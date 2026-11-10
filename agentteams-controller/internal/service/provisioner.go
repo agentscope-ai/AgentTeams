@@ -605,6 +605,16 @@ func (p *Provisioner) ensureMatrixToken(ctx context.Context, matrixUsername stri
 // worker/manager, bypassing the cache. Called when the caller reports a 401
 // from the homeserver. Persists the new token to the credential store.
 func (p *Provisioner) ForceRefreshMatrixToken(ctx context.Context, name string) (*RefreshResult, error) {
+	return p.forceRefreshMatrixToken(ctx, name, name)
+}
+
+// ForceRefreshManagerMatrixToken preserves the Manager CR credential owner
+// while logging in as its stable Matrix runtime identity.
+func (p *Provisioner) ForceRefreshManagerMatrixToken(ctx context.Context, name string) (*RefreshResult, error) {
+	return p.forceRefreshMatrixToken(ctx, name, "manager")
+}
+
+func (p *Provisioner) forceRefreshMatrixToken(ctx context.Context, name, matrixUsername string) (*RefreshResult, error) {
 	creds, err := p.creds.Load(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("load credentials for %s: %w", name, err)
@@ -618,9 +628,9 @@ func (p *Provisioner) ForceRefreshMatrixToken(ctx context.Context, name string) 
 
 	var tok string
 	if p.MatrixAppServiceEnabled() {
-		tok, err = p.matrix.LoginAppServiceUser(ctx, name)
+		tok, err = p.matrix.LoginAppServiceUser(ctx, matrixUsername)
 	} else {
-		tok, err = p.matrix.Login(ctx, name, creds.MatrixPassword)
+		tok, err = p.matrix.Login(ctx, matrixUsername, creds.MatrixPassword)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("re-login for %s: %w", name, err)

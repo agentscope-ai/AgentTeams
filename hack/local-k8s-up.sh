@@ -82,28 +82,16 @@ if [ "$SKIP_BUILD" = "0" ]; then
 
     # Controller
     log "Building controller image..."
-    docker build -t "$CONTROLLER_IMAGE" -f "${PROJECT_ROOT}/agentteams-controller/Dockerfile" "${PROJECT_ROOT}/agentteams-controller"
+    make -C "${PROJECT_ROOT}" build-agentteams-controller LOCAL_CONTROLLER="$CONTROLLER_IMAGE"
 
-    # Manager (choose between all-in-one and k8s-lightweight)
-    if [ "$BUILD_K8S_IMAGE" = "1" ]; then
-        log "Building manager image (lightweight k8s)..."
-        docker build -t "$MANAGER_IMAGE" \
-            --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base:${OPENCLAW_BASE_TAG} \
-            --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-            -f "${PROJECT_ROOT}/manager/Dockerfile.k8s" "${PROJECT_ROOT}"
-    else
-        log "Building manager image (all-in-one)..."
-        docker build -t "$MANAGER_IMAGE" \
-            --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base:${OPENCLAW_BASE_TAG} \
-            --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-            -f "${PROJECT_ROOT}/manager/Dockerfile" "${PROJECT_ROOT}"
-    fi
-
-    # QwenPaw Manager (lightweight Python image with the agentteams_manager package)
-    log "Building QwenPaw manager image..."
+    # The same QwenPaw Harness image supports Manager and team roles.
+    log "Building shared QwenPaw Harness image..."
+    (cd "${PROJECT_ROOT}" && OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml)
+    (cd "${PROJECT_ROOT}" && OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml)
     docker build -t "$QWENPAW_MANAGER_IMAGE" \
         --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-        -f "${PROJECT_ROOT}/manager/Dockerfile.qwenpaw" "${PROJECT_ROOT}"
+        --build-context shared="${PROJECT_ROOT}/shared/lib" \
+        -f "${PROJECT_ROOT}/qwenpaw/Dockerfile" "${PROJECT_ROOT}"
 
     # Worker images
     log "Building worker image (openclaw)..."
@@ -112,6 +100,7 @@ if [ "$SKIP_BUILD" = "0" ]; then
         --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
         --build-context shared="${PROJECT_ROOT}/shared/lib" \
         -f "${PROJECT_ROOT}/worker/Dockerfile" "${PROJECT_ROOT}/worker"
+    docker tag "$WORKER_IMAGE" "$MANAGER_IMAGE"
 
     log "Building worker image (hermes)..."
     docker build -t "$HERMES_WORKER_IMAGE" \

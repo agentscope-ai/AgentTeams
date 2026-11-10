@@ -311,6 +311,29 @@ func (h *LifecycleHandler) EnsureReady(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, WorkerLifecycleResponse{Name: name, Phase: phase})
 }
 
+// ManagerReady accepts readiness reports from the shared Harness.
+func (h *LifecycleHandler) ManagerReady(w http.ResponseWriter, r *http.Request) {
+	var manager v1beta1.Manager
+	if err := h.k8s.Get(r.Context(), client.ObjectKey{Name: r.PathValue("name"), Namespace: h.namespace}, &manager); err != nil {
+		writeK8sError(w, "get manager", err)
+		return
+	}
+	if manager.Spec.DesiredState() != "Running" {
+		httputil.WriteError(w, http.StatusConflict, "manager is not expected to run")
+		return
+	}
+	if manager.Status.Ready {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	manager.Status.Ready = true
+	if err := h.k8s.Status().Update(r.Context(), &manager); err != nil {
+		writeK8sError(w, "report manager ready", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Ready handles POST /api/v1/workers/{name}/ready — worker self-reports readiness.
 func (h *LifecycleHandler) Ready(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")

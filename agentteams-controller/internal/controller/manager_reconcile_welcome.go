@@ -108,6 +108,9 @@ func (r *ManagerReconciler) reconcileManagerWelcome(ctx context.Context, s *mana
 	if m.Status.RoomID == "" {
 		return reconcile.Result{}, nil
 	}
+	if !m.Status.Ready {
+		return reconcile.Result{RequeueAfter: welcomeRequeueInterval}, nil
+	}
 
 	logger := log.FromContext(ctx)
 	// A fresh local installation can intentionally have no model provider yet.

@@ -180,8 +180,10 @@ manager_prompt = read(plugin_root / manager_prompts.fetch("agents"))
 assert(manager_prompt.include?("control-plane"), "manager prompt must state the control-plane boundary")
 
 skills = manifest.fetch("skills")
-assert(!skills.key?("manager"), "manager control-plane skills are not part of TeamHarness v0.1 manifest")
 expected_skills = {
+  "manager" => {
+    "resource-management" => %w[manager]
+  },
   "agent" => {
     "mcporter" => %w[leader worker manager remote-member],
     "find-skills" => %w[leader worker manager remote-member]
@@ -206,7 +208,7 @@ expected_skills.each do |group, expected|
     skill_path = plugin_root / entry.fetch("path") / "SKILL.md"
     assert_file(skill_path)
     frontmatter = skill_frontmatter(skill_path)
-    expected_name = group == "agent" ? entry.fetch("id") : "teamharness-#{entry.fetch("id")}"
+    expected_name = group == "team" ? "teamharness-#{entry.fetch("id")}" : entry.fetch("id")
     assert(frontmatter.fetch("name", nil) == expected_name, "skill #{entry.fetch("id")} front matter name must be #{expected_name}")
     description = frontmatter.fetch("description", "").to_s.strip
     assert(!description.empty?, "skill #{entry.fetch("id")} front matter description must be present")

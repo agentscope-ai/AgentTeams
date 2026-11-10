@@ -36,13 +36,13 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `AGENTTEAMS_DATA_DIR` | 否 | `agentteams-data` | 持久化数据的 Docker 卷名称 |
 | `AGENTTEAMS_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |
 | `AGENTTEAMS_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
-| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `qwenpaw` | Manager 引擎：**`qwenpaw`**（默认，`agentteams-manager-qwenpaw` 镜像）或 **`openclaw`**（`agentteams-manager` 镜像）。**Hermes** 仅支持 **Worker**，不能作为 Manager 运行时。 |
+| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `qwenpaw` | Manager Harness：`qwenpaw`（默认）、`openclaw`、`hermes`、`deepseek-harness` 或 `openhuman`。 |
 
-用户看到的 Manager runtime 选项仍是 **CoPaw** 和 **OpenClaw**。启动入口会把 `copaw` 作为 `qwenpaw` 的兼容别名：本地安装器当前写入 `copaw`，Helm 当前使用 `qwenpaw`，两者都启动 CoPaw/QwenPaw Python Manager 镜像。
+Manager 支持 `qwenpaw`、`openclaw`、`hermes`、`deepseek-harness` 和 `openhuman`。`copaw` 保留为 QwenPaw Manager 的兼容别名。每种运行时的 Manager、Leader、Worker 复用同一 Harness 镜像和入口，由 Controller 注入角色提示词、凭据与权限。Helm 使用 `manager.runtime` 选择，本地安装器提供对应选项；显式指定的 Manager 镜像也必须支持该角色契约。
 
 ### QwenPaw Manager（`AGENTTEAMS_MANAGER_RUNTIME=qwenpaw`）
 
-安装时若选择 QwenPaw Manager，controller 会拉起 **`agentteams-manager-qwenpaw`** 镜像而非基于 OpenClaw 的 **`agentteams-manager`**。职责相同（经 Matrix 协调 Worker/Team、驱动 Higress/MCP），差异在于 Agent 引擎与配置形态（Python QwenPaw vs Node OpenClaw）。多通道与技能遵循 QwenPaw 工作区约定（容器内 **`/root/manager-workspace`**）。
+Controller 在 **`/root/manager-workspace`** 中以 Manager 角色运行共享 QwenPaw Harness；原 `agentteams-manager-qwenpaw` 镜像名作为兼容别名保留。Manager 管理资源并委派 Leader，不因切换 Harness 获得 Leader 的工作流工具。其他 Harness 遵循同一角色边界，可通过 `agt message` 完成跨房间交接。
 
 ### 自定义 Manager Agent
 

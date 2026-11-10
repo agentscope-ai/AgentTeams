@@ -2,6 +2,7 @@ package controller
 
 import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -12,6 +13,16 @@ type managerScope struct {
 	provResult        *service.ManagerProvisionResult
 	patchBase         client.Patch
 	modelProviderInfo *gateway.ModelProviderInfo
+}
+
+// copaw is the historical Manager selector for the QwenPaw implementation.
+// Worker runtime selection remains unchanged.
+func resolveManagerRuntime(runtime, fallback string) string {
+	runtime = backend.ResolveRuntime(runtime, fallback)
+	if runtime == backend.RuntimeCopaw {
+		return backend.RuntimeQwenPaw
+	}
+	return runtime
 }
 
 // computeManagerPhase determines the Manager status phase based on reconcile outcome.

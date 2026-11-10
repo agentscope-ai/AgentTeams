@@ -40,6 +40,11 @@ source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
 WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 WORKER_CR_NAME="${AGENTTEAMS_WORKER_CR_NAME:-${WORKER_NAME}}"
 WORKSPACE="${OPENHUMAN_WORKSPACE:-/home/openhuman/.openhuman}"
+if [ "${AGENTTEAMS_AGENT_ROLE:-}" = "manager" ]; then
+    WORKSPACE="${AGENTTEAMS_WORKER_HOME:?AGENTTEAMS_WORKER_HOME is required}"
+    export HOME="${WORKSPACE}"
+    export OPENHUMAN_WORKSPACE="${WORKSPACE}"
+fi
 
 log() {
     echo "[agentteams-openhuman-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -223,6 +228,48 @@ EOF
 
 log "config.toml generated at ${WORKSPACE}/config.toml"
 
+if [ "${AGENTTEAMS_AGENT_ROLE:-}" = "manager" ]; then
+    # Native channel turns route through orchestrator, whose builtin definition
+    # omits workspace identity and shell tools. Bind the Manager role explicitly.
+    # OpenHuman resolves <config-dir>/workspace as its native workspace.
+    NATIVE_WORKSPACE="${WORKSPACE}/workspace"
+    mkdir -p "${NATIVE_WORKSPACE}/agents" "${NATIVE_WORKSPACE}/skills"
+    write_manager_prompt() {
+        cat "${WORKSPACE}/AGENTS.md"
+        printf '\nController member context:\nmember.name: %s\nmember.role: manager\nmember.personalRoomId: %s\nmember.matrixUserId: %s\n' \
+            "${WORKER_CR_NAME}" "${BRIDGE_ROOM_ID}" "${BRIDGE_USER_ID}"
+        printf '\nYour existing personality:\n'
+        cat "${WORKSPACE}/SOUL.md"
+    }
+    # Channel turns load SOUL.md directly; the definition supplies tool scope.
+    write_manager_prompt > "${NATIVE_WORKSPACE}/SOUL.md"
+    cp -a "${WORKSPACE}/skills/." "${NATIVE_WORKSPACE}/skills/"
+    cat > "${NATIVE_WORKSPACE}/agents/orchestrator.toml" <<EOF
+id = "orchestrator"
+display_name = "Manager"
+when_to_use = "Coordinate your AgentTeams resources and delegate to Team Leaders."
+agent_tier = "chat"
+max_iterations = 15
+omit_identity = true
+omit_skills_catalog = true
+omit_memory_md = false
+
+[system_prompt]
+inline = "Follow your workspace identity to coordinate AgentTeams resources and delegate to Team Leaders."
+
+[tools]
+named = ["shell", "file_read", "file_write", "query_memory", "memory_store", "memory_forget"]
+EOF
+    cat >> "${WORKSPACE}/config.toml" <<'EOF'
+
+[autonomy]
+allowed_commands = ["agt", "mc", "ls", "cat", "grep", "find", "echo", "pwd", "head", "tail"]
+EOF
+    if [ "${AGENTTEAMS_YOLO:-0}" = "1" ]; then
+        printf '\nlevel = "full"\nrequire_approval_for_medium_risk = false\n' >> "${WORKSPACE}/config.toml"
+    fi
+fi
+
 # --- LLM routing through AgentTeams AI gateway (Higress) ---
 # Use openhuman-core's CLI to register the AgentTeams gateway as an
 # OpenAI-compatible inference endpoint. This is REQUIRED for AgentTeams-managed
@@ -240,6 +287,23 @@ else
     log "FATAL: LLM gateway not configured (AGENTTEAMS_AI_GATEWAY_URL or AGENTTEAMS_WORKER_GATEWAY_KEY missing). AgentTeams-managed workers must route through the platform AI gateway; refusing to start to prevent silent fallback to external services."
     exit 1
 fi
+
+# Preserve CLI context outside the native shell's cleared environment. Keep
+# credentials out of prompts and argv; the wrapper reads this private file.
+umask 077
+{
+    printf 'export AGENTTEAMS_CONTROLLER_URL=%q\n' "${AGENTTEAMS_CONTROLLER_URL:-}"
+    printf 'export AGENTTEAMS_AUTH_TOKEN_FILE=%q\n' "${AGENTTEAMS_AUTH_TOKEN_FILE:-}"
+    if [ -n "${AGENTTEAMS_AUTH_TOKEN:-}" ]; then
+        printf 'export AGENTTEAMS_AUTH_TOKEN=%q\n' "${AGENTTEAMS_AUTH_TOKEN}"
+    fi
+    printf 'export AGENTTEAMS_AGENT_ROLE=%q\n' "${AGENTTEAMS_AGENT_ROLE:-standalone}"
+    printf 'export AGENTTEAMS_MATRIX_URL=%q\n' "${BRIDGE_HOMESERVER}"
+    printf 'export AGENTTEAMS_WORKER_MATRIX_TOKEN=%q\n' "${BRIDGE_ACCESS_TOKEN}"
+    if [ "${AGENTTEAMS_AGENT_ROLE:-}" = "manager" ]; then
+        printf 'export AGENTTEAMS_MANAGER_MATRIX_TOKEN=%q\n' "${BRIDGE_ACCESS_TOKEN}"
+    fi
+} > "${HOME}/.agentteams-cli.env"
 
 # Generate a random core token if not set
 export OPENHUMAN_CORE_TOKEN="${OPENHUMAN_CORE_TOKEN:-$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -A n -t x1 | tr -d ' \n')}"
@@ -281,7 +345,17 @@ log "Local->Remote sync started (PID: ${SYNC_LOCAL_PID})"
 # Remote → Local: pull Manager-managed files every 5 minutes
 (
     while true; do
-        sleep 300
+        if [ "${AGENTTEAMS_AGENT_ROLE:-}" = "manager" ]; then
+            sleep 5
+            if mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" "${WORKSPACE}/agent-config/openclaw.json.next" 2>/dev/null; then
+                mv "${WORKSPACE}/agent-config/openclaw.json.next" "${WORKSPACE}/agent-config/openclaw.json"
+            fi
+            mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/AGENTS.md" "${WORKSPACE}/AGENTS.md" 2>/dev/null || true
+            write_manager_prompt > "${NATIVE_WORKSPACE}/SOUL.md"
+            cp -a "${WORKSPACE}/skills/." "${NATIVE_WORKSPACE}/skills/"
+        else
+            sleep 300
+        fi
         ensure_mc_credentials 2>/dev/null || true
         mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/" \
             "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
@@ -337,11 +411,9 @@ CORE_PID=$!
     log "OpenHuman Core is healthy"
 
     # Report ready to controller
-    if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
+    # Your Manager Matrix adapter reports readiness after joining and syncing.
+    if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ] && [ "${AGENTTEAMS_AGENT_ROLE:-}" != "manager" ]; then
         agt worker report-ready --name "${WORKER_CR_NAME}" 2>/dev/null || \
-            curl -sf -X POST "${AGENTTEAMS_CONTROLLER_URL}/api/v1/workers/${WORKER_CR_NAME}/ready" \
-                -H "Content-Type: application/json" \
-                -H "Authorization: Bearer $(cat ${AGENTTEAMS_AUTH_TOKEN_FILE:-/var/run/secrets/agentteams/token} 2>/dev/null)" 2>/dev/null || \
             log "WARNING: Failed to report ready to controller"
     fi
 ) &

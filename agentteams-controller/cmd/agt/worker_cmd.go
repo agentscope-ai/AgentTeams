@@ -244,6 +244,9 @@ Worker name is read from --name, AGENTTEAMS_WORKER_CR_NAME, or AGENTTEAMS_WORKER
 
 			client := NewAPIClient()
 			path := "/api/v1/workers/" + name + "/ready"
+			if os.Getenv("AGENTTEAMS_AGENT_ROLE") == "manager" {
+				path = "/api/v1/managers/" + name + "/ready"
+			}
 
 			// Initial ready report with retries
 			var lastErr error

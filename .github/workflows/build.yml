@@ -46,7 +46,7 @@ jobs:
               'manager-qwenpaw': ['agentteams-controller'],
               'worker': ['openclaw-base', 'agentteams-controller'],
               'hermes-worker': ['agentteams-controller'],
-              'qwenpaw-worker': [],
+              'qwenpaw-worker': ['agentteams-controller'],
           }
           tagged = os.environ['GITHUB_REF'].startswith('refs/tags/')
           version = os.environ['GITHUB_REF_NAME'] if tagged else os.environ['REQUESTED_VERSION'] or 'latest'
@@ -126,7 +126,7 @@ jobs:
     secrets: inherit
 
   qwenpaw-worker:
-    needs: [prepare]
+    needs: [prepare, agentteams-controller]
     if: contains(fromJSON(needs.prepare.outputs.targets), 'qwenpaw-worker')
     uses: ./.github/workflows/build-image.yml
     with:

@@ -934,7 +934,7 @@ func TestManagerCreate_EnvPassesToBackend(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestManagerWelcome_HappyPath_SendsOnce verifies that once the manager
-// container reports Running, the controller calls SendManagerWelcome
+// Harness reports ready, the controller calls SendManagerWelcome
 // exactly once and persists Status.WelcomeSent=true. Forwarded
 // language/timezone must reflect the values wired from controller config
 // (see suite_test.go: en / America/Los_Angeles).
@@ -952,6 +952,10 @@ func TestManagerWelcome_HappyPath_SendsOnce(t *testing.T) {
 	})
 
 	waitForManagerRunning(t, mgr)
+	if calls := mockMgrProv.WelcomeCallCount(); calls != 0 {
+		t.Fatalf("welcome sent %d times before Harness readiness", calls)
+	}
+	reportManagerReady(t, mgr)
 
 	assertEventually(t, func() error {
 		var m v1beta1.Manager
@@ -998,6 +1002,7 @@ func TestManagerWelcome_Idempotent_NoResendOnReconcile(t *testing.T) {
 	})
 
 	waitForManagerRunning(t, mgr)
+	reportManagerReady(t, mgr)
 	assertEventually(t, func() error {
 		var m v1beta1.Manager
 		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(mgr), &m); err != nil {
@@ -1056,6 +1061,7 @@ func TestManagerWelcome_NotJoinedYet_RequeuesUntilJoined(t *testing.T) {
 	})
 
 	waitForManagerRunning(t, mgr)
+	reportManagerReady(t, mgr)
 
 	assertEventually(t, func() error {
 		var m v1beta1.Manager
@@ -1120,6 +1126,7 @@ func TestManagerWelcome_LLMAuthNotReady_RequeuesUntilPropagated(t *testing.T) {
 	})
 
 	waitForManagerRunning(t, mgr)
+	reportManagerReady(t, mgr)
 
 	assertEventually(t, func() error {
 		var m v1beta1.Manager
@@ -1154,6 +1161,19 @@ func TestManagerWelcome_LLMAuthNotReady_RequeuesUntilPropagated(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Simulate the Harness readiness callback after the mock container starts.
+func reportManagerReady(t *testing.T, mgr *v1beta1.Manager) {
+	t.Helper()
+	assertEventually(t, func() error {
+		var current v1beta1.Manager
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(mgr), &current); err != nil {
+			return err
+		}
+		current.Status.Ready = true
+		return k8sClient.Status().Update(ctx, &current)
+	})
+}
+
 // CR Labels → Pod Labels propagation
 // ---------------------------------------------------------------------------
 

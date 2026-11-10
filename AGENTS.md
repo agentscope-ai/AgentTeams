@@ -48,16 +48,19 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 
 | Runtime   | Behavior |
 |-----------|-----------|
-| `openclaw` | OpenClaw gateway; primary Matrix channel uses the **message** tool pattern (see upstream OpenClaw / AgentTeams manager config). |
-| `qwenpaw` (default) | Python QwenPaw workspace; Matrix traffic uses the **`copaw channels send`** CLI (see `start-qwenpaw-manager.sh`). |
+| `openclaw` | Shared OpenClaw Worker image and entrypoint; Manager role assets and credentials are projected by the controller. |
+| `qwenpaw` (default) | Shared QwenPaw Harness image and `qwenpaw-worker-entrypoint.sh`; `runtime.yaml` selects the Manager role, with TeamHarness communication and `agt` management tools. |
+| `hermes` | Shared Hermes image; Manager instructions are bound into the native system prompt and Matrix policies remain scoped to DM/group senders. |
+| `deepseek-harness` | Shared DSH image; TeamHarness selects Manager context and skills without requiring Team membership. |
+| `openhuman` | Shared OpenHuman image; native Matrix receives explicitly mentioned Manager messages across joined rooms. |
 
-Hermes, DeepSeek Harness, and OpenHuman are **Worker-only** runtimes in the API and Helm worker defaults; the Manager entrypoint in `start-manager-agent.sh` today starts **openclaw** or **qwenpaw** only.
+Each Harness uses its Worker image and entrypoint for Manager, Leader, and Worker. The controller projects role, credentials, prompts, and policy; the Manager remains a Manager API resource. The legacy Manager selector `copaw` resolves to QwenPaw without changing the CoPaw Worker runtime. `agt message` supplies cross-room messaging when a Harness lacks a native tool. OpenClaw keeps the controller compatibility projection separate from its SDK-owned native config so SDK migrations survive controller updates.
 
-**Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack vs `aliyun` vs `k8s` changes which bootstrap steps run inside the Manager container (for example Matrix registration and Higress setup are skipped or reduced in `k8s` because the controller owns them).
+**Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack, `aliyun`, or `k8s` selects infrastructure and storage integration. Controller/installer infrastructure bootstrap is separate from the shared Harness entrypoints.
 
-## `manager/agent/` layout (built into Manager images)
+## `manager/agent/` layout (legacy Manager assets and current member templates)
 
-Agent-facing Markdown and skills under `manager/agent/` are copied to `/opt/agentteams/agent/` in the image and synced into the Manager workspace by `upgrade-builtins.sh`. This tree is the single source of truth for builtin prompts and skills.
+Shared Manager role content lives under `plugins/teamharness/prompts/manager/` and `plugins/teamharness/skills/manager/`. Controller builds package this content into `manager-agent/` for Harnesses that use file-based role prompts. The tree under `manager/agent/` retains Worker/Leader templates and legacy installer assets.
 
 ```
 manager/agent/
@@ -80,11 +83,11 @@ manager/agent/
 
 **Which files apply at startup**
 
-- **OpenClaw Manager**: workspace copies of `AGENTS.md`, `HEARTBEAT.md`, `SOUL.md`, plus everything under `skills/` (from image builtins).
-- **CoPaw Manager**: `copaw-manager-agent/AGENTS.md` and `copaw-manager-agent/HEARTBEAT.md` are merged into the workspace copies during `upgrade-builtins.sh` when `MANAGER_RUNTIME=copaw`; **skills/** stay shared with OpenClaw Manager.
+- **Shared Managers**: Controller projects `runtime.yaml`, the common Manager prompt/skills, and native compatibility config where required. QwenPaw/DSH use TeamHarness adapters; OpenClaw, Hermes, and OpenHuman bind these assets into their native config/prompt inputs.
+- **Legacy Managers**: `upgrade-builtins.sh` retains the old OpenClaw/CoPaw workspace migration logic; current shared Harness images use their own entrypoints.
 - **Workers**: the controller (or local registry) records `runtime` per worker; init scripts materialize the matching `*-worker-agent/` tree into that worker’s storage.
 
-**Template rendering**: `shared/lib/render-skills.sh` runs from `start-manager-agent.sh` over workspace and image paths so known `${VAR}` placeholders become literal text before agents read them.
+**Legacy template rendering**: `shared/lib/render-skills.sh` runs from `start-manager-agent.sh`. Shared Harness adapters consume the Controller-written role contract instead.
 
 ## Key Entry Points
 
@@ -155,14 +158,16 @@ make build-openclaw-base DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyu
 
 ### To modify the Manager container
 
-- [manager/Dockerfile](manager/Dockerfile) — OpenClaw-based Manager (from `openclaw-base`; bundles `agt` CLI from controller image)
-- [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) — QwenPaw-based Manager (Python venv + QwenPaw from PyPI; same agent tree and scripts pattern)
+- [worker/Dockerfile](worker/Dockerfile) and [worker/scripts/worker-entrypoint.sh](worker/scripts/worker-entrypoint.sh) — shared OpenClaw Harness; [manager/Dockerfile](manager/Dockerfile) is a compatibility wrapper
+- [qwenpaw/Dockerfile](qwenpaw/Dockerfile) — shared QwenPaw Harness for Manager, Leader, and Worker; [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) only aliases an explicitly supplied Harness image
 - [manager/supervisord.conf](manager/supervisord.conf) — process orchestration (local embedded stack)
-- [manager/scripts/init/](manager/scripts/init/) — startup: `start-manager-agent.sh` (runtime + `AGENTTEAMS_RUNTIME`), `upgrade-builtins.sh`, Higress/Matrix bootstrap where applicable
+- [hermes/](hermes/), [deepseek-harness/](deepseek-harness/), [openhuman/](openhuman/) — shared entrypoints and native Manager role bindings for the other Harnesses
+- [plugins/teamharness/prompts/manager/](plugins/teamharness/prompts/manager/) and [plugins/teamharness/skills/manager/](plugins/teamharness/skills/manager/) — common role instructions and resource-management tools
+- [manager/scripts/init/](manager/scripts/init/) — legacy startup and migration scripts, including `start-manager-agent.sh` and `upgrade-builtins.sh`
 - [manager/scripts/lib/](manager/scripts/lib/) — shared libraries (`base.sh`, `container-api.sh`, …)
 - [manager/configs/](manager/configs/) — init-time configuration templates (e.g. `manager-openclaw.json.tmpl`)
 
-The Manager **image** is an agent runtime plus scripts; Higress, Tuwunel, MinIO, and Element Web are brought up by **Helm** or **install/**, not inside the slim Manager Dockerfile unless you use the legacy all-in-one local compose layout.
+The Manager uses the selected Harness image. Higress, Tuwunel, MinIO, and Element Web are brought up by **Helm** or **install/**; embedded infrastructure runs in the Controller image.
 
 ### To modify the Worker container (OpenClaw)
 

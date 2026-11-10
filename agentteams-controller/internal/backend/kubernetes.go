@@ -756,6 +756,8 @@ func defaultRuntime(runtime string) string {
 		return RuntimeCopaw
 	case RuntimeHermes:
 		return RuntimeHermes
+	case RuntimeOpenHuman:
+		return RuntimeOpenHuman
 	case RuntimeQwenPaw:
 		return RuntimeQwenPaw
 	case RuntimeDeepSeekHarness:

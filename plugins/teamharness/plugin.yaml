@@ -18,6 +18,10 @@ prompts:
     tools: prompts/manager/TOOLS.md
     heartbeat: prompts/manager/HEARTBEAT.md
 skills:
+  manager:
+    - id: resource-management
+      path: skills/manager/resource-management
+      roles: [manager]
   agent:
     - id: mcporter
       path: skills/agent/mcporter

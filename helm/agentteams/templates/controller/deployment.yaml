@@ -87,6 +87,8 @@ spec:
             {{- end }}
             - name: AGENTTEAMS_HERMES_WORKER_IMAGE
               value: {{ include "agentteams.worker.hermesImage" . | quote }}
+            - name: AGENTTEAMS_QWENPAW_WORKER_IMAGE
+              value: {{ printf "%s:%s" .Values.worker.defaultImage.qwenpaw.repository (.Values.worker.defaultImage.qwenpaw.tag | default (include "agentteams.globalImageTag" .)) | quote }}
             - name: AGENTTEAMS_OPENHUMAN_WORKER_IMAGE
               value: {{ include "agentteams.worker.openhumanImage" . | quote }}
             - name: AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE

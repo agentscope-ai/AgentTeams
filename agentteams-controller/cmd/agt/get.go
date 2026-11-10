@@ -22,6 +22,7 @@ func getCmd() *cobra.Command {
 	cmd.AddCommand(getHumansCmd())
 	cmd.AddCommand(getManagersCmd())
 	cmd.AddCommand(getProjectsCmd())
+	cmd.AddCommand(getTasksCmd())
 	return cmd
 }
 

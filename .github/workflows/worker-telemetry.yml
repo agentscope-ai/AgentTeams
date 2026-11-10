@@ -6,6 +6,7 @@ on:
       - 'shared/lib/telemetry/**'
       - 'tests/test_worker_telemetry.py'
       - 'tests/test_worker_full_telemetry.py'
+      - 'tests/test_task_trace_mcp.py'
       - '.github/workflows/worker-telemetry.yml'
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - 'shared/lib/telemetry/**'
       - 'tests/test_worker_telemetry.py'
       - 'tests/test_worker_full_telemetry.py'
+      - 'tests/test_task_trace_mcp.py'
       - '.github/workflows/worker-telemetry.yml'
 
 permissions:
@@ -29,4 +31,4 @@ jobs:
           cache: pip
           cache-dependency-path: shared/lib/telemetry/requirements.txt
       - run: python -m pip install -r shared/lib/telemetry/requirements.txt openai==3.46.0 pytest
-      - run: python -m pytest tests/test_worker_telemetry.py tests/test_worker_full_telemetry.py -q
+      - run: python -m pytest tests/test_worker_telemetry.py tests/test_worker_full_telemetry.py tests/test_task_trace_mcp.py -q

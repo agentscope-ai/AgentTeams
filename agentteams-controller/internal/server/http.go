@@ -276,11 +276,22 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Projects (workflow inspection; read from object storage) ---
 	projh := NewProjectHandler(deps.Client, deps.Namespace, deps.OSS, deps.MatrixClient)
+	if deps.APIReader != nil {
+		projh.configReader = deps.APIReader
+	}
+	mux.Handle("GET /api/v1/observability/config", mw.Authenticate(http.HandlerFunc(projh.GetObservabilityConfig)))
+	mux.Handle("PUT /api/v1/observability/config", mw.Authenticate(http.HandlerFunc(projh.PutObservabilityConfig)))
+	mux.Handle("POST /api/v1/observability/test", mw.Authenticate(http.HandlerFunc(projh.TestObservabilityConfig)))
+	mux.Handle("POST /api/v1/observability/apply", mw.Authenticate(http.HandlerFunc(projh.ApplyObservabilityConfig)))
+	mux.Handle("GET /api/v1/traces", mw.Authenticate(http.HandlerFunc(projh.ListTraces)))
+	mux.Handle("GET /api/v1/traces/{traceId}", mw.Authenticate(http.HandlerFunc(projh.GetTrace)))
 	projectNameFn := func(r *http.Request) string { return r.PathValue("id") }
 	projectTaskNameFn := func(r *http.Request) string { return r.PathValue("id") + "/" + r.PathValue("taskId") }
 	mux.Handle("GET /api/v1/projects", mw.RequireAuthz(authpkg.ActionList, "project", nil)(http.HandlerFunc(projh.ListProjects)))
+	mux.Handle("GET /api/v1/tasks", mw.RequireAuthz(authpkg.ActionList, "project", nil)(http.HandlerFunc(projh.ListTasks)))
 	mux.Handle("GET /api/v1/projects/{id}/workflow", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectWorkflow)))
 	mux.Handle("GET /api/v1/projects/{id}/tasks/{taskId}", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetTaskInspection)))
+	mux.Handle("GET /api/v1/projects/{id}/tasks/{taskId}/traces", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetTaskTraces)))
 	mux.Handle("GET /api/v1/projects/{id}/tasks/{taskId}/artifact", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetTaskArtifact)))
 	mux.Handle("GET /api/v1/projects/{id}/spawns", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSpawns)))
 	mux.Handle("GET /api/v1/projects/{id}/spawns/{sessionId}/messages", mw.RequireAuthz(authpkg.ActionGet, "project", projectNameFn)(http.HandlerFunc(projh.GetProjectSpawnMessages)))

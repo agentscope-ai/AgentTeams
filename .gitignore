@@ -67,6 +67,7 @@ htmlcov/
 
 # Local build artifacts
 /agentteams-controller/agt
+/agentteams-controller/bin/
 
 # dev build artifacts
 build-manifest.json
@@ -74,3 +75,4 @@ build-manifest.json
 # Local Worker tracing evidence and runtime reference sources
 /output/observability-demo/
 /output/native/
+/output/native-acceptance/

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import os
 
 import re
 
@@ -246,6 +247,15 @@ def _matrix_content(text: str, mentions: list[str]) -> dict[str, Any]:
     }
     if mentions:
         content["m.mentions"] = {"user_ids": mentions}
+    if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in ("true", "1"):
+        try:
+            from at_trace_transport import carrier, MATRIX_TRACE_KEY
+        except ImportError:
+            pass
+        else:
+            wire = carrier()
+            if wire.get("traceparent"):
+                content[MATRIX_TRACE_KEY] = wire
     return content
 
 

@@ -21,6 +21,7 @@ from opentelemetry.sdk.trace import Event, ReadableSpan, SpanLimits, SpanProcess
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
 _correlation = ContextVar("at_trace_correlation", default={})
+_active_turn = ContextVar("at_active_turn", default=None)
 _model_request = ContextVar("at_model_request", default=None)
 _provider = None
 _secret_key = re.compile(r"(?:api[_-]?key|secret|password|authorization|access[_-]?token|gateway[_-]?key|credential|license[_-]?key|security[_-]?token|OTEL_EXPORTER_OTLP(?:_TRACES)?_HEADERS)", re.I)
@@ -267,11 +268,14 @@ async def trace_stream(generator, span, fields):
         while True:
             token = context.attach(span_context)
             correlation_token = _correlation.set(fields)
+            turn_token = _active_turn.set(span) if span.name == "worker.turn" else None
             try:
                 last = await anext(generator)
             except StopAsyncIteration:
                 break
             finally:
+                if turn_token is not None:
+                    _active_turn.reset(turn_token)
                 _correlation.reset(correlation_token)
                 context.detach(token)
             yield last

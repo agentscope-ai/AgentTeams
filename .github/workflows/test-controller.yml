@@ -315,6 +315,7 @@ jobs:
         run: |
           python -m pytest plugins/tests/agentteams-matrix/golden -q
           python -m pytest plugins/tests/agentteams-teamharness/golden -q
+          python -m pytest plugins/tests/teamharness/adapters/qwenpaw/test_manager_diagnosis_package.py -q
 
   openclaw-native-discovery:
     runs-on: ubuntu-latest

@@ -1,5 +1,7 @@
 # 本机 Worker 完整会话 Tracing 演示
 
+当前配置与查询入口已迁移到 Controller，见 [QwenPaw 任务诊断方案与验收](../../docs/design/task-tracing-analysis.md)。下文的 `at-tracing-demo`、独立 Dashboard 配置卷及旧 `configuration_acceptance.py` 是此前演示记录，不能作为当前 Controller 配置闭环的验收入口。当前使用 `capture_qwenpaw_live.py`、`verify_qwenpaw_mcp.py` 和 Controller 的 `TestQwenPawLangfuseAcceptance`。
+
 已增加可选 [AgentLoop 上报、查询与隔离验收](agentloop.md)。可单独使用 AgentLoop，也可由 Collector 同时上报两个平台；云上入库和评估仍需目标端点验收。
 
 AT 与 Dashboard 均使用本地分支 codex/worker-otel-langfuse-demo，工作树分别为 output/otel-langfuse-demo/core 和 output/otel-langfuse-demo/dashboard。[技术方案](../../docs/design/worker-otel-langfuse.md)说明了原生采集点、扩展契约和覆盖边界。
@@ -15,7 +17,7 @@ AT 与 Dashboard 均使用本地分支 codex/worker-otel-langfuse-demo，工作�
 
 Dashboard 使用正式“控制台 → 治理 → Tracing”同一组件和资源权限 BFF。正式登录后，Team/Worker 下拉和列表、详情、导出使用当前账号经 Controller 确认的访问范围，选择 Team 后 Worker 联动过滤。选择 Worker 后按其配置自动带出并锁定运行时；取消 Worker 选择后恢复手动运行时筛选。
 
-Tracing 顶部的“可观测配置”仅管理员可见。可先启动 AT，再填写 Langfuse 地址/项目查询密钥和已部署的 Collector 地址/采集凭证，测试、保存并应用到指定 Worker。保存无需重启 Dashboard；运行中的托管 Worker 由 Controller 重建，休眠中的下次启动生效。默认关闭，历史数据查询不受采集开关影响。配置和密钥保存在独立 at-tracing-demo_dashboard-config 卷中，重建 Dashboard 后仍保留，密钥不会由配置读取接口返回。Worker 只接收 Collector 配置，Langfuse 查询密钥保留在 Dashboard。
+Tracing 顶部的“可观测配置”仅管理员可见。可先启动 AT，再填写 Langfuse 地址/项目查询密钥和已部署的 Collector 地址/采集凭证，测试、保存并应用到指定 Worker。保存无需重启 Dashboard；运行中的托管 Worker 由 Controller 重建，休眠中的下次启动生效。默认关闭，历史数据查询不受采集开关影响。当前配置和查询密钥保存在 Controller 的 `agentteams-observability` Secret，新建容器自动读取同一配置。Dashboard 通过 Controller 接口读写，配置读取接口不返回密钥；Worker 只接收 Collector 配置。
 
 独立入口由 AGENTTEAMS_TRACING_DEMO=true 启用；演示仅绑定 localhost，使用本地开发身份，仅持有这个隔离 Langfuse 项目密钥。本机没有真实组织账号/Controller，因此启动脚本显式配置 AGENTTEAMS_TRACING_DEMO_SCOPE，只允许 tracing-team 的 trace-qwenpaw / trace-hermes，不以 Langfuse 历史记录推导账号权限。该演示清单仅在演示开关和 AUTH_DISABLED 同时开启、身份为本地管理员时使用；正式账号必须查询 Controller。
 
@@ -31,7 +33,7 @@ Tracing 顶部的“可观测配置”仅管理员可见。可先启动 AT，再
 | 任务 | 复用 TeamHarness 唯一匹配规则，歧义或缺失原因保留，不猜任务 |
 | 运行诊断 | 版本、采集策略、警告/错误事件、取消、父子关系、耗时与用量 |
 
-本次真实模型为用户授权复用的 qwen3.6-plus。Worker、Matrix、存储和 Langfuse 均独立；Worker 只连接 at-tracing-demo_default。原模型密钥仅放在受限代理中，代理只开放指定模型接口，不能访问 AT 其他 API。Langfuse 写入密钥保留在 Collector，查询密钥保留在 Dashboard。
+此前演示真实模型为用户授权复用的 qwen3.6-plus。Worker、Matrix、存储和 Langfuse 均独立；Worker 只连接 at-tracing-demo_default。原模型密钥仅放在受限代理中，代理只开放指定模型接口，不能访问 AT 其他 API。当前 Langfuse 写入密钥保留在 Collector，查询密钥保留在 Controller。
 
 完整采集有明确边界：单字段 256 KiB 超限标记长度/哈希/预览；脱敏凭证；不能恢复运行时已经截断的输出或模型未返回的内部推理。Collector 持久队列保护已接收数据，SDK 未导出/未结束 span 和强杀不能承诺不丢。OpenClaw、DSH、OpenHuman 尚未完成本分支适配。不同架构/历史上下文的示例不能直接当作 runtime 性能排名。
 

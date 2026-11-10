@@ -49,6 +49,9 @@ def enrich_task(fields, workspace):
         task = found.get("task") or {}
         if task.get("task_id") or task.get("taskId"):
             fields["agentteams.task.id"] = task.get("task_id") or task["taskId"]
+            for source, label in (("notifyTxn", "dispatch_id"), ("submission_id", "submission_id")):
+                if task.get(source):
+                    fields[f"agentteams.task.{label}"] = str(task[source])
     elif fields.get("agentteams.task.id"):
         fields["agentteams.task.correlation"] = "explicit request context"
     return fields
@@ -96,6 +99,11 @@ def start_turn(fields, request):
 def qwenpaw_runtime(module):
     async def run(wrapped, instance, args, kwargs):
         request = args[0] if args else kwargs["request"]
+        request = instance._normalize(request)
+        if args:
+            args = (request, *args[1:])
+        else:
+            kwargs = {**kwargs, "request": request}
         fields = telemetry.turn_fields(getattr(request, "session_id", "") or "unassigned",
                                       user_id=getattr(request, "user_id", ""),
                                       metadata=getattr(request, "channel_meta", {}) or {})
@@ -156,9 +164,17 @@ def agentscope(module):
         return wrapped(*args, **kwargs)
 
     async def reply(wrapped, instance, args, kwargs):
-        if telemetry._correlation.get().get("agentteams.turn.id"):
-            return await wrapped(*args, **kwargs)
         rc = getattr(instance, "_request_context", {}) or {}
+        if telemetry._correlation.get().get("agentteams.turn.id"):
+            # Runtime hooks may have synced the task files after run() began.
+            fields = enrich_task(telemetry._correlation.get(), rc.get("workspace_dir") or getattr(instance, "workspace_dir", None))
+            with bind(fields):
+                root = telemetry._active_turn.get()
+                if root is not None and root.is_recording():
+                    telemetry.IdentityProcessor().on_start(root)
+                    from at_trace_transport import remember_reply
+                    remember_reply(root, fields, rc.get("channel_meta"))
+                return await wrapped(*args, **kwargs)
         session_id = rc.get("session_id") or getattr(instance.state, "session_id", "")
         fields = telemetry.turn_fields(session_id, user_id=rc.get("user_id", ""), metadata=rc.get("channel_meta", {}))
         fields = enrich_task(fields, rc.get("workspace_dir") or getattr(instance, "workspace_dir", None))

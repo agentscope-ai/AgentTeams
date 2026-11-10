@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import os
 import subprocess  # noqa: F401 — kept as an attribute: tests patch server.subprocess.run
 import sys
@@ -266,7 +267,20 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any] | None:
         result = {"tools": list_tools()}
     elif method == "tools/call":
         params = request.get("params", {}) or {}
-        result = call_tool(str(params.get("name", "")), params.get("arguments", {}) or {})
+        scope = nullcontext()
+        if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in ("true", "1"):
+            try:
+                from at_trace_transport import mcp_request
+            except ImportError:
+                pass
+            else:
+                scope = mcp_request(params.get("_meta", {}), str(params.get("name", "")))
+        with scope as span:
+            result = call_tool(str(params.get("name", "")), params.get("arguments", {}) or {})
+            if span is not None:
+                from at_telemetry import set_io, outcome
+                set_io(span, input=params.get("arguments", {}), output=result)
+                outcome(span, json.loads(result["content"][0]["text"]))
     else:
         result = {
             "content": [

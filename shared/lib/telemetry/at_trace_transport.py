@@ -1,6 +1,8 @@
 """W3C carriers in Matrix events and child processes; no per-turn global env."""
 
 import os
+import copy
+import json
 import time
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -81,6 +83,67 @@ def incoming(content, *, room_id="", event_id=""):
     return {key: value for key, value in result.items() if value}
 
 
+def mcp_client(module):
+    async def call(wrapped, instance, args, kwargs):
+        if trace.get_current_span().get_span_context().is_valid:
+            kwargs = {**kwargs, "meta": {**(kwargs.get("meta") or {}), MATRIX_TRACE_KEY: carrier()}}
+        return await wrapped(*args, **kwargs)
+
+    wrapt.wrap_function_wrapper(module, "ClientSession.call_tool", call)
+
+
+@contextmanager
+def mcp_request(metadata, name):
+    """Restore one call in a long-lived child, without retaining its identity."""
+    wire = metadata.get(MATRIX_TRACE_KEY, {}) if isinstance(metadata, Mapping) else {}
+    restored = propagate.extract(dict(wire)) if isinstance(wire, Mapping) else context.Context()
+    parent = trace.get_current_span(restored).get_span_context()
+    forwarded = baggage.get_all(restored)
+    if not parent.is_valid or forwarded.get("agentteams.worker.name") != os.getenv("AGENTTEAMS_WORKER_NAME", "unknown"):
+        restored = context.Context()
+        fields = {}
+    else:
+        fields = {key: str(value) for key, value in forwarded.items() if key.startswith("agentteams.")}
+    token = context.attach(restored)
+    correlation = telemetry._correlation.set(fields)
+    try:
+        if parent.is_valid and fields:
+            with telemetry.operation("mcp " + name, attributes={"langfuse.observation.type": "tool", "gen_ai.operation.name": "execute_tool"}) as span:
+                yield span
+        else:
+            yield None
+    finally:
+        telemetry._correlation.reset(correlation)
+        context.detach(token)
+
+
+def urllib_requests(module):
+    def request(wrapped, instance, args, kwargs):
+        original = args[0] if args else kwargs.get("url")
+        if not isinstance(original, module.Request) or not trace.get_current_span().get_span_context().is_valid:
+            return wrapped(*args, **kwargs)
+        if original.type not in ("http", "https"):
+            return wrapped(*args, **kwargs)
+        from urllib.parse import urlsplit
+        url = urlsplit(original.full_url)
+        matrix_send = "/_matrix/client/" in url.path and "/send/" in url.path
+        attributes = {"http.request.method": original.get_method(), "server.address": url.hostname or "", "url.path": url.path}
+        with telemetry.operation("matrix.send" if matrix_send else "http.request", attributes=attributes) as span:
+            if matrix_send and original.data:
+                content = json.loads(original.data)
+                content[MATRIX_TRACE_KEY] = carrier()
+                updated = copy.copy(original)
+                updated.headers = dict(original.headers)
+                updated.unredirected_hdrs = dict(original.unredirected_hdrs)
+                updated.data = json.dumps(content).encode("utf-8")
+                args, kwargs = ((updated, *args[1:]), kwargs) if args else (args, {**kwargs, "url": updated})
+                telemetry.set_io(span, input=content)
+            response = wrapped(*args, **kwargs)
+            span.set_attribute("http.response.status_code", response.status)
+            return response
+    wrapt.wrap_function_wrapper(module, "urlopen", request)
+
+
 def matrix_client(module, path, content_index):
     async def send_current(wrapped, instance, args, kwargs):
         if not trace.get_current_span().get_span_context().is_valid:
@@ -157,3 +220,5 @@ def install():
     wrapt.register_post_import_hook(lambda m: matrix_client(m, "Client.send_message_event", 2), "mautrix.client")
     wrapt.register_post_import_hook(hermes_gateway, "gateway.platforms.base")
     wrapt.register_post_import_hook(subprocesses, "subprocess")
+    wrapt.register_post_import_hook(mcp_client, "mcp.client.session")
+    wrapt.register_post_import_hook(urllib_requests, "urllib.request")

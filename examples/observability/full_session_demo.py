@@ -50,7 +50,7 @@ async def qwenpaw():
         react_config=ReActConfig(max_iters=12), middlewares=[],
         agent_config=AgentProfileConfig(id="default", name="full-session"), workspace_dir=WORK,
         request_context={"session_id": "full-session-qwenpaw", "user_id": "acceptance",
-                         "channel_meta": {"room_id": "!full-session:at-demo", "task_id": "full-session-acceptance", "team_id": "tracing-team"}},
+                         "channel_meta": {"room_id": "!full-session:at-demo", "task_id": "full-session-acceptance", "team_id": "tracing-team", "project_id": "tracing-acceptance"}},
     )
     for index, prompt in enumerate(PROMPTS):
         result = await agent.reply(Msg(name="acceptance", role="user", content=[TextBlock(text=prompt)]))

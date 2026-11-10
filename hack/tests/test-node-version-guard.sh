@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Execute the *actual* pre-download Node guard from the four Dockerfiles.
+# Execute the actual pre-download Node guard from the shared Harness Dockerfiles.
 #
 # The maintainer's #1421 constraint is Node 24 LTS: the guard must validate
 # both the requested major and the 24.22.1 floor, so that NODE_VERSION=25/26
@@ -13,7 +13,6 @@ cd "$root"
 files=(
   openclaw-base/Dockerfile
   qwenpaw/Dockerfile
-  manager/Dockerfile.qwenpaw
   hermes/Dockerfile
 )
 
@@ -83,4 +82,4 @@ if [ "$fail" -ne 0 ]; then
   echo "Node guard regression failed." >&2
   exit 1
 fi
-echo "Node guards OK (major 24 + floor 24.22.1, four Dockerfiles)."
+echo "Node guards OK (major 24 + floor 24.22.1, three Dockerfiles)."

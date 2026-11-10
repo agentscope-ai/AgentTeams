@@ -101,6 +101,8 @@ Dir.mktmpdir("teamharness-qwenpaw-") do |tmp|
   end
 
   copy_entry(adapter_root, staging, "plugin.py")
+  # QwenPaw registers one skill root per plugin; Managers use skills/manager.
+  FileUtils.cp_r(plugin_root / "skills/agent/task-diagnosis", asset_dir / "skills/manager")
   copy_entry(adapter_root, staging, "task_trace.py")
 
   qwenpaw_manifest = {

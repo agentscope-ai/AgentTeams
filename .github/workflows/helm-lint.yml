@@ -37,6 +37,8 @@ on:
       - 'tests/check-installer-dashboard-session-secret.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-auto-version-images.sh'
+      - 'tests/check-installer-codex-image.sh'
+      - 'tests/check-installer-codex-image.ps1'
       - 'tests/check-teamharness-acceptance-observer.sh'
       - 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh'
       - 'tests/check-installer-qwenpaw-runtime-options.sh'
@@ -94,6 +96,13 @@ jobs:
 
       - name: Check Bash installer WASM registry
         run: bash tests/check-installer-wasm-registry.sh
+
+      - name: Check Codex default Worker image
+        run: bash tests/check-installer-codex-image.sh
+
+      - name: Check PowerShell Codex default Worker image
+        shell: pwsh
+        run: ./tests/check-installer-codex-image.ps1
 
       - name: Check PowerShell installer WASM registry
         shell: pwsh

@@ -13,7 +13,13 @@
 
 参见 [../../../AGENTS.md](../../../AGENTS.md) 获取完整的代码库导航指南。
 
-## 检出 Hermes Harness
+## 检出运行时 Harness
+
+OpenClaw Worker 源码维护在
+[agentteams-harness-openclaw](https://github.com/agentteams-group/agentteams-harness-openclaw)，
+主仓库通过 `worker/` Git 子模块固定提交。`make build-worker` 和
+`make push-worker` 会自动初始化缺失的子模块。升级 Worker 打包代码时，先更新独立仓库，
+再更新子模块提交。Manager 启动逻辑、`openclaw-base/`、平台插件和角色模板仍在主仓库维护。
 
 Hermes 运行时代码维护在
 [agentteams-harness-hermes](https://github.com/agentteams-group/agentteams-harness-hermes)，

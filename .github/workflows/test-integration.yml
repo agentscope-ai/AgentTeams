@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'manager/**'
+      - 'worker'
       - 'worker/**'
       - 'openclaw-base/**'
       - 'agentteams-controller/**'
@@ -33,6 +34,7 @@ on:
       - 'v*'
     paths:
       - 'manager/**'
+      - 'worker'
       - 'worker/**'
       - 'openclaw-base/**'
       - 'agentteams-controller/**'

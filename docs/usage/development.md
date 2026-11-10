@@ -13,7 +13,15 @@ Guide for contributing to AgentTeams, building images locally, and running tests
 
 See [../../AGENTS.md](../../AGENTS.md) for a comprehensive codebase navigation guide.
 
-## Hermes Harness checkout
+## Runtime Harness checkouts
+
+OpenClaw Worker source is maintained in
+[agentteams-harness-openclaw](https://github.com/agentteams-group/agentteams-harness-openclaw)
+and pinned here as the `worker/` Git submodule. `make build-worker` and
+`make push-worker` initialize a missing checkout automatically. Update the
+harness first, then bump the submodule commit to upgrade the Worker packaging.
+Manager bootstrap, `openclaw-base/`, platform plugins and role templates remain
+in this repository.
 
 Hermes runtime source is maintained in
 [agentteams-harness-hermes](https://github.com/agentteams-group/agentteams-harness-hermes)

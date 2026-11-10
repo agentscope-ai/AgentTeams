@@ -222,7 +222,12 @@ class BuildWorkflowTests(unittest.TestCase):
                                                      'MANIFEST': manifest, 'STATUS': status, 'ERROR': error, 'GITHUB_OUTPUT': str(output), 'IMAGE_LOG': str(log)})
                         self.assertEqual(result.returncode == 0, ready is not None, result.stderr)
                         self.assertEqual(output.read_text(), 'ready=' + ready + '\n' if ready is not None else '')
-                        image = target if target in ['openclaw-base', 'agentteams-controller'] else 'agentteams-' + target
+                        image = {
+                            'worker': 'agentteams-harness-openclaw',
+                            'qwenpaw-worker': 'agentteams-harness-qwenpaw',
+                            'hermes-worker': 'agentteams-harness-hermes',
+                            'openhuman-worker': 'agentteams-harness-openhuman',
+                        }.get(target, target if target in ['openclaw-base', 'agentteams-controller'] else 'agentteams-' + target)
                         self.assertEqual(log.read_text(), f'example.test/agentteams/{image}:v1.2.3')
 
     def test_release_gate_rejects_missing_or_single_arch_images(self):

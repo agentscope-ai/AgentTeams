@@ -340,8 +340,8 @@ worker:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-deepseek-harness-worker
       tag: "v0.1.1"           # experimental; released independently from global.imageTag
     codex:
-      repository: ""           # opt-in; built in agentteams-group/agentteams-harness-codex
-      tag: ""                  # pin an independently published version
+      repository: ghcr.io/agentteams-group/agentteams-harness-codex
+      tag: "v0.1.0"            # released independently from global.imageTag
   defaultRuntime: "openclaw"
   resources:
     requests:

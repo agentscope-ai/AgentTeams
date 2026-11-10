@@ -82,4 +82,4 @@ AGENTTEAMS_ACCEPTANCE_MODEL_NETWORK="$MODEL_NETWORK" \
 go test ./internal/server -run '^TestQwenPawLangfuseAcceptance$' -count=1 -v -timeout=10m
 ```
 
-默认单元测试跳过这项外部服务验收。常规回归覆盖 Controller 配置持久化、脱敏、并发保存、创建时注入、已有 Worker 应用、分页完整性、越权、CLI 和 QwenPaw MCP 环境继承。Dashboard 变更的测试与 lint 通过；生产构建的编译通过，但最终 Next 路由类型检查受三个未修改路由导出的既有测试辅助符号阻断，不能记为完整构建通过。
+默认单元测试跳过这项外部服务验收。常规回归覆盖 Controller 配置持久化、脱敏、并发保存、创建时注入、已有 Worker 应用、分页完整性、越权、CLI 和 QwenPaw MCP 环境继承。Dashboard 初次构建受三个既有路由导出的测试辅助符号阻断；该问题在独立的 [Dashboard PR #224](https://github.com/agentteams-group/agentteams-dashboard/pull/224) 修复，其完整生产构建和 3803 条测试已通过。配套配置改造需基于该修复继续验收。

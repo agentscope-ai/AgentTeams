@@ -608,6 +608,15 @@ func isHumanFileTombstone(meta oss.ObjectMeta) bool {
 
 // --- GET files (read one file or list a directory) --------------------------
 
+// serveListing runs one listing branch under the list-optimization
+// pipeline: the ETag middleware inner (validator over
+// the uncompressed JSON, so gzip and identity share one ETag) and the gzip
+// middleware outer. Only listing branches take it — readSingleFile keeps
+// its own content-bound ETag / If-Range / Range / ServeContent.
+func (h *humanFilesHandler) serveListing(w http.ResponseWriter, r *http.Request, listing func(http.ResponseWriter, *http.Request)) {
+	httputil.GzipMiddleware(httputil.ETagMiddleware(http.HandlerFunc(listing))).ServeHTTP(w, r)
+}
+
 // getFile handles GET /api/v1/humans/{name}/files/{path...}. When the path
 // is empty (the files root), ends with "/", or ?list=1 is present the
 // directory at that path is listed; otherwise the single file is streamed
@@ -635,7 +644,9 @@ func (h *humanFilesHandler) getFile(w http.ResponseWriter, r *http.Request) {
 	username := a.human.Spec.EffectiveUsername(a.human.Name)
 
 	if rawPath == "" || strings.HasSuffix(rawPath, "/") || r.URL.Query().Has("list") {
-		h.listDirectory(w, r, a, username, rawPath)
+		h.serveListing(w, r, func(w http.ResponseWriter, r *http.Request) {
+			h.listDirectory(w, r, a, username, rawPath)
+		})
 		return
 	}
 	h.readSingleFile(w, r, a, username, rawPath)

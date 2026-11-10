@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'agentteams-controller/**'
+      - 'qwenpaw'
       - 'qwenpaw/**'
       - 'manager/src/**'
       - 'plugins/teamharness/**'
@@ -20,6 +21,7 @@ on:
     branches: [main]
     paths:
       - 'agentteams-controller/**'
+      - 'qwenpaw'
       - 'qwenpaw/**'
       - 'manager/src/**'
       - 'plugins/teamharness/**'

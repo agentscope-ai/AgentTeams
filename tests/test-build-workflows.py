@@ -58,7 +58,7 @@ class BuildWorkflowTests(unittest.TestCase):
         selected = set(json.loads(values['targets']))
         self.assertEqual(selected, {
             'openclaw-base', 'agentteams-controller', 'embedded',
-            'manager', 'manager-qwenpaw', 'worker',
+            'worker',
             'hermes-worker', 'qwenpaw-worker', 'openhuman-worker',
         })
         self.assertEqual(selected, set(BUILD['jobs']) - {'prepare', 'release'})
@@ -127,10 +127,10 @@ class BuildWorkflowTests(unittest.TestCase):
                 self.assertNotIn('Building + pushing agentteams-controller', result.stdout)
                 self.assertIn('AGENTTEAMS_CONTROLLER_IMAGE=example.test/agentteams/agentteams-controller:v1.2.3', result.stdout)
 
-    def test_manager_publication_only_aliases_the_published_harness(self):
+    def test_manager_commands_publish_only_the_shared_harness(self):
         script = next(s['run'] for s in IMAGE['jobs']['build']['steps'] if s.get('name') == 'Build and push')
         for target, harness in [('manager', 'worker'), ('manager-qwenpaw', 'qwenpaw-worker')]:
-            self.assertIn(harness, BUILD['jobs'][target]['needs'])
+            self.assertNotIn(target, BUILD['jobs'])
             with tempfile.TemporaryDirectory() as directory:
                 stub = Path(directory) / 'make'
                 stub.write_text('#!/bin/bash\nexec /usr/bin/make -n "$@"\n')
@@ -141,8 +141,12 @@ class BuildWorkflowTests(unittest.TestCase):
                                              'TARGET': target, 'VERSION': 'v1.2.3',
                                              'REGISTRY': 'example.test', 'REPO': 'agentteams'})
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertNotIn('docker buildx build', result.stdout)
-                self.assertIn('docker buildx imagetools create', result.stdout)
+                self.assertIn('docker buildx build', result.stdout)
+                self.assertNotIn('/agentteams-manager:', result.stdout)
+                self.assertNotIn('/agentteams-manager-qwenpaw:', result.stdout)
+        verify = next(s['run'] for s in RELEASE['jobs']['release']['steps']
+                      if s.get('name') == 'Verify versioned multi-architecture images')
+        self.assertNotIn('agentteams-manager', verify)
 
     def test_hermes_builds_supply_the_trace_context(self):
         for target, podman in [('build-hermes-worker', '0'),
@@ -249,7 +253,7 @@ class BuildWorkflowTests(unittest.TestCase):
                                                  'MANIFEST': both, 'LAST_MANIFEST': manifest,
                                                  'LAST_STATUS': status, 'IMAGE_LOG': str(log)})
                     self.assertEqual(result.returncode == 0, success, result.stderr)
-                    self.assertEqual(len(set(log.read_text().splitlines())), 9)
+                    self.assertEqual(len(set(log.read_text().splitlines())), 7)
 
 
 if __name__ == '__main__':

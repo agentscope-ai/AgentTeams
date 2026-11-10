@@ -15,7 +15,7 @@ $script:AGENTTEAMS_REGISTRY = 'registry.example'
 $script:AGENTTEAMS_KNOWN_STABLE_VERSION = 'v1.2.7'
 $script:AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION = 'v1.2.4'
 $script:AGENTTEAMS_CODEX_WORKER_VERSION = 'v0.1.0'
-$names = @('WORKER', 'QWENPAW_WORKER', 'HERMES_WORKER', 'OPENHUMAN_WORKER', 'DEEPSEEK_HARNESS_WORKER')
+$names = @('MANAGER', 'MANAGER_QWENPAW', 'WORKER', 'QWENPAW_WORKER', 'HERMES_WORKER', 'OPENHUMAN_WORKER', 'DEEPSEEK_HARNESS_WORKER')
 $saved = @{}
 foreach ($name in $names) {
     $key = "AGENTTEAMS_INSTALL_${name}_IMAGE"
@@ -27,6 +27,8 @@ try {
     $script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = 'v0.1.1'
     & $resolve
     if ($script:WORKER_IMAGE -ne 'registry.example/agentteams/agentteams-worker:v1.2.6') { throw 'Historical OpenClaw image changed' }
+    if ($script:MANAGER_IMAGE -ne 'registry.example/agentteams/agentteams-manager:v1.2.6') { throw 'Historical Manager image changed' }
+    if ($script:MANAGER_QWENPAW_IMAGE -ne 'registry.example/agentteams/agentteams-manager-qwenpaw:v1.2.6') { throw 'Historical QwenPaw Manager image changed' }
     if ($script:QWENPAW_WORKER_IMAGE -ne 'registry.example/agentteams/agentteams-qwenpaw-worker:v1.2.6') { throw 'Historical QwenPaw image changed' }
     if ($script:DEEPSEEK_HARNESS_WORKER_IMAGE -ne 'registry.example/agentteams/agentteams-deepseek-harness-worker:v0.1.1') { throw 'Historical DeepSeek image changed' }
     $script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = 'v0.1.2'
@@ -39,6 +41,8 @@ try {
         if ((Get-Variable -Scope Script -Name "$($entry[0])_IMAGE" -ValueOnly) -ne "registry.example/agentteams/agentteams-harness-$($entry[1]):v1.2.7") { throw "Harness name mismatch: $($entry[1])" }
     }
     if ($script:DEEPSEEK_HARNESS_WORKER_IMAGE -ne 'registry.example/agentteams/agentteams-harness-deepseek:v0.1.2') { throw 'DeepSeek Harness name mismatch' }
+    if ($script:MANAGER_IMAGE -ne $script:WORKER_IMAGE) { throw 'OpenClaw Manager must share Harness image' }
+    if ($script:MANAGER_QWENPAW_IMAGE -ne $script:QWENPAW_WORKER_IMAGE) { throw 'QwenPaw Manager must share Harness image' }
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable("AGENTTEAMS_INSTALL_${name}_IMAGE", "private.example/${name}:custom", 'Process') }
     $script:AGENTTEAMS_VERSION = 'v1.2.6'
     & $resolve

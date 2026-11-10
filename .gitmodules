@@ -4,3 +4,6 @@
 [submodule "qwenpaw"]
 	path = qwenpaw
 	url = https://github.com/agentteams-group/agentteams-harness-qwenpaw.git
+[submodule "deepseek-harness"]
+	path = deepseek-harness
+	url = https://github.com/agentteams-group/agentteams-harness-deepseek.git

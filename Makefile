@@ -209,10 +209,10 @@ build-qwenpaw-worker: ## Build QwenPaw Worker image
 
 build-deepseek-harness-worker: ## Build DeepSeek Harness Worker image
 	@echo "==> Building DeepSeek Harness Worker image: $(LOCAL_DEEPSEEK_HARNESS_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 		-f deepseek-harness/Dockerfile \
 		-t $(LOCAL_DEEPSEEK_HARNESS_WORKER) \
-		.
+		deepseek-harness
 
 # ---------- Tag ----------
 
@@ -493,18 +493,18 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building DeepSeek Harness Worker for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 			--manifest $(DEEPSEEK_HARNESS_WORKER_TAG) \
-			-f deepseek-harness/Dockerfile . && ) true
+			-f deepseek-harness/Dockerfile deepseek-harness && ) true
 	podman manifest push --all $(DEEPSEEK_HARNESS_WORKER_TAG) docker://$(DEEPSEEK_HARNESS_WORKER_TAG)
 else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 		-t $(DEEPSEEK_HARNESS_WORKER_TAG) \
 		--push \
-		-f deepseek-harness/Dockerfile .
+		-f deepseek-harness/Dockerfile deepseek-harness
 endif
 
 # ---------- Push native-arch only (dev use) ----------

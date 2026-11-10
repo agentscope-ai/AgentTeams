@@ -167,6 +167,11 @@ build-embedded: build-agentteams-controller ## Build embedded all-in-one control
 		-t $(LOCAL_EMBEDDED) \
 		.
 
+worker/Dockerfile:
+	git submodule update --init -- worker
+
+build-worker push-worker: | worker/Dockerfile
+
 build-worker: build-agentteams-controller ## Build shared OpenClaw Harness image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \

@@ -22,7 +22,8 @@ def test_integration_workflow_runs_qwenpaw_like_copaw() -> None:
     independent_build = workflow["jobs"]["build-images-independent"]
     build_targets = json.loads(independent_build["with"]["targets"])
     assert "qwenpaw-worker" in build_targets
-    assert independent_build["needs"] == ["detect-changes"]
+    assert independent_build["needs"] == ["detect-changes", "build-base"]
+    assert independent_build["with"]["controller"] == "true"
 
     matrix_step = next(
         step

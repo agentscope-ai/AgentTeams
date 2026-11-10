@@ -730,10 +730,10 @@ class Worker:
                 shutil.copy2(source, target)
         if self.config.agent_role != "manager":
             self._prepare_builtin_plugin("workerflow", builtin_root / "workerflow")
-        self._prepare_builtin_plugin(
-            "qwen-code-bridge",
-            builtin_root / "qwen-code-bridge",
-        )
+            self._prepare_builtin_plugin(
+                "qwen-code-bridge",
+                builtin_root / "qwen-code-bridge",
+            )
 
     def _builtin_qwenpaw_plugins_dir(self) -> Path:
         configured = os.getenv("AGENTTEAMS_BUILTIN_QWENPAW_PLUGINS_DIR", "").strip()

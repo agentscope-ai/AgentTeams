@@ -45,6 +45,33 @@ func TestOpenClawWorkerShortMention(t *testing.T) {
 	}
 }
 
+func TestOpenClawWorkerDedicatedRoomDoesNotRequireMention(t *testing.T) {
+	g := NewGenerator(Config{MatrixDomain: "matrix.test", AdminUser: "admin"})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName: "alice", PersonalRoomID: "!alice:matrix.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	matrix := cfg["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	groups := matrix["groups"].(map[string]interface{})
+	room, ok := groups["!alice:matrix.test"].(map[string]interface{})
+	if !ok || room["requireMention"] != false {
+		t.Fatalf("dedicated room still requires a mention: %v", groups)
+	}
+	if groups["*"].(map[string]interface{})["requireMention"] != true {
+		t.Fatal("shared room mention requirement changed")
+	}
+	allowed := matrix["groupAllowFrom"].([]interface{})
+	if matrix["groupPolicy"] != "allowlist" || len(allowed) != 2 || allowed[0] != "@manager:matrix.test" || allowed[1] != "@admin:matrix.test" {
+		t.Fatalf("sender allowlist changed: %v", allowed)
+	}
+}
+
 func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 	g := NewGenerator(Config{
 		MatrixDomain:    "matrix.test:8080",

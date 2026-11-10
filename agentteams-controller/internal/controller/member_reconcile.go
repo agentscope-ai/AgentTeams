@@ -466,6 +466,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	// team-wide default (read-time merge — no spec writes, no second writer).
 	if err := d.Deployer.DeployWorkerConfig(ctx, service.WorkerDeployRequest{
 		Name:                   m.RuntimeName,
+		PersonalRoomID:         state.RoomID,
 		Spec:                   m.Spec,
 		SubagentModel:          resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
 		Role:                   m.Role.String(),

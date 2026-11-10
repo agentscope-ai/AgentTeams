@@ -324,6 +324,12 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 		dmAllowFrom = []string{leaderMatrixID, adminMatrixID}
 	}
 
+	groups := map[string]interface{}{
+		"*": map[string]interface{}{"requireMention": true},
+	}
+	if req.PersonalRoomID != "" {
+		groups[req.PersonalRoomID] = map[string]interface{}{"requireMention": false}
+	}
 	cfg := map[string]interface{}{
 		"homeserver":  serverURL,
 		"enabled":     true,
@@ -336,9 +342,7 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 		},
 		"groupPolicy":    "allowlist",
 		"groupAllowFrom": groupAllowFrom,
-		"groups": map[string]interface{}{
-			"*": map[string]interface{}{"requireMention": true},
-		},
+		"groups":         groups,
 		// Matrix v2026.10.6: nested streaming contract; editable preview while
 		// the LLM streams, one message per assistant block.
 		"streaming": map[string]interface{}{

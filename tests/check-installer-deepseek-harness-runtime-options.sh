@@ -36,7 +36,7 @@ if _supports_deepseek_harness "v1.2.3" || _supports_deepseek_harness "latest"; t
 fi
 _supports_deepseek_harness "v1.2.4" ||
     fail "Bash installer must offer DeepSeek Harness starting at v1.2.4"
-AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE="agentteams/deepseek-harness-worker:test"
+AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE="agentteams/agentteams-harness-deepseek:test"
 if _supports_deepseek_harness "v1.2.3"; then
     fail "A Worker-only image override must not bypass the v1.2.4 Controller contract"
 fi
@@ -62,7 +62,7 @@ _supports_deepseek_harness "latest" ||
 
 grep -Fq 'AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE' "${BASH_INSTALLER}" ||
     fail "Bash installer must support a DeepSeek Harness Worker image override"
-grep -Fq 'agentteams-deepseek-harness-worker:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}' "${BASH_INSTALLER}" ||
+grep -Fq 'agentteams-harness-deepseek:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}' "${BASH_INSTALLER}" ||
     fail "Bash installer must resolve the independently versioned DeepSeek Harness Worker image"
 grep -Fq '_refresh_known_stable_version' "${BASH_INSTALLER}" ||
     fail "Bash installer must refresh the stable version used by the latest feature gate"
@@ -77,7 +77,7 @@ grep -Fq 'AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=${DEEPSEEK_HARNESS_WORKER_IMA
 
 grep -Fq 'AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer must support a DeepSeek Harness Worker image override"
-grep -Fq 'agentteams-deepseek-harness-worker:$($script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION)' "${POWERSHELL_INSTALLER}" ||
+grep -Fq 'agentteams-harness-deepseek:$($script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION)' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer must resolve the independently versioned DeepSeek Harness Worker image"
 grep -Fq 'Update-AgentTeamsKnownStableVersion' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer must refresh the stable version used by the latest feature gate"

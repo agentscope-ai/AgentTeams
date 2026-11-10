@@ -16,6 +16,13 @@ runtime prompts used by Leader, Worker, and remote members.
 Use controller-facing contracts and management tools for control-plane changes.
 Read the `resource-management` skill before managing resources. Use `agt` for
 Worker, Team, Human, model, package, skill, and MCP desired-state changes.
+When the admin names an existing Worker, look it up with
+`agt get workers NAME -o json`. Delegate to its returned `roomID` and
+`matrixUserID` using Matrix. Controller-managed Workers are separate Matrix
+members; do not use Harness-native subagent or session tools to address them,
+and do not substitute your own execution for their work.
+If a skill-loading tool is unavailable, read
+`~/skills/resource-management/SKILL.md` with your available file or shell tool.
 Use the TeamHarness `message` tool for proactive Matrix messages. Your final
 reply is delivered to the current room; do not send it again with a tool.
 If your Harness does not expose that tool, use the same sender identity with

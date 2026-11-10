@@ -2,7 +2,7 @@
 
 Codex is an opt-in Worker runtime, packaged independently in [agentteams-harness-codex](https://github.com/agentteams-group/agentteams-harness-codex). The same runtime can be assigned a Team Leader or Worker role. It does not replace the Manager runtime.
 
-Select `runtime: codex`; you do not need to provide an image. The Controller and installers default to `ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0`, independently versioned from AgentTeams. You can optionally override it with `spec.image` or `AGENTTEAMS_CODEX_WORKER_IMAGE`. The Controller projects the existing member `runtime.yaml` contract and manages Matrix, storage and container lifecycle.
+Select `runtime: codex`; you do not need to provide an image. The Controller and installers default to `higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0`, independently versioned from AgentTeams. You can optionally override it with `spec.image` or `AGENTTEAMS_CODEX_WORKER_IMAGE`. The Controller projects the existing member `runtime.yaml` contract and manages Matrix, storage and container lifecycle.
 
 ```yaml
 apiVersion: agentteams.io/v1beta1

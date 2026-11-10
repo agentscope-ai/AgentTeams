@@ -691,7 +691,7 @@ _patch_worker_package_ref() {
 log_section "QwenPaw Image Plugin Package Baseline"
 
 QWENPAW_WORKER_IMAGE="$(_controller_env AGENTTEAMS_QWENPAW_WORKER_IMAGE)"
-QWENPAW_WORKER_IMAGE="${AGENTTEAMS_E2E_QWENPAW_WORKER_IMAGE:-${QWENPAW_WORKER_IMAGE:-agentteams/qwenpaw-worker:latest}}"
+QWENPAW_WORKER_IMAGE="${AGENTTEAMS_E2E_QWENPAW_WORKER_IMAGE:-${QWENPAW_WORKER_IMAGE:-agentteams/agentteams-harness-qwenpaw:latest}}"
 CONTROLLER_NAME="$(_controller_env AGENTTEAMS_CONTROLLER_NAME)"
 
 if docker image inspect "${QWENPAW_WORKER_IMAGE}" >/dev/null 2>&1; then

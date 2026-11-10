@@ -101,7 +101,7 @@ grep -Fq 'AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($Config.QWENPAW_WORKER_IMAGE)' "${PO
     fail "PowerShell installer must pass the QwenPaw Worker image to the Controller for on-demand creation"
 
 # Tag-triggered image selection is exercised in test-build-workflows.py.
-grep -Fq 'docker pull ${REGISTRY}/${REPO}/agentteams-qwenpaw-worker:${VERSION}' \
+grep -Fq 'docker pull ${REGISTRY}/${REPO}/agentteams-harness-qwenpaw:${VERSION}' \
     "${RELEASE_WORKFLOW}" ||
     fail "Release notes must list the versioned QwenPaw Worker image"
 

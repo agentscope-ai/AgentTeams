@@ -67,7 +67,7 @@ _select_available_auto_version
 grep -q 'agentteams-manager-qwenpaw:v1.2.4' "$CALLS" || fail 'selected manager missing'
 [ "$DEEPSEEK_HARNESS_WORKER_IMAGE" = registry.example/agentteams/agentteams-deepseek-harness-worker:v0.1.0 ] || fail 'independent runtime tag lost'
 ! grep -q 'agentteams-.*worker' "$CALLS" || fail 'Worker images must be pulled on demand'
-[ "$CODEX_WORKER_IMAGE" = ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0 ] || fail 'Codex default image missing'
+[ "$CODEX_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-codex:v0.1.0 ] || fail 'Codex default image missing'
 grep -q 'agentteams-dashboard:v1.4.1' "$CALLS" || fail 'dashboard missing'
 for FAILURE_KIND in missing arch; do
     reset_case

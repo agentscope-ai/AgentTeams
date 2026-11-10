@@ -27,11 +27,11 @@ REPO           ?= agentteams
 
 MANAGER_IMAGE        ?= $(REGISTRY)/$(REPO)/agentteams-manager
 MANAGER_QWENPAW_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-manager-qwenpaw
-WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-worker
-HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-hermes-worker
-QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-qwenpaw-worker
-OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-openhuman-worker
-DEEPSEEK_HARNESS_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-deepseek-harness-worker
+WORKER_IMAGE         ?= $(REGISTRY)/$(REPO)/agentteams-harness-openclaw
+HERMES_WORKER_IMAGE  ?= $(REGISTRY)/$(REPO)/agentteams-harness-hermes
+QWENPAW_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-harness-qwenpaw
+OPENHUMAN_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-harness-openhuman
+DEEPSEEK_HARNESS_WORKER_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-harness-deepseek
 OPENCLAW_BASE_IMAGE  ?= $(REGISTRY)/$(REPO)/openclaw-base
 CONTROLLER_IMAGE     ?= $(REGISTRY)/$(REPO)/agentteams-controller
 EMBEDDED_IMAGE       ?= $(REGISTRY)/$(REPO)/agentteams-embedded
@@ -50,11 +50,11 @@ EMBEDDED_TAG       ?= $(EMBEDDED_IMAGE):$(VERSION)
 # Local image names (no registry prefix, used by tests and install script)
 LOCAL_MANAGER        = agentteams/manager:$(VERSION)
 LOCAL_MANAGER_QWENPAW  = agentteams/manager-qwenpaw:$(VERSION)
-LOCAL_WORKER         = agentteams/worker-agent:$(VERSION)
-LOCAL_HERMES_WORKER  = agentteams/hermes-worker:$(VERSION)
-LOCAL_QWENPAW_WORKER = agentteams/qwenpaw-worker:$(VERSION)
-LOCAL_OPENHUMAN_WORKER = agentteams/openhuman-worker:$(VERSION)
-LOCAL_DEEPSEEK_HARNESS_WORKER = agentteams/deepseek-harness-worker:$(VERSION)
+LOCAL_WORKER         = agentteams/agentteams-harness-openclaw:$(VERSION)
+LOCAL_HERMES_WORKER  = agentteams/agentteams-harness-hermes:$(VERSION)
+LOCAL_QWENPAW_WORKER = agentteams/agentteams-harness-qwenpaw:$(VERSION)
+LOCAL_OPENHUMAN_WORKER = agentteams/agentteams-harness-openhuman:$(VERSION)
+LOCAL_DEEPSEEK_HARNESS_WORKER = agentteams/agentteams-harness-deepseek:$(VERSION)
 LOCAL_OPENCLAW_BASE  = agentteams/openclaw-base:$(VERSION)
 LOCAL_CONTROLLER     = agentteams/agentteams-controller:$(VERSION)
 LOCAL_CONTROLLER_BUILD_IMAGE ?= $(LOCAL_CONTROLLER)
@@ -429,6 +429,23 @@ else
 		$(if $(PUSH_LATEST),-t $(HERMES_WORKER_IMAGE):latest) \
 		--push \
 		./hermes/
+endif
+
+push-openhuman-worker: push-agentteams-controller buildx-setup ## Build + push multi-arch OpenHuman Harness image
+ifeq ($(IS_PODMAN),1)
+	-podman manifest rm $(OPENHUMAN_WORKER_TAG) 2>/dev/null
+	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
+		podman build --platform $(plat) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+			--manifest $(OPENHUMAN_WORKER_TAG) -f openhuman/Dockerfile . && ) true
+	podman manifest push --all $(OPENHUMAN_WORKER_TAG) docker://$(OPENHUMAN_WORKER_TAG)
+	$(if $(PUSH_LATEST),podman manifest push --all $(OPENHUMAN_WORKER_TAG) docker://$(OPENHUMAN_WORKER_IMAGE):latest)
+else
+	docker buildx build --builder $(BUILDX_BUILDER) --platform $(MULTIARCH_PLATFORMS) \
+		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
+		-t $(OPENHUMAN_WORKER_TAG) $(if $(PUSH_LATEST),-t $(OPENHUMAN_WORKER_IMAGE):latest) \
+		--push -f openhuman/Dockerfile .
 endif
 
 push-qwenpaw-worker: push-agentteams-controller ## Build + push multi-arch QwenPaw Harness image

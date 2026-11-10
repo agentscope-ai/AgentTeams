@@ -12,7 +12,7 @@ AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.1
 AGENTTEAMS_CODEX_WORKER_VERSION=v0.1.0
 unset AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE AGENTTEAMS_CODEX_WORKER_IMAGE
 resolve_image_tags
-[[ "${CODEX_WORKER_IMAGE}" == ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0 ]]
+[[ "${CODEX_WORKER_IMAGE}" == example.test/agentteams/agentteams-harness-codex:v0.1.0 ]]
 AGENTTEAMS_CODEX_WORKER_IMAGE=example.test/codex:saved
 resolve_image_tags
 [[ "${CODEX_WORKER_IMAGE}" == example.test/codex:saved ]]

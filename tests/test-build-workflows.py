@@ -59,7 +59,7 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertEqual(selected, {
             'openclaw-base', 'agentteams-controller', 'embedded',
             'manager', 'manager-qwenpaw', 'worker',
-            'hermes-worker', 'qwenpaw-worker',
+            'hermes-worker', 'qwenpaw-worker', 'openhuman-worker',
         })
         self.assertEqual(selected, set(BUILD['jobs']) - {'prepare', 'release'})
         self.assertEqual(set(BUILD['jobs']['release']['needs']), selected | {'prepare'})
@@ -80,6 +80,20 @@ class BuildWorkflowTests(unittest.TestCase):
             with self.subTest(targets=targets, version=version):
                 result, _ = self.resolve(targets, version=version)
                 self.assertNotEqual(result.returncode, 0)
+
+    def test_openhuman_publication_builds_the_installed_image(self):
+        for podman in ['0', '1']:
+            result = subprocess.run(['make', '-n', '-o', 'push-agentteams-controller',
+                                     'push-openhuman-worker', 'IS_PODMAN=' + podman,
+                                     'VERSION=v1.2.7'], cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('openhuman/Dockerfile', result.stdout)
+            self.assertIn('agentteams/agentteams-harness-openhuman:v1.2.7', result.stdout)
+        self.assertIn('agentteams-harness-openhuman',
+                      next(s['run'] for s in RELEASE['jobs']['release']['steps']
+                           if s.get('name') == 'Verify versioned multi-architecture images'))
+        rc = workflow('build-rc.yml')['jobs']['build-rc']['steps']
+        self.assertIn('push-openhuman-worker', next(s['run'] for s in rc if s.get('name') == 'Build and push multi-arch images'))
 
     def test_manual_default_version(self):
         result, values = self.resolve(version='')
@@ -103,7 +117,7 @@ class BuildWorkflowTests(unittest.TestCase):
             stub = Path(directory) / 'make'
             stub.write_text('#!/bin/bash\nexec /usr/bin/make -n "$@"\n')
             stub.chmod(0o755)
-            for target in ['embedded', 'manager']:
+            for target in ['embedded', 'worker', 'qwenpaw-worker', 'hermes-worker']:
                 result = subprocess.run(['bash', '-e', '-c', script], cwd=ROOT,
                                         capture_output=True, text=True,
                                         env={**os.environ, 'PATH': directory + ':' + os.environ['PATH'],
@@ -112,6 +126,23 @@ class BuildWorkflowTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn('Building + pushing agentteams-controller', result.stdout)
                 self.assertIn('AGENTTEAMS_CONTROLLER_IMAGE=example.test/agentteams/agentteams-controller:v1.2.3', result.stdout)
+
+    def test_manager_publication_only_aliases_the_published_harness(self):
+        script = next(s['run'] for s in IMAGE['jobs']['build']['steps'] if s.get('name') == 'Build and push')
+        for target, harness in [('manager', 'worker'), ('manager-qwenpaw', 'qwenpaw-worker')]:
+            self.assertIn(harness, BUILD['jobs'][target]['needs'])
+            with tempfile.TemporaryDirectory() as directory:
+                stub = Path(directory) / 'make'
+                stub.write_text('#!/bin/bash\nexec /usr/bin/make -n "$@"\n')
+                stub.chmod(0o755)
+                result = subprocess.run(['bash', '-e', '-c', script], cwd=ROOT,
+                                        capture_output=True, text=True,
+                                        env={**os.environ, 'PATH': directory + ':' + os.environ['PATH'],
+                                             'TARGET': target, 'VERSION': 'v1.2.3',
+                                             'REGISTRY': 'example.test', 'REPO': 'agentteams'})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('docker buildx build', result.stdout)
+                self.assertIn('docker buildx imagetools create', result.stdout)
 
     def test_hermes_builds_supply_the_trace_context(self):
         for target, podman in [('build-hermes-worker', '0'),
@@ -191,7 +222,12 @@ class BuildWorkflowTests(unittest.TestCase):
                                                      'MANIFEST': manifest, 'STATUS': status, 'ERROR': error, 'GITHUB_OUTPUT': str(output), 'IMAGE_LOG': str(log)})
                         self.assertEqual(result.returncode == 0, ready is not None, result.stderr)
                         self.assertEqual(output.read_text(), 'ready=' + ready + '\n' if ready is not None else '')
-                        image = target if target in ['openclaw-base', 'agentteams-controller'] else 'agentteams-' + target
+                        image = {
+                            'worker': 'agentteams-harness-openclaw',
+                            'qwenpaw-worker': 'agentteams-harness-qwenpaw',
+                            'hermes-worker': 'agentteams-harness-hermes',
+                            'openhuman-worker': 'agentteams-harness-openhuman',
+                        }.get(target, target if target in ['openclaw-base', 'agentteams-controller'] else 'agentteams-' + target)
                         self.assertEqual(log.read_text(), f'example.test/agentteams/{image}:v1.2.3')
 
     def test_release_gate_rejects_missing_or_single_arch_images(self):
@@ -200,7 +236,7 @@ class BuildWorkflowTests(unittest.TestCase):
         single = json.dumps({'manifests': [{'platform': {'os': 'linux', 'architecture': 'amd64'}}]})
         with tempfile.TemporaryDirectory() as directory:
             stub = Path(directory) / 'docker'
-            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$4" >> "$IMAGE_LOG"\nif [[ "$4" == *agentteams-hermes-worker:* ]]; then\n  printf "%s" "$LAST_MANIFEST"\n  exit "$LAST_STATUS"\nfi\nprintf "%s" "$MANIFEST"\n')
+            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$4" >> "$IMAGE_LOG"\nif [[ "$4" == *agentteams-harness-openhuman:* ]]; then\n  printf "%s" "$LAST_MANIFEST"\n  exit "$LAST_STATUS"\nfi\nprintf "%s" "$MANIFEST"\n')
             stub.chmod(0o755)
             for manifest, status, success in [(both, '0', True), (single, '0', False), ('', '1', False), ('not-json', '0', False), ('', '0', False)]:
                 with self.subTest(manifest=manifest, status=status):
@@ -213,7 +249,7 @@ class BuildWorkflowTests(unittest.TestCase):
                                                  'MANIFEST': both, 'LAST_MANIFEST': manifest,
                                                  'LAST_STATUS': status, 'IMAGE_LOG': str(log)})
                     self.assertEqual(result.returncode == 0, success, result.stderr)
-                    self.assertEqual(len(set(log.read_text().splitlines())), 8)
+                    self.assertEqual(len(set(log.read_text().splitlines())), 9)
 
 
 if __name__ == '__main__':

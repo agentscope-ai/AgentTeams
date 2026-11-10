@@ -108,11 +108,10 @@ fi
 # ---- Process check ----
 log_section "Process Check"
 
-if docker exec "${_AGENT_CTR}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1 || \
-   docker exec "${_AGENT_CTR}" pgrep -f "qwenpaw app" >/dev/null 2>&1; then
-    log_pass "QwenPaw process running"
+if wait_for_manager_agent_ready 30; then
+    log_pass "QwenPaw native runtime ready"
 else
-    log_fail "QwenPaw process running"
+    log_fail "QwenPaw native runtime ready"
 fi
 
 # ---- Health endpoint ----

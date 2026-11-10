@@ -1,7 +1,7 @@
 #!/bin/bash
 # test-03-assign-task.sh - Case 3: Assign task in Room, Worker completes
-# Verifies: Manager relays task to Worker, task brief created in MinIO,
-#           Worker completes and writes result
+# Verifies: Manager acknowledges the current task, and Worker publishes the
+#           requested README with its unique task marker in shared storage.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/test-helpers.sh"
@@ -39,13 +39,12 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
 # Alice container should be running from test-02; wait to ensure it's up before snapshot
 wait_for_worker_container "alice" 60
 METRICS_BASELINE=$(snapshot_baseline "alice")
-MANAGER_BASELINE_EVENT=$(matrix_latest_reply_event "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager")
+TASK_ID="test03-$(date +%s)-$$"
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Please assign Alice a task: Create a simple README.md for a hello-world project. The README should include project name, description, and usage instructions."
+    "Please assign Alice task ${TASK_ID}: Create shared/tasks/${TASK_ID}/README.md for a hello-world project. Include project name, description, usage instructions, and the exact marker ${TASK_ID}. Publish the file with TeamHarness filesync push and verify the remote file before reporting completion. Delegate the work to Alice and mention ${TASK_ID} in your acknowledgement."
 
 log_info "Waiting for Manager to process task..."
-REPLY=$(matrix_wait_for_reply_since "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" "${MANAGER_BASELINE_EVENT}" 180 \
-    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the task assignment has been processed.")
+REPLY=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" "${TASK_ID}" 180)
 
 assert_not_empty "${REPLY}" "Manager acknowledged task assignment"
 
@@ -53,25 +52,15 @@ log_section "Verify Task in MinIO"
 
 minio_setup
 
-# Wait for task brief to appear
-log_info "Waiting for task brief in MinIO..."
-TASKS=""
-for _ in $(seq 1 18); do
-    TASKS=$(minio_list_dir "shared/tasks/" 2>/dev/null || echo "")
-    [ -n "${TASKS}" ] && break
-    sleep 5
-done
-assert_not_empty "${TASKS}" "Task directory created in MinIO"
-
-log_section "Wait for Worker Completion"
-
-# Wait for Worker to complete (up to 5 minutes)
-log_info "Waiting for Worker Alice to complete the task..."
-sleep 60
-
-# Check for result file
-TASKS_LIST=$(minio_list_dir "shared/tasks/" 2>/dev/null)
-log_info "Tasks directory contents: ${TASKS_LIST}"
+log_info "Waiting for this task's actual README in MinIO..."
+RESULT_PATH="shared/tasks/${TASK_ID}/README.md"
+if minio_wait_for_file "${RESULT_PATH}" 300; then
+    log_pass "Task README exists in shared storage"
+    RESULT=$(minio_read_file "${RESULT_PATH}")
+    assert_contains "${RESULT}" "${TASK_ID}" "Task README contains the current task marker"
+else
+    log_fail "Task README missing from shared storage"
+fi
 
 log_section "Collect Metrics"
 wait_for_worker_session_stable "alice" 5 120

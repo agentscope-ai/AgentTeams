@@ -10,7 +10,7 @@
 #
 # Usage:
 #   source /opt/agentteams/scripts/lib/container-api.sh
-#   worker_backend_create '{"name":"alice","image":"agentteams/worker-agent:latest"}'
+#   worker_backend_create '{"name":"alice","image":"agentteams/agentteams-harness-openclaw:latest"}'
 #   worker_backend_status "alice"
 #   worker_backend_delete "alice"
 

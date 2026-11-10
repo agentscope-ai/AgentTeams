@@ -15,7 +15,7 @@
 #      the embedded kube-apiserver
 #   3. controller provisions the legacy instance; container runs the old image
 #   4. persist real .copaw workspace/session/secret state (MinIO-backed)
-#   5. upgrade to qwenpaw via update-worker-config.sh → container recreated
+#   5. upgrade to qwenpaw via agt update worker → container recreated
 #   6. state migrated under .qwenpaw with the same content; room/consumer preserved
 #   7. NEW CoPaw worker creation via the product API must be REJECTED
 #
@@ -37,7 +37,7 @@ STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-s
 # (May be pinned via @sha256: digest in the future.)
 LEGACY_IMAGE="${COPAW_LEGACY_IMAGE:-higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.4}"
 
-CTRL=agentteams-controller
+CTRL="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
 
 # CI test-artifact directory (the workflow copies tests/output/* into the
 # uploaded artifacts); failure evidence is written under it.
@@ -283,8 +283,7 @@ fi
 # ============================================================
 log_section "Switch Runtime (copaw → qwenpaw)"
 
-QWEN_SWITCH_OUTPUT=$(exec_in_agent bash \
-    /opt/agentteams/agent/skills/worker-management/scripts/update-worker-config.sh \
+QWEN_SWITCH_OUTPUT=$(exec_in_agent agt update worker \
     --name "${TEST_WORKER}" --runtime qwenpaw 2>&1)
 QWEN_SWITCH_EXIT=$?
 if [ "${QWEN_SWITCH_EXIT}" -eq 0 ]; then

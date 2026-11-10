@@ -29,7 +29,7 @@ try {
         New-EnvFile -Config $config -Path $script:AGENTTEAMS_ENV_FILE
         $lines = Get-Content $script:AGENTTEAMS_ENV_FILE
         if ($lines -cnotcontains "HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=$($case[2])") { throw 'Wrong saved WASM registry' }
-        $script:WORKER_IMAGE = "$($case[0])/agentteams/agentteams-worker:test"
+        $script:WORKER_IMAGE = "$($case[0])/agentteams/agentteams-harness-openclaw:test"
         Invoke-Expression $argsNode.Extent.Text
         if ($ctrlArgs -cnotcontains "HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=$($case[2])") { throw 'WASM registry not forwarded to embedded Controller' }
         if ($ctrlArgs -cnotcontains "AGENTTEAMS_WORKER_IMAGE=$script:WORKER_IMAGE") { throw 'Worker image registry changed' }

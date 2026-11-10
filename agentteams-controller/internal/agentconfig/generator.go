@@ -3,6 +3,7 @@ package agentconfig
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -197,6 +198,13 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 				},
 			},
 		},
+		// Matrix messages sent by agt use plain @name mentions. The SDK
+		// cannot derive these from the Matrix user ID without a pattern.
+		"messages": map[string]interface{}{
+			"groupChat": map[string]interface{}{
+				"mentionPatterns": []string{`(^|[^A-Za-z0-9_@-])@` + regexp.QuoteMeta(req.WorkerName) + `($|[^A-Za-z0-9_-])`},
+			},
+		},
 		"agents": map[string]interface{}{
 			"defaults": map[string]interface{}{
 				"timeoutSeconds":  1800,
@@ -316,6 +324,12 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 		dmAllowFrom = []string{leaderMatrixID, adminMatrixID}
 	}
 
+	groups := map[string]interface{}{
+		"*": map[string]interface{}{"requireMention": true},
+	}
+	if req.PersonalRoomID != "" {
+		groups[req.PersonalRoomID] = map[string]interface{}{"requireMention": false}
+	}
 	cfg := map[string]interface{}{
 		"homeserver":  serverURL,
 		"enabled":     true,
@@ -328,9 +342,7 @@ func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL,
 		},
 		"groupPolicy":    "allowlist",
 		"groupAllowFrom": groupAllowFrom,
-		"groups": map[string]interface{}{
-			"*": map[string]interface{}{"requireMention": true},
-		},
+		"groups":         groups,
 		// Matrix v2026.10.6: nested streaming contract; editable preview while
 		// the LLM streams, one message per assistant block.
 		"streaming": map[string]interface{}{

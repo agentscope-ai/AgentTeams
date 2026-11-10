@@ -47,12 +47,18 @@ if [ "${_MANAGER_RUNTIME}" != "qwenpaw" ] && [ "${_MANAGER_RUNTIME}" != "copaw" 
     exit 0
 fi
 
-# Migration script must be shipped in the Manager image
+# Shared Harnesses perform migration in the installed native runtime. Keep
+# the legacy shell checks below for installations that still ship that path.
 if ! docker exec "${_AGENT_CTR}" test -f /opt/agentteams/scripts/init/migrate-copaw-state.sh 2>/dev/null; then
-    log_fail "migrate-copaw-state.sh not present in Manager container"
+    if docker exec -i "${_AGENT_CTR}" /opt/venv/qwenpaw/bin/python \
+        < "${SCRIPT_DIR}/lib/check-harness-migration.py"; then
+        log_pass "Shared Harness preserves and safely persists legacy Manager state"
+    else
+        log_fail "Shared Harness legacy Manager state migration"
+    fi
     test_teardown "28-migration-e2e"
     test_summary
-    exit 1
+    exit $?
 fi
 
 # ------------------------------------------------------------

@@ -11,10 +11,11 @@ $assignment = $ast.Find({ param($node)
 }, $true)
 if (-not $assignment) { throw 'Codex image resolver missing' }
 $script:AGENTTEAMS_CODEX_WORKER_VERSION = 'v0.1.0'
+$script:AGENTTEAMS_REGISTRY = 'example.test'
 Remove-Item Env:AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE -ErrorAction SilentlyContinue
 Remove-Item Env:AGENTTEAMS_CODEX_WORKER_IMAGE -ErrorAction SilentlyContinue
 Invoke-Expression $assignment.Extent.Text
-if ($script:CODEX_WORKER_IMAGE -ne 'ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0') {
+if ($script:CODEX_WORKER_IMAGE -ne 'example.test/agentteams/agentteams-harness-codex:v0.1.0') {
     throw 'Default Codex image missing'
 }
 $env:AGENTTEAMS_CODEX_WORKER_IMAGE = 'example.test/codex:saved'

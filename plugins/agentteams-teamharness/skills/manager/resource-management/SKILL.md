@@ -22,6 +22,15 @@ agt create worker --name example-worker --runtime qwenpaw --model MODEL --no-wai
 
 Use `agt create worker --help` or `agt update worker --help` for supported flags.
 Poll the returned resource until ready when a subsequent operation needs it.
+For a custom Skill ZIP attachment, use the bundled safe importer:
+
+```bash
+bash /opt/agentteams/agent/skills/worker-management/scripts/install-worker-skill.sh --worker NAME --archive FILE.zip
+```
+
+Use `--replace` only when updating an existing Skill. The importer validates
+the archive, verifies its upload and updates the Worker's assigned skills.
+
 Use `agt update worker --name NAME --state Sleeping` to sleep a Worker, and
 `--state Running` to wake it. Deletion uses `agt delete worker NAME`.
 

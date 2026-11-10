@@ -83,7 +83,7 @@ make build
 docker images | grep agentteams
 
 # Manual startup test
-docker run --rm -it agentteams/worker-agent:latest /bin/bash
+docker run --rm -it agentteams/agentteams-harness-openclaw:latest /bin/bash
 ```
 
 ### Worker Cannot Connect to Matrix

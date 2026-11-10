@@ -35,6 +35,22 @@ git submodule update --init --recursive
 
 ## 本地构建镜像
 
+从 Core 1.2.7 起，Harness 镜像仓库统一使用以下名称：
+
+| 运行时 | 镜像仓库名称 |
+| --- | --- |
+| OpenClaw | `agentteams-harness-openclaw` |
+| QwenPaw | `agentteams-harness-qwenpaw` |
+| Hermes | `agentteams-harness-hermes` |
+| DeepSeek Harness | `agentteams-harness-deepseek` |
+| OpenHuman | `agentteams-harness-openhuman` |
+| Codex | `agentteams-harness-codex` |
+
+Core 本地构建使用 `agentteams/` 前缀。Codex 仍在独立仓库中构建；DeepSeek 和
+Codex 继续使用独立版本号。Manager 角色可以复用同一 Harness 镜像，原 Manager
+镜像标签保留为兼容别名。容器名、运行时 ID 和镜像覆盖环境变量保持不变。
+安装器为历史 Core 版本和 v0.1.2 之前的 DeepSeek 版本保留原仓库名称。
+
 所有构建都通过根目录的 `Makefile` 进行：
 
 ```bash
@@ -57,10 +73,11 @@ make build-hermes-worker
 make build-deepseek-harness-worker
 
 # 使用指定版本标签构建
-make build VERSION=0.1.0
+make build VERSION=local-dev
 
 # DeepSeek Harness 使用独立于主版本的 runtime 版本
-make push-deepseek-harness-worker DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.0
+make push-deepseek-harness-worker VERSION=sha-$(git rev-parse --short=12 HEAD) \
+    PUSH_LATEST= DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.2
 
 # 为指定平台构建
 make build DOCKER_PLATFORM=linux/amd64
@@ -354,7 +371,7 @@ Manager 在启动时检测 socket 并设置 `AGENTTEAMS_CONTAINER_RUNTIME=socket
 # Docker
 docker run -d --name agentteams-manager \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e AGENTTEAMS_WORKER_IMAGE=agentteams/worker-agent:latest \
+  -e AGENTTEAMS_WORKER_IMAGE=agentteams/agentteams-harness-openclaw:latest \
   ... \
   agentteams/manager:latest
 
@@ -362,7 +379,7 @@ docker run -d --name agentteams-manager \
 podman run -d --name agentteams-manager \
   -v /run/podman/podman.sock:/var/run/docker.sock \
   --security-opt label=disable \
-  -e AGENTTEAMS_WORKER_IMAGE=agentteams/worker-agent:latest \
+  -e AGENTTEAMS_WORKER_IMAGE=agentteams/agentteams-harness-openclaw:latest \
   ... \
   agentteams/manager:latest
 ```

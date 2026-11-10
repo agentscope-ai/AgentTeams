@@ -1195,6 +1195,9 @@ def test_failed_pull_fails_closed_for_submit_and_accept_but_check_still_reads(
     check_task stays a read, so it still succeeds and surfaces
     ``pulled`` — a reader may tolerate a failed pull, a writer may not."""
     project_id, task_id = _write_project_and_task(tmp_path)
+    # The guarded write must find an existing remote version before it can
+    # reach the failed-pull branch this case exercises.
+    monkeypatch.setattr(server, "_filesync", lambda *_args, **_kwargs: {"ok": True, "etag": "fixture-version"})
     monkeypatch.setattr(server, "_pull_task", lambda *_args, **_kwargs: False)
 
     task_path = tmp_path / "shared" / "tasks" / task_id / "meta.json"

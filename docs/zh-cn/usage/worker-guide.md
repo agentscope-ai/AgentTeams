@@ -56,7 +56,7 @@ docker run -d --name agentteams-worker-alice \
   -e AGENTTEAMS_FS_ENDPOINT=http://<MANAGER_HOST>:9000 \
   -e AGENTTEAMS_FS_ACCESS_KEY=<ACCESS_KEY> \
   -e AGENTTEAMS_FS_SECRET_KEY=<SECRET_KEY> \
-  agentteams/worker-agent:latest
+  agentteams/agentteams-harness-openclaw:latest
 ```
 
 Manager 会在回复中提供所有具体参数值。

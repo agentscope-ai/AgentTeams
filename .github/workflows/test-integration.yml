@@ -509,7 +509,7 @@ jobs:
             # no test in this run actually starts a CoPaw worker (test-23
             # rejects the copaw switch; test-29 skips via
             # COPAW_LEGACY_IMAGE_OPTIONAL).
-            echo "CI_COPAW_WORKER_IMAGE=agentteams/qwenpaw-worker:latest" >> "$GITHUB_ENV"
+            echo "CI_COPAW_WORKER_IMAGE=agentteams/agentteams-harness-qwenpaw:latest" >> "$GITHUB_ENV"
             echo "::notice::Registry credentials unavailable in this run — the legacy-upgrade test (29) will skip, and the copaw install slot uses a local placeholder image."
           else
             echo "COPAW_LEGACY_IMAGE_OPTIONAL=0" >> "$GITHUB_ENV"
@@ -806,11 +806,15 @@ jobs:
           # from GitHub-hosted runners (frequently times out on `docker pull`).
           # Published images are auto-mirrored from cn-hangzhou to us-west-1.
           REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com/agentteams
+          WORKER_REPOSITORY=agentteams-harness-openclaw
+          if [ "$(printf '%s\n' v1.2.7 "${VERSION}" | sort -V | head -1)" != v1.2.7 ]; then
+            WORKER_REPOSITORY=agentteams-worker
+          fi
           docker pull ${REGISTRY}/agentteams-manager:${VERSION}
-          docker pull ${REGISTRY}/agentteams-worker:${VERSION}
+          docker pull ${REGISTRY}/${WORKER_REPOSITORY}:${VERSION}
           docker pull ${REGISTRY}/agentteams-controller:${VERSION}
           docker tag ${REGISTRY}/agentteams-manager:${VERSION} agentteams/manager:${VERSION}
-          docker tag ${REGISTRY}/agentteams-worker:${VERSION} agentteams/worker-agent:${VERSION}
+          docker tag ${REGISTRY}/${WORKER_REPOSITORY}:${VERSION} agentteams/agentteams-harness-openclaw:${VERSION}
           docker tag ${REGISTRY}/agentteams-controller:${VERSION} agentteams/agentteams-controller:${VERSION}
 
       - name: Install AgentTeams
@@ -824,7 +828,7 @@ jobs:
           AGENTTEAMS_MATRIX_E2EE=0 \
           AGENTTEAMS_LLM_PROVIDER=qwen \
           AGENTTEAMS_INSTALL_MANAGER_IMAGE=agentteams/manager:${VERSION} \
-          AGENTTEAMS_INSTALL_WORKER_IMAGE=agentteams/worker-agent:${VERSION} \
+          AGENTTEAMS_INSTALL_WORKER_IMAGE=agentteams/agentteams-harness-openclaw:${VERSION} \
           AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=agentteams/agentteams-controller:${VERSION} \
           bash ./install/agentteams-install.sh manager
 

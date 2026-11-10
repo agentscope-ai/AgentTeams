@@ -1,3 +1,6 @@
 [submodule "hermes"]
 	path = hermes
 	url = https://github.com/agentteams-group/agentteams-harness-hermes.git
+[submodule "qwenpaw"]
+	path = qwenpaw
+	url = https://github.com/agentteams-group/agentteams-harness-qwenpaw.git

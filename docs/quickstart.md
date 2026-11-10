@@ -67,7 +67,7 @@ docker exec agentteams-controller agt get managers
 By default, open this URL in a browser:
 
 ```text
-http://127.0.0.1:18088/#/login
+http://127.0.0.1:13000/
 ```
 
 Sign in with the administrator username and password printed by the installer. You should see a conversation or room for the Manager.
@@ -83,11 +83,11 @@ See the [FAQ](usage/troubleshooting/faq.md) for more troubleshooting steps.
 
 ## Step 3: Create your first Worker
 
-Open a direct message with the Manager in Element Web and send:
+Open the Manager conversation in Dashboard and send:
 
 > Create a Worker named alice for Python development and code testing.
 
-The Manager will ask for or confirm the Worker's role, model, runtime, and Skills based on the current configuration. For a first evaluation, accept the recommended options. If you choose a runtime, prefer one whose default image was prepared during installation.
+The Manager will ask for or confirm the Worker's role, model, runtime, and Skills based on the current configuration. For a first evaluation, accept the recommended options. The selected runtime's image is downloaded when first needed, which can take longer on the first launch.
 
 Provisioning normally takes several dozen seconds. The Manager asks the controller to:
 
@@ -103,11 +103,11 @@ docker exec agentteams-controller agt get workers
 docker ps --filter name=agentteams-worker
 ```
 
-Wait until `alice` reaches `Running`, and confirm that its room appears in Element Web.
+Wait until `alice` reaches `Running`, and confirm that its conversation appears in Dashboard.
 
 ## Step 4: Complete your first task
 
-Open Alice's Matrix room and send:
+Open Alice's conversation in Dashboard and send:
 
 > Create a Python command-line program that accepts a name and prints a greeting. Include a README and basic tests. When finished, explain which files you created and how to run the tests.
 
@@ -129,7 +129,7 @@ Confirm that the Worker understands the additional requirement and covers both t
 ## Completion checklist
 
 - [ ] `agentteams-controller` and `agentteams-manager` are running.
-- [ ] You can sign in to Element Web and talk to the Manager.
+- [ ] You can sign in to Dashboard and talk to the Manager.
 - [ ] Alice is in the `Running` state.
 - [ ] Alice's Matrix room is visible to the Human.
 - [ ] The Worker returned the implementation, instructions, and test results.

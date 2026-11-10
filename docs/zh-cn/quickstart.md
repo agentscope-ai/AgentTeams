@@ -64,7 +64,7 @@ docker exec agentteams-controller agt get managers
 默认情况下，在浏览器中打开：
 
 ```text
-http://127.0.0.1:18088/#/login
+http://127.0.0.1:13000/
 ```
 
 使用安装器打印的管理员用户名和密码登录。登录后，你应该可以看到 Manager 的会话或房间。
@@ -80,11 +80,11 @@ docker logs --tail 200 agentteams-manager
 
 ## 第三步：创建第一个 Worker
 
-在 Element Web 中打开与 Manager 的私聊，发送：
+在 Dashboard 中打开 Manager 对话，发送：
 
 > 请创建一个名为 alice 的 Worker，负责 Python 开发和代码测试。
 
-Manager 会根据当前配置询问或确认 Worker 的角色、模型、运行时和 Skills。第一次体验可以接受推荐选项；如果选择运行时，请优先使用安装时已经准备好默认镜像的运行时。
+Manager 会根据当前配置询问或确认 Worker 的角色、模型、运行时和 Skills。第一次体验可以接受推荐选项。所选运行时的镜像在首次使用时下载，因此第一次启动可能需要更长时间。
 
 创建过程通常需要几十秒。Manager 会调用 controller 完成以下工作：
 
@@ -100,11 +100,11 @@ docker exec agentteams-controller agt get workers
 docker ps --filter name=agentteams-worker
 ```
 
-等待 `alice` 进入 `Running` 状态，并确认对应房间已经出现在 Element Web 中。
+等待 `alice` 进入 `Running` 状态，并确认对应会话已经出现在 Dashboard 中。
 
 ## 第四步：完成第一个任务
 
-打开 Alice 所在的 Matrix 房间，发送：
+在 Dashboard 中打开 Alice 的会话，发送：
 
 > 请创建一个 Python 命令行程序：接收一个名字参数并输出问候语。请同时编写 README 和基础测试，并在完成后说明生成了哪些文件以及如何运行测试。
 
@@ -126,7 +126,7 @@ docker ps --filter name=agentteams-worker
 ## 完成检查
 
 - [ ] `agentteams-controller` 和 `agentteams-manager` 正在运行。
-- [ ] 可以登录 Element Web 并与 Manager 对话。
+- [ ] 可以登录 Dashboard 并与 Manager 对话。
 - [ ] Alice 的状态为 `Running`。
 - [ ] Alice 的 Matrix 房间对 Human 可见。
 - [ ] Worker 返回了实现、说明和测试结果。

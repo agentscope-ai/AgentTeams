@@ -19,7 +19,7 @@ def functions(*names):
 def run(script):
     return subprocess.run(
         ["bash"], input=script, text=True, capture_output=True,
-        env={"PATH": os.environ["PATH"], "HOME": "/nonexistent/one-click-test"},
+        env={"PATH": os.environ["PATH"], "HOME": "/nonexistent/one-click-test"}, timeout=15,
     )
 
 

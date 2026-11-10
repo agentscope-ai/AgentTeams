@@ -7,19 +7,19 @@
 ## 完成后你将获得什么
 
 - 一套运行在本机的 AgentTeams 实例。
-- 一个可以通过 Element Web 对话的 Manager。
+- 一个可以通过 Dashboard 对话的 Manager。
 - 一个由 Manager 创建和管理的 Worker。
 - 一次 Human、Manager 与 Worker 共同参与的任务执行记录。
 
 ## 前置条件
 
 - macOS 或 Linux。Windows 用户参见 [Windows 部署指南](usage/deployment/windows.md)。
-- Docker Desktop、Docker Engine，或兼容的 Podman 环境已经启动。
+- OrbStack、Docker Desktop、Docker Engine，或兼容的 Podman 环境。未安装或未启动时，安装器会引导你安装并启动，随后继续。
 - 至少 2 核 CPU 和 4 GB 可用内存；运行多个 Worker 时建议 4 核 CPU 和 8 GB 内存。
-- 一个可用的 LLM API Key。安装器支持阿里云百炼/Qwen，也支持 OpenAI 兼容服务。
+- LLM API Key 可以在进入 Dashboard 后配置。安装器支持阿里云百炼/Qwen，也支持 OpenAI 兼容服务。
 - 本机端口 `18080`、`18001`、`18088` 未被占用。默认启用 Dashboard 时还需要端口 `13000`。
 
-> 第一次体验建议使用安装器的“快速开始”模式。如果需要自定义模型地址、外部访问、端口、持久化、运行时或镜像，请选择“手动配置”。
+> 默认直接启动本地服务和 Dashboard。需要逐项配置安装参数时，在命令末尾添加 `--manual`。
 
 ## 第一步：安装 AgentTeams
 
@@ -29,24 +29,22 @@
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
-按照提示完成配置：
+等待 Dashboard 自动打开。安装器会将登录密码复制到剪贴板，登录页预填用户名 `admin`；粘贴密码后即可登录。浏览器或剪贴板不可用时，可以使用终端打印的地址和账号密码。
 
-1. 选择中文。
-2. 选择“快速开始”或“手动配置”。
-3. 填写 LLM API Key；手动配置其他 OpenAI 兼容服务时，还需要填写 Base URL 和模型 ID。
-4. 等待模型连通性检查和容器启动完成。
+未配置模型时，在 Manager 对话页点击“配置模型”，前往模型列表填写 API Key、选择模型并验证，然后返回对话。Worker 运行时和模型可在创建 Worker 时选择，embedding 可在需要时配置。安装前已设置 `AGENTTEAMS_LLM_API_KEY` 的，会沿用该值；自定义服务还可以设置 `AGENTTEAMS_LLM_PROVIDER=openai-compat`、`AGENTTEAMS_OPENAI_BASE_URL` 和 `AGENTTEAMS_DEFAULT_MODEL`。
 
 如果使用 OpenAI 兼容服务，Base URL 通常需要包含 `/v1`，具体以服务商文档为准。
 
 安装成功后，终端会打印：
 
-- Element Web 登录地址。
+- Dashboard 登录地址和可选的 Element Web 地址。
 - 管理员用户名和密码。
 - Higress Console 地址。
-- Dashboard 地址（启用时）。
 - 配置文件、数据卷和 Manager 工作空间位置。
 
 请先保存安装器输出的登录信息。
+
+以后升级时，重新运行相同命令，在唯一的升级确认处按回车即可。账号密码、模型配置、聊天记录、工作空间和数据挂载会保留；安装器先准备镜像，再备份原配置并替换服务，核心服务会短暂重启。普通嵌入式部署升级不再统一重建所有 Worker。发现已有数据但无法可靠恢复配置时，会停止并保留原数据。Dashboard 的版本保留规则及独立的数据库备份、回滚流程，参见[升级说明](../../install/README.md#upgrade-an-existing-local-installation)。
 
 ## 第二步：验证并登录
 

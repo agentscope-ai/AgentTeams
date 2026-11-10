@@ -47,6 +47,8 @@ After a successful installation, the terminal prints:
 
 Save the login information before continuing.
 
+To upgrade later, run the same command again and press Enter at the single confirmation. The installer retains your accounts, model configuration, chat history, data and workspaces, backs up the original configuration, and prepares images before replacing services. Existing Worker containers stay in place during normal embedded-stack upgrades. If existing data cannot be matched to its configuration, installation stops without cleaning it up. See the [upgrade instructions](../install/README.md#upgrade-an-existing-local-installation) for Dashboard version handling and the separate backup/rollback workflow.
+
 ## Step 2: Verify and sign in
 
 Check the main containers:

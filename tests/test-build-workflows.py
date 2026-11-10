@@ -37,6 +37,23 @@ class BuildWorkflowTests(unittest.TestCase):
                     self.assertIn('.gitmodules', paths)
                     self.assertIn('.github/workflows/' + name, paths)
 
+    def test_integration_builds_and_loads_real_codex_runtime(self):
+        config = workflow('test-integration.yml')
+        targets = json.loads(config['jobs']['build-images-independent']['with']['targets'])
+        self.assertIn('codex-worker', targets)
+        steps = workflow('build-integration-images.yml')['jobs']['build']['steps']
+        checkout = next(s for s in steps if s.get('name') == 'Checkout Codex Harness')
+        self.assertEqual(checkout['with']['repository'], 'agentteams-group/agentteams-harness-codex')
+        self.assertRegex(checkout['with']['ref'], r'^[0-9a-f]{40}$')
+        build = next(s for s in steps if s.get('name') == 'Build Codex Harness image')
+        self.assertIn('--build-context at=.', build['run'])
+        self.assertIn('--load', build['run'])
+        self.assertNotIn('--push', build['run'])
+        test_steps = [s for job in config['jobs'].values() for s in job.get('steps', [])]
+        test = next(s for s in test_steps if s.get('id') == 'tests')
+        self.assertEqual(test['env']['AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE'],
+                         'agentteams/codex-worker:latest')
+
     def resolve(self, targets='all', tag=False, version='v1.2.3'):
         script = BUILD['jobs']['prepare']['steps'][0]['run']
         with tempfile.TemporaryDirectory() as directory:

@@ -341,7 +341,7 @@ jobs:
     if: needs.detect-changes.outputs.run_builds == 'true'
     uses: ./.github/workflows/build-integration-images.yml
     with:
-      targets: '["qwenpaw-worker", "deepseek-harness-worker"]'
+      targets: '["qwenpaw-worker", "deepseek-harness-worker", "codex-worker"]'
       controller: true
     secrets: inherit
 
@@ -525,6 +525,9 @@ jobs:
           AGENTTEAMS_MANAGER_RUNTIME: ${{ matrix.manager_runtime }}
           # Exercise the PR-built QwenPaw Manager directly.
           AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE: agentteams/manager-qwenpaw:latest
+          # The installer pre-pulls every runtime. Use the real CI-built Codex
+          # image, loaded from image-codex-worker, without changing defaults.
+          AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE: agentteams/codex-worker:latest
           # Propagate the worker runtime to worker-creating tests too. Without
           # this the apply-zip path (test-15) silently falls back to openclaw
           # on the qwenpaw and hermes matrix entries because the controller's

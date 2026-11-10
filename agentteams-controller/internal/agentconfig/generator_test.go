@@ -31,9 +31,13 @@ func TestOpenClawWorkerShortMention(t *testing.T) {
 		"@alice.dev Task assigned":      true,
 		"Please ask @alice.dev, thanks": true,
 		"@alice.dev":                    true,
+		"@alice.dev，请执行任务":              true,
+		"你好，@alice.dev！":                true,
 		"@alice.dev-other task":         false,
 		"@aliceXdev task":               false,
 		"mail@alice.dev":                false,
+		"@@alice.dev task":              false,
+		"@alice.dev_extra task":         false,
 	} {
 		if got := pattern.MatchString(text); got != want {
 			t.Errorf("mention %q = %v, want %v", text, got, want)

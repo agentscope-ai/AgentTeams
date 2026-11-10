@@ -202,7 +202,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		// cannot derive these from the Matrix user ID without a pattern.
 		"messages": map[string]interface{}{
 			"groupChat": map[string]interface{}{
-				"mentionPatterns": []string{`(^|\s)@` + regexp.QuoteMeta(req.WorkerName) + `($|[\s:,.!?])`},
+				"mentionPatterns": []string{`(^|[^A-Za-z0-9_@-])@` + regexp.QuoteMeta(req.WorkerName) + `($|[^A-Za-z0-9_-])`},
 			},
 		},
 		"agents": map[string]interface{}{

@@ -21,7 +21,7 @@
 # ---------- Configuration ----------
 
 VERSION        ?= latest
-DEEPSEEK_HARNESS_WORKER_VERSION ?= v0.1.1
+DEEPSEEK_HARNESS_WORKER_VERSION ?= v0.1.2
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= agentteams
 

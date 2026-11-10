@@ -16,7 +16,7 @@ on:
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
   REPO: agentteams
-  DEEPSEEK_HARNESS_WORKER_VERSION: v0.1.1
+  DEEPSEEK_HARNESS_WORKER_VERSION: v0.1.2
   CODEX_WORKER_IMAGE: ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0
 
 jobs:

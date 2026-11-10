@@ -71,7 +71,7 @@
 #   AGENTTEAMS_PORT_MANAGER_CONSOLE  Host port for Manager console (default: 18888)
 #   AGENTTEAMS_WORKER_IDLE_TIMEOUT  Worker idle timeout in minutes (default: 720, i.e. 12 hours)
 #   AGENTTEAMS_DASHBOARD              Install agentteams-dashboard management UI (default: 1)
-#   AGENTTEAMS_DASHBOARD_VERSION      Dashboard version (default: v1.4.0, independent of AgentTeams version)
+#   AGENTTEAMS_DASHBOARD_VERSION      Dashboard version (default: v1.4.1, independent of AgentTeams version)
 #   AGENTTEAMS_PORT_DASHBOARD         Dashboard host port (default: 13000)
 #   AGENTTEAMS_DASHBOARD_IMAGE        Override dashboard image (default: <registry>/agentteams/agentteams-dashboard:<DASHBOARD_VERSION>)
 #   AGENTTEAMS_AI_GATEWAY_ADMIN_URL   Higress Console URL for shared auth (auto-detected)
@@ -1285,7 +1285,7 @@ _check_version_images() {
             fi
         done
         if [ "${AGENTTEAMS_DASHBOARD:-1}" = "1" ]; then
-            _check_install_image "${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}}" "${platform}" || return $?
+            _check_install_image "${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.1}}" "${platform}" || return $?
         fi
         return 0
     )
@@ -2127,9 +2127,9 @@ prepare_upgrade_dashboard() {
     # Recognize versions shipped as installer defaults. Custom images/tags and
     # caller-specified versions remain pinned, including newer release tags.
     case "${old_version}" in
-        ''|v1.2.4|v1.3.1|v1.4.0)
+        ''|v1.2.4|v1.3.1|v1.4.0|v1.4.1)
             if [ -z "${old_image}" ] || [ "${old_image}" = "${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${old_version}" ]; then
-                AGENTTEAMS_DASHBOARD_VERSION=v1.4.0
+                AGENTTEAMS_DASHBOARD_VERSION=v1.4.1
                 AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}"
             fi
             ;;
@@ -2849,7 +2849,7 @@ step_workspace() {
 
 step_dashboard() {
     AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
-    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.1}"
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
     AGENTTEAMS_HIGRESS_ADAPTER_MODE="${AGENTTEAMS_HIGRESS_ADAPTER_MODE:-direct}"
     AGENTTEAMS_AI_GATEWAY_URL="${AGENTTEAMS_AI_GATEWAY_URL:-}"
@@ -3506,7 +3506,7 @@ _start_dashboard() {
     fi
 
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
-    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.1}"
     AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
 
     # Embedded deployment marker: controller lives on the same network as the
@@ -4203,7 +4203,7 @@ install_manager() {
     _selected_manager_image="$(manager_image_for_runtime "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}")"
     _pull_image "${_selected_manager_image}" "install.image.exists" "install.image.pulling_manager"
     if [ "${AGENTTEAMS_DASHBOARD:-1}" = "1" ]; then
-        _pull_image "${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}}" "install.image.exists" "install.image.pulling_manager"
+        _pull_image "${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.1}}" "install.image.exists" "install.image.pulling_manager"
     fi
 
     # Write .env file
@@ -4340,7 +4340,7 @@ AGENTTEAMS_HOST_SHARE_DIR=${AGENTTEAMS_HOST_SHARE_DIR:-}
 
 # agentteams-dashboard (management UI)
 AGENTTEAMS_DASHBOARD=${AGENTTEAMS_DASHBOARD:-1}
-AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}
+AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.1}
 AGENTTEAMS_PORT_DASHBOARD=${AGENTTEAMS_PORT_DASHBOARD:-13000}
 AGENTTEAMS_DASHBOARD_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}
 DASHBOARD_SESSION_SECRET=${DASHBOARD_SESSION_SECRET:-}
@@ -5455,7 +5455,7 @@ case "${1:-}" in
         check_container_runtime
         load_current_params_from_env
         AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
-        AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}"
+        AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.1}"
         AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
         AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
         AGENTTEAMS_USE_EMBEDDED=1

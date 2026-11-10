@@ -54,9 +54,10 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 - **技能生态**：Worker 可以按需从 [skills.sh](https://skills.sh) 获取技能（社区已有 80,000+ 个）。因为 Worker 本身就拿不到真实凭证，所以可以放心使用公开技能库。
 
 ## 快速开始
-**前置条件**：Docker Desktop（Windows/macOS）或 Docker Engine（Linux）。若在 ECS 或云桌面等虚拟机上部署，请采用 Linux 系统，图形化需求，请使用 Ubuntu，官方镜像包暂不支持虚拟机上的 Window 系统，原因是虚拟机上的 Window 系统不是 Linux Container。
+**前置条件**：OrbStack、Docker Desktop、Docker Engine 或兼容的 Podman。未安装或未启动时，安装器会引导安装和启动，并等待引擎就绪后继续。若在 ECS 或云桌面等虚拟机上部署，请采用 Linux 系统，图形化需求，请使用 Ubuntu，官方镜像包暂不支持虚拟机上的 Window 系统，原因是虚拟机上的 Window 系统不是 Linux Container。
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)（Windows / macOS）
+- [OrbStack](https://orbstack.dev/download)（macOS 推荐）
 - [Docker Engine](https://docs.docker.com/engine/install/)（Linux）或 [Podman Desktop](https://podman-desktop.io/)（替代方案）
 
 **资源需求**：最低 2C4GB 内存。如果希望部署较多 Worker 体验更强大的 Agent Teams 能力，建议 4C8GB 内存。目前 OpenClaw 内存占用较高。Docker Desktop 用户可在 Settings → Resources 中调整。
@@ -64,7 +65,7 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 ![资源](https://img.alicdn.com/imgextra/i4/O1CN01c8qOlx1hPiKMjzGZQ_!!6000000004270-0-tps-2496-690.jpg)
 
 安装步骤：
-以下我们以最简单的本地部署、本地访问来演示安装步骤，不到5分钟就能开始玩龙虾了。
+以下展示默认的本地部署、本地访问流程。
 
 第一步：打开终端，Mac 系统输入以下安装命令。
 
@@ -78,35 +79,16 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
-这里，输入 Mac 系统的安装命令。
+第二步：等待本地服务和 Dashboard 启动。默认流程无需选择模型、embedding 或 Manager/Worker 运行时。需要逐项设置时，在命令末尾添加 `--manual`（PowerShell 使用 `-Manual`）。
 
-第二步：选择语言，选择中文。
+第三步：Dashboard 会自动打开 http://127.0.0.1:13000，用户名预填 `admin`，生成的密码自动复制到剪贴板。粘贴密码并登录即可；浏览器或剪贴板不可用时，使用终端打印的地址和账号密码。
 
-第三步：选择安装模式，快速开始请选择阿里云百炼快速安装。您也可以选择其他模型服务，手动配置。
-
-第四步：选择大模型服务商。快速开始会默认使用阿里云百炼；如果使用 DeepSeek、OpenAI、Qwen 国际站、自部署模型等服务，请选择手动配置里的 **OpenAI 兼容 API**，并填写对应的 Base URL、API Key 和模型 ID。Base URL 通常需要包含 `/v1`，例如 `https://api.deepseek.com/v1`。
-
-第五步：选择模型接口。百炼 Coding Plan 和百炼通用接口有所不同，这里我们选择 Coding Plan 接口。[购买Coding Plan](https://bailian.console.aliyun.com/cn-beijing/?source_channel=4qjGAvs1Pl&tab=coding-plan#/efm/index)
-
-第六步：选择模型系列。如果第五步中选择的是百炼 Coding Plan，您可以选择 qwen3.5-plus、GLM等，待 Matrix room 建立起来后，还可通过发送指令，让 Manager 切换其他到模型。
-
-第七步：开始测试 API 联通性，若测试成功，效果如下。
-![测试](https://img.alicdn.com/imgextra/i4/O1CN0148wFGG1lYeWKd3Uat_!!6000000004831-2-tps-1752-600.png)
-
-若测试不成功，您需要检查粘贴的模型 API Key 是否完整或无空格、Base URL 是否包含服务商要求的路径（常见为 `/v1`）、模型 ID 是否正确。再次尝试仍无法通过时，建议向对应模型服务厂商提交服务工单。
-
-第八步：选择网络访问模式。这里我们选择仅本机使用，若允许外部访问，例如和同事建立 Matrix room，则选择允许外部访问。选择后，按回车键即可，确定端口号、网关主机端口、Higress 控制台主机端口、Maxtrix 域名、Element Web 直接访问的主机端口、文件系统域名等，均采用默认值，无须手动配置。
-
-第九步：GitHub 集成、Skills 注册中心、数据持久化、Docker 卷、Manager 工作空间，按回车键即可，均采用默认配置，无须手动配置。
-
-第十步：选择 Manager Worker 运行时，目前支持 OpenClaw 和 Copaw，未来还将支持 NanoClaw、ZeroClaw 等。
-
-第十一步：等待安装。安装完成。登录密码是自动生成的。
+第四步：未配置模型时，在 Manager 对话页点击“配置模型”，到模型列表填写 API Key 并选择模型。安装前导出的 `AGENTTEAMS_LLM_API_KEY` 会保留。随后直接让 Manager 创建 Worker、分配任务，运行时在创建 Worker 时选择，镜像按需下载。自定义模型服务等配置参见[快速开始](docs/zh-cn/quickstart.md)。
 
 若希望通过移动端来访问和使用，则需要使用美区账号下载 FluffyChat/Element Mobile。（之所以采用这两个 IM，是因为他们是支持 Matrix 协议的）下载后，连接您的 Matrix 服务器地址，就能随时随地管理您的 Agent 团队。
 ![测试](https://img.alicdn.com/imgextra/i3/O1CN01Tl4T8q29HIHtPVSJL_!!6000000008042-2-tps-2372-1282.png)
 
-第十二步：浏览器中，输入 http://127.0.0.1:18088/#/login，登录 Element，输入用户名和密码，就可以玩龙虾了，告诉 Manager 创建 Worker 并分配任务。
+可选：浏览器中输入 http://127.0.0.1:18088/#/login，使用同一账号密码登录 Element Web，也可以与 Manager 对话。
 ![登录](https://img.alicdn.com/imgextra/i1/O1CN01C5NvV41P6msPuucrs_!!6000000001792-2-tps-2748-1224.png)
 
 ⚠️ **注意：AgentTeams 内置了 Higress AI 网关，负责模型 API Key 管理以及入口流量的安全管控。模型 API Key 的切换、新增，以及路由、域名、证书管理，均可在 Higress 控制台管理。**
@@ -119,7 +101,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 ```bash
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
-就地升级，数据和配置会保留；全新重新，会删除所有数据。
+检测到已有安装时，只需确认一次，即可保留原账号、模型配置、数据和工作空间。安装器先准备镜像，再备份原配置并替换服务。数据库备份、回滚及配置恢复说明参见[升级指南](install/README.md#upgrade-an-existing-local-installation)。全新重装是单独操作，会删除数据并要求额外确认。
 
 若要升级到指定版本，请使用以下命令：
 

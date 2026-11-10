@@ -42,8 +42,8 @@ jobs:
               'openclaw-base': [],
               'agentteams-controller': [],
               'embedded': ['agentteams-controller'],
-              'manager': ['openclaw-base', 'agentteams-controller'],
-              'manager-qwenpaw': ['agentteams-controller'],
+              'manager': ['openclaw-base', 'agentteams-controller', 'worker'],
+              'manager-qwenpaw': ['agentteams-controller', 'qwenpaw-worker'],
               'worker': ['openclaw-base', 'agentteams-controller'],
               'hermes-worker': ['agentteams-controller'],
               'qwenpaw-worker': ['agentteams-controller'],
@@ -90,7 +90,7 @@ jobs:
     secrets: inherit
 
   manager:
-    needs: [prepare, openclaw-base, agentteams-controller]
+    needs: [prepare, openclaw-base, agentteams-controller, worker]
     if: contains(fromJSON(needs.prepare.outputs.targets), 'manager')
     uses: ./.github/workflows/build-image.yml
     with:
@@ -99,7 +99,7 @@ jobs:
     secrets: inherit
 
   manager-qwenpaw:
-    needs: [prepare, agentteams-controller]
+    needs: [prepare, agentteams-controller, qwenpaw-worker]
     if: contains(fromJSON(needs.prepare.outputs.targets), 'manager-qwenpaw')
     uses: ./.github/workflows/build-image.yml
     with:

@@ -103,7 +103,7 @@ class BuildWorkflowTests(unittest.TestCase):
             stub = Path(directory) / 'make'
             stub.write_text('#!/bin/bash\nexec /usr/bin/make -n "$@"\n')
             stub.chmod(0o755)
-            for target in ['embedded', 'manager']:
+            for target in ['embedded', 'worker', 'qwenpaw-worker', 'hermes-worker']:
                 result = subprocess.run(['bash', '-e', '-c', script], cwd=ROOT,
                                         capture_output=True, text=True,
                                         env={**os.environ, 'PATH': directory + ':' + os.environ['PATH'],
@@ -112,6 +112,23 @@ class BuildWorkflowTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn('Building + pushing agentteams-controller', result.stdout)
                 self.assertIn('AGENTTEAMS_CONTROLLER_IMAGE=example.test/agentteams/agentteams-controller:v1.2.3', result.stdout)
+
+    def test_manager_publication_only_aliases_the_published_harness(self):
+        script = next(s['run'] for s in IMAGE['jobs']['build']['steps'] if s.get('name') == 'Build and push')
+        for target, harness in [('manager', 'worker'), ('manager-qwenpaw', 'qwenpaw-worker')]:
+            self.assertIn(harness, BUILD['jobs'][target]['needs'])
+            with tempfile.TemporaryDirectory() as directory:
+                stub = Path(directory) / 'make'
+                stub.write_text('#!/bin/bash\nexec /usr/bin/make -n "$@"\n')
+                stub.chmod(0o755)
+                result = subprocess.run(['bash', '-e', '-c', script], cwd=ROOT,
+                                        capture_output=True, text=True,
+                                        env={**os.environ, 'PATH': directory + ':' + os.environ['PATH'],
+                                             'TARGET': target, 'VERSION': 'v1.2.3',
+                                             'REGISTRY': 'example.test', 'REPO': 'agentteams'})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('docker buildx build', result.stdout)
+                self.assertIn('docker buildx imagetools create', result.stdout)
 
     def test_hermes_builds_supply_the_trace_context(self):
         for target, podman in [('build-hermes-worker', '0'),

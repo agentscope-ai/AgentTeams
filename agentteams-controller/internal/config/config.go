@@ -530,7 +530,7 @@ func (c *Config) DockerConfig() backend.DockerConfig {
 		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-harness-openhuman:latest"),
 		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
 		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
-		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0"),
+		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
 		DefaultNetwork:             envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
 	}
 }
@@ -584,7 +584,7 @@ func (c *Config) K8sConfig() backend.K8sConfig {
 		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-harness-openhuman:latest"),
 		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
 		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
-		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0"),
+		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
 		WorkerCPU:                  c.K8sWorkerCPU,
 		WorkerMemory:               c.K8sWorkerMemory,
 		ControllerName:             c.ControllerName,
@@ -603,7 +603,7 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 		OpenHumanWorkerImage:         envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-harness-openhuman:latest"),
 		QwenPawWorkerImage:           envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
 		DeepSeekHarnessWorkerImage:   envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
-		CodexWorkerImage:             envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0"),
+		CodexWorkerImage:             envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
 		WorkerCPU:                    c.K8sWorkerCPU,
 		WorkerMemory:                 c.K8sWorkerMemory,
 		SandboxPrewarmSize:           c.SandboxPrewarmSize,

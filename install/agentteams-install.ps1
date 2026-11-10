@@ -2743,7 +2743,7 @@ function Install-Manager {
     } elseif ($env:AGENTTEAMS_CODEX_WORKER_IMAGE) {
         $env:AGENTTEAMS_CODEX_WORKER_IMAGE
     } else {
-        "ghcr.io/agentteams-group/agentteams-harness-codex:$($script:AGENTTEAMS_CODEX_WORKER_VERSION)"
+        "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-harness-codex:$($script:AGENTTEAMS_CODEX_WORKER_VERSION)"
     }
 
     $script:MANAGER_COPAW_IMAGE = $env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE

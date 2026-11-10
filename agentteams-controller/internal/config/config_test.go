@@ -176,7 +176,7 @@ func TestBackendConfigsResolveCodexWorkerImage(t *testing.T) {
 			cfg := LoadConfig()
 			want := image
 			if want == "" {
-				want = "ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0"
+				want = "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"
 			}
 			for name, got := range map[string]string{
 				"docker":  cfg.DockerConfig().CodexWorkerImage,

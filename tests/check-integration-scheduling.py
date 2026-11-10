@@ -109,6 +109,8 @@ exec_in_agent() {
             root = Path(directory)
             for number in ('02', '15', '17', '21', '23', '27', '100'):
                 (root / f'test-{number}-stub.sh').write_text(f'echo run-{number} >> "$TRACE"\n')
+            # Helper regressions are run separately, not as numbered scenarios.
+            (root / 'test-manager-harness-helpers.sh').write_text('exit 99\n')
             trace = root / 'trace'
             subprocess.run(['bash', '-e', '-c', '''
 log() { :; }

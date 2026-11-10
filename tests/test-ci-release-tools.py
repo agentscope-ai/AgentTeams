@@ -250,7 +250,7 @@ class WorkflowPlanTests(unittest.TestCase):
     def test_test_shards_require_every_image_group_to_succeed(self):
         jobs = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())['jobs']
         test = jobs['integration-tests']
-        for group in ['build-images-independent', 'build-images-controller', 'build-images-openclaw']:
+        for group in ['build-images-independent', 'build-images-controller', 'build-images-openclaw', 'build-images-codex']:
             self.assertIn(group, test['needs'])
             self.assertIn(f"needs.{group}.result == 'success'", test['if'])
         openclaw = jobs['build-images-openclaw']

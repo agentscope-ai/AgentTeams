@@ -86,7 +86,30 @@ jobs:
           (matrix.target == 'manager' || matrix.target == 'worker')
         run: gunzip -c /tmp/agentteams-openclaw-base.tar.gz | docker load
 
+      # Build the real independent runtime, not a substitute image. Keep the
+      # source pinned while its release image is not yet publicly available.
+      - name: Checkout Codex Harness
+        if: matrix.target == 'codex-worker'
+        uses: actions/checkout@v4
+        with:
+          repository: agentteams-group/agentteams-harness-codex
+          ref: 70251686f7df413f3d5d7978490cf16c5a097c25
+          path: .ci-codex-harness
+          submodules: recursive
+
+      - name: Build Codex Harness image
+        if: matrix.target == 'codex-worker'
+        run: |
+          docker buildx build --load --build-context at=. \
+            -t agentteams/codex-worker:latest .ci-codex-harness
+          docker run --rm --entrypoint codex agentteams/codex-worker:latest --version
+          docker run --rm --entrypoint /opt/venv/bin/python3 \
+            -e AT_SOURCE=/opt/agentteams/transport \
+            -v "$PWD/.ci-codex-harness/tests:/tests:ro" \
+            agentteams/codex-worker:latest -m unittest discover -s /tests -v
+
       - name: Build image
+        if: matrix.target != 'codex-worker'
         run: |
           # Dependencies were built once by the caller and loaded above.
           EXTRA=()

@@ -21,6 +21,40 @@ RELEASE = workflow('release.yml')
 
 
 class BuildWorkflowTests(unittest.TestCase):
+    def test_worker_consumers_checkout_submodules_and_track_gitlink(self):
+        for name, job_name in [('test-controller.yml', 'matrix-bundle-core'),
+                               ('test-manager.yml', 'manager-tools')]:
+            with self.subTest(workflow=name, job=job_name):
+                self.assertIn('.github/workflows/' + name,
+                              workflow('helm-lint.yml')[True]['pull_request']['paths'])
+                config = workflow(name)
+                checkout = next(step for step in config['jobs'][job_name]['steps']
+                                if step.get('uses', '').startswith('actions/checkout@'))
+                self.assertEqual(checkout.get('with', {}).get('submodules'), 'recursive')
+                for event in ('pull_request', 'push'):
+                    paths = config[True][event]['paths']
+                    self.assertIn('worker', paths)
+                    self.assertIn('.gitmodules', paths)
+                    self.assertIn('.github/workflows/' + name, paths)
+
+    def test_integration_builds_and_loads_real_codex_runtime(self):
+        config = workflow('test-integration.yml')
+        targets = json.loads(config['jobs']['build-images-codex']['with']['targets'])
+        self.assertEqual(['codex-worker'], targets)
+        self.assertEqual(config['jobs']['build-images-codex']['needs'], ['detect-changes'])
+        steps = workflow('build-integration-images.yml')['jobs']['build']['steps']
+        checkout = next(s for s in steps if s.get('name') == 'Checkout Codex Harness')
+        self.assertEqual(checkout['with']['repository'], 'agentteams-group/agentteams-harness-codex')
+        self.assertRegex(checkout['with']['ref'], r'^[0-9a-f]{40}$')
+        build = next(s for s in steps if s.get('name') == 'Build Codex Harness image')
+        self.assertIn('--build-context at=.', build['run'])
+        self.assertIn('--load', build['run'])
+        self.assertNotIn('--push', build['run'])
+        test_steps = [s for job in config['jobs'].values() for s in job.get('steps', [])]
+        test = next(s for s in test_steps if s.get('id') == 'tests')
+        self.assertEqual(test['env']['AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE'],
+                         'agentteams/codex-worker:latest')
+
     def resolve(self, targets='all', tag=False, version='v1.2.3'):
         script = BUILD['jobs']['prepare']['steps'][0]['run']
         with tempfile.TemporaryDirectory() as directory:

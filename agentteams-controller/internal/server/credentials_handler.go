@@ -4,6 +4,9 @@ import (
 	"log"
 	"net/http"
 
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credentials"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
@@ -12,8 +15,11 @@ import (
 
 // CredentialsHandler handles /api/v1/credentials/* requests.
 type CredentialsHandler struct {
-	stsService  *credentials.STSService
-	provisioner *service.Provisioner
+	stsService     *credentials.STSService
+	provisioner    *service.Provisioner
+	client         client.Client
+	namespace      string
+	controllerName string
 }
 
 func NewCredentialsHandler(stsService *credentials.STSService, provisioner *service.Provisioner) *CredentialsHandler {
@@ -62,7 +68,27 @@ func (h *CredentialsHandler) RefreshMatrixToken(w http.ResponseWriter, r *http.R
 	}
 
 	log.Printf("[INFO] Matrix token refresh request from %s/%s", caller.Role, caller.Username)
-	result, err := h.provisioner.ForceRefreshMatrixToken(r.Context(), caller.Username)
+	var result *service.RefreshResult
+	var err error
+	if caller.Role == auth.RoleManager {
+		// Manager SA identity is canonical "manager", not its CR/secret name.
+		var managers v1beta1.ManagerList
+		opts := []client.ListOption{client.InNamespace(h.namespace)}
+		if h.controllerName != "" {
+			opts = append(opts, client.MatchingLabels{v1beta1.LabelController: h.controllerName})
+		}
+		if err := h.client.List(r.Context(), &managers, opts...); err != nil {
+			writeK8sError(w, "resolve manager credential owner", err)
+			return
+		}
+		if len(managers.Items) != 1 {
+			httputil.WriteError(w, http.StatusConflict, "Matrix credential refresh requires one Manager for this controller")
+			return
+		}
+		result, err = h.provisioner.ForceRefreshManagerMatrixToken(r.Context(), managers.Items[0].Name)
+	} else {
+		result, err = h.provisioner.ForceRefreshMatrixToken(r.Context(), caller.Username)
+	}
 	if err != nil {
 		log.Printf("[ERROR] refresh matrix token for %s: %v", caller.Username, err)
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())

@@ -24,7 +24,7 @@ function adapterRole(value) {
 }
 
 function skillEntries(manifest) {
-  return [...(manifest?.skills?.agent ?? []), ...(manifest?.skills?.team ?? [])]
+  return [...(manifest?.skills?.manager ?? []), ...(manifest?.skills?.agent ?? []), ...(manifest?.skills?.team ?? [])]
 }
 
 function sourceUnderPlugin(pluginDir, configuredPath) {

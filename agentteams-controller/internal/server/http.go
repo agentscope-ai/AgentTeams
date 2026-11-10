@@ -489,6 +489,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// --- Credentials ---
 	// STS is self-scoped: no {name} in path; handler uses CallerIdentity to scope the issued token.
 	ch := NewCredentialsHandler(deps.STS, deps.Provisioner)
+	ch.client, ch.namespace, ch.controllerName = deps.Client, deps.Namespace, deps.ControllerName
 	mux.Handle("POST /api/v1/credentials/sts", mw.RequireAuthz(authpkg.ActionSTS, "credentials", nil)(http.HandlerFunc(ch.RefreshSTS)))
 	mux.Handle("POST /api/v1/credentials/matrix-token", mw.RequireAuthz(authpkg.ActionRefreshMatrixToken, "credentials", nil)(http.HandlerFunc(ch.RefreshMatrixToken)))
 

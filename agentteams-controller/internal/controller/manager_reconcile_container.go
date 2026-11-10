@@ -210,6 +210,9 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 			logger.Error(err, "SA token request failed (non-fatal, manager auth will fail)")
 		}
 		createReq.AuthToken = token
+		if wb.Name() == "docker" {
+			createReq.AuthTokenFile = backend.DefaultAuthTokenFile
+		}
 	}
 
 	r.applyEmbeddedConfig(&createReq, wb)

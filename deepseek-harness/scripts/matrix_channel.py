@@ -19,6 +19,7 @@ def matrix_events(
     room_types: dict[str, str],
     own_user_id: str,
     agent_user_ids: set[str] | None = None,
+    allowed_senders: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Extract actionable text, image, and file events from watched joined rooms."""
     found: list[dict[str, Any]] = []
@@ -43,6 +44,8 @@ def matrix_events(
             if not isinstance(content, dict):
                 continue
             sender = str(event.get("sender") or "").strip()
+            if allowed_senders is not None and sender not in allowed_senders:
+                continue
             mentions = content.get("m.mentions")
             mentioned_users = mentions.get("user_ids", []) if isinstance(mentions, dict) else []
             is_targeted = (

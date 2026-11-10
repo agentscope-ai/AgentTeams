@@ -701,8 +701,8 @@ msg() {
         "manager_runtime.qwenpaw.en") text="QwenPaw (recommended)" ;;
         "manager_runtime.copaw.zh") text="CoPaw（旧版本，建议升级为 QwenPaw）" ;;
         "manager_runtime.copaw.en") text="CoPaw (legacy; upgrade to QwenPaw recommended)" ;;
-        "manager_runtime.choice.zh") text="请选择 [1/2]" ;;
-        "manager_runtime.choice.en") text="Enter choice [1/2]" ;;
+        "manager_runtime.choice.zh") text="请选择 [1-5]" ;;
+        "manager_runtime.choice.en") text="Enter choice [1-5]" ;;
         "manager_runtime.selected.zh") text="Manager 运行时: %s" ;;
         "manager_runtime.selected.en") text="Manager runtime: %s" ;;
         "manager_runtime.title_short.zh") text="Manager 运行时" ;;
@@ -1172,6 +1172,7 @@ WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-}"
 COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
 QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-}"
 HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}"
+OPENHUMAN_WORKER_IMAGE="${AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE:-}"
 DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-}"
 CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
@@ -1185,6 +1186,7 @@ resolve_image_tags() {
     COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
     QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-qwenpaw-worker:${AGENTTEAMS_VERSION}}"
     HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
+    OPENHUMAN_WORKER_IMAGE="${AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/higress/agentteams-openhuman-worker:${AGENTTEAMS_VERSION}}"
     DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-deepseek-harness-worker:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}}"
     EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-embedded:${AGENTTEAMS_VERSION}}"
     # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
@@ -1205,6 +1207,9 @@ manager_image_for_runtime() {
         # Legacy alias: route to the QwenPaw manager image unless an explicit
         # AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE override is provided.
         copaw) printf '%s' "${MANAGER_COPAW_IMAGE:-${MANAGER_QWENPAW_IMAGE}}" ;;
+        hermes) printf '%s' "${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${HERMES_WORKER_IMAGE}}" ;;
+        deepseek-harness) printf '%s' "${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${DEEPSEEK_HARNESS_WORKER_IMAGE}}" ;;
+        openhuman) printf '%s' "${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${OPENHUMAN_WORKER_IMAGE}}" ;;
         *) printf '%s' "${MANAGER_IMAGE}" ;;
     esac
 }
@@ -3043,6 +3048,9 @@ step_manager_runtime() {
     echo ""
     echo "  1) $(msg manager_runtime.qwenpaw)"
     echo "  2) $(msg manager_runtime.openclaw)"
+    echo "  3) Hermes"
+    echo "  4) DeepSeek Harness"
+    echo "  5) OpenHuman"
     echo ""
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
         AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
@@ -3057,6 +3065,9 @@ step_manager_runtime() {
         if [ -n "${_runtime_choice}" ]; then
             case "${_runtime_choice}" in
                 2) AGENTTEAMS_MANAGER_RUNTIME="openclaw" ;;
+                3) AGENTTEAMS_MANAGER_RUNTIME="hermes" ;;
+                4) AGENTTEAMS_MANAGER_RUNTIME="deepseek-harness" ;;
+                5) AGENTTEAMS_MANAGER_RUNTIME="openhuman" ;;
                 *) AGENTTEAMS_MANAGER_RUNTIME="qwenpaw" ;;
             esac
         fi
@@ -3067,6 +3078,9 @@ step_manager_runtime() {
         _runtime_choice="${_runtime_choice:-1}"
         case "${_runtime_choice}" in
             2) AGENTTEAMS_MANAGER_RUNTIME="openclaw" ;;
+            3) AGENTTEAMS_MANAGER_RUNTIME="hermes" ;;
+            4) AGENTTEAMS_MANAGER_RUNTIME="deepseek-harness" ;;
+            5) AGENTTEAMS_MANAGER_RUNTIME="openhuman" ;;
             *) AGENTTEAMS_MANAGER_RUNTIME="qwenpaw" ;;
         esac
     fi
@@ -4070,7 +4084,7 @@ AGENTTEAMS_PORT_CONSOLE=${AGENTTEAMS_PORT_CONSOLE}
 AGENTTEAMS_PORT_ELEMENT_WEB=${AGENTTEAMS_PORT_ELEMENT_WEB}
 AGENTTEAMS_PORT_MANAGER_CONSOLE=${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}
 
-# Manager runtime (qwenpaw | openclaw | copaw)
+# Manager runtime (qwenpaw | openclaw | copaw | hermes | deepseek-harness | openhuman)
 AGENTTEAMS_MANAGER_RUNTIME=${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}
 
 # Matrix
@@ -4121,6 +4135,7 @@ AGENTTEAMS_WORKER_IMAGE=${WORKER_IMAGE}
 AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
 AGENTTEAMS_QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}
 AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}
+AGENTTEAMS_OPENHUMAN_WORKER_IMAGE=${OPENHUMAN_WORKER_IMAGE}
 AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=${DEEPSEEK_HARNESS_WORKER_IMAGE}
 AGENTTEAMS_CODEX_WORKER_IMAGE=${AGENTTEAMS_CODEX_WORKER_IMAGE:-}
 
@@ -4529,6 +4544,7 @@ CREDEOF
             -e "${_ctrl_env_prefix}COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
+            -e "${_ctrl_env_prefix}OPENHUMAN_WORKER_IMAGE=${OPENHUMAN_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}DEEPSEEK_HARNESS_WORKER_IMAGE=${DEEPSEEK_HARNESS_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}MATRIX_DOMAIN=${_matrix_domain}"
             -e "${_ctrl_env_prefix}ELEMENT_HOMESERVER_URL=http://127.0.0.1:${AGENTTEAMS_PORT_GATEWAY}"
@@ -4819,6 +4835,7 @@ CREDEOF
                     -e AGENTTEAMS_COPAW_WORKER_IMAGE="${COPAW_WORKER_IMAGE}" \
                     -e AGENTTEAMS_QWENPAW_WORKER_IMAGE="${QWENPAW_WORKER_IMAGE}" \
                     -e AGENTTEAMS_HERMES_WORKER_IMAGE="${HERMES_WORKER_IMAGE}" \
+                    -e AGENTTEAMS_OPENHUMAN_WORKER_IMAGE="${OPENHUMAN_WORKER_IMAGE}" \
                     -e AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE="${DEEPSEEK_HARNESS_WORKER_IMAGE}" \
                     -e AGENTTEAMS_CODEX_WORKER_IMAGE="${AGENTTEAMS_CODEX_WORKER_IMAGE:-}" \
                     ${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES:+-e AGENTTEAMS_PROXY_ALLOWED_REGISTRIES="${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES}"} \

@@ -33,7 +33,7 @@ fi
 
 # Use absolute path because HOME is set to the workspace directory via docker run
 AGENTTEAMS_ROOT="/root/agentteams-fs"
-WORKSPACE="${AGENTTEAMS_ROOT}/agents/${WORKER_NAME}"
+WORKSPACE="${AGENTTEAMS_WORKER_HOME:-${AGENTTEAMS_ROOT}/agents/${WORKER_NAME}}"
 
 # ============================================================
 # Step 1: Configure mc alias for centralized file system
@@ -229,6 +229,8 @@ worker_sync_init "${WORKER_SYNC_STATE_DIR}" "${PULL_MARKER}"
 ) &
 log "Local->Remote change-triggered sync started (PID: $!)"
 
+CONFIG_SYNC_INTERVAL=300
+start_config_sync() {
 # Authorization changes must reach a running Worker without waiting for the
 # bulk workspace fallback. Only fetch the small config and merge when changed;
 # keep the local Matrix token through merge_openclaw_config.
@@ -239,6 +241,9 @@ log "Local->Remote change-triggered sync started (PID: $!)"
         if mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/openclaw.json" /tmp/openclaw-policy-remote.json 2>/dev/null; then
             if ! cmp -s /tmp/openclaw-policy-remote.json /tmp/openclaw-policy-applied.json; then
                 if merge_openclaw_config /tmp/openclaw-policy-remote.json "${WORKSPACE}/openclaw.json"; then
+                    if [ "${AGENTTEAMS_AGENT_ROLE:-}" = "manager" ]; then
+                        prepare_manager_config || { log "WARNING: native Manager config validation failed"; continue; }
+                    fi
                     cp /tmp/openclaw-policy-remote.json /tmp/openclaw-policy-applied.json
                     touch "${PULL_MARKER}"
                     worker_sync_mark_remote_pull "${WORKER_SYNC_STATE_DIR}"
@@ -255,7 +260,7 @@ log "Local->Remote change-triggered sync started (PID: $!)"
 # handled by the small changed-config loop above.
 (
     while true; do
-        sleep 300
+        sleep "${CONFIG_SYNC_INTERVAL}"
         ensure_mc_credentials 2>/dev/null || true
         mc cp "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/config/mcporter.json" "${WORKSPACE}/config/mcporter.json" 2>/dev/null || true
         mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/agents/${WORKER_NAME}/skills/" "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
@@ -267,7 +272,29 @@ log "Local->Remote change-triggered sync started (PID: $!)"
         worker_sync_mark_remote_pull "${WORKER_SYNC_STATE_DIR}"
     done
 ) &
-log "Remote->Local fallback sync started (Manager-managed files only, every 5m, PID: $!)"
+log "Remote->Local fallback sync started (every ${CONFIG_SYNC_INTERVAL}s, PID: $!)"
+}
+
+# Translate the controller's desired config into an SDK-owned snapshot.
+# Rebuild from that desired config so model and policy updates take effect.
+prepare_manager_config() {
+    local candidate="${OPENCLAW_CONFIG_PATH}.pending"
+    cp "${WORKSPACE}/openclaw.json" "${candidate}"
+    jq --arg room "${AGENTTEAMS_WORKER_ROOM_ID}" '.channels.matrix.groups[$room].requireMention = false' \
+        "${candidate}" > "${candidate}.tmp" && mv "${candidate}.tmp" "${candidate}"
+    if [ "${OPENCLAW_HAS_VALIDATE}" = "1" ]; then
+        if ! OPENCLAW_CONFIG_PATH="${candidate}" openclaw config validate >/dev/null 2>&1; then
+            # The projection uses groupPolicy/groupAllowFrom for access control;
+            # the redundant legacy allow=true blocks the SDK's own migration.
+            jq 'if .channels.matrix.groups then .channels.matrix.groups |= with_entries(if .value.allow == true then .value |= del(.allow) else . end) else . end' \
+                "${candidate}" > "${candidate}.tmp" && mv "${candidate}.tmp" "${candidate}"
+            OPENCLAW_STATE_DIR=/tmp/agentteams-manager-config-migration OPENCLAW_CONFIG_PATH="${candidate}" \
+                openclaw doctor --fix --non-interactive >/tmp/manager-config-migration.log 2>&1 || true
+            OPENCLAW_CONFIG_PATH="${candidate}" openclaw config validate >/dev/null 2>&1 || return 1
+        fi
+    fi
+    mv "${candidate}" "${OPENCLAW_CONFIG_PATH}"
+}
 
 # ============================================================
 # Step 4: Configure mcporter (MCP tool CLI)
@@ -355,6 +382,18 @@ else
     log "No Matrix password found in MinIO, skipping re-login (E2EE may not work after restart)"
 fi
 
+# Materialize the selected Harness's native Manager configuration.
+if [ "${AGENTTEAMS_AGENT_ROLE:-}" = "manager" ]; then
+    export OPENCLAW_CONFIG_PATH="${WORKSPACE}/.openclaw/manager-runtime.json"
+    OPENCLAW_HAS_VALIDATE=0
+    if openclaw config --help 2>/dev/null | grep -q 'validate'; then
+        OPENCLAW_HAS_VALIDATE=1
+    fi
+    prepare_manager_config || { log "ERROR: native Manager config validation failed"; exit 1; }
+    MANAGER_CONFIG_HASH=$(sha256sum "${WORKSPACE}/openclaw.json" | cut -d' ' -f1)
+fi
+start_config_sync
+
 # Disable full-process respawn so the CLI uses its internal restart loop.
 # Without this, config reload spawns a detached child and exits, killing the container.
 export OPENCLAW_NO_RESPAWN=1
@@ -379,7 +418,7 @@ if [ -n "${AGENTTEAMS_CONTROLLER_URL:-}" ]; then
         # Phase 1: Wait for gateway to be healthy (with timeout)
         TIMEOUT=120; ELAPSED=0
         while [ "${ELAPSED}" -lt "${TIMEOUT}" ]; do
-            if openclaw gateway health --json 2>/dev/null | grep -q '"ok"' 2>/dev/null; then
+            if openclaw gateway health --json 2>/dev/null | jq -e '.ok == true' >/dev/null 2>&1; then
                 break
             fi
             sleep 5; ELAPSED=$((ELAPSED + 5))

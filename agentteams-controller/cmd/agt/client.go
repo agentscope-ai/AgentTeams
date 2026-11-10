@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 )
 
 // APIClient is a thin HTTP wrapper for the agentteams-controller REST API.
@@ -49,16 +51,19 @@ func NewAPIClient() *APIClient {
 // discoverToken returns a bearer token using the AgentTeams runtime contract:
 //  1. AGENTTEAMS_AUTH_TOKEN env var
 //  2. AGENTTEAMS_AUTH_TOKEN_FILE token file
-//  3. empty string (unauthenticated, for controllers with auth disabled)
+//  3. the backend's standard mounted token file (Harness shells may scrub env)
+//  4. empty string (unauthenticated, for controllers with auth disabled)
 func discoverToken() string {
 	if token := os.Getenv("AGENTTEAMS_AUTH_TOKEN"); token != "" {
 		return token
 	}
-	if path := os.Getenv("AGENTTEAMS_AUTH_TOKEN_FILE"); path != "" {
-		if data, err := os.ReadFile(path); err == nil {
-			if t := strings.TrimSpace(string(data)); t != "" {
-				return t
-			}
+	path := os.Getenv("AGENTTEAMS_AUTH_TOKEN_FILE")
+	if path == "" {
+		path = backend.DefaultAuthTokenFile
+	}
+	if data, err := os.ReadFile(path); err == nil {
+		if t := strings.TrimSpace(string(data)); t != "" {
+			return t
 		}
 	}
 	return ""

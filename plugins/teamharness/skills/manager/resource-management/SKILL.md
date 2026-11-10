@@ -54,6 +54,9 @@ After sending, end your turn and wait for the Leader's report. Do not take over
 projectflow/taskflow or run polling loops while the team works.
 Reply to the admin once per turn. For a team project, forward its goal and
 acceptance criteria to the Leader and let the Leader manage task state.
+If your Harness has no native `message` tool, use `agt message --room ROOM_ID
+--text 'MESSAGE WITH FULL MATRIX MENTIONS'`. Your current credentials determine
+the sender; never extract tokens or use another agent's identity.
 
 Use TeamHarness `filesync` and `artifact` tools for shared deliverables. Do not
 edit project/task state or native runtime configuration as a management shortcut.

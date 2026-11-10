@@ -48,6 +48,19 @@ export function apply(ctx, config) {
   const normalizedRole = role.toLowerCase().replaceAll('_', '-').trim()
   const configuredAgent = inlineAgentConfig(runtimeConfig)
 
+  if (normalizedRole === 'manager') {
+    const managerPrompt = readFileSync(join(pluginDir, 'prompts/manager/AGENTS.md'), 'utf8').trim()
+    const text = [managerPrompt, '# Current Agent Context',
+      `member.name: ${requiredString(member.name, 'member.name')}`,
+      `member.runtimeName: ${requiredString(member.runtimeName, 'member.runtimeName')}`,
+      `member.role: ${role}`,
+      `member.matrixUserId: ${requiredString(member.matrixUserId, 'member.matrixUserId')}`,
+      `member.personalRoomId: ${requiredString(member.personalRoomId, 'member.personalRoomId')}`,
+      fileExchangePrompt, configuredAgent].filter(Boolean).join('\n\n')
+    ctx.effect(() => ctx.systemPrompt.section({name: 'teamharness:collaboration', order: 20, text}), 'teamharness-context.section()')
+    return
+  }
+
   if (normalizedRole === 'standalone') {
     const standalonePrompt = [
       '# Worker Role — Standalone',

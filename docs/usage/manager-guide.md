@@ -36,13 +36,13 @@ The Manager is configured via environment variables set during installation. The
 | `AGENTTEAMS_DATA_DIR` | No | `agentteams-data` | Docker volume name for persistent data |
 | `AGENTTEAMS_MOUNT_SOCKET` | No | `1` | Mount container runtime socket for direct Worker creation |
 | `AGENTTEAMS_YOLO` | No | - | Set to `1` to enable YOLO mode (autonomous decisions, no interactive prompts) |
-| `AGENTTEAMS_MANAGER_RUNTIME` | No | `qwenpaw` | Manager engine: **`qwenpaw`** (default, `agentteams-manager-qwenpaw` image) or **`openclaw`** (`agentteams-manager` image). Hermes is supported for **Workers** only, not as a Manager runtime. |
+| `AGENTTEAMS_MANAGER_RUNTIME` | No | `qwenpaw` | Manager Harness: `qwenpaw` (default), `openclaw`, `hermes`, `deepseek-harness`, or `openhuman`. |
 
-The user-facing Manager runtime choices remain **CoPaw** and **OpenClaw**. The startup entrypoint treats `copaw` as a compatibility alias for `qwenpaw`: the local installer currently writes `copaw`, while Helm uses `qwenpaw`; both select the CoPaw/QwenPaw Python Manager image.
+Manager runtime choices are `qwenpaw`, `openclaw`, `hermes`, `deepseek-harness`, and `openhuman`. `copaw` remains a compatibility alias for the QwenPaw Manager. Each runtime uses the same Harness image and entrypoint as its Workers and Leaders; role prompts, credentials, and permissions come from the controller. Set `manager.runtime` in Helm or choose the runtime in the local installer. An explicit Manager image override must support this role contract.
 
 ### QwenPaw Manager (`AGENTTEAMS_MANAGER_RUNTIME=qwenpaw`)
 
-When you choose the QwenPaw Manager at install time, the controller runs the **`agentteams-manager-qwenpaw`** image instead of the OpenClaw-based **`agentteams-manager`**. Behavior is the same role (coordinate Workers/Teams over Matrix, drive Higress/MCP flows); only the agent engine and config layout differ (Python QwenPaw vs Node OpenClaw). Multi-channel setup and skills follow the QwenPaw workspace conventions under `/root/manager-workspace`.
+The controller runs the shared QwenPaw Harness with the Manager role under `/root/manager-workspace`. The legacy `agentteams-manager-qwenpaw` image name remains a compatibility alias. The Manager coordinates resources and delegates work to Leaders; it does not acquire Leader workflow tools merely by changing its Harness. The other Harnesses follow the same role boundary and can use `agt message` for cross-room handoffs.
 
 ### Customizing the Manager Agent
 

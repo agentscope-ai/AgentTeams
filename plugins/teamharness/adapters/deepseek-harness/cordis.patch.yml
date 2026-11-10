@@ -10,6 +10,12 @@
     provider: deepseek-official
     model: !!js process.env.TEAMHARNESS_DSH_MODEL || 'deepseek-v4-flash'
 
+# DSH's native 256k output default exceeds common gateway model limits.
+# This caps each reply, without reducing the model's input context window.
+- id: llm-deepseek
+  config:
+    maxTokens: 16384
+
 - id: headless-runner
   disabled: true
 
@@ -40,6 +46,7 @@
         args: ['mcp/server.py']
         cwd: !!js process.env.AGENTTEAMS_PLUGIN_DIR
         env:
+          AGENTTEAMS_AGENT_ROLE: !!js process.env.AGENTTEAMS_AGENT_ROLE || ''
           AGENTTEAMS_PLUGIN_DIR: !!js process.env.AGENTTEAMS_PLUGIN_DIR
           TEAMHARNESS_RUNTIME_CONFIG: !!js process.env.TEAMHARNESS_RUNTIME_CONFIG
           TEAMHARNESS_WORKSPACE: !!js process.env.TEAMHARNESS_WORKSPACE

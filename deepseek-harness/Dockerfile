@@ -1,6 +1,9 @@
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
+ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 FROM ${HIGRESS_REGISTRY}/higress/mc:20260216 AS mc
+
+FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS controller
 
 FROM node:24-bookworm-slim
 
@@ -21,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
+COPY --from=controller /usr/local/bin/agt /usr/local/bin/agt
 COPY shared/lib/ /opt/agentteams/scripts/lib/
 
 COPY deepseek-harness/package.json /opt/agentteams/dsh/package.json

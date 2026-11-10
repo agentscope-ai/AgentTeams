@@ -23,8 +23,8 @@ func (r *ManagerReconciler) reconcileManagerConfig(ctx context.Context, s *manag
 	isUpdate := m.Status.Phase != "" && m.Status.Phase != "Pending" && m.Status.Phase != "Failed"
 
 	runtime := resolveManagerRuntime(m.Spec.Runtime, r.DefaultRuntime)
-	if runtime != backend.RuntimeQwenPaw {
-		if err := r.Deployer.DeployPackage(ctx, m.Name, m.Spec.Package, isUpdate); err != nil {
+	if !backend.UsesMemberRuntimeConfig(runtime) {
+		if err := r.Deployer.DeployPackage(ctx, "manager", m.Spec.Package, isUpdate); err != nil {
 			return reconcile.Result{}, fmt.Errorf("deploy package: %w", err)
 		}
 	}
@@ -51,11 +51,7 @@ func (r *ManagerReconciler) reconcileManagerConfig(ctx context.Context, s *manag
 		return reconcile.Result{}, fmt.Errorf("deploy manager config: %w", err)
 	}
 
-	skillOwner := m.Name
-	if runtime == backend.RuntimeQwenPaw {
-		skillOwner = "manager"
-	}
-	if err := r.Deployer.PushOnDemandSkills(ctx, skillOwner, "", m.Spec.Skills, nil); err != nil {
+	if err := r.Deployer.PushOnDemandSkills(ctx, "manager", "", m.Spec.Skills, nil); err != nil {
 		logger.Info("skill push failed", "error", err)
 	}
 

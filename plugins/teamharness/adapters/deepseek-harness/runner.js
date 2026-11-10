@@ -65,6 +65,10 @@ async function run(ctx, config, io) {
   const sessionId = SessionId(config.sessionId || `session-${randomUUID()}`)
   const { agent } = await openAgent(ctx, sessionId, config.resume, selection)
   await agent.whenIdle()
+  // Reconcile explicitly selected platform permissions on resumed sessions too.
+  if (process.env.DSH_PERMISSION_MODE) {
+    ctx.get('permissionPresets').set(agent.session, process.env.DSH_PERMISSION_MODE)
+  }
 
   const id = messageId(config.eventId, config.attempt)
   const outcome = await executeAttempt({

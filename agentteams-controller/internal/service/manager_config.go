@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
@@ -198,7 +199,11 @@ func (l *ManagerConfigStore) updateManagerRuntimeAllowFrom(ctx context.Context, 
 	if err != nil {
 		return true, err
 	}
-	return true, l.OSS.PutObject(ctx, key, payload)
+	if err := l.OSS.PutObject(ctx, key, payload); err != nil {
+		return true, err
+	}
+	// Legacy Harnesses consume openclaw.json as well as the role contract.
+	return backend.UsesMemberRuntimeConfig(doc.Member.Runtime), nil
 }
 
 // PutManagerConfig writes the Manager's openclaw.json to OSS, merging the
@@ -271,10 +276,7 @@ func (l *ManagerConfigStore) PutManagerConfig(configJSON []byte) error {
 	// First boot may need the generated file on the shared workspace, but an
 	// existing local file is authoritative and must not be replaced here.
 	l.writeManagerLocalConfig(configJSON)
-	// The runtime projection belongs to the shared Harness. Retire it when
-	// switching back to the legacy OpenClaw config so membership writes reach
-	// the active runtime rather than a stale projection.
-	return l.OSS.DeleteObject(ctx, memberRuntimeConfigObjectKey(l.ManagerName))
+	return nil
 }
 
 // mergeGroupAllowFrom copies any extra groupAllowFrom entries from old config

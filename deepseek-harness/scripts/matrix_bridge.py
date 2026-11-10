@@ -123,6 +123,30 @@ def source_agent_reply_user_id(event: dict[str, object], agent_user_ids: set[str
     return ""
 
 
+def manager_allowed_senders(runtime_path: Path, matrix_domain: str) -> set[str]:
+    """Resolve the Controller-owned Manager allow-list without a YAML dependency."""
+    allowed = {f"@{os.getenv('AGENTTEAMS_ADMIN_USER', 'admin')}:{matrix_domain}"}
+    in_policy = False
+    in_group = False
+    for line in runtime_path.read_text(encoding="utf-8").splitlines():
+        if line == "  channelPolicy:":
+            in_policy = True
+            continue
+        if in_policy and line and not line.startswith("    "):
+            break
+        if not in_policy:
+            continue
+        if line.strip() == "groupAllowExtra:":
+            in_group = True
+            continue
+        if in_group:
+            value = line.strip()
+            if not value.startswith("- "):
+                break
+            allowed.add(value[2:].strip().strip("'\""))
+    return allowed
+
+
 def reply_mention_user_ids(
     event: dict[str, object],
     text: str,
@@ -439,6 +463,9 @@ def main() -> int:
     max_attempts = max(1, int(os.getenv("AGENTTEAMS_MATRIX_EVENT_MAX_ATTEMPTS", "3")))
     retry_base_seconds = max(1, int(os.getenv("AGENTTEAMS_MATRIX_RETRY_BASE_SECONDS", "2")))
     print(f"[agentteams-dsh-worker] ready worker={worker_name} rooms={len(room_types)}", flush=True)
+    if os.getenv("AGENTTEAMS_CONTROLLER_URL"):
+        subprocess.run(["agt", "worker", "report-ready", "--name",
+                        os.getenv("AGENTTEAMS_WORKER_CR_NAME", worker_name)], check=True)
     while not STOP.is_set():
         try:
             if refresh_runtime_config(worker_name, runtime_path):
@@ -451,9 +478,15 @@ def main() -> int:
                     flush=True,
                 )
             payload = client.sync(since, 30_000)
+            allowed_senders = None
+            if runtime_section(runtime_path, "member").get("role") == "manager":
+                allowed_senders = manager_allowed_senders(runtime_path, matrix_domain)
+                agent_user_ids = allowed_senders - {f"@{os.getenv('AGENTTEAMS_ADMIN_USER', 'admin')}:{matrix_domain}"}
+                # Manager spans its admin DM and all joined member rooms.
+                room_types.update({room: "team" for room in payload.get("rooms", {}).get("join", {}) if room not in room_types})
             client.fill_timeline_gaps(payload, since, room_types)
             batch_complete = True
-            for event in matrix_events(payload, room_types, own_user_id, agent_user_ids):
+            for event in matrix_events(payload, room_types, own_user_id, agent_user_ids, allowed_senders):
                 if state.is_completed(event["event_id"]):
                     continue
                 session_id, resume = state.session_for(event["room_id"])
@@ -464,6 +497,8 @@ def main() -> int:
                     cached_answer = state.answer_for(event["event_id"])
                     if cached_answer is None:
                         task = event["body"]
+                        if allowed_senders is not None:
+                            task = f"Current Matrix room: {event['room_id']}\nSender: {event['sender']}\n\n{task}"
                         if event["kind"] != "text":
                             task, _saved_path = materialize_attachment(event, client, workspace, attachment_max_bytes)
                         outbox_before = state.outbox_before_for(event["event_id"])

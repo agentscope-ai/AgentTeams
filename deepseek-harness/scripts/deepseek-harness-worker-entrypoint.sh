@@ -47,6 +47,9 @@ export TEAMHARNESS_PYTHON="/usr/bin/python3"
 export AGENTTEAMS_PLUGIN_DIR="/opt/agentteams/plugins/teamharness"
 export AGENTTEAMS_MATRIX_USER_ID="@${WORKER_NAME}:${AGENTTEAMS_MATRIX_DOMAIN}"
 export DEEPSEEK_API_KEY="${DSH_LLM_CREDENTIAL}"
+if [ "${AGENTTEAMS_YOLO:-}" = "1" ]; then
+    export DSH_PERMISSION_MODE="${DSH_PERMISSION_MODE:-danger-full-access}"
+fi
 unset DSH_LLM_CREDENTIAL AGENTTEAMS_WORKER_GATEWAY_KEY
 
 log "Pulling controller-projected runtime state"

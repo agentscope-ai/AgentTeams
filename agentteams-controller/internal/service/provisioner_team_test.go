@@ -449,6 +449,19 @@ func TestRefreshWorkerCredentialsRestoresMinIOAccess(t *testing.T) {
 	}
 }
 
+func TestManagerMatrixRefreshUsesRuntimeIdentity(t *testing.T) {
+	creds := fakeCredentialStore{"default": {MatrixToken: "old-token"}}
+	p := NewProvisioner(ProvisionerConfig{Matrix: newFakeTeamMatrix(), Creds: creds})
+	p.matrixConfig.AppServiceEnabled = true
+	result, err := p.ForceRefreshManagerMatrixToken(context.Background(), "default")
+	if err != nil || result.MatrixToken != "as-token-manager" {
+		t.Fatalf("Manager login must use runtime identity: %+v, %v", result, err)
+	}
+	if creds["default"].MatrixToken != "as-token-manager" || creds["manager"] != nil {
+		t.Fatal("Manager credential ownership changed from its CR name")
+	}
+}
+
 func TestRefreshManagerCredentialsRestoresMinIOAccess(t *testing.T) {
 	admin := &fakeStorageAdmin{}
 	creds := fakeCredentialStore{

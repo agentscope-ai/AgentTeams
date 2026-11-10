@@ -13,10 +13,24 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/test/testutil/mocks"
 )
 
+func TestManagerDockerProjectsCredentialFile(t *testing.T) {
+	b := mocks.NewMockWorkerBackend()
+	b.NameOverride = "docker"
+	r := &ManagerReconciler{
+		Provisioner: mocks.NewMockManagerProvisioner(), EnvBuilder: mocks.NewMockManagerEnvBuilder(),
+		ResourcePrefix: auth.DefaultResourcePrefix, DefaultRuntime: "qwenpaw",
+	}
+	s := &managerScope{manager: &v1beta1.Manager{}, provResult: &service.ManagerProvisionResult{MatrixToken: "matrix-test"}}
+	if _, err := r.createManagerContainer(context.Background(), s, b); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Calls.CreateReqs) != 1 || b.Calls.CreateReqs[0].AuthTokenFile != backend.DefaultAuthTokenFile || b.Calls.CreateReqs[0].AuthToken == "" {
+		t.Fatal("Docker Manager must use the shared mounted credential contract")
+	}
+}
+
 // captureManagerCreateLabels exercises createManagerContainer with fully
-// mocked dependencies and returns the Labels map the reconciler handed
-// to the backend.Create call. Using a capturing CreateFn lets us lock
-// in the exact merged Pod-label set without spinning up envtest.
+// mocked dependencies and returns the Labels map passed to backend.Create.
 func captureManagerCreateLabels(t *testing.T, mgr *v1beta1.Manager) map[string]string {
 	t.Helper()
 	return captureManagerCreateRequest(t, mgr, nil).Labels

@@ -1,0 +1,7 @@
+#!/bin/bash
+# Native shell tools retain HOME but clear the agent's runtime environment.
+set -e
+if [ -f "${HOME}/.agentteams-cli.env" ]; then
+    source "${HOME}/.agentteams-cli.env"
+fi
+exec /usr/local/bin/agt.bin "$@"

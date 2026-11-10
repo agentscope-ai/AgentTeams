@@ -13,6 +13,7 @@ from matrix_bridge import (  # noqa: E402
     MatrixClient,
     dsh_error_detail,
     materialize_attachment,
+    manager_allowed_senders,
     matrix_events,
     matrix_transaction_id,
     restore_output_paths,
@@ -82,6 +83,22 @@ class LimitedTimelineTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "pagination"):
                 client.fill_timeline_gaps(payload, "start", {room_id: "personal"})
         self.assertEqual(timeline["events"], [self.event("$latest")])
+
+
+class ManagerRoleTest(unittest.TestCase):
+    def test_manager_policy_reads_controller_membership(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "runtime.yaml"
+            path.write_text("desired:\n  channelPolicy:\n    groupAllowExtra:\n    - '@leader:matrix.local'\n    - '@worker:matrix.local'\nmember:\n  role: manager\n")
+            with patch.dict("os.environ", {"AGENTTEAMS_ADMIN_USER": "admin"}):
+                self.assertEqual(manager_allowed_senders(path, "matrix.local"), {"@admin:matrix.local", "@leader:matrix.local", "@worker:matrix.local"})
+
+    def test_manager_rejects_unknown_senders_even_when_mentioned(self):
+        event = {"type": "m.room.message", "event_id": "$event", "sender": "@unknown:matrix.local", "content": {"msgtype": "m.text", "body": "please act", "m.mentions": {"user_ids": ["@manager:matrix.local"]}}}
+        payload = {"rooms": {"join": {"!leader:matrix.local": {"timeline": {"events": [event]}}}}}
+        self.assertEqual(matrix_events(payload, {"!leader:matrix.local": "team"}, "@manager:matrix.local", set(), {"@leader:matrix.local"}), [])
+        event["sender"] = "@leader:matrix.local"
+        self.assertEqual(len(matrix_events(payload, {"!leader:matrix.local": "team"}, "@manager:matrix.local", set(), {"@leader:matrix.local"})), 1)
 
 
 class TextEventsTest(unittest.TestCase):

@@ -14,7 +14,7 @@ AgentTeams/
 ├── helm/                # Helm chart (K8s): Higress, Tuwunel, MinIO, controller, Manager CR, defaults
 ├── manager/             # Manager images: OpenClaw-based (Dockerfile) and QwenPaw-based (Dockerfile.qwenpaw)
 ├── worker/              # OpenClaw Worker image (shared base pattern; runtime also selected at deploy time)
-├── hermes/              # Hermes Python package source (Hermes Matrix worker runtime)
+├── hermes/              # Pinned submodule: agentteams-group/agentteams-harness-hermes
 ├── deepseek-harness/    # Experimental headless DeepSeek Harness Worker image and Matrix bridge
 ├── openhuman/           # OpenHuman Worker image: Rust core + native Matrix (channel-matrix feature)
 ├── openclaw-base/       # Base image: Ubuntu + Node.js + bundled agent assets + mcporter
@@ -171,7 +171,8 @@ The Manager **image** is an agent runtime plus scripts; Higress, Tuwunel, MinIO,
 
 ### To modify the Hermes worker runtime
 
-- [hermes/](hermes/) — Python package layout under `hermes/src/` (`hermes_worker`, `hermes_matrix`, CLI)
+- [agentteams-harness-hermes](https://github.com/agentteams-group/agentteams-harness-hermes) — canonical Hermes runtime source, tests and standalone image CI
+- [hermes/](hermes/) — pinned Git submodule; run `git submodule update --init --recursive` after cloning or updating
 
 ### To modify the DeepSeek Harness worker runtime
 

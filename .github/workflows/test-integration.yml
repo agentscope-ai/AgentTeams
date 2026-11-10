@@ -13,7 +13,9 @@ on:
       - 'install/**'
       - 'shared/**'
       - 'qwenpaw/**'
+      - 'hermes'
       - 'hermes/**'
+      - '.gitmodules'
       - 'deepseek-harness/**'
       - 'plugins/teamharness/adapters/qwenpaw/**'
       - 'plugins/teamharness/adapters/deepseek-harness/**'
@@ -38,7 +40,9 @@ on:
       - 'install/**'
       - 'shared/**'
       - 'qwenpaw/**'
+      - 'hermes'
       - 'hermes/**'
+      - '.gitmodules'
       - 'deepseek-harness/**'
       - 'plugins/teamharness/adapters/qwenpaw/**'
       - 'plugins/teamharness/adapters/deepseek-harness/**'
@@ -117,6 +121,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          submodules: recursive
           fetch-depth: 0
 
       - name: Plan validation from the actual diff
@@ -164,6 +169,8 @@ jobs:
       openclaw_base_ref: ${{ steps.decide.outputs.openclaw_base_ref }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -201,6 +208,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Check integration scheduling
         run: |
@@ -219,6 +228,8 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Check MCP setup and Console session handling
         run: |
           python3 -m unittest discover -s manager/tests -p 'test_mcp*.py' -v
@@ -229,6 +240,8 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Check Worker config pull and workspace upload
         run: |
           bash shared/tests/test-worker-file-sync.sh
@@ -243,6 +256,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -287,6 +302,8 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -385,6 +402,8 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Login to Higress registry (when credentials are available)
         if: env.REGISTRY_USERNAME != ''
@@ -766,6 +785,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          submodules: recursive
           ref: ${{ steps.version.outputs.version }}
 
       - name: Set up Docker Buildx
@@ -886,6 +906,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Run the LLM-smoke regression suite (stubbed docker/curl)
         run: bash install/tests/verify-llm-regressions.sh
@@ -901,6 +923,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Run the upgrade CLI regression suite (stubbed docker/agt)
         run: bash install/tests/test-upgrade-cli.sh
@@ -929,6 +953,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -959,6 +985,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Run the in-place upgrade battery (stubbed selftest)
         run: timeout 150 bash qwenpaw/scripts/upgrade_qwenpaw_runtime.sh --selftest

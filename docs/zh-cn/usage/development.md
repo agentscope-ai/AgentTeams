@@ -13,6 +13,20 @@
 
 参见 [../../../AGENTS.md](../../../AGENTS.md) 获取完整的代码库导航指南。
 
+## 检出 Hermes Harness
+
+Hermes 运行时代码维护在
+[agentteams-harness-hermes](https://github.com/agentteams-group/agentteams-harness-hermes)，
+主仓库通过 `hermes/` Git 子模块固定其提交。克隆仓库或拉取更新后执行：
+
+```sh
+git submodule update --init --recursive
+```
+
+`make build-hermes-worker` 会自动初始化缺失的子模块。升级 Hermes 时，先更新独立仓库，
+再同时更新子模块提交和 `hack/versions.env` 中的 `HERMES_GIT_REF`。
+现有镜像名称、Helm 与安装器默认值继续由主仓库管理。
+
 ## 本地构建镜像
 
 所有构建都通过根目录的 `Makefile` 进行：

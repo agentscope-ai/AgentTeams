@@ -77,7 +77,7 @@ fi
 # ---- Workspace prompt files ----
 log_section "Workspace Prompts"
 
-for _file in SOUL.md AGENTS.md HEARTBEAT.md; do
+for _file in SOUL.md MANAGER.md HEARTBEAT.md; do
     _found=false
     if docker exec "${_AGENT_CTR}" test -f "${_qwenpaw_wd}/workspaces/default/${_file}" 2>/dev/null; then
         _found=true
@@ -118,7 +118,7 @@ fi
 # ---- Health endpoint ----
 log_section "Health Endpoint"
 
-if docker exec "${_AGENT_CTR}" curl -sf http://127.0.0.1:18799/ >/dev/null 2>&1; then
+if docker exec "${_AGENT_CTR}" curl -sf http://127.0.0.1:18799/api/version >/dev/null 2>&1; then
     log_pass "QwenPaw health endpoint responding on :18799"
 else
     log_fail "QwenPaw health endpoint responding on :18799"

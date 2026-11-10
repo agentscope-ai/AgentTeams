@@ -6,19 +6,21 @@ on:
       - main
     paths:
       - 'manager/**'
+      - 'worker'
       - 'worker/**'
       - 'openclaw-base/**'
       - 'agentteams-controller/**'
       - 'tests/**'
       - 'install/**'
       - 'shared/**'
+      - 'qwenpaw'
       - 'qwenpaw/**'
       - 'hermes'
       - 'hermes/**'
       - '.gitmodules'
+      - 'deepseek-harness'
       - 'deepseek-harness/**'
       - 'plugins/teamharness/adapters/qwenpaw/**'
-      - 'plugins/teamharness/adapters/deepseek-harness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
       - 'Makefile'
       - 'hack/versions.env'
@@ -33,19 +35,21 @@ on:
       - 'v*'
     paths:
       - 'manager/**'
+      - 'worker'
       - 'worker/**'
       - 'openclaw-base/**'
       - 'agentteams-controller/**'
       - 'tests/**'
       - 'install/**'
       - 'shared/**'
+      - 'qwenpaw'
       - 'qwenpaw/**'
       - 'hermes'
       - 'hermes/**'
       - '.gitmodules'
+      - 'deepseek-harness'
       - 'deepseek-harness/**'
       - 'plugins/teamharness/adapters/qwenpaw/**'
-      - 'plugins/teamharness/adapters/deepseek-harness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
       - 'Makefile'
       - 'hack/versions.env'
@@ -333,11 +337,12 @@ jobs:
 
   # Each group waits only for the images its Dockerfiles actually consume.
   build-images-independent:
-    needs: [detect-changes]
+    needs: [detect-changes, build-base]
     if: needs.detect-changes.outputs.run_builds == 'true'
     uses: ./.github/workflows/build-integration-images.yml
     with:
       targets: '["qwenpaw-worker", "deepseek-harness-worker"]'
+      controller: true
     secrets: inherit
 
   build-images-controller:

@@ -265,10 +265,10 @@ controller:
 manager:
   enabled: true                 # create Manager CR during cluster initialization
   model: ""                     # LLM model; defaults to credentials.defaultModel
-  runtime: "openclaw"           # openclaw | qwenpaw
+  runtime: "openclaw"           # openclaw | qwenpaw | hermes | deepseek-harness | openhuman
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager
-    tag: ""                     # defaults to global.imageTag
+    repository: ""             # defaults to the selected Harness worker.defaultImage
+    tag: ""                     # defaults to the Harness tag, then global.imageTag
   resources:
     requests:
       cpu: 500m
@@ -333,9 +333,15 @@ worker:
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
       tag: ""                 # defaults to global.imageTag
+    qwenpaw:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-qwenpaw-worker
+      tag: ""
     deepseekHarness:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-deepseek-harness-worker
       tag: "v0.1.1"           # experimental; released independently from global.imageTag
+    codex:
+      repository: ""           # opt-in; built in agentteams-group/agentteams-harness-codex
+      tag: ""                  # pin an independently published version
   defaultRuntime: "openclaw"
   resources:
     requests:

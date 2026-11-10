@@ -108,8 +108,20 @@ func (r *ManagerReconciler) reconcileManagerWelcome(ctx context.Context, s *mana
 	if m.Status.RoomID == "" {
 		return reconcile.Result{}, nil
 	}
+	if !m.Status.Ready {
+		return reconcile.Result{RequeueAfter: welcomeRequeueInterval}, nil
+	}
 
 	logger := log.FromContext(ctx)
+	// A fresh local installation can intentionally have no model provider yet.
+	// Keep infrastructure available without repeatedly calling an absent AI route;
+	// the Dashboard guides the admin to configure it before the first conversation.
+	if r.GatewayClient != nil && m.Spec.ModelProvider == "" {
+		routes, err := r.GatewayClient.ListAIRoutes(ctx)
+		if err == nil && len(routes) == 0 {
+			return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+	}
 
 	wb := r.managerBackend(ctx)
 	if wb != nil {
@@ -154,7 +166,7 @@ func (r *ManagerReconciler) reconcileManagerWelcome(ctx context.Context, s *mana
 	if s.provResult != nil {
 		gatewayKey = s.provResult.GatewayKey
 	}
-	authReady, err := r.Provisioner.IsManagerLLMAuthReady(ctx, gatewayKey)
+	authReady, err := r.Provisioner.IsManagerLLMAuthReady(ctx, gatewayKey, m.Spec.Model)
 	if err != nil {
 		logger.Error(err, "manager welcome llm-auth probe failed (non-fatal, will retry)",
 			"manager", m.Name)

@@ -138,6 +138,13 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		probe.key = deps.Provisioner.WorkerGatewayKey
 	}
 	mux.Handle("POST /api/v1/workers/{name}/gateway-probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(probe))
+	managerProbe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, manager: true}
+	if deps.Provisioner != nil {
+		managerProbe.key = deps.Provisioner.ManagerGatewayKey
+	}
+	mux.Handle("POST /api/v1/managers/{name}/gateway-probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(managerProbe))
+	modelStatus := &managerModelStatus{client: deps.Client, namespace: deps.Namespace, gateway: deps.Gateway}
+	mux.Handle("GET /api/v1/managers/{name}/model-status", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(modelStatus))
 
 	// Teams
 	mux.Handle("POST /api/v1/teams", mw.RequireAuthz(authpkg.ActionCreate, "team", nil)(http.HandlerFunc(rh.CreateTeam)))
@@ -258,6 +265,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Imperative lifecycle ---
 	lh := NewLifecycleHandler(deps.Client, deps.Backend, deps.Namespace, deps.ResourcePrefix)
+	mux.Handle("POST /api/v1/managers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "manager", nameFn)(http.HandlerFunc(lh.ManagerReady)))
 	mux.Handle("POST /api/v1/workers/{name}/wake", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Wake)))
 	mux.Handle("POST /api/v1/workers/{name}/restart", mw.RequireAuthz(authpkg.ActionWake, "worker", nameFn)(http.HandlerFunc(lh.Restart)))
 	mux.Handle("POST /api/v1/managers/{name}/restart", mw.RequireAuthz(authpkg.ActionUpdate, "manager", nameFn)(http.HandlerFunc(lh.RestartManager)))
@@ -488,6 +496,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// --- Credentials ---
 	// STS is self-scoped: no {name} in path; handler uses CallerIdentity to scope the issued token.
 	ch := NewCredentialsHandler(deps.STS, deps.Provisioner)
+	ch.client, ch.namespace, ch.controllerName = deps.Client, deps.Namespace, deps.ControllerName
 	mux.Handle("POST /api/v1/credentials/sts", mw.RequireAuthz(authpkg.ActionSTS, "credentials", nil)(http.HandlerFunc(ch.RefreshSTS)))
 	mux.Handle("POST /api/v1/credentials/matrix-token", mw.RequireAuthz(authpkg.ActionRefreshMatrixToken, "credentials", nil)(http.HandlerFunc(ch.RefreshMatrixToken)))
 

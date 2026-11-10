@@ -168,7 +168,7 @@ type ManagerProvisioner interface {
 	// deliver a prompt the manager receives but cannot reply to (its first
 	// /v1/chat/completions call 401s) and the onboarding turn is silently
 	// lost.
-	IsManagerLLMAuthReady(ctx context.Context, gatewayKey string) (bool, error)
+	IsManagerLLMAuthReady(ctx context.Context, gatewayKey, model string) (bool, error)
 	// SendManagerWelcomeMessage renders and posts the first-boot onboarding
 	// prompt as the homeserver admin into the given DM room. Pure side
 	// effect, no readiness checks — caller must guarantee the manager has

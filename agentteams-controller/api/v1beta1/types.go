@@ -225,7 +225,7 @@ type WorkerSpec struct {
 	LlmRateLimitPause  string                     `json:"llmRateLimitPause,omitempty"`
 	LlmRateLimitJitter string                     `json:"llmRateLimitJitter,omitempty"`
 	LlmAcquireTimeout  string                     `json:"llmAcquireTimeout,omitempty"`
-	Runtime            string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
+	Runtime            string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness | codex (default: openclaw)
 	Image              string                     `json:"image,omitempty"`      // custom Docker image
 	WorkerName         string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
 	Identity           string                     `json:"identity,omitempty"`
@@ -881,7 +881,7 @@ type Manager struct {
 type ManagerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-manager LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | qwenpaw
+	Runtime       string                     `json:"runtime,omitempty"`       // Harness runtime; independent of the Manager role
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
 	Soul          string                     `json:"soul,omitempty"`          // custom SOUL.md content
 	Agents        string                     `json:"agents,omitempty"`        // custom AGENTS.md content
@@ -929,6 +929,7 @@ type ManagerConfig struct {
 }
 
 type ManagerStatus struct {
+	Ready              bool   `json:"ready,omitempty"`
 	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
 	SpecHash           string `json:"specHash,omitempty"`
 	Phase              string `json:"phase,omitempty"` // Pending/Running/Updating/Failed

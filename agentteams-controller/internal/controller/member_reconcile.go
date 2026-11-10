@@ -956,6 +956,7 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
 	}
 	workerEnv["AGENTTEAMS_WORKER_ROLE"] = m.Role.String()
+	workerEnv["AGENTTEAMS_AGENT_ROLE"] = m.Role.String()
 	// Startup-only LLM tuning (QwenPaw registry "startup_only" keys):
 	// projected into the container environment (worker value over team
 	// default). The spec-hash path re-creates the container when the spec

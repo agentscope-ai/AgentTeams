@@ -386,7 +386,7 @@ else
 fi
 
 # Manager: should have Leader but NOT team workers
-MGR_GAF=$(exec_in_manager mc cat "${STORAGE_PREFIX}/agents/manager/openclaw.json" 2>/dev/null | jq -r '.channels.matrix.groupAllowFrom[]' 2>/dev/null)
+MGR_GAF=$(read_worker_matrix_allowlist "manager")
 if echo "${MGR_GAF}" | grep -q "@${TEST_LEADER}:"; then
     log_pass "Manager groupAllowFrom includes Leader"
 else

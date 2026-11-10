@@ -19,7 +19,15 @@ while IFS= read -r f; do
   fi
 done < <(git ls-files '*Dockerfile*' 'hack/mirror-images.sh')
 
-for f in openclaw-base/Dockerfile qwenpaw/Dockerfile hermes/Dockerfile manager/Dockerfile.qwenpaw; do
+# Manager is a compatibility tag for the shared QwenPaw image; verify the
+# alias still points there, then check the actual Node installation below.
+if ! grep -q '^FROM ${QWENPAW_HARNESS_IMAGE}$' manager/Dockerfile.qwenpaw || \
+   ! grep -q '^build-manager-qwenpaw: build-qwenpaw-worker ' Makefile; then
+  echo "ERROR: QwenPaw Manager must reuse the shared QwenPaw Harness" >&2
+  fail=1
+fi
+
+for f in openclaw-base/Dockerfile qwenpaw/Dockerfile hermes/Dockerfile; do
   if ! grep -q 'NODE_MIN_VERSION=24\.22\.1' "$f"; then
     echo "ERROR: $f must set NODE_MIN_VERSION=24.22.1" >&2
     fail=1

@@ -133,11 +133,12 @@ class BaseProbeTests(unittest.TestCase):
 
 
 class WorkflowPlanTests(unittest.TestCase):
-    def test_hermes_submodule_updates_trigger_runtime_validation(self):
+    def test_runtime_submodule_updates_trigger_runtime_validation(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())
         triggers = workflow.get('on', workflow.get(True))
         for event in ('push', 'pull_request'):
             self.assertIn('hermes', triggers[event]['paths'])
+            self.assertIn('worker', triggers[event]['paths'])
             self.assertIn('.gitmodules', triggers[event]['paths'])
         for name in ('build-image', 'build-integration-images', 'build-rc', 'check-node-pins', 'test-integration'):
             jobs = yaml.safe_load((ROOT / f'.github/workflows/{name}.yml').read_text())['jobs']
@@ -220,14 +221,14 @@ class WorkflowPlanTests(unittest.TestCase):
     def test_build_groups_wait_only_for_actual_dockerfile_dependencies(self):
         jobs = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())['jobs']
         expected = {
-            'build-images-independent': ({'qwenpaw-worker', 'deepseek-harness-worker'}, {'detect-changes'}),
+            'build-images-independent': ({'qwenpaw-worker', 'deepseek-harness-worker'}, {'detect-changes', 'build-base'}),
             'build-images-controller': ({'embedded', 'manager-qwenpaw', 'hermes-worker'}, {'detect-changes', 'build-base'}),
             'build-images-openclaw': ({'manager', 'worker'}, {'detect-changes', 'resolve-openclaw-base', 'build-base', 'build-openclaw-base'}),
         }
         dockerfiles = {'embedded': 'agentteams-controller/Dockerfile.embedded',
-                      'manager-qwenpaw': 'manager/Dockerfile.qwenpaw', 'hermes-worker': 'hermes/Dockerfile',
+                      'manager-qwenpaw': 'qwenpaw/Dockerfile', 'hermes-worker': 'hermes/Dockerfile',
                       'qwenpaw-worker': 'qwenpaw/Dockerfile', 'deepseek-harness-worker': 'deepseek-harness/Dockerfile',
-                      'manager': 'manager/Dockerfile', 'worker': 'worker/Dockerfile'}
+                      'manager': 'worker/Dockerfile', 'worker': 'worker/Dockerfile'}
         targets = []
         for name, (wanted, dependencies) in expected.items():
             job = jobs[name]

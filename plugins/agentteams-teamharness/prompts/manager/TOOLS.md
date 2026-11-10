@@ -2,6 +2,10 @@
 
 Use management tools only for explicit control-plane work.
 
+For task failures, stalls or execution analysis, load `task-diagnosis` and
+use `agt get tasks` and `agt tracing task` with your own Controller identity.
+Ground your diagnosis in Trace/span evidence and report collection gaps.
+
 Allowed control-plane work includes team membership, worker lifecycle, channel
 policy, model selection, MCP configuration, and package deployment decisions.
 

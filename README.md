@@ -64,7 +64,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 ## Quick Start
 
-**Prerequisites**: Docker Desktop (Windows/macOS) or Docker Engine (Linux).
+**Prerequisites**: OrbStack, Docker Desktop, Docker Engine, or compatible Podman. If no engine is ready, the installer guides you to install/start one and waits before continuing.
 
 **Resources**: 2 CPU cores + 4 GB RAM minimum. For multiple Workers, 4 cores + 8 GB recommended.
 
@@ -80,21 +80,21 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
-The installer walks you through:
-1. Choose your LLM provider (OpenAI-compatible APIs supported)
-2. Enter your API key
-3. Select network mode (local-only or external access)
-4. Wait for setup to complete
+The default command starts the local services and Dashboard without configuration questions. API keys, embedding and Worker runtimes can be configured later. For the interactive setup, add `--manual` (PowerShell: `-Manual`).
 
 ### Access
 
-Open http://127.0.0.1:18088 in your browser and log in to Element Web. The Manager will greet you and explain how to create your first Worker.
+Dashboard opens automatically at http://127.0.0.1:13000 with `admin` prefilled and the generated password copied to your clipboard. Paste the password and sign in; if the browser or clipboard is unavailable, use the address and credentials printed in the terminal.
+
+If no model is configured, use the Manager conversation's configuration link to open model management, enter your API key and choose a model. An exported `AGENTTEAMS_LLM_API_KEY` is preserved. Ask the Manager to create your first Worker and choose its runtime then; Worker images download on demand. See the [quickstart](docs/quickstart.md) for details.
 
 **Mobile**: Use any Matrix client (Element, FluffyChat) and connect to your server address.
 
 **That's it.** No bot applications. No external services. Your AI team runs entirely on your machine.
 
 ## Upgrade
+
+Run the same command again and confirm once to keep the original accounts, model settings, data and workspaces. Images are prepared before services are replaced, and the original configuration is backed up. See [upgrade instructions](install/README.md#upgrade-an-existing-local-installation) for recovery and database backup/rollback options.
 
 ```bash
 # Upgrade to latest (preserves all data)

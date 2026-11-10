@@ -201,3 +201,8 @@ app.kubernetes.io/component: {{ .component }}
 {{- $tag := required "worker.defaultImage.deepseekHarness.tag is required because DeepSeek Harness releases independently" .Values.worker.defaultImage.deepseekHarness.tag }}
 {{- printf "%s:%s" .Values.worker.defaultImage.deepseekHarness.repository $tag }}
 {{- end }}
+
+{{- define "agentteams.worker.codexImage" -}}
+{{- $tag := required "worker.defaultImage.codex.tag is required because Codex releases independently" .Values.worker.defaultImage.codex.tag }}
+{{- printf "%s:%s" .Values.worker.defaultImage.codex.repository $tag }}
+{{- end }}

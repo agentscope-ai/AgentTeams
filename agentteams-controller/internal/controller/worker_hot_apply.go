@@ -50,8 +50,8 @@ const subagentModelDialTimeout = 5 * time.Second
 // network) logs and leaves the annotation untouched, so the next periodic
 // reconcile retries. It never fails the worker reconcile.
 func (r *WorkerReconciler) applySubagentModelHot(ctx context.Context, w *v1beta1.Worker, spec v1beta1.WorkerSpec, configCtx MemberContext, state *MemberState) {
-	if backend.ResolveRuntime(spec.Runtime, r.DefaultRuntime) == backend.RuntimeDeepSeekHarness {
-		return // DSH reads runtime.yaml per turn and has no QwenPaw console API.
+	if runtime := backend.ResolveRuntime(spec.Runtime, r.DefaultRuntime); runtime == backend.RuntimeDeepSeekHarness || runtime == backend.RuntimeCodex {
+		return // DSH and Codex read runtime.yaml per turn and have no QwenPaw console API.
 	}
 	if r.KubeMode != "embedded" {
 		return
@@ -106,8 +106,8 @@ const annotationActiveModelProviderApplied = "agentteams.io/active-model-provide
 // restart. Same guard rails as applySubagentModelHot; an empty spec.Model is
 // left untouched (the deployment default stays in place).
 func (r *WorkerReconciler) applyActiveModelHot(ctx context.Context, w *v1beta1.Worker, spec v1beta1.WorkerSpec, state *MemberState) {
-	if backend.ResolveRuntime(spec.Runtime, r.DefaultRuntime) == backend.RuntimeDeepSeekHarness {
-		return // DSH reads runtime.yaml per turn and has no QwenPaw console API.
+	if runtime := backend.ResolveRuntime(spec.Runtime, r.DefaultRuntime); runtime == backend.RuntimeDeepSeekHarness || runtime == backend.RuntimeCodex {
+		return // DSH and Codex read runtime.yaml per turn and have no QwenPaw console API.
 	}
 	if r.KubeMode != "embedded" {
 		return

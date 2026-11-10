@@ -225,7 +225,7 @@ type WorkerSpec struct {
 	LlmRateLimitPause  string                     `json:"llmRateLimitPause,omitempty"`
 	LlmRateLimitJitter string                     `json:"llmRateLimitJitter,omitempty"`
 	LlmAcquireTimeout  string                     `json:"llmAcquireTimeout,omitempty"`
-	Runtime            string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness (default: openclaw)
+	Runtime            string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness | codex (default: openclaw)
 	Image              string                     `json:"image,omitempty"`      // custom Docker image
 	WorkerName         string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
 	Identity           string                     `json:"identity,omitempty"`

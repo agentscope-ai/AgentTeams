@@ -1,7 +1,7 @@
 #!/bin/bash
 # test-03-assign-task.sh - Case 3: Assign task in Room, Worker completes
-# Verifies: Manager relays task to Worker, task brief created in MinIO,
-#           Worker completes and writes result
+# Verifies: Manager acknowledges the current task, and Worker publishes the
+#           requested README with its unique task marker in shared storage.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/test-helpers.sh"

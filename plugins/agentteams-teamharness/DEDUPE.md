@@ -60,5 +60,5 @@ implementation behind.
 
 - The DeepSeek Harness adapter ships its npm package under the name
   `agentteams-teamharness-dsh`
-  (`plugins/teamharness/adapters/deepseek-harness/package.json`). That
+  (`deepseek-harness/plugins/teamharness/adapters/deepseek-harness/package.json`). That
   package name is frozen and does not move into this bundle.

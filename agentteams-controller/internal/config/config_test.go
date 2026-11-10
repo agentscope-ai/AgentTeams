@@ -169,6 +169,28 @@ func TestBackendConfigsIncludeQwenPawWorkerImage(t *testing.T) {
 	}
 }
 
+func TestBackendConfigsResolveCodexWorkerImage(t *testing.T) {
+	for _, image := range []string{"", "example.test/codex:custom"} {
+		t.Run(image, func(t *testing.T) {
+			t.Setenv("AGENTTEAMS_CODEX_WORKER_IMAGE", image)
+			cfg := LoadConfig()
+			want := image
+			if want == "" {
+				want = "ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0"
+			}
+			for name, got := range map[string]string{
+				"docker":  cfg.DockerConfig().CodexWorkerImage,
+				"k8s":     cfg.K8sConfig().CodexWorkerImage,
+				"sandbox": cfg.SandboxConfig().CodexWorkerImage,
+			} {
+				if got != want {
+					t.Errorf("%s CodexWorkerImage = %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestBackendConfigsIncludeDeepSeekHarnessWorkerImage(t *testing.T) {
 	t.Setenv("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/deepseek-harness-worker:test")
 

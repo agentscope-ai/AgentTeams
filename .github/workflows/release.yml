@@ -17,6 +17,7 @@ env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
   REPO: agentteams
   DEEPSEEK_HARNESS_WORKER_VERSION: v0.1.1
+  CODEX_WORKER_IMAGE: ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0
 
 jobs:
   release:
@@ -206,6 +207,25 @@ jobs:
               /opt/agentteams/scripts/runtime_env.py \
               /opt/agentteams/scripts/matrix_channel.py \
               /opt/agentteams/scripts/matrix_bridge.py
+          '
+
+      - name: Verify and smoke-test Codex runtime image
+        env:
+          IMAGE: ${{ env.CODEX_WORKER_IMAGE }}
+        run: |
+          MANIFEST="$(docker buildx imagetools inspect --raw "${IMAGE}")"
+          test -n "${MANIFEST}"
+          for PLATFORM in linux/amd64 linux/arm64; do
+            jq -e --arg platform "${PLATFORM}" \
+              'any(.manifests[]?; ((.platform.os // "") + "/" + (.platform.architecture // "")) == $platform)' \
+              <<<"${MANIFEST}" >/dev/null
+          done
+          docker pull --platform linux/amd64 "${IMAGE}"
+          docker run --rm --platform linux/amd64 --entrypoint sh "${IMAGE}" -ec '
+            codex --version
+            test -x /opt/agentteams/entrypoint.sh
+            test -f /opt/agentteams/plugins/teamharness/plugin.yaml
+            /opt/venv/bin/python -c "import agentteams_codex.bridge"
           '
 
       - name: Create GitHub Release

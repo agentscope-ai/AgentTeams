@@ -28,6 +28,7 @@
 #   AGENTTEAMS_WORKSPACE_DIR      Host directory for manager workspace (default: ~/agentteams-manager)
 #   AGENTTEAMS_VERSION            Image tag          (default: latest)
 #   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.1; independent of AGENTTEAMS_VERSION)
+#   AGENTTEAMS_CODEX_WORKER_VERSION Codex runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_REGISTRY           Image registry     (default: auto-detected by timezone)
 #   AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
 #                                      WASM plugins (default: cn-hangzhou primary)
@@ -39,6 +40,7 @@
 #   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override qwenpaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE Override experimental DeepSeek Harness worker image
+#   AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE Override Codex worker image
 #   AGENTTEAMS_PORT_GATEWAY       Host port for Higress gateway (default: 18080)
 #   AGENTTEAMS_PORT_CONSOLE       Host port for Higress console (default: 18001)
 #   AGENTTEAMS_PORT_ELEMENT_WEB   Host port for Element Web direct access (default: 18088)
@@ -76,6 +78,7 @@ $script:AGENTTEAMS_VERSION = if ($env:AGENTTEAMS_VERSION) { $env:AGENTTEAMS_VERS
 $script:AGENTTEAMS_KNOWN_STABLE_VERSION = "v1.2.6"
 $script:AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION = "v1.2.4"
 $script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = if ($env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION) { $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION } else { "v0.1.1" }
+$script:AGENTTEAMS_CODEX_WORKER_VERSION = if ($env:AGENTTEAMS_CODEX_WORKER_VERSION) { $env:AGENTTEAMS_CODEX_WORKER_VERSION } else { "v0.1.0" }
 $script:AGENTTEAMS_NON_INTERACTIVE = if ($env:AGENTTEAMS_NON_INTERACTIVE -eq "1" -or $NonInteractive) { $true } else { $false }
 $script:AGENTTEAMS_QUICKSTART = -not $Manual -and $env:AGENTTEAMS_QUICKSTART -ne "0"
 $script:AGENTTEAMS_MOUNT_SOCKET = if ($env:AGENTTEAMS_MOUNT_SOCKET -eq "0") { $false } else { $true }
@@ -1135,6 +1138,7 @@ AGENTTEAMS_COPAW_WORKER_IMAGE=$($Config.COPAW_WORKER_IMAGE)
 AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($Config.QWENPAW_WORKER_IMAGE)
 AGENTTEAMS_HERMES_WORKER_IMAGE=$($Config.HERMES_WORKER_IMAGE)
 AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($Config.DEEPSEEK_HARNESS_WORKER_IMAGE)
+AGENTTEAMS_CODEX_WORKER_IMAGE=$($Config.CODEX_WORKER_IMAGE)
 
 # Manager runtime (qwenpaw | openclaw | copaw)
 AGENTTEAMS_MANAGER_RUNTIME=$($Config.MANAGER_RUNTIME)
@@ -2732,6 +2736,14 @@ function Install-Manager {
         ""
     }
 
+    $script:CODEX_WORKER_IMAGE = if ($env:AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE) {
+        $env:AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE
+    } elseif ($env:AGENTTEAMS_CODEX_WORKER_IMAGE) {
+        $env:AGENTTEAMS_CODEX_WORKER_IMAGE
+    } else {
+        "ghcr.io/agentteams-group/agentteams-harness-codex:$($script:AGENTTEAMS_CODEX_WORKER_VERSION)"
+    }
+
     $script:MANAGER_COPAW_IMAGE = $env:AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE
 
     $script:CONTROLLER_IMAGE = if ($env:AGENTTEAMS_INSTALL_CONTROLLER_IMAGE) {
@@ -2825,6 +2837,7 @@ function Install-Manager {
     $config.QWENPAW_WORKER_IMAGE = $script:QWENPAW_WORKER_IMAGE
     $config.HERMES_WORKER_IMAGE = $script:HERMES_WORKER_IMAGE
     $config.DEEPSEEK_HARNESS_WORKER_IMAGE = $script:DEEPSEEK_HARNESS_WORKER_IMAGE
+    $config.CODEX_WORKER_IMAGE = $script:CODEX_WORKER_IMAGE
     $config.MANAGER_QWENPAW_IMAGE = $script:MANAGER_QWENPAW_IMAGE
     $config.MANAGER_COPAW_IMAGE = $script:MANAGER_COPAW_IMAGE
 
@@ -2915,6 +2928,7 @@ function Install-Manager {
                     -e "AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($script:QWENPAW_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($script:DEEPSEEK_HARNESS_WORKER_IMAGE)" `
+                    -e "AGENTTEAMS_CODEX_WORKER_IMAGE=$($script:CODEX_WORKER_IMAGE)" `
                     -e "AGENTTEAMS_DEFAULT_WORKER_RUNTIME=$($script:config.DEFAULT_WORKER_RUNTIME)" `
                     $(if ($config.PROXY_ALLOWED_REGISTRIES) { @("-e", "AGENTTEAMS_PROXY_ALLOWED_REGISTRIES=$($config.PROXY_ALLOWED_REGISTRIES)") }) `
                     --restart unless-stopped `
@@ -3236,6 +3250,7 @@ function Install-Manager {
             "-e", "AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($script:QWENPAW_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_HERMES_WORKER_IMAGE=$($script:HERMES_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($script:DEEPSEEK_HARNESS_WORKER_IMAGE)",
+            "-e", "AGENTTEAMS_CODEX_WORKER_IMAGE=$($script:CODEX_WORKER_IMAGE)",
             "-e", "AGENTTEAMS_MATRIX_DOMAIN=$matrixDomain",
             "-e", "AGENTTEAMS_ELEMENT_HOMESERVER_URL=http://127.0.0.1:$($config.PORT_GATEWAY)",
             "-e", "AGENTTEAMS_MATRIX_URL=http://127.0.0.1:6167",

@@ -70,8 +70,8 @@ grep -Fq 'log "      $(msg manager_runtime.copaw)"' <<<"${bash_runtime_blocks}" 
     fail "Bash installer must keep the legacy CoPaw upgrade hint for existing instances"
 grep -Fq 'CoPaw（旧版本，建议升级为 QwenPaw）' "${BASH_INSTALLER}" ||
     fail "Bash installer must recommend upgrading CoPaw to QwenPaw"
-grep -E '_pull_image.*QWENPAW_WORKER_IMAGE' "${BASH_INSTALLER}" | grep -Eqv '^[[:space:]]*#' ||
-    fail "Bash installer must pull the published QwenPaw Worker image"
+grep -Fq 'AGENTTEAMS_QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}' "${BASH_INSTALLER}" ||
+    fail "Bash installer must pass the QwenPaw Worker image to the Controller for on-demand creation"
 grep -Fq 'AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE' "${BASH_INSTALLER}" ||
     fail "Bash installer must support a QwenPaw Manager image override"
 grep -Fq 'agentteams-manager-qwenpaw:${AGENTTEAMS_VERSION}' "${BASH_INSTALLER}" ||
@@ -97,9 +97,8 @@ grep -Fq 'CoPaw（旧版本，建议升级为 QwenPaw）' "${POWERSHELL_INSTALLE
     fail "PowerShell installer must recommend upgrading CoPaw to QwenPaw"
 grep -Fq 'AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer must support a QwenPaw Manager image override"
-powershell_worker_images="$(sed -n '/\$workerImages = @(/,/^    )/p' "${POWERSHELL_INSTALLER}")"
-grep -F 'QWENPAW_WORKER_IMAGE' <<<"${powershell_worker_images}" | grep -Eqv '^[[:space:]]*#' ||
-    fail "PowerShell installer must pull the published QwenPaw Worker image"
+grep -Fq 'AGENTTEAMS_QWENPAW_WORKER_IMAGE=$($Config.QWENPAW_WORKER_IMAGE)' "${POWERSHELL_INSTALLER}" ||
+    fail "PowerShell installer must pass the QwenPaw Worker image to the Controller for on-demand creation"
 
 # Tag-triggered image selection is exercised in test-build-workflows.py.
 grep -Fq 'docker pull ${REGISTRY}/${REPO}/agentteams-qwenpaw-worker:${VERSION}' \

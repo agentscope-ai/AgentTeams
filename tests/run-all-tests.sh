@@ -355,7 +355,7 @@ RESULTS=()
 
 # Determine which tests to run
 TESTS=()
-for test_file in "${SCRIPT_DIR}"/test-*.sh; do
+for test_file in "${SCRIPT_DIR}"/test-[0-9]*.sh; do
     test_num=$(basename "${test_file}" | grep -o '[0-9]\+')
     if [ -n "${TEST_FILTER}" ]; then
         if echo "${TEST_FILTER}" | grep -qw "${test_num}"; then

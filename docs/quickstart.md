@@ -16,10 +16,10 @@ This guide follows the recommended local deployment path. You will install Agent
 - macOS or Linux. Windows users should follow the [Windows Deployment Guide](usage/deployment/windows.md).
 - Docker Desktop, Docker Engine, or a compatible Podman environment is running.
 - At least 2 CPU cores and 4 GB of available memory. Use 4 CPU cores and 8 GB when running multiple Workers.
-- A working LLM API key. The installer supports Alibaba Cloud Model Studio/Qwen and OpenAI-compatible services.
+- A model API key is optional during installation. You can add it in Dashboard before your first conversation.
 - Local ports `18080`, `18001`, and `18088` are available. The Dashboard also uses port `13000` when enabled by default.
 
-> For a first evaluation, use the installer's Quick Start mode. Choose Manual Setup when you need a custom model endpoint, external access, ports, persistence, runtimes, or images.
+> The default command starts Dashboard without configuration prompts. If the container engine is missing or stopped, the installer guides you to install or start it and waits before continuing. Use `--manual` to configure installation options in the terminal.
 
 ## Step 1: Install AgentTeams
 
@@ -29,26 +29,25 @@ Run the installer in a terminal:
 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
 ```
 
-When you select **stable** (or omit `AGENTTEAMS_VERSION` in non-interactive mode), the Bash installer checks the selected Manager, embedded controller, all supported Worker images, and the enabled Dashboard against the container engine's architecture before saving configuration. It downloads missing images for reuse during installation. A missing tag or architecture triggers a complete-set check of the bundled fallback (currently `v1.2.3`); connection or authentication errors stop installation. Upgrades never fall back automatically. Explicit versions and `latest` retain their existing behavior. Dashboard and DeepSeek Harness keep their independent image versions.
+With no explicit version, the Bash installer checks the recommended Manager, embedded controller and Dashboard images against your container engine's architecture before saving configuration. Worker images are pulled when you create Workers. Missing image tags or architectures trigger a check of the bundled fallback; connection or authentication errors stop installation. Upgrades never fall back automatically. Dashboard and DeepSeek Harness keep their independent image versions.
 
-Follow the prompts:
+Wait for Dashboard to open. The installer copies the login password to your clipboard and prefills the username as `admin`; paste the password and sign in. If the browser or clipboard is unavailable, use the URL and credentials printed in the terminal.
 
-1. Select English.
-2. Choose Quick Start or Manual Setup.
-3. Enter the LLM API key. For another OpenAI-compatible service in Manual Setup, also enter its Base URL and model ID.
-4. Wait for the model connectivity check and container startup to complete.
+If a model has not been configured, open the Manager conversation and click **Configure model**. Save and verify your API key and model in model management, then return to the conversation. You can also export `AGENTTEAMS_LLM_API_KEY` before installation; for a custom endpoint, set `AGENTTEAMS_LLM_PROVIDER=openai-compat`, `AGENTTEAMS_OPENAI_BASE_URL` and `AGENTTEAMS_DEFAULT_MODEL` as well.
 
 For OpenAI-compatible services, the Base URL commonly includes `/v1`; follow the requirements of your provider.
 
 After a successful installation, the terminal prints:
 
-- The Element Web login URL.
+- The Dashboard login URL (and an optional Element Web URL).
 - The administrator username and password.
 - The Higress Console URL.
 - The Dashboard URL, when enabled.
 - The locations of the configuration file, data volume, and Manager workspace.
 
 Save the login information before continuing.
+
+To upgrade later, run the same command again and press Enter at the single confirmation. The installer retains your accounts, model configuration, chat history, data and workspaces, backs up the original configuration, and prepares images before replacing services. Existing Worker containers stay in place during normal embedded-stack upgrades. If existing data cannot be matched to its configuration, installation stops without cleaning it up. See the [upgrade instructions](../install/README.md#upgrade-an-existing-local-installation) for Dashboard version handling and the separate backup/rollback workflow.
 
 ## Step 2: Verify and sign in
 
@@ -68,7 +67,7 @@ docker exec agentteams-controller agt get managers
 By default, open this URL in a browser:
 
 ```text
-http://127.0.0.1:18088/#/login
+http://127.0.0.1:13000/
 ```
 
 Sign in with the administrator username and password printed by the installer. You should see a conversation or room for the Manager.
@@ -84,11 +83,11 @@ See the [FAQ](usage/troubleshooting/faq.md) for more troubleshooting steps.
 
 ## Step 3: Create your first Worker
 
-Open a direct message with the Manager in Element Web and send:
+Open the Manager conversation in Dashboard and send:
 
 > Create a Worker named alice for Python development and code testing.
 
-The Manager will ask for or confirm the Worker's role, model, runtime, and Skills based on the current configuration. For a first evaluation, accept the recommended options. If you choose a runtime, prefer one whose default image was prepared during installation.
+The Manager will ask for or confirm the Worker's role, model, runtime, and Skills based on the current configuration. For a first evaluation, accept the recommended options. The selected runtime's image is downloaded when first needed, which can take longer on the first launch.
 
 Provisioning normally takes several dozen seconds. The Manager asks the controller to:
 
@@ -104,11 +103,11 @@ docker exec agentteams-controller agt get workers
 docker ps --filter name=agentteams-worker
 ```
 
-Wait until `alice` reaches `Running`, and confirm that its room appears in Element Web.
+Wait until `alice` reaches `Running`, and confirm that its conversation appears in Dashboard.
 
 ## Step 4: Complete your first task
 
-Open Alice's Matrix room and send:
+Open Alice's conversation in Dashboard and send:
 
 > Create a Python command-line program that accepts a name and prints a greeting. Include a README and basic tests. When finished, explain which files you created and how to run the tests.
 
@@ -130,7 +129,7 @@ Confirm that the Worker understands the additional requirement and covers both t
 ## Completion checklist
 
 - [ ] `agentteams-controller` and `agentteams-manager` are running.
-- [ ] You can sign in to Element Web and talk to the Manager.
+- [ ] You can sign in to Dashboard and talk to the Manager.
 - [ ] Alice is in the `Running` state.
 - [ ] Alice's Matrix room is visible to the Human.
 - [ ] The Worker returned the implementation, instructions, and test results.

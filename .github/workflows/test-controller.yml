@@ -3,6 +3,9 @@ name: AgentTeams Controller Tests
 on:
   pull_request:
     paths:
+      - 'worker'
+      - 'worker/**'
+      - '.gitmodules'
       - 'agentteams-controller/**'
       - 'qwenpaw'
       - 'qwenpaw/**'
@@ -20,6 +23,9 @@ on:
   push:
     branches: [main]
     paths:
+      - 'worker'
+      - 'worker/**'
+      - '.gitmodules'
       - 'agentteams-controller/**'
       - 'qwenpaw'
       - 'qwenpaw/**'
@@ -649,6 +655,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:

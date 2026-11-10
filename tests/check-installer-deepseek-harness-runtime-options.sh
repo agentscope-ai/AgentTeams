@@ -72,8 +72,6 @@ grep -Fq 'AGENTTEAMS_DEFAULT_WORKER_RUNTIME="deepseek-harness"' "${BASH_INSTALLE
     fail "Bash installer must map menu choice 4 to deepseek-harness"
 grep -Fq 'DEFAULT_WORKER_RUNTIME}" = "deepseek-harness"' "${BASH_INSTALLER}" ||
     fail "Bash installer must reject unavailable non-interactive DeepSeek Harness selections"
-grep -E '_pull_image.*DEEPSEEK_HARNESS_WORKER_IMAGE' "${BASH_INSTALLER}" | grep -Eqv '^[[:space:]]*#' ||
-    fail "Bash installer must pull the DeepSeek Harness Worker image"
 grep -Fq 'AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=${DEEPSEEK_HARNESS_WORKER_IMAGE}' "${BASH_INSTALLER}" ||
     fail "Bash installer env file must expose the DeepSeek Harness Worker image"
 
@@ -91,8 +89,6 @@ grep -Fq '"4" { if ($deepSeekHarnessAvailable) { "deepseek-harness" }' "${POWERS
     fail "PowerShell installer must map menu choice 4 to deepseek-harness"
 grep -Fq 'DEFAULT_WORKER_RUNTIME -eq "deepseek-harness" -and -not $deepSeekHarnessAvailable' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer must reject unavailable non-interactive DeepSeek Harness selections"
-grep -Fq '$workerImages += $script:DEEPSEEK_HARNESS_WORKER_IMAGE' "${POWERSHELL_INSTALLER}" ||
-    fail "PowerShell installer must pull the DeepSeek Harness Worker image"
 grep -Fq 'AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($Config.DEEPSEEK_HARNESS_WORKER_IMAGE)' "${POWERSHELL_INSTALLER}" ||
     fail "PowerShell installer env file must expose the DeepSeek Harness Worker image"
 pwsh -NoProfile -File "${ROOT_DIR}/tests/check-powershell-deepseek-harness-latest.ps1"

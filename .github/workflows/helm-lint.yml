@@ -6,6 +6,8 @@ on:
       - 'helm/**'
       - 'install/agentteams-install.sh'
       - 'install/agentteams-install.ps1'
+      - 'install/agentteams-dashboard-tests.sh'
+      - 'install/test*install*'
       - 'install/agentteams-apply.sh'
       - 'Makefile'
       - '.github/workflows/build.yml'
@@ -13,6 +15,8 @@ on:
       - '.github/workflows/build-openclaw-base.yml'
       - '.github/workflows/helm-lint.yml'
       - 'tests/test-build-workflows.py'
+      - '.github/workflows/test-controller.yml'
+      - '.github/workflows/test-manager.yml'
       - '.github/workflows/build-rc.yml'
       - '.github/workflows/build-deepseek-harness.yml'
       - '.github/workflows/release.yml'
@@ -78,6 +82,18 @@ jobs:
 
       - name: Check AgentTeams rename contracts
         run: bash tests/check-agentteams-rename-defaults.sh
+
+      - name: Check one-click installation and data-preserving upgrades
+        run: python3 -m unittest discover -s install -p 'test_*install.py' -v
+
+      - name: Check PowerShell installation and upgrades
+        shell: pwsh
+        run: |
+          ./install/test-one-click-install.ps1
+          ./install/test-upgrade-install.ps1
+
+      - name: Check Dashboard installation
+        run: bash install/agentteams-dashboard-tests.sh
 
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh

@@ -3,8 +3,10 @@
 # Requires PowerShell 7.0+ (recommended)
 #
 # Usage:
-#   .\agentteams-install.ps1                  # Interactive installation (choose Quick Start or Manual)
+#   .\agentteams-install.ps1                  # Start locally and open Dashboard
+#   .\agentteams-install.ps1 -Manual          # Customize installation interactively
 #   .\agentteams-install.ps1 manager          # Same as above (explicit)
+#   .\agentteams-install.ps1 reinstall        # Erase existing installation (typed confirmation)
 #   .\agentteams-install.ps1 worker --name <name> ...  # Worker installation
 #
 # Onboarding Modes:
@@ -16,7 +18,7 @@
 #   AGENTTEAMS_LLM_PROVIDER       LLM provider       (default: openai-compat for zh non-interactive Token Plan; qwen for en)
 #   AGENTTEAMS_DEFAULT_MODEL      Default model      (default: qwen3.6-plus for zh Token Plan and en non-interactive)
 #   AGENTTEAMS_OPENAI_BASE_URL    OpenAI-compatible base URL (default for zh non-interactive: Alibaba Token Plan endpoint)
-#   AGENTTEAMS_LLM_API_KEY        LLM API key        (required)
+#   AGENTTEAMS_LLM_API_KEY        LLM API key        (optional; configure later in Dashboard)
 #   AGENTTEAMS_ADMIN_USER         Admin username     (default: admin)
 #   AGENTTEAMS_ADMIN_PASSWORD     Admin password     (auto-generated if not set, min 8 chars)
 #   AGENTTEAMS_MATRIX_DOMAIN      Matrix domain      (default: matrix-local.agentteams.io:18080)
@@ -48,7 +50,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("manager", "worker", "uninstall")]
+    [ValidateSet("manager", "worker", "reinstall", "uninstall")]
     [string]$Command = "manager",
 
     # Worker options
@@ -62,6 +64,7 @@ param(
 
     # General options
     [switch]$NonInteractive,
+    [switch]$Manual,
     [string]$EnvFile
 )
 
@@ -69,12 +72,15 @@ param(
 # Configuration
 # ============================================================
 
+$script:InstallEnvKeys = @{}
+foreach ($key in [Environment]::GetEnvironmentVariables('Process').Keys) { $script:InstallEnvKeys[$key] = $true }
 $script:AGENTTEAMS_VERSION = if ($env:AGENTTEAMS_VERSION) { $env:AGENTTEAMS_VERSION } else { "latest" }
 $script:AGENTTEAMS_KNOWN_STABLE_VERSION = "v1.2.6"
 $script:AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION = "v1.2.4"
 $script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = if ($env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION) { $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION } else { "v0.1.1" }
 $script:AGENTTEAMS_CODEX_WORKER_VERSION = if ($env:AGENTTEAMS_CODEX_WORKER_VERSION) { $env:AGENTTEAMS_CODEX_WORKER_VERSION } else { "v0.1.0" }
 $script:AGENTTEAMS_NON_INTERACTIVE = if ($env:AGENTTEAMS_NON_INTERACTIVE -eq "1" -or $NonInteractive) { $true } else { $false }
+$script:AGENTTEAMS_QUICKSTART = -not $Manual -and $env:AGENTTEAMS_QUICKSTART -ne "0"
 $script:AGENTTEAMS_MOUNT_SOCKET = if ($env:AGENTTEAMS_MOUNT_SOCKET -eq "0") { $false } else { $true }
 $script:AGENTTEAMS_ENV_FILE = if ($EnvFile) { $EnvFile } elseif ($env:AGENTTEAMS_ENV_FILE) { $env:AGENTTEAMS_ENV_FILE } else { "$env:USERPROFILE\agentteams-manager.env" }
 $script:StepResult = ""  # Used by state machine to signal "back" navigation
@@ -255,6 +261,10 @@ function Get-AgentTeamsLanguage {
 # ============================================================
 
 $script:Messages = @{
+    "upgrade.summary" = @{ zh = "保留数据升级：{0} → {1}。保留账号、模型配置、聊天记录和工作空间；核心服务将短暂中断。"; en = "Upgrade with data preserved: {0} → {1}. Accounts, models, messages and workspaces are retained; core services will briefly restart." }
+    "upgrade.confirm" = @{ zh = "继续升级？[Y/n]"; en = "Continue upgrading? [Y/n]" }
+    "upgrade.recovered" = @{ zh = "已从现有容器恢复安装配置，将复用原数据卷和工作空间。"; en = "Recovered settings from the existing container; original storage and workspace will be reused." }
+    "upgrade.recovery_failed" = @{ zh = "发现已有安装数据，但无法完整恢复配置。已停止，不会清理或替换原数据。请恢复 agentteams-manager.env 后重试。"; en = "Existing data found, but configuration could not be fully recovered. Stopped without deleting or replacing data. Restore agentteams-manager.env and retry." }
     # --- Timezone detection messages ---
     "tz.warning.title" = @{ zh = "无法自动检测时区。"; en = "Could not detect timezone automatically." }
     "tz.warning.prompt" = @{ zh = "请输入您的时区（例如 Asia/Shanghai、America/New_York）。"; en = "Please enter your timezone (e.g., Asia/Shanghai, America/New_York)." }
@@ -1161,9 +1171,15 @@ AGENTTEAMS_DATA_DIR=$($Config.DATA_DIR)
 AGENTTEAMS_WORKSPACE_DIR=$($Config.WORKSPACE_DIR)
 # Host directory sharing
 AGENTTEAMS_HOST_SHARE_DIR=$($Config.HOST_SHARE_DIR)
+
+# Dashboard
+AGENTTEAMS_DASHBOARD=$($Config.DASHBOARD)
+AGENTTEAMS_DASHBOARD_VERSION=$($Config.DASHBOARD_VERSION)
+AGENTTEAMS_DASHBOARD_IMAGE=$($Config.DASHBOARD_IMAGE)
+AGENTTEAMS_PORT_DASHBOARD=$($Config.PORT_DASHBOARD)
 "@
 
-    Set-Content -Path $Path -Value $content -Encoding UTF8
+    Set-Content -Path $Path -Value $content -Encoding UTF8 -ErrorAction Stop
     Write-Log (Get-Msg "install.config_saved" -f $Path)
 }
 
@@ -1278,6 +1294,9 @@ function Load-CurrentParamsFromEnv {
     if (Test-Path $envFile) {
         $content = Get-Content $envFile
         $content | ForEach-Object {
+            if ($_ -match '^AGENTTEAMS_(DASHBOARD|DASHBOARD_VERSION|DASHBOARD_IMAGE|PORT_DASHBOARD)=(.*)$') {
+                $script:config[$Matches[1]] = $Matches[2].Trim()
+            }
             if ($_ -match "^AGENTTEAMS_LLM_PROVIDER=(.*)$") {
                 $script:config.LLM_PROVIDER = $Matches[1].Trim()
             }
@@ -1509,12 +1528,17 @@ function New-OpenAICompatProvider {
 
 function Test-ShouldSkipStep {
     param([string]$StepFn)
+    if ($script:AGENTTEAMS_UPGRADE -and $env:AGENTTEAMS_UPGRADE_KEEP_ALL -eq "1" -and $StepFn -notin @("Step-Lang", "Step-Mode", "Step-Existing")) { return $true }
+    if ($script:AGENTTEAMS_QUICKSTART) {
+        if ($StepFn -in @("Step-Lang", "Step-Mode")) { return $true }
+        if (-not $script:AGENTTEAMS_UPGRADE -and $StepFn -in @("Step-Runtime", "Step-ManagerRuntime", "Step-Network", "Step-E2ee", "Step-DockerProxy", "Step-Idle", "Step-Hostshare")) { return $true }
+    }
     switch ($StepFn) {
         { $_ -in @("Step-Lang", "Step-Mode") } {
             return $script:AGENTTEAMS_NON_INTERACTIVE
         }
         "Step-Existing" {
-            return (-not (Test-Path $script:AGENTTEAMS_ENV_FILE))
+            return (-not (Test-Path $script:AGENTTEAMS_ENV_FILE) -and -not $script:RecoveredConfig)
         }
         # Keep-All upgrade mode: skip all config steps, values are already loaded
         { $_ -in @("Step-Llm", "Step-Admin", "Step-Network", "Step-Ports", "Step-Domains",
@@ -1671,6 +1695,69 @@ function Step-Mode {
     Write-Log ""
 }
 
+function Load-UpgradeConfig {
+    $lines = if (Test-Path $script:AGENTTEAMS_ENV_FILE) { Get-Content -LiteralPath $script:AGENTTEAMS_ENV_FILE } else { $script:RecoveredConfig }
+    foreach ($line in $lines) {
+        if ($line -notmatch '^([A-Z][A-Z0-9_]*)=(.*)$') { continue }
+        $key, $value = $Matches[1], $Matches[2]
+        if (($key -notlike 'AGENTTEAMS_*' -and $key -notin @('JVM_ARGS', 'DASHBOARD_SESSION_SECRET')) -or $key -eq 'AGENTTEAMS_VERSION') { continue }
+        if ($script:InstallEnvKeys.ContainsKey($key)) { $value = [Environment]::GetEnvironmentVariable($key, 'Process') }
+        else { [Environment]::SetEnvironmentVariable($key, $value, 'Process') }
+        if ($key -eq 'AGENTTEAMS_REGISTRY') { $script:AGENTTEAMS_REGISTRY = $value }
+        if ($key -like 'AGENTTEAMS_*') { $script:config[$key.Substring(11)] = $value }
+    }
+}
+
+function Prepare-UpgradeDashboard {
+    if (-not $script:config.DASHBOARD) { $script:config.DASHBOARD = '1' }
+    if ($script:InstallEnvKeys.ContainsKey('AGENTTEAMS_DASHBOARD_VERSION') -or $script:InstallEnvKeys.ContainsKey('AGENTTEAMS_DASHBOARD_IMAGE')) { return }
+    $oldVersion = $script:config.DASHBOARD_VERSION
+    $oldImage = $script:config.DASHBOARD_IMAGE
+    if ($oldVersion -in @($null, '', 'v1.2.4', 'v1.3.1', 'v1.4.0') -and
+        (-not $oldImage -or $oldImage -eq "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-dashboard:$oldVersion")) {
+        $script:config.DASHBOARD_VERSION = 'v1.4.0'
+        $script:config.DASHBOARD_IMAGE = "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-dashboard:v1.4.0"
+        $env:AGENTTEAMS_DASHBOARD_VERSION = $script:config.DASHBOARD_VERSION
+        $env:AGENTTEAMS_DASHBOARD_IMAGE = $script:config.DASHBOARD_IMAGE
+    }
+}
+
+function Get-InstalledStorage {
+    param([string]$Container = 'agentteams-controller')
+    try {
+        $raw = docker inspect $Container --format '{{json .Mounts}}' 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $raw) { return $null }
+        $mounts = ($raw | Out-String) | ConvertFrom-Json -ErrorAction Stop
+        $data = $mounts | Where-Object Destination -eq '/data' | Select-Object -First 1
+        $workspace = $mounts | Where-Object { $_.Destination -in @('/root/agentteams-fs/agents/manager', '/root/manager-workspace') } | Select-Object -First 1
+        return @{ Data = $(if ($data.Type -eq 'volume') { $data.Name } else { $data.Source }); Workspace = $workspace.Source }
+    } catch { return $null }
+}
+
+function Recover-ExistingInstall {
+    $names = @(docker ps -a --format '{{.Names}}' 2>$null)
+    $container = if ($names -contains 'agentteams-controller') { 'agentteams-controller' } elseif ($names -contains 'agentteams-manager') { 'agentteams-manager' } else { $null }
+    if (-not $container) {
+        $data = if ($env:AGENTTEAMS_DATA_DIR) { $env:AGENTTEAMS_DATA_DIR } else { 'agentteams-data' }
+        docker volume inspect $data *> $null
+        if ($LASTEXITCODE -eq 0 -or ((Test-Path -LiteralPath $data -PathType Container) -and (Get-ChildItem -LiteralPath $data -Force | Select-Object -First 1))) { Write-Error (Get-Msg 'upgrade.recovery_failed') }
+        return
+    }
+    try {
+        $raw = docker inspect $container --format '{{json .Config.Env}}' 2>$null
+        $saved = @(($raw | Out-String) | ConvertFrom-Json -ErrorAction Stop)
+    } catch { Write-Error (Get-Msg 'upgrade.recovery_failed') }
+    $storage = Get-InstalledStorage $container
+    if (-not $storage.Data -or -not $storage.Workspace) { Write-Error (Get-Msg 'upgrade.recovery_failed') }
+    $required = @('ADMIN_USER', 'ADMIN_PASSWORD', 'MANAGER_PASSWORD', 'REGISTRATION_TOKEN', 'MINIO_USER', 'MINIO_PASSWORD', 'MANAGER_GATEWAY_KEY')
+    if ($saved -notcontains 'AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=false' -and $saved -notcontains 'AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=0') { $required += @('MATRIX_APPSERVICE_AS_TOKEN', 'MATRIX_APPSERVICE_HS_TOKEN') }
+    foreach ($key in $required) {
+        if (-not ($saved | Where-Object { $_ -match "^AGENTTEAMS_${key}=.+" })) { Write-Error (Get-Msg 'upgrade.recovery_failed') }
+    }
+    $script:RecoveredConfig = $saved + @("AGENTTEAMS_DATA_DIR=$($storage.Data)", "AGENTTEAMS_WORKSPACE_DIR=$($storage.Workspace)")
+    Write-Log (Get-Msg 'upgrade.recovered')
+}
+
 function Step-Existing {
     # This step is skipped when env file doesn't exist
     Write-Log (Get-Msg "install.existing.detected" -f $script:AGENTTEAMS_ENV_FILE)
@@ -1679,73 +1766,38 @@ function Step-Existing {
     $runningWorkers = docker ps --format "{{.Names}}" 2>$null | Select-String "^agentteams-worker-"
     $existingWorkers = docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-worker-"
 
-    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
-        Write-Log (Get-Msg "install.existing.upgrade_noninteractive")
-        $upgradeChoice = "1"
-    } else {
-        Write-Host ""
-        Write-Host (Get-Msg "install.existing.choose")
-        Write-Host (Get-Msg "install.existing.upgrade")
-        Write-Host (Get-Msg "install.existing.reinstall")
-        Write-Host (Get-Msg "install.existing.cancel")
-        Write-Host ""
-        $upgradeChoice = Read-Host (Get-Msg "install.existing.prompt")
-        $upgradeChoice = if ($upgradeChoice) { $upgradeChoice } else { "1" }
-        if ($upgradeChoice -eq "b") { $script:StepResult = "back"; return }
+    Load-UpgradeConfig
+    $storage = Get-InstalledStorage
+    if ($storage.Data) {
+        if ($script:config.DATA_DIR -and $script:config.DATA_DIR -ne $storage.Data) { Write-Error (Get-Msg 'upgrade.recovery_failed') }
+        $script:config.DATA_DIR = $storage.Data
     }
-
-    switch -Regex ($upgradeChoice) {
-        "^(1|upgrade)$" {
+    if (-not $script:config.WORKSPACE_DIR -and $storage.Workspace) { $script:config.WORKSPACE_DIR = $storage.Workspace }
+    foreach ($key in @('ADMIN_USER', 'ADMIN_PASSWORD', 'MANAGER_PASSWORD', 'REGISTRATION_TOKEN', 'MINIO_USER', 'MINIO_PASSWORD', 'MANAGER_GATEWAY_KEY', 'DATA_DIR', 'WORKSPACE_DIR')) {
+        if (-not $script:config[$key]) { Write-Error (Get-Msg 'upgrade.recovery_failed') }
+    }
+    if ($script:config.MATRIX_APPSERVICE_ENABLED -notin @('false', '0') -and (-not $script:config.MATRIX_APPSERVICE_AS_TOKEN -or -not $script:config.MATRIX_APPSERVICE_HS_TOKEN)) { Write-Error (Get-Msg 'upgrade.recovery_failed') }
+    docker volume inspect $script:config.DATA_DIR *> $null
+    if ($LASTEXITCODE -ne 0 -and -not (Test-Path -LiteralPath $script:config.DATA_DIR -PathType Container)) { Write-Error (Get-Msg 'upgrade.recovery_failed') }
+    $upgradeChoice = if ($Command -eq 'reinstall') { 'reinstall' } else { 'upgrade' }
+    switch ($upgradeChoice) {
+        'upgrade' {
             $script:AGENTTEAMS_UPGRADE = $true
-            Write-Log (Get-Msg "install.existing.upgrading")
-
-            # Show upgrade mode sub-menu (unless already set via env var)
-            if ($env:AGENTTEAMS_UPGRADE_KEEP_ALL -ne "1") {
-                Write-Host ""
-                Write-Host (Get-Msg "upgrade.mode.prompt")
-                Write-Host (Get-Msg "upgrade.mode.keep_all")
-                Write-Host (Get-Msg "upgrade.mode.confirm_each")
-                Write-Host (Get-Msg "upgrade.mode.back")
-                Write-Host ""
-                $upgradeModeChoice = Read-Host (Get-Msg "install.existing.prompt")
-                $upgradeModeChoice = if ($upgradeModeChoice) { $upgradeModeChoice } else { "1" }
-                switch -Regex ($upgradeModeChoice) {
-                    "^(1|keep)$" {
-                        $env:AGENTTEAMS_UPGRADE_KEEP_ALL = "1"
-                    }
-                    "^(2|confirm)$" {
-                        $env:AGENTTEAMS_UPGRADE_KEEP_ALL = "0"
-                    }
-                    "^(3|b)$" {
-                        $script:StepResult = "back"
-                        return
-                    }
-                    default {
-                        $env:AGENTTEAMS_UPGRADE_KEEP_ALL = "0"
-                    }
-                }
-            }
-            # Load current parameters for both Keep-All and confirm-each modes
-            Load-CurrentParamsFromEnv
-
-            if ($runningManager -or $runningWorkers) {
-                Write-Host ""
-                Write-Host "$($script:ESC)[33m$(Get-Msg 'install.existing.warn_manager_stop')$($script:ESC)[0m"
-                if ($existingWorkers) {
-                    Write-Host "$($script:ESC)[33m$(Get-Msg 'install.existing.warn_worker_recreate')$($script:ESC)[0m"
-                }
-                if (-not $script:AGENTTEAMS_NON_INTERACTIVE) {
-                    $confirm = Read-Host (Get-Msg "install.existing.continue_prompt")
-                    if ($confirm -eq "b" -or $confirm -eq "B") { $script:StepResult = "back"; return }
-                    if ($confirm -ne "y" -and $confirm -ne "Y") {
-                        Write-Log (Get-Msg "install.existing.cancelled")
-                        exit 0
-                    }
+            $env:AGENTTEAMS_UPGRADE_KEEP_ALL = '1'
+            Prepare-UpgradeDashboard
+            $image = docker inspect agentteams-controller --format '{{.Config.Image}}' 2>$null
+            if (-not $image) { $image = docker inspect agentteams-manager --format '{{.Config.Image}}' 2>$null }
+            Write-Log (Get-Msg 'upgrade.summary' -f $image, $script:AGENTTEAMS_VERSION)
+            if (-not $script:AGENTTEAMS_NON_INTERACTIVE) {
+                $confirm = Read-Host (Get-Msg 'upgrade.confirm')
+                if ($confirm -and $confirm -notmatch '^(y|yes)$') {
+                    Write-Log (Get-Msg 'install.existing.cancelled')
+                    exit 0
                 }
             }
             $script:UPGRADE_EXISTING_WORKERS = $existingWorkers
         }
-        "^(2|reinstall)$" {
+        'reinstall' {
             Write-Log (Get-Msg "install.reinstall.performing")
             $existingWorkspace = "$env:USERPROFILE\agentteams-manager"
             if (Test-Path $script:AGENTTEAMS_ENV_FILE) {
@@ -1814,25 +1866,13 @@ function Step-Existing {
         }
     }
 
-    # Load existing env file (upgrade path)
-    if (Test-Path $script:AGENTTEAMS_ENV_FILE) {
-        Write-Log (Get-Msg "install.loading_config" -f $script:AGENTTEAMS_ENV_FILE)
-        Get-Content $script:AGENTTEAMS_ENV_FILE | ForEach-Object {
-            if ($_ -match "^([^#=][^=]*)=(.*)$") {
-                $key = $Matches[1].Trim()
-                $value = $Matches[2].Split("#")[0].Trim()
-                if (-not [Environment]::GetEnvironmentVariable($key)) {
-                    [Environment]::SetEnvironmentVariable($key, $value, "Process")
-                }
-            }
-        }
-    }
+
 }
 
 function Step-Llm {
     Write-Log (Get-Msg "llm.title")
 
-    if ($script:AGENTTEAMS_NON_INTERACTIVE) {
+    if ($script:AGENTTEAMS_NON_INTERACTIVE -or $script:AGENTTEAMS_QUICKSTART) {
         if ($script:AGENTTEAMS_LANGUAGE -eq "zh") {
             $script:config.LLM_PROVIDER = if ($env:AGENTTEAMS_LLM_PROVIDER) { $env:AGENTTEAMS_LLM_PROVIDER } else { "openai-compat" }
             $script:config.DEFAULT_MODEL = if ($env:AGENTTEAMS_DEFAULT_MODEL) { $env:AGENTTEAMS_DEFAULT_MODEL } else { "qwen3.6-plus" }
@@ -1847,8 +1887,8 @@ function Step-Llm {
         }
         Write-Log (Get-Msg "llm.model.label" -f $script:config.DEFAULT_MODEL)
         Write-Log ""
-        $script:config.LLM_API_KEY = Read-Prompt -VarName "AGENTTEAMS_LLM_API_KEY" -PromptText (Get-Msg "llm.apikey_prompt") -Secret
-        $script:config.EMBEDDING_MODEL = if ($null -ne $env:AGENTTEAMS_EMBEDDING_MODEL) { $env:AGENTTEAMS_EMBEDDING_MODEL } else { "text-embedding-v4" }
+        $script:config.LLM_API_KEY = $env:AGENTTEAMS_LLM_API_KEY
+        $script:config.EMBEDDING_MODEL = $env:AGENTTEAMS_EMBEDDING_MODEL
         return
     }
 
@@ -2601,6 +2641,59 @@ function Install-Manager {
     # Detect registry
     $script:AGENTTEAMS_REGISTRY = Get-Registry -Timezone $script:AGENTTEAMS_TIMEZONE
 
+    # Check the container runtime before resolving images. Resolve-EmbeddedImage
+    # performs docker pull for remote tags, so these actionable errors must win
+    # over a misleading "embedded image unavailable" failure.
+    Ensure-ContainerRuntime
+
+    Write-Log (Get-Msg "install.registry" -f $script:AGENTTEAMS_REGISTRY)
+    Write-Log ""
+    Write-Log (Get-Msg "install.dir" -f (Get-Location))
+    Write-Log (Get-Msg "install.dir_hint")
+    Write-Log (Get-Msg "install.dir_hint2")
+    Write-Log ""
+
+    # Initialize shared config hashtable
+    $script:config = @{}
+    $config = $script:config  # local alias so post-machine code can use $config
+
+    # A missing env file must never turn an existing data volume into a fresh install.
+    if (-not (Test-Path $script:AGENTTEAMS_ENV_FILE)) { Recover-ExistingInstall }
+
+    # ── State machine ─────────────────────────────────────────────────────────
+    $_steps = @("Step-Lang", "Step-Mode", "Step-Existing", "Step-Llm", "Step-ManagerRuntime", "Step-Runtime", "Step-Admin",
+                "Step-Network", "Step-Ports", "Step-Domains", "Step-Github", "Step-Skills",
+                "Step-Volume", "Step-Workspace", "Step-E2ee", "Step-DockerProxy", "Step-Idle",
+                "Step-Hostshare")
+    $_stepHistory = [System.Collections.Generic.List[int]]::new()
+    $_stepIdx = 0
+    while ($_stepIdx -lt $_steps.Count) {
+        $_stepFn = $_steps[$_stepIdx]
+        if (Test-ShouldSkipStep $_stepFn) {
+            $_stepIdx++
+            continue
+        }
+        if ($_stepHistory.Count -gt 0) {
+            Write-Log (Get-Msg "nav.back_hint")
+        }
+        $script:StepResult = ""
+        & $_stepFn
+        if ($script:StepResult -eq "back") {
+            if ($_stepHistory.Count -gt 0) {
+                $_stepIdx = $_stepHistory[$_stepHistory.Count - 1]
+                $_stepHistory.RemoveAt($_stepHistory.Count - 1)
+                Clear-StepVars $_steps[$_stepIdx]
+            }
+            # else: first step, ignore 'b'
+        } else {
+            $_stepHistory.Add($_stepIdx)
+            $_stepIdx++
+        }
+    }
+    # ── End state machine ──────────────────────────────────────────────────────
+
+    # Saved registry and image overrides are now available.
+    $script:AGENTTEAMS_REGISTRY = Get-Registry -Timezone $script:AGENTTEAMS_TIMEZONE
     # Set image names
     $script:MANAGER_IMAGE = if ($env:AGENTTEAMS_INSTALL_MANAGER_IMAGE) {
         $env:AGENTTEAMS_INSTALL_MANAGER_IMAGE
@@ -2659,114 +2752,10 @@ function Install-Manager {
         "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-controller:$($script:AGENTTEAMS_VERSION)"
     }
 
-    # Check the container runtime before resolving images. Resolve-EmbeddedImage
-    # performs docker pull for remote tags, so these actionable errors must win
-    # over a misleading "embedded image unavailable" failure.
-    if (-not (Get-Command "docker" -ErrorAction SilentlyContinue) -and
-        -not (Get-Command "podman" -ErrorAction SilentlyContinue)) {
-        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_found')" -ForegroundColor Red
-        Exit-Script 1
-    }
-
-    if (-not (Test-DockerRunning)) {
-        Write-Host "$($script:ESC)[31m[AgentTeams ERROR]$($script:ESC)[0m $(Get-Msg 'error.docker_not_running')" -ForegroundColor Red
-        Exit-Script 1
-    }
-
     # Resolve embedded controller image (sets $script:EMBEDDED_IMAGE and
     # $script:AGENTTEAMS_USE_EMBEDDED). Errors out fast if no embedded image is available
     # for the requested version (mirrors the bash installer behavior).
     Resolve-EmbeddedImage
-
-    Write-Log (Get-Msg "install.registry" -f $script:AGENTTEAMS_REGISTRY)
-    Write-Log ""
-    Write-Log (Get-Msg "install.dir" -f (Get-Location))
-    Write-Log (Get-Msg "install.dir_hint")
-    Write-Log (Get-Msg "install.dir_hint2")
-    Write-Log ""
-
-    # Initialize shared config hashtable
-    $script:config = @{}
-    $config = $script:config  # local alias so post-machine code can use $config
-
-    # Orphan volume detection (env file gone but volume remains)
-    if (-not (Test-Path $script:AGENTTEAMS_ENV_FILE)) {
-        $dataVol = if ($env:AGENTTEAMS_DATA_DIR) { $env:AGENTTEAMS_DATA_DIR } else { "agentteams-data" }
-        $volumeExists = docker volume ls -q 2>$null | Select-String "^${dataVol}$"
-        if ($volumeExists) {
-            Write-Host ""
-            Write-Log (Get-Msg "install.orphan_volume.detected" -f $dataVol)
-            Write-Log (Get-Msg "install.orphan_volume.warn")
-            if ($script:AGENTTEAMS_NON_INTERACTIVE) {
-                Write-Log (Get-Msg "install.orphan_volume.clean_noninteractive")
-                docker stop agentteams-manager *>$null
-                docker rm agentteams-manager *>$null
-                docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-worker-" | ForEach-Object {
-                    docker stop $_.ToString().Trim() *>$null
-                    docker rm $_.ToString().Trim() *>$null
-                }
-                Write-Log (Get-Msg "install.orphan_volume.cleaning")
-                docker volume rm $dataVol *>$null
-                Write-Log (Get-Msg "install.orphan_volume.cleaned")
-            } else {
-                Write-Host ""
-                Write-Host (Get-Msg "install.orphan_volume.choose")
-                Write-Host (Get-Msg "install.orphan_volume.clean")
-                Write-Host (Get-Msg "install.orphan_volume.keep")
-                Write-Host ""
-                $orphanChoice = Read-Host (Get-Msg "install.orphan_volume.prompt")
-                if (-not $orphanChoice) { $orphanChoice = "1" }
-                switch -Regex ($orphanChoice) {
-                    "^(1|clean)$" {
-                        docker stop agentteams-manager *>$null
-                        docker rm agentteams-manager *>$null
-                        docker ps -a --format "{{.Names}}" 2>$null | Select-String "^agentteams-worker-" | ForEach-Object {
-                            docker stop $_.ToString().Trim() *>$null
-                            docker rm $_.ToString().Trim() *>$null
-                        }
-                        Write-Log (Get-Msg "install.orphan_volume.cleaning")
-                        docker volume rm $dataVol *>$null
-                        Write-Log (Get-Msg "install.orphan_volume.cleaned")
-                    }
-                    "^(2|keep)$" {
-                        Write-Log (Get-Msg "install.orphan_volume.keeping")
-                    }
-                }
-            }
-        }
-    }
-
-    # ── State machine ─────────────────────────────────────────────────────────
-    $_steps = @("Step-Lang", "Step-Mode", "Step-Existing", "Step-Llm", "Step-ManagerRuntime", "Step-Runtime", "Step-Admin",
-                "Step-Network", "Step-Ports", "Step-Domains", "Step-Github", "Step-Skills",
-                "Step-Volume", "Step-Workspace", "Step-E2ee", "Step-DockerProxy", "Step-Idle",
-                "Step-Hostshare")
-    $_stepHistory = [System.Collections.Generic.List[int]]::new()
-    $_stepIdx = 0
-    while ($_stepIdx -lt $_steps.Count) {
-        $_stepFn = $_steps[$_stepIdx]
-        if (Test-ShouldSkipStep $_stepFn) {
-            $_stepIdx++
-            continue
-        }
-        if ($_stepHistory.Count -gt 0) {
-            Write-Log (Get-Msg "nav.back_hint")
-        }
-        $script:StepResult = ""
-        & $_stepFn
-        if ($script:StepResult -eq "back") {
-            if ($_stepHistory.Count -gt 0) {
-                $_stepIdx = $_stepHistory[$_stepHistory.Count - 1]
-                $_stepHistory.RemoveAt($_stepHistory.Count - 1)
-                Clear-StepVars $_steps[$_stepIdx]
-            }
-            # else: first step, ignore 'b'
-        } else {
-            $_stepHistory.Add($_stepIdx)
-            $_stepIdx++
-        }
-    }
-    # ── End state machine ──────────────────────────────────────────────────────
 
     # Post-machine defaults for any steps that were skipped
     if (-not $script:config.DATA_DIR) {
@@ -2852,8 +2841,13 @@ function Install-Manager {
     $config.MANAGER_QWENPAW_IMAGE = $script:MANAGER_QWENPAW_IMAGE
     $config.MANAGER_COPAW_IMAGE = $script:MANAGER_COPAW_IMAGE
 
-    # Write env file
-    New-EnvFile -Config $config -Path $script:AGENTTEAMS_ENV_FILE
+    foreach ($key in @('DASHBOARD', 'DASHBOARD_VERSION', 'DASHBOARD_IMAGE', 'PORT_DASHBOARD')) {
+        $value = [Environment]::GetEnvironmentVariable("AGENTTEAMS_$key", 'Process')
+        if ($null -ne $value) { $config[$key] = $value }
+    }
+    if (-not $config.DASHBOARD) { $config.DASHBOARD = '1' }
+    if (-not $config.DASHBOARD_VERSION) { $config.DASHBOARD_VERSION = 'v1.4.0' }
+    if (-not $config.PORT_DASHBOARD) { $config.PORT_DASHBOARD = '13000' }
 
     # Manager image selection (used by both embedded — passed to controller via env —
     # and legacy — used directly as `docker run` target).
@@ -2976,12 +2970,6 @@ function Install-Manager {
         $dockerArgs += $managerImage
     }
 
-    # Check if the Docker volume exists; create if not (reuse on reinstall) — both modes.
-    $volumeExists = docker volume ls -q 2>$null | Select-String "^$($config.DATA_DIR)$"
-    if (-not $volumeExists) {
-        docker volume create $config.DATA_DIR | Out-Null
-    }
-
     # Pull images (skip if already exists locally for local build tags).
     $LocalImagePattern = "^agentteams/"
     function Test-LocalImage {
@@ -3015,10 +3003,12 @@ function Install-Manager {
             } else {
                 Write-Log (Get-Msg "install.image.pulling_manager" -f $managerImage)
                 & docker pull $managerImage
+                if ($LASTEXITCODE -ne 0) { Exit-Script 1 }
             }
         } else {
             Write-Log (Get-Msg "install.image.pulling_manager" -f $managerImage)
             & docker pull $managerImage
+            if ($LASTEXITCODE -ne 0) { Exit-Script 1 }
         }
     } else {
         if ($managerImage -match $LocalImagePattern) {
@@ -3027,36 +3017,52 @@ function Install-Manager {
             } else {
                 Write-Log (Get-Msg "install.image.pulling_manager" -f $managerImage)
                 & docker pull $managerImage
+                if ($LASTEXITCODE -ne 0) { Exit-Script 1 }
             }
         } else {
             Write-Log (Get-Msg "install.image.pulling_manager" -f $managerImage)
             & docker pull $managerImage
+            if ($LASTEXITCODE -ne 0) { Exit-Script 1 }
         }
     }
 
-    # Pull all worker runtime images (workers may use any runtime regardless of the default)
-    $workerImages = @(
-        $script:WORKER_IMAGE
-        $script:COPAW_WORKER_IMAGE
-        $script:QWENPAW_WORKER_IMAGE
-        $script:HERMES_WORKER_IMAGE
-    )
-    if ($script:DEEPSEEK_HARNESS_WORKER_IMAGE) { $workerImages += $script:DEEPSEEK_HARNESS_WORKER_IMAGE }
-    $workerImages += $script:CODEX_WORKER_IMAGE
-    foreach ($workerImg in $workerImages) {
-        if (-not $workerImg) { continue }
-        if ($workerImg -match $LocalImagePattern) {
-            if (Test-LocalImage $workerImg) {
-                Write-Log (Get-Msg "install.image.worker_exists" -f $workerImg)
-            } else {
-                Write-Log (Get-Msg "install.image.pulling_worker" -f $workerImg)
-                & docker pull $workerImg
-            }
-        } else {
-            Write-Log (Get-Msg "install.image.pulling_worker" -f $workerImg)
-            & docker pull $workerImg
+    # Prepare Dashboard before stopping any existing service.
+    if ($config.DASHBOARD -ne '0') {
+        $dashboardImage = if ($config.DASHBOARD_IMAGE) { $config.DASHBOARD_IMAGE } else { "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-dashboard:$($config.DASHBOARD_VERSION)" }
+        docker image inspect $dashboardImage *> $null
+        if ($LASTEXITCODE -ne 0) { docker pull $dashboardImage; if ($LASTEXITCODE -ne 0) { Write-Error 'Could not pull Dashboard image; existing services have not been stopped.' } }
+    }
+
+    # Preserve the original configuration before writing upgrade settings.
+    $backup = $null
+    if ($script:AGENTTEAMS_UPGRADE -and (Test-Path $script:AGENTTEAMS_ENV_FILE)) {
+        $backup = "$($script:AGENTTEAMS_ENV_FILE).before-upgrade-$(Get-Date -Format yyyyMMddHHmmss)"
+        Copy-Item -LiteralPath $script:AGENTTEAMS_ENV_FILE -Destination $backup -ErrorAction Stop
+        Write-Log "Config backup: $backup"
+    }
+    # Write env file
+    New-EnvFile -Config $config -Path $script:AGENTTEAMS_ENV_FILE
+    # Keep saved settings outside the generated template (for example external storage).
+    if ($script:AGENTTEAMS_UPGRADE) {
+        $savedLines = if ($backup) { Get-Content -LiteralPath $backup } else { $script:RecoveredConfig }
+        $generated = Get-Content -LiteralPath $script:AGENTTEAMS_ENV_FILE
+        foreach ($line in $savedLines) {
+            if ($line -notmatch '^([A-Z][A-Z0-9_]*)=(.*)$') { continue }
+            $key = $Matches[1]
+            if ($key -notlike 'AGENTTEAMS_*' -and $key -notin @('JVM_ARGS', 'DASHBOARD_SESSION_SECRET')) { continue }
+            if ($generated -match "^${key}=") { continue }
+            $value = [Environment]::GetEnvironmentVariable($key, 'Process')
+            Add-Content -LiteralPath $script:AGENTTEAMS_ENV_FILE -Value "${key}=$value" -Encoding UTF8 -ErrorAction Stop
         }
     }
+
+    # Check if the Docker volume exists; create if not (reuse on reinstall) — both modes.
+    $volumeExists = docker volume ls -q 2>$null | Select-String "^$($config.DATA_DIR)$"
+    if (-not $volumeExists) {
+        docker volume create $config.DATA_DIR | Out-Null
+    }
+
+    # The controller pulls a Worker image when you create that Worker.
 
     # --- Pre-upgrade: extract Matrix passwords from old containers (old-arch -> embedded) ---
     $credsTmp = $null
@@ -3167,8 +3173,8 @@ function Install-Manager {
         docker rm agentteams-manager *>$null
     }
 
-    # Stop and remove worker containers (controller will recreate via CR reconciliation)
-    if ($script:UPGRADE_EXISTING_WORKERS) {
+    # Only legacy architecture migration needs Worker containers to be recreated.
+    if ($isOldArch -and $script:UPGRADE_EXISTING_WORKERS) {
         Write-Log (Get-Msg "install.existing.stopping_workers")
         $script:UPGRADE_EXISTING_WORKERS | ForEach-Object {
             docker stop $_ *>$null
@@ -3453,7 +3459,7 @@ function Install-Manager {
             if ($LASTEXITCODE -eq 0) { $hasAgentTeamsCli = $true }
         } catch {}
 
-        if ($hasAgentTeamsCli) {
+        if ($hasAgentTeamsCli -and -not $script:AGENTTEAMS_QUICKSTART -and $config.LLM_API_KEY) {
             Write-Log (Get-Msg "install.welcome_msg.waiting")
             $welcomeMax = if ($env:AGENTTEAMS_WELCOME_TIMEOUT) { [int]$env:AGENTTEAMS_WELCOME_TIMEOUT } else { 300 }
             $welcomeWait = 0
@@ -3500,6 +3506,7 @@ function Install-Manager {
     # Print success message
     Write-Log ""
     Write-Log (Get-Msg "success.title")
+    Start-AgentTeamsDashboard
     Write-Log ""
     Write-Log (Get-Msg "success.domains_configured")
     Write-Log "  $($config.MATRIX_DOMAIN.Split(':')[0]) $($config.MATRIX_CLIENT_DOMAIN) $($config.AI_GATEWAY_DOMAIN) $($config.FS_DOMAIN) $($config.CONSOLE_DOMAIN)"
@@ -3774,9 +3781,92 @@ function Uninstall-AgentTeams {
 # Main Entry Point
 # ============================================================
 
+function Ensure-ContainerRuntime {
+    if (Test-DockerRunning) { return }
+    if (Get-Command podman -ErrorAction SilentlyContinue) {
+        & podman info *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Set-Alias -Name docker -Value podman -Scope Script
+            return
+        }
+    }
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) { Write-Error (Get-Msg 'error.docker_not_running') }
+    $dockerDesktop = @("$env:LOCALAPPDATA\Programs\DockerDesktop\Docker Desktop.exe", "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($dockerDesktop) { Start-Process $dockerDesktop }
+    elseif (Get-Command podman -ErrorAction SilentlyContinue) { Write-Log 'podman machine start' }
+    else {
+        $guide = 'https://docs.docker.com/desktop/setup/install/windows-install/'
+        Write-Log "Docker Desktop: $guide"
+        Start-Process $guide
+    }
+    if ($script:AGENTTEAMS_LANGUAGE -eq 'zh') { Write-Log '请安装并启动容器工具。此窗口会等待引擎就绪，然后自动继续（Ctrl+C 取消）。' }
+    else { Write-Log 'Install and start your container tool. This window will continue when the engine is ready (Ctrl+C to cancel).' }
+    $deadline = (Get-Date).AddMinutes(15)
+    $env:PATH = "$env:PATH;$env:ProgramFiles\Docker\Docker\resources\bin;$env:LOCALAPPDATA\Programs\DockerDesktop\resources\bin"
+    while ((Get-Date) -lt $deadline) {
+        # Newly installed desktop tools may not be on this shell's original PATH.
+        if (Test-DockerRunning) { return }
+        if (Get-Command podman -ErrorAction SilentlyContinue) {
+            & podman info *> $null
+            if ($LASTEXITCODE -eq 0) { Set-Alias -Name docker -Value podman -Scope Script; return }
+        }
+        Start-Sleep -Seconds 3
+    }
+    Write-Error (Get-Msg 'error.docker_not_running')
+}
+
+function Start-AgentTeamsDashboard {
+    if ($script:config.DASHBOARD -eq '0' -or $script:AGENTTEAMS_USE_EMBEDDED -ne '1') { return }
+    $version = if ($script:config.DASHBOARD_VERSION) { $script:config.DASHBOARD_VERSION } else { 'v1.4.0' }
+    $image = if ($script:config.DASHBOARD_IMAGE) { $script:config.DASHBOARD_IMAGE } else { "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-dashboard:$version" }
+    $port = if ($script:config.PORT_DASHBOARD) { $script:config.PORT_DASHBOARD } else { '13000' }
+    $bindAddress = if ($script:config.LOCAL_ONLY -eq '0') { '0.0.0.0' } else { '127.0.0.1' }
+    docker image inspect $image *> $null
+    if ($LASTEXITCODE -ne 0) { docker pull $image; if ($LASTEXITCODE -ne 0) { Write-Error 'Could not pull Dashboard image.' } }
+    $token = $env:AGENTTEAMS_AUTH_TOKEN
+    for ($attempt = 0; -not $token -and $attempt -lt 15; $attempt++) {
+        $token = (docker exec agentteams-controller cat /var/run/agentteams/cli-token 2>$null | Out-String).Trim()
+        if (-not $token) { Start-Sleep -Seconds 2 }
+    }
+    if (-not $token) { Write-Error 'Controller credentials are not ready for Dashboard.' }
+    docker volume create agentteams-dashboard-data *> $null
+    docker run --rm --user 0 --entrypoint sh -v 'agentteams-dashboard-data:/data/agentteams-dashboard' $image -c 'chown -R 1001:1001 /data/agentteams-dashboard' *> $null
+    if ($LASTEXITCODE -ne 0) { Write-Error 'Could not prepare Dashboard storage.' }
+    docker rm -f agentteams-dashboard *> $null
+    $args = @('run', '-d', '--name', 'agentteams-dashboard', '--restart', 'unless-stopped', '--network', 'agentteams-net',
+        '-p', "${bindAddress}:${port}:3000", '-v', 'agentteams-dashboard-data:/data/agentteams-dashboard',
+        '-e', 'AGENTTEAMS_DEPLOYMENT_MODE=embedded', '-e', 'AGENTTEAMS_CONTROLLER_URL=http://agentteams-controller:8090',
+        '-e', "AGENTTEAMS_AUTH_TOKEN=$token", '-e', 'AGENTTEAMS_MATRIX_URL=http://agentteams-controller:6167',
+        '-e', 'MATRIX_HOMESERVER_ALLOWLIST=agentteams-controller,matrix-local.agentteams.io',
+        '-e', 'AGENTTEAMS_AI_GATEWAY_URL=http://agentteams-controller:8080',
+        '-e', 'AGENTTEAMS_AI_GATEWAY_ADMIN_URL=http://agentteams-controller:8001',
+        '-e', 'AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS=agentteams-controller',
+        '-e', 'AGENTTEAMS_FS_ENDPOINT=http://agentteams-controller:9000',
+        '-e', "AGENTTEAMS_FS_ACCESS_KEY=$($script:config.MINIO_USER)", '-e', "AGENTTEAMS_FS_SECRET_KEY=$($script:config.MINIO_PASSWORD)", $image)
+    & docker @args
+    if ($LASTEXITCODE -ne 0) { Write-Error 'Could not start Dashboard.' }
+    $url = "http://127.0.0.1:${port}/?username=$([uri]::EscapeDataString($script:config.ADMIN_USER))"
+    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+        try {
+            $null = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 2 -ErrorAction Stop
+            Write-Log "Dashboard: $url"
+            if (-not $script:AGENTTEAMS_NON_INTERACTIVE) {
+                try {
+                    Set-Clipboard -Value $script:config.ADMIN_PASSWORD -ErrorAction Stop
+                    if ($script:AGENTTEAMS_LANGUAGE -eq 'zh') { Write-Log '登录密码已复制，粘贴密码后点击登录即可。' }
+                    else { Write-Log 'Login password copied. Paste it in Dashboard and sign in.' }
+                } catch { Write-Log 'Copy the login password shown below.' }
+                Start-Process $url
+            }
+            return
+        } catch { Start-Sleep -Seconds 2 }
+    }
+    Write-Error 'Dashboard did not become ready. Check: docker logs agentteams-dashboard'
+}
+
 try {
     switch ($Command) {
-        "manager" {
+        { $_ -in @("manager", "reinstall") } {
             Install-Manager
         }
         "worker" {

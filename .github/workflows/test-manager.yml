@@ -3,6 +3,9 @@ name: AgentTeams Manager Tests
 on:
   pull_request:
     paths:
+      - 'worker'
+      - 'worker/**'
+      - '.gitmodules'
       - 'manager/src/**'
       - 'manager/Dockerfile.qwenpaw'
       - 'manager/scripts/init/start-qwenpaw-manager.sh'
@@ -20,6 +23,10 @@ on:
   push:
     branches: [main]
     paths:
+      - '.github/workflows/test-manager.yml'
+      - 'worker'
+      - 'worker/**'
+      - '.gitmodules'
       - 'manager/src/**'
       - 'manager/Dockerfile.qwenpaw'
       - 'manager/scripts/init/start-qwenpaw-manager.sh'
@@ -41,6 +48,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:

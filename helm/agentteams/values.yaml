@@ -331,7 +331,7 @@ worker:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker
       tag: ""                 # defaults to global.imageTag
     openhuman:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-openhuman-worker
       tag: ""                 # defaults to global.imageTag
     qwenpaw:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-qwenpaw-worker

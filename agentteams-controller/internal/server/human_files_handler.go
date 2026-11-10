@@ -785,11 +785,6 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	fields, err := parseHumanFileListFields(r.URL.Query().Get("fields"), "name", humanFileDirFieldsList, humanFileDirFields)
-	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	ctx := r.Context()
 	prefix := humanFilesPrefix(username)
 	if dir != "" {
@@ -867,24 +862,6 @@ func (h *humanFilesHandler) listDirectory(w http.ResponseWriter, r *http.Request
 	if dir != "" {
 		respPath += dir + "/"
 	}
-	if fields != nil {
-		projected := make([]humanFileEntryFields, 0, len(out))
-		for _, e := range out {
-			pe := humanFileEntryFields{Name: e.Name}
-			if fields["type"] {
-				pe.Type = &e.Type
-			}
-			if fields["size"] {
-				pe.Size = &e.Size
-			}
-			if fields["updatedAt"] {
-				pe.UpdatedAt = &e.UpdatedAt
-			}
-			projected = append(projected, pe)
-		}
-		httputil.WriteJSON(w, http.StatusOK, humanFileListFieldsResponse{Path: respPath, Entries: projected})
-		return
-	}
 	httputil.WriteJSON(w, http.StatusOK, humanFileListResponse{Path: respPath, Entries: out})
 }
 
@@ -928,92 +905,6 @@ type humanFileRecursiveEntry struct {
 type humanFileRecursiveResponse struct {
 	Entries []humanFileRecursiveEntry `json:"entries"`
 	NextKey *string                   `json:"nextKey"`
-}
-
-// --- ?fields= projection ----------------------------------------------------
-
-// Projectable field sets of the two listing shapes. The identifier
-// (name / path) is always present in a projection and always allowed.
-var (
-	humanFileDirFields       = map[string]bool{"name": true, "type": true, "size": true, "updatedAt": true}
-	humanFileRecursiveFields = map[string]bool{"path": true, "size": true, "etag": true, "updatedAt": true}
-)
-
-const (
-	humanFileDirFieldsList       = "name, type, size, updatedAt"
-	humanFileRecursiveFieldsList = "path, size, etag, updatedAt"
-)
-
-// parseHumanFileListFields validates the ?fields= projection of a listing:
-// comma-separated, whitespace items ignored, duplicates collapsed. An
-// empty or blank value selects the default full shape (nil — the response
-// stays byte-compatible with the unprojected form). Otherwise the
-// returned set always contains the identifier field, which the response
-// carries regardless of the request. An unknown field is an error naming
-// the allowed set — the projection is explicit, never silently trimmed.
-func parseHumanFileListFields(raw, idField, allowedList string, allowed map[string]bool) (map[string]bool, error) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, nil
-	}
-	want := make(map[string]bool, 4)
-	seen := make(map[string]bool, 4)
-	var unknown []string
-	for _, part := range strings.Split(raw, ",") {
-		f := strings.TrimSpace(part)
-		if f == "" || seen[f] {
-			continue
-		}
-		seen[f] = true
-		if allowed[f] {
-			want[f] = true
-		} else {
-			unknown = append(unknown, f)
-		}
-	}
-	if len(unknown) > 0 {
-		quoted := make([]string, len(unknown))
-		for i, u := range unknown {
-			quoted[i] = `"` + u + `"`
-		}
-		return nil, fmt.Errorf("unknown field %s; allowed fields: %s", strings.Join(quoted, ", "), allowedList)
-	}
-	want[idField] = true
-	return want, nil
-}
-
-// humanFileEntryFields is the projection form of humanFileEntry: name is
-// the identifier and always present; the other fields appear only when
-// the caller asked for them, and a requested field is serialized even at
-// its zero value (explicit projection — the omitempty of the default
-// shape applies only to the unprojected response).
-type humanFileEntryFields struct {
-	Name      string  `json:"name"`
-	Type      *string `json:"type,omitempty"`
-	Size      *int64  `json:"size,omitempty"`
-	UpdatedAt *string `json:"updatedAt,omitempty"`
-}
-
-// humanFileListFieldsResponse is the projected directory-listing body.
-type humanFileListFieldsResponse struct {
-	Path    string                 `json:"path"`
-	Entries []humanFileEntryFields `json:"entries"`
-}
-
-// humanFileRecursiveEntryFields is the projection form of
-// humanFileRecursiveEntry: path is the identifier and always present.
-type humanFileRecursiveEntryFields struct {
-	Path      string  `json:"path"`
-	Size      *int64  `json:"size,omitempty"`
-	ETag      *string `json:"etag,omitempty"`
-	UpdatedAt *string `json:"updatedAt,omitempty"`
-}
-
-// humanFileRecursiveFieldsResponse is the projected recursive-listing
-// body. The key cursor is part of the pagination contract, not of the
-// projection, so nextKey survives ?fields= unchanged.
-type humanFileRecursiveFieldsResponse struct {
-	Entries []humanFileRecursiveEntryFields `json:"entries"`
-	NextKey *string                         `json:"nextKey"`
 }
 
 // Bounds for the recursive listing's page size.
@@ -1075,11 +966,6 @@ func (h *humanFilesHandler) listRecursiveFiles(w http.ResponseWriter, r *http.Re
 		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	fields, err := parseHumanFileListFields(q.Get("fields"), "path", humanFileRecursiveFieldsList, humanFileRecursiveFields)
-	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 	// The cursor is the previous page's nextKey: a full storage key under
 	// this area's files/ prefix, generated by the store and passed back
 	// verbatim as the StartAfter bound. Re-asserting the caller's prefix
@@ -1136,31 +1022,13 @@ func (h *humanFilesHandler) listRecursiveFiles(w http.ResponseWriter, r *http.Re
 			startAfter = nextKey
 			continue
 		}
-		var next *string
+		resp := humanFileRecursiveResponse{Entries: entries}
 		if nextKey != "" {
 			// Only a readable path may appear in the client-visible cursor.
 			cursor := prefix + strings.TrimPrefix(entries[len(entries)-1].Path, "files/")
-			next = &cursor
+			resp.NextKey = &cursor
 		}
-		if fields != nil {
-			projected := make([]humanFileRecursiveEntryFields, 0, len(entries))
-			for _, e := range entries {
-				pe := humanFileRecursiveEntryFields{Path: e.Path}
-				if fields["size"] {
-					pe.Size = &e.Size
-				}
-				if fields["etag"] {
-					pe.ETag = &e.ETag
-				}
-				if fields["updatedAt"] {
-					pe.UpdatedAt = &e.UpdatedAt
-				}
-				projected = append(projected, pe)
-			}
-			httputil.WriteJSON(w, http.StatusOK, humanFileRecursiveFieldsResponse{Entries: projected, NextKey: next})
-			return
-		}
-		httputil.WriteJSON(w, http.StatusOK, humanFileRecursiveResponse{Entries: entries, NextKey: next})
+		httputil.WriteJSON(w, http.StatusOK, resp)
 		return
 	}
 }

@@ -16,7 +16,7 @@ import (
 // It is the OUTER layer of the list-optimization pipeline ("gzip outer,
 // ETag inner"): the inner ETagMiddleware computes its validator over the
 // UNCOMPRESSED JSON, so gzip and identity requests of the same
-// representation share one ETag, and a revalidation that the inner layer
+// representation share one weak ETag, and a revalidation that the inner layer
 // answers 304 (no body) leaves this layer nothing to compress — a 304
 // therefore never carries Content-Encoding (RFC 9110 §15.4.5).
 //
@@ -43,6 +43,18 @@ func GzipMiddleware(next http.Handler) http.Handler {
 
 		h := w.Header()
 		addVaryValue(h, "Accept-Encoding")
+		// Encoded and identity representations differ in bytes. Their shared
+		// validator is valid only for weak comparison (RFC 9110 §8.8.3.3).
+		if etag := h.Get("ETag"); etag != "" && !strings.HasPrefix(etag, "W/") {
+			h.Set("ETag", "W/"+etag)
+		}
+		if bw.status == http.StatusNotModified {
+			// A 304 length, if present, must describe the corresponding 200.
+			h.Del("Content-Length")
+			h.Del("Content-Encoding")
+			w.WriteHeader(bw.status)
+			return
+		}
 
 		// Compression is confined to 200 JSON bodies: a 304 carries no
 		// body by definition, and error JSON stays identity — the wrapped
@@ -63,10 +75,9 @@ func GzipMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Identity and every non-compressible shape (304, error JSON,
+		// Identity and every non-compressible shape (error JSON,
 		// non-JSON) pass through verbatim. The Content-Length always
-		// answers the FINAL body: for a 304 it is 0 — the same value the
-		// inner ETag layer already wrote.
+		// answers the final body length; 304 was handled above.
 		h.Set("Content-Length", strconv.Itoa(bw.buf.Len()))
 		w.WriteHeader(bw.status)
 		if bw.buf.Len() > 0 {

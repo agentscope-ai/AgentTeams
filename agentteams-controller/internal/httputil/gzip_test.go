@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -118,7 +119,7 @@ func TestGzip_VaryMerged(t *testing.T) {
 }
 
 // TestGzip_304NoGzipBody pins requirement 4: a revalidation hit (304)
-// carries no body, no Content-Encoding, Content-Length 0, and the current
+// carries no body, no Content-Encoding, no Content-Length, and the current
 // ETag — even when the request offered gzip.
 func TestGzip_304NoGzipBody(t *testing.T) {
 	handler := GzipMiddleware(ETagMiddleware(jsonHandler(http.StatusOK, listBody)))
@@ -145,8 +146,8 @@ func TestGzip_304NoGzipBody(t *testing.T) {
 	if ce := rec2.Header().Get("Content-Encoding"); ce != "" {
 		t.Errorf("304 carries Content-Encoding %q", ce)
 	}
-	if got := rec2.Header().Get("Content-Length"); got != "0" {
-		t.Errorf("304 Content-Length = %q, want 0", got)
+	if got := rec2.Header().Get("Content-Length"); got != "" {
+		t.Errorf("304 Content-Length = %q, want absent", got)
 	}
 	if got := rec2.Header().Get("ETag"); got != etag {
 		t.Errorf("304 ETag = %q, want the current validator %q", got, etag)
@@ -163,7 +164,7 @@ func TestGzip_SameETagAcrossEncodings(t *testing.T) {
 	handler := GzipMiddleware(ETagMiddleware(jsonHandler(http.StatusOK, listBody)))
 	etagID := doGzip(handler, "/x", nil).Header().Get("ETag")
 	etagGZ := doGzip(handler, "/x", map[string]string{"Accept-Encoding": "gzip"}).Header().Get("ETag")
-	if etagID == "" || etagGZ == "" {
+	if !strings.HasPrefix(etagID, `W/"`) || !strings.HasPrefix(etagGZ, `W/"`) {
 		t.Fatalf("missing ETags: identity %q / gzip %q", etagID, etagGZ)
 	}
 	if etagID != etagGZ {
@@ -275,7 +276,7 @@ func TestGzip_ContentLengthFinal(t *testing.T) {
 	if rec304.Code != http.StatusNotModified {
 		t.Fatalf("replay status = %d, want 304", rec304.Code)
 	}
-	if got := rec304.Header().Get("Content-Length"); got != "0" {
-		t.Errorf("304 Content-Length = %q, want 0", got)
+	if got := rec304.Header().Get("Content-Length"); got != "" {
+		t.Errorf("304 Content-Length = %q, want absent", got)
 	}
 }

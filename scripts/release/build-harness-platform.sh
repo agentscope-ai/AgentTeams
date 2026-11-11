@@ -32,7 +32,7 @@ case "$runtime" in
   qwenpaw) docker run --rm --platform "$platform" --entrypoint /opt/venv/qwenpaw/bin/python "$image" -c 'import qwenpaw_worker' ;;
   hermes) docker run --rm --platform "$platform" --entrypoint /opt/venv/hermes/bin/python "$image" -c 'import hermes_worker' ;;
   deepseek) docker run --rm --platform "$platform" --entrypoint python3 -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/smoke.py:ro" "$image" /tmp/smoke.py ;;
-  openhuman) docker run --rm --platform "$platform" --entrypoint openhuman-core "$image" --version ;;
+  openhuman) docker run --rm --platform "$platform" --entrypoint openhuman-core "$image" --help ;;
   codex)
     docker run --rm --platform "$platform" --entrypoint codex "$image" --version
     docker run --rm --platform "$platform" --entrypoint /opt/venv/bin/python "$image" -c 'import agentteams_codex.bridge'

@@ -16,8 +16,8 @@ on:
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
   REPO: agentteams
-  DEEPSEEK_HARNESS_WORKER_VERSION: v0.1.2
-  CODEX_WORKER_IMAGE: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0
+  DEEPSEEK_HARNESS_WORKER_VERSION: v1.2.7
+  CODEX_WORKER_IMAGE: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v1.2.7
 
 jobs:
   release:
@@ -57,6 +57,7 @@ jobs:
             openclaw-base agentteams-controller agentteams-embedded
             agentteams-harness-openclaw
             agentteams-harness-qwenpaw agentteams-harness-hermes agentteams-harness-openhuman
+            agentteams-harness-deepseek agentteams-harness-codex
           )
           for image in "${images[@]}"; do
             ref="${REGISTRY}/${REPO}/${image}:${VERSION}"

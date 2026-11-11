@@ -342,6 +342,14 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
         # project node status back (otherwise the write-back would clobber
         # the Controller's paused status with a stale active).
         pid = _project_id_for_pull(arguments, payload)
+        if not pid and action in _TASKFLOW_MUTATING_ACTIONS and action != "delegate_task":
+            task_id = _first_text(payload.get("taskId"), payload.get("task_id"))
+            if task_id:
+                # A Worker's first action has no cached task from which to
+                # resolve its project. Pull the task before the project so
+                # ACK/progress writes do not silently skip the project node.
+                task = _load_authoritative_task(arguments, _safe_id(task_id, "taskId"))
+                pid = _first_text(task.get("project_id"), task.get("projectId"))
         if pid and not _pull_project(arguments, pid):
             # Same rationale as _projectflow: ack/submit/cancel write the
             # project node status back — proceeding on stale local state

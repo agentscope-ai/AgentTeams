@@ -61,3 +61,35 @@ def test_controller_submission_requires_ack_before_any_mutation(tmp_path, monkey
     assert data["ok"] is False
     assert "ack_task" in json.dumps(data)
     assert task_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("project_pull_ok", [True, False])
+def test_first_ack_loads_its_project_before_writing(tmp_path, monkeypatch, project_pull_ok):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
+    task_path = tmp_path / "shared/tasks/p1-01/meta.json"
+    project_path = tmp_path / "shared/projects/p1/meta.json"
+    assigned = {"task_id": "p1-01", "project_id": "p1", "status": "assigned", "assigned_to": "alice"}
+
+    def pull_task(*args, **kwargs):
+        server._write_json(task_path, assigned)
+        return True
+
+    def pull_project(*args, **kwargs):
+        if project_pull_ok:
+            server._write_json(project_path, {"project_id": "p1", "status": "active",
+                "tasks": [{"task_id": "p1-01", "status": "assigned"}]})
+        return project_pull_ok
+
+    monkeypatch.setattr(server, "_pull_task", pull_task)
+    monkeypatch.setattr(server, "_pull_project", pull_project)
+    monkeypatch.setattr(server, "_sync_task", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_sync_project", lambda *a, **kw: True)
+    response = server.call_tool("taskflow", {"action": "ack_task", "workspaceDir": str(tmp_path),
+        "payload": {"taskId": "p1-01"}})
+    data = json.loads(response["content"][0]["text"])
+    assert data["ok"] is project_pull_ok
+    if project_pull_ok:
+        assert server._read_json(project_path)["tasks"][0]["status"] == "in_progress"
+    else:
+        assert server._read_json(task_path)["status"] == "assigned"

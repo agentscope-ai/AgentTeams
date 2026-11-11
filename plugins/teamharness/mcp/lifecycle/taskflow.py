@@ -395,7 +395,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         assigned_to = str(item.get("assigned_to") or "").strip()
                         break
             assignment_mxid = _assignee_matrix_id(assigned_to)
-            if not assignment_mxid and os.getenv("AGENTTEAMS_MATRIX_URL", "").strip() and os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "").strip():
+            if assigned_to and not assignment_mxid and os.getenv("AGENTTEAMS_MATRIX_URL", "").strip() and os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "").strip():
                 raise ValueError(
                     f"cannot resolve assignee {assigned_to!r} to one Matrix identity; "
                     "use a full Matrix user ID or an unambiguous team roster name"

@@ -9,6 +9,7 @@ import (
 
 func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 	builder := NewWorkerEnvBuilder(config.WorkerEnvDefaults{
+		AdminUser:       "demo127",
 		MatrixDomain:    "matrix.example.com",
 		FSEndpoint:      "http://fs.example.com:9000",
 		FSBucket:        "agentteams-fs",
@@ -30,6 +31,7 @@ func TestWorkerEnvBuilderBuildIncludesFinalRuntimeEnv(t *testing.T) {
 	})
 
 	for key, want := range map[string]string{
+		"AGENTTEAMS_ADMIN_USER":          "demo127",
 		"AGENTTEAMS_WORKER_NAME":         "alice",
 		"AGENTTEAMS_FS_ACCESS_KEY":       "alice",
 		"AGENTTEAMS_FS_SECRET_KEY":       "secret",

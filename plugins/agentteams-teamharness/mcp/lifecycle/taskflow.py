@@ -32,7 +32,7 @@ from mcp.artifact.publish import (
 )
 from mcp.artifact.sync import _load_authoritative_task, _load_authoritative_task_optional
 from mcp.project.state import _loop_pause_state
-from mcp.room.matrix import _assignee_matrix_id, _team_human_matrix_ids, _team_leader_matrix_id
+from mcp.room.matrix import _assignee_matrix_id, _matrix_user_id, _team_human_matrix_ids, _team_leader_matrix_id
 from mcp.room.notify import _send_attention_notification, _task_completion_notification
 from .review import (
     ProtocolGuardError,
@@ -83,6 +83,23 @@ _transition_task = refs.proxy("_transition_task")
 # never the tool payload — the only authority an approval close may rely
 # on (#1467 round 4).
 _runtime_role = refs.proxy("_runtime_role")
+_runtime_identity = refs.proxy("_runtime_identity")
+
+
+def _require_task_assignee(task: dict[str, Any]) -> None:
+    assigned = str(task.get("assigned_to") or task.get("assignedTo") or "").strip()
+    actor = _runtime_identity()
+    if not assigned or not actor:
+        return  # Legacy/offline tasks may have no trusted assignment identity.
+    owner_mxid = _assignee_matrix_id(assigned)
+    actor_mxid = _matrix_user_id()
+    matches = (
+        _canonical_assignee(owner_mxid) == _canonical_assignee(actor_mxid)
+        if owner_mxid and actor_mxid
+        else _canonical_account(assigned) == _canonical_account(actor)
+    )
+    if not matches:
+        raise ValueError(f"task is assigned to {assigned}, not runtime member {actor}")
 
 
 _TASKFLOW_MUTATING_ACTIONS = frozenset({
@@ -717,6 +734,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # cached copy must never be the write base (fail closed on a
             # failed pull).
             task = _load_authoritative_task(arguments, task_id)
+            _require_task_assignee(task)
             pulled = True
             _require_task_mutable(arguments, task, task_id, action, to_status="in_progress")
             if task.get("status") != "submitted":
@@ -766,6 +784,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # from the authoritative copy (a stale cache would drop a peer's
             # freeze or approval record). Fail closed on a failed pull.
             task = _load_authoritative_task(arguments, task_id)
+            _require_task_assignee(task)
             _require_task_mutable(arguments, task, task_id, action, to_status="submitted")
             summary = str(payload.get("summary") or "")
             status = _validate_task_result_status(payload.get("status"))
@@ -1104,6 +1123,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # previous pull ignored its own failure and fell back to the
             # stale local copy.
             task = _load_authoritative_task(arguments, task_id)
+            _require_task_assignee(task)
             _require_task_mutable(arguments, task, task_id, action)
             # Progress notes only exist while the task is actually in flight.
             _progress_from = str(task.get("status") or "")

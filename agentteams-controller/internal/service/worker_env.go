@@ -120,9 +120,6 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 	if spec.Runtime == "qwenpaw" || spec.Runtime == "copaw" {
 		env[WorkerConsolePortEnv] = "18799"
 	}
-	if b.defaults.AdminUser != "" {
-		env["AGENTTEAMS_ADMIN_USER"] = b.defaults.AdminUser
-	}
 	if b.defaults.DefaultWorkerRuntime != "" {
 		env["AGENTTEAMS_DEFAULT_WORKER_RUNTIME"] = b.defaults.DefaultWorkerRuntime
 	}
@@ -144,6 +141,7 @@ func (b *WorkerEnvBuilder) BuildManager(managerName string, prov *ManagerProvisi
 
 func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	for k, v := range map[string]string{
+		"AGENTTEAMS_ADMIN_USER":       b.defaults.AdminUser,
 		"AGENTTEAMS_MATRIX_DOMAIN":    b.defaults.MatrixDomain,
 		"AGENTTEAMS_FS_ENDPOINT":      b.defaults.FSEndpoint,
 		"AGENTTEAMS_FS_BUCKET":        b.defaults.FSBucket,

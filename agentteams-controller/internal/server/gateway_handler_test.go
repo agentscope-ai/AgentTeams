@@ -14,11 +14,16 @@ import (
 type consumerGateway struct {
 	gateway.Client
 	requests []gateway.ConsumerRequest
+	status   string
 }
 
 func (g *consumerGateway) EnsureConsumer(_ context.Context, req gateway.ConsumerRequest) (*gateway.ConsumerResult, error) {
 	g.requests = append(g.requests, req)
-	return &gateway.ConsumerResult{Status: "created", APIKey: req.CredentialKey}, nil
+	status := g.status
+	if status == "" {
+		status = "created"
+	}
+	return &gateway.ConsumerResult{Status: status, APIKey: req.CredentialKey}, nil
 }
 func TestCreateConsumerGeneratesUniqueKeys(t *testing.T) {
 	g := &consumerGateway{}
@@ -65,5 +70,14 @@ func TestListConsumersUnsupported(t *testing.T) {
 	NewGatewayHandler(nil).ListConsumers(w, httptest.NewRequest(http.MethodGet, "/", nil))
 	if w.Code != http.StatusNotImplemented {
 		t.Fatalf("status=%d", w.Code)
+	}
+}
+
+func TestCreateConsumerExistingNameDoesNotReturnNewCredential(t *testing.T) {
+	g := &consumerGateway{status: "exists"}
+	w := httptest.NewRecorder()
+	NewGatewayHandler(g).CreateConsumer(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"existing"}`)))
+	if w.Code != http.StatusConflict || strings.Contains(w.Body.String(), g.requests[0].CredentialKey) {
+		t.Fatalf("incorrect conflict response: %d", w.Code)
 	}
 }

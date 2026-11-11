@@ -76,6 +76,11 @@ func (h *GatewayHandler) CreateConsumer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if result.Status == "exists" {
+		httputil.WriteError(w, http.StatusConflict, "consumer already exists; choose a different name")
+		return
+	}
+
 	httputil.WriteJSON(w, http.StatusCreated, ConsumerResponse{
 		Name:       req.Name,
 		ConsumerID: result.ConsumerID,

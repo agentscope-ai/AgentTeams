@@ -27,8 +27,8 @@
 #   AGENTTEAMS_DATA_DIR           Docker volume name for persistent data (default: agentteams-data)
 #   AGENTTEAMS_WORKSPACE_DIR      Host directory for manager workspace (default: ~/agentteams-manager)
 #   AGENTTEAMS_VERSION            Image tag          (default: latest)
-#   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.2; independent of AGENTTEAMS_VERSION)
-#   AGENTTEAMS_CODEX_WORKER_VERSION Codex runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
+#   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v1.2.7; explicit overrides supported)
+#   AGENTTEAMS_CODEX_WORKER_VERSION Codex runtime image tag (default: v1.2.7; explicit overrides supported)
 #   AGENTTEAMS_REGISTRY           Image registry     (default: auto-detected by timezone)
 #   AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
 #                                      WASM plugins (default: cn-hangzhou primary)
@@ -78,8 +78,8 @@ foreach ($key in [Environment]::GetEnvironmentVariables('Process').Keys) { $scri
 $script:AGENTTEAMS_VERSION = if ($env:AGENTTEAMS_VERSION) { $env:AGENTTEAMS_VERSION } else { "latest" }
 $script:AGENTTEAMS_KNOWN_STABLE_VERSION = "v1.2.6"
 $script:AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION = "v1.2.4"
-$script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = if ($env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION) { $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION } else { "v0.1.2" }
-$script:AGENTTEAMS_CODEX_WORKER_VERSION = if ($env:AGENTTEAMS_CODEX_WORKER_VERSION) { $env:AGENTTEAMS_CODEX_WORKER_VERSION } else { "v0.1.0" }
+$script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = if ($env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION) { $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION } else { "v1.2.7" }
+$script:AGENTTEAMS_CODEX_WORKER_VERSION = if ($env:AGENTTEAMS_CODEX_WORKER_VERSION) { $env:AGENTTEAMS_CODEX_WORKER_VERSION } else { "v1.2.7" }
 $script:AGENTTEAMS_NON_INTERACTIVE = if ($env:AGENTTEAMS_NON_INTERACTIVE -eq "1" -or $NonInteractive) { $true } else { $false }
 $script:AGENTTEAMS_QUICKSTART = -not $Manual -and $env:AGENTTEAMS_QUICKSTART -ne "0"
 $script:AGENTTEAMS_MOUNT_SOCKET = if ($env:AGENTTEAMS_MOUNT_SOCKET -eq "0") { $false } else { $true }
@@ -2759,9 +2759,12 @@ function Install-Manager {
         if (-not $env:AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE) { $script:QWENPAW_WORKER_IMAGE = $script:QWENPAW_WORKER_IMAGE.Replace('agentteams-harness-qwenpaw', 'agentteams-qwenpaw-worker') }
         if (-not $env:AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE) { $script:HERMES_WORKER_IMAGE = $script:HERMES_WORKER_IMAGE.Replace('agentteams-harness-hermes', 'agentteams-hermes-worker') }
         if (-not $env:AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE) { $script:OPENHUMAN_WORKER_IMAGE = $script:OPENHUMAN_WORKER_IMAGE.Replace('agentteams-harness-openhuman', 'agentteams-openhuman-worker') }
-        if (-not $env:AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE -and -not $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION -and $script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION -eq 'v0.1.2') {
+        if (-not $env:AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE -and -not $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION -and $script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION -in @('v0.1.2', 'v1.2.7')) {
             $script:DEEPSEEK_HARNESS_WORKER_IMAGE = "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-deepseek-harness-worker:v0.1.1"
         }
+    }
+    if ($coreVersionMatch.Success -and [version]$coreVersionMatch.Groups[1].Value -lt [version]'1.2.7' -and -not $env:AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE -and -not $env:AGENTTEAMS_CODEX_WORKER_IMAGE -and -not $env:AGENTTEAMS_CODEX_WORKER_VERSION -and $script:AGENTTEAMS_CODEX_WORKER_VERSION -eq 'v1.2.7') {
+        $script:CODEX_WORKER_IMAGE = "$($script:AGENTTEAMS_REGISTRY)/agentteams/agentteams-harness-codex:v0.1.0"
     }
     $dshVersionMatch = [regex]::Match($script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION, '^v?(\d+\.\d+\.\d+)')
     if (-not $env:AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE -and $dshVersionMatch.Success -and [version]$dshVersionMatch.Groups[1].Value -lt [version]'0.1.2') {

@@ -42,6 +42,8 @@ on:
       - 'tests/check-installer-auto-version-images.sh'
       - 'tests/check-harness-image-names.ps1'
       - 'tests/check-manager-shared-images.sh'
+      - 'tests/check-unified-harness-versions.sh'
+      - 'tests/check-unified-harness-versions.ps1'
       - 'tests/check-manager-dm-room.sh'
       - 'tests/check-installer-codex-image.sh'
       - 'tests/check-installer-codex-image.ps1'
@@ -152,6 +154,13 @@ jobs:
 
       - name: Check automatic installer version and platform selection
         run: bash tests/check-installer-auto-version-images.sh
+
+      - name: Check unified Harness release versions
+        run: bash tests/check-unified-harness-versions.sh
+
+      - name: Check PowerShell unified Harness release versions
+        shell: pwsh
+        run: ./tests/check-unified-harness-versions.ps1
 
       - name: Check shared Manager Harness images
         run: bash tests/check-manager-shared-images.sh

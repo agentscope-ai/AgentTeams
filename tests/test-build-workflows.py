@@ -253,7 +253,7 @@ class BuildWorkflowTests(unittest.TestCase):
                                                  'MANIFEST': both, 'LAST_MANIFEST': manifest,
                                                  'LAST_STATUS': status, 'IMAGE_LOG': str(log)})
                     self.assertEqual(result.returncode == 0, success, result.stderr)
-                    self.assertEqual(len(set(log.read_text().splitlines())), 7)
+                    self.assertEqual(len(set(log.read_text().splitlines())), 9 if success else 7)
 
 
 if __name__ == '__main__':

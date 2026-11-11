@@ -23,7 +23,7 @@ grep -q 'name: agentteams-controller' "${render}"
 grep -q 'app.kubernetes.io/name: agentteams' "${render}"
 
 echo "PASS: AgentTeams Helm release renders canonical resource names"
-grep -qF -- 'value: "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"' "${render}"
+grep -qF -- 'value: "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v1.2.7"' "${render}"
 
 # Old releases using --reuse-values can omit the new Codex map. Null removes
 # the chart default so this render exercises the same missing-map boundary.

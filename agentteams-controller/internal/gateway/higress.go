@@ -139,6 +139,31 @@ func (c *HigressClient) changePasswordLocked(ctx context.Context, oldPassword, n
 	return fmt.Errorf("higress change password failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 }
 
+// ListConsumers reads all pages without returning the gateway's credentials.
+func (c *HigressClient) ListConsumers(ctx context.Context) ([]ConsumerSummary, error) {
+	consumers := []ConsumerSummary{}
+	for page := 1; ; page++ {
+		body, status, err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/v1/consumers?pageNum=%d&pageSize=100", page), nil)
+		if err != nil {
+			return nil, fmt.Errorf("list consumers: %w", err)
+		}
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("list consumers: HTTP %d", status)
+		}
+		var response struct {
+			Data  []ConsumerSummary `json:"data"`
+			Total int               `json:"total"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			return nil, fmt.Errorf("decode consumers: %w", err)
+		}
+		consumers = append(consumers, response.Data...)
+		if len(response.Data) == 0 || len(consumers) >= response.Total {
+			return consumers, nil
+		}
+	}
+}
+
 func (c *HigressClient) EnsureConsumer(ctx context.Context, req ConsumerRequest) (*ConsumerResult, error) {
 	body := map[string]interface{}{
 		"name": req.Name,

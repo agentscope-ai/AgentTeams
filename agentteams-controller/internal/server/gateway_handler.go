@@ -1,11 +1,15 @@
 package server
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
@@ -19,6 +23,22 @@ type GatewayHandler struct {
 
 func NewGatewayHandler(gw gateway.Client) *GatewayHandler {
 	return &GatewayHandler{gw: gw, fallbackConfigWritable: os.Getenv("AGENTTEAMS_HIGRESS_FALLBACK_CONFIG_WRITE_ENABLED") == "true"}
+}
+
+func (h *GatewayHandler) ListConsumers(w http.ResponseWriter, r *http.Request) {
+	lister, ok := h.gw.(interface {
+		ListConsumers(context.Context) ([]gateway.ConsumerSummary, error)
+	})
+	if !ok {
+		httputil.WriteError(w, http.StatusNotImplemented, "gateway does not support listing consumers")
+		return
+	}
+	consumers, err := lister.ListConsumers(r.Context())
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadGateway, "unable to list gateway consumers")
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, consumers)
 }
 
 func (h *GatewayHandler) CreateConsumer(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +57,31 @@ func (h *GatewayHandler) CreateConsumer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if lister, ok := h.gw.(interface {
+		ListConsumers(context.Context) ([]gateway.ConsumerSummary, error)
+	}); ok {
+		consumers, err := lister.ListConsumers(r.Context())
+		if err != nil {
+			httputil.WriteError(w, http.StatusBadGateway, "unable to check existing gateway consumers")
+			return
+		}
+		for _, consumer := range consumers {
+			if consumer.Name == req.Name {
+				httputil.WriteError(w, http.StatusConflict, "consumer already exists; choose a different name")
+				return
+			}
+		}
+	}
+
+	if strings.TrimSpace(req.CredentialKey) == "" {
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			httputil.WriteError(w, http.StatusInternalServerError, "unable to generate consumer credential")
+			return
+		}
+		req.CredentialKey = hex.EncodeToString(key)
+	}
+
 	result, err := h.gw.EnsureConsumer(r.Context(), gateway.ConsumerRequest{
 		Name:          req.Name,
 		CredentialKey: req.CredentialKey,
@@ -44,6 +89,11 @@ func (h *GatewayHandler) CreateConsumer(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		log.Printf("[ERROR] create consumer %s: %v", req.Name, err)
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if result.Status == "exists" {
+		httputil.WriteError(w, http.StatusConflict, "consumer already exists; choose a different name")
 		return
 	}
 

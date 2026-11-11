@@ -57,6 +57,22 @@ func (h *GatewayHandler) CreateConsumer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if lister, ok := h.gw.(interface {
+		ListConsumers(context.Context) ([]gateway.ConsumerSummary, error)
+	}); ok {
+		consumers, err := lister.ListConsumers(r.Context())
+		if err != nil {
+			httputil.WriteError(w, http.StatusBadGateway, "unable to check existing gateway consumers")
+			return
+		}
+		for _, consumer := range consumers {
+			if consumer.Name == req.Name {
+				httputil.WriteError(w, http.StatusConflict, "consumer already exists; choose a different name")
+				return
+			}
+		}
+	}
+
 	if strings.TrimSpace(req.CredentialKey) == "" {
 		key := make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {

@@ -13,8 +13,9 @@ import (
 
 type consumerGateway struct {
 	gateway.Client
-	requests []gateway.ConsumerRequest
-	status   string
+	requests  []gateway.ConsumerRequest
+	status    string
+	consumers []gateway.ConsumerSummary
 }
 
 func (g *consumerGateway) EnsureConsumer(_ context.Context, req gateway.ConsumerRequest) (*gateway.ConsumerResult, error) {
@@ -56,11 +57,11 @@ func TestCreateConsumerPreservesProvidedKey(t *testing.T) {
 }
 
 func (g *consumerGateway) ListConsumers(_ context.Context) ([]gateway.ConsumerSummary, error) {
-	return []gateway.ConsumerSummary{{Name: "first"}}, nil
+	return g.consumers, nil
 }
 func TestListConsumers(t *testing.T) {
 	w := httptest.NewRecorder()
-	NewGatewayHandler(&consumerGateway{}).ListConsumers(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	NewGatewayHandler(&consumerGateway{consumers: []gateway.ConsumerSummary{{Name: "first"}}}).ListConsumers(w, httptest.NewRequest(http.MethodGet, "/", nil))
 	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `[{"name":"first"}]` {
 		t.Fatalf("unexpected response: %d %s", w.Code, w.Body.String())
 	}
@@ -79,5 +80,14 @@ func TestCreateConsumerExistingNameDoesNotReturnNewCredential(t *testing.T) {
 	NewGatewayHandler(g).CreateConsumer(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"existing"}`)))
 	if w.Code != http.StatusConflict || strings.Contains(w.Body.String(), g.requests[0].CredentialKey) {
 		t.Fatalf("incorrect conflict response: %d", w.Code)
+	}
+}
+
+func TestCreateConsumerRejectsExistingNameBeforeUpstreamWrite(t *testing.T) {
+	g := &consumerGateway{consumers: []gateway.ConsumerSummary{{Name: "existing"}}}
+	w := httptest.NewRecorder()
+	NewGatewayHandler(g).CreateConsumer(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"existing"}`)))
+	if w.Code != http.StatusConflict || len(g.requests) != 0 {
+		t.Fatalf("creation overwrote an existing Consumer: status=%d writes=%d", w.Code, len(g.requests))
 	}
 }

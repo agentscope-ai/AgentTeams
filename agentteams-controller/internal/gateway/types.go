@@ -86,3 +86,8 @@ type AIRouteRequest struct {
 	PathPrefix string // e.g. "/v1"
 	Provider   string // upstream provider name
 }
+
+// ConsumerSummary deliberately excludes credentials from list responses.
+type ConsumerSummary struct {
+	Name string `json:"name"`
+}

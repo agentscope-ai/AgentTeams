@@ -136,6 +136,7 @@ jobs:
         runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -151,7 +152,7 @@ jobs:
           image="${REGISTRY}/agentteams/agentteams-harness-${RUNTIME}"
           final="${image}:${VERSION}"
           if docker buildx imagetools inspect "$final" --raw > manifest.json 2>existing-error.txt; then
-            jq -e --arg revision "$GITHUB_SHA" '.annotations["org.opencontainers.image.revision"] == $revision and any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")' manifest.json || {
+            scripts/release/verify-harness-image.sh "$final" "$GITHUB_SHA" "$VERSION" < manifest.json || {
               echo "Refusing to overwrite an unverified existing version $final" >&2
               exit 1
             }
@@ -166,7 +167,7 @@ jobs:
             --annotation "index:org.opencontainers.image.version=$VERSION" \
             -t "$final" "${image}:${CANDIDATE}-amd64" "${image}:${CANDIDATE}-arm64"
           docker buildx imagetools inspect "$final" --raw > manifest.json
-          jq -e 'any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")' manifest.json
+          scripts/release/verify-harness-image.sh "$final" "$GITHUB_SHA" "$VERSION" < manifest.json
           docker buildx imagetools inspect "$final" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:

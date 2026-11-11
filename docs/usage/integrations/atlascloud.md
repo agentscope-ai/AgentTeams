@@ -32,8 +32,8 @@ credentials:
 ```bash
 AGENTTEAMS_LLM_PROVIDER=openai-compat \
 AGENTTEAMS_OPENAI_BASE_URL=https://api.atlascloud.ai/v1 \
-AGENTTEAMS_LLM_API_KEY=<your-atlascloud-api-key> \
-AGENTTEAMS_DEFAULT_MODEL=<exact-model-id> \
+AGENTTEAMS_LLM_API_KEY='<your-atlascloud-api-key>' \
+AGENTTEAMS_DEFAULT_MODEL='<exact-model-id>' \
 ./agentteams-install.sh
 ```
 
@@ -46,7 +46,7 @@ Validation has two separate levels. Passing the first does not imply the second.
 The Helm preflight Job sends one minimal non-streaming `/chat/completions` request with the configured key, base URL, and model. It confirms that the key is accepted, the URL is reachable, and the model ID exists. It does not exercise streaming or tool calls. You can reproduce it by hand:
 
 ```bash
-export ATLASCLOUD_API_KEY=<your-atlascloud-api-key>
+export ATLASCLOUD_API_KEY='<your-atlascloud-api-key>'
 curl -s https://api.atlascloud.ai/v1/chat/completions \
   -H "Authorization: Bearer $ATLASCLOUD_API_KEY" \
   -H "Content-Type: application/json" \
@@ -95,4 +95,4 @@ On 2026-11-02, the Level 1 and Level 2 requests above were run directly against 
 
 Not verified: a Helm install or local install of AgentTeams with these values, the Higress route, or any Manager/Worker task (Level 3).
 
-Notes: `logprobs` requests are rejected by the gateway (HTTP 400), and only some models accept `reasoning_effort` values other than `high`/`xhigh`. Avoid sending those parameters unless the model has been checked.
+Parameter support is model-specific (see the [Atlas Cloud protocol guide](https://www.atlascloud.ai/docs/llm-protocols)). When re-checked on 2026-11-11, `deepseek-ai/deepseek-v4.1-flash` returned HTTP 400 for a request with `logprobs: true`, and accepted `reasoning_effort: "low"` (HTTP 200). This applies only to that model on that date and is not a gateway-wide rule. Check any optional parameter against the model you intend to use.

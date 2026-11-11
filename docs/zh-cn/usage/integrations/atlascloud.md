@@ -32,8 +32,8 @@ credentials:
 ```bash
 AGENTTEAMS_LLM_PROVIDER=openai-compat \
 AGENTTEAMS_OPENAI_BASE_URL=https://api.atlascloud.ai/v1 \
-AGENTTEAMS_LLM_API_KEY=<your-atlascloud-api-key> \
-AGENTTEAMS_DEFAULT_MODEL=<exact-model-id> \
+AGENTTEAMS_LLM_API_KEY='<your-atlascloud-api-key>' \
+AGENTTEAMS_DEFAULT_MODEL='<exact-model-id>' \
 ./agentteams-install.sh
 ```
 
@@ -46,7 +46,7 @@ AGENTTEAMS_DEFAULT_MODEL=<exact-model-id> \
 Helm 预检 Job 使用已配置的 Key、Base URL 和模型发送一次最小的非流式 `/chat/completions` 请求，只确认 Key 有效、地址可达、模型 ID 存在，不检查流式输出或工具调用。可手动复现：
 
 ```bash
-export ATLASCLOUD_API_KEY=<your-atlascloud-api-key>
+export ATLASCLOUD_API_KEY='<your-atlascloud-api-key>'
 curl -s https://api.atlascloud.ai/v1/chat/completions \
   -H "Authorization: Bearer $ATLASCLOUD_API_KEY" \
   -H "Content-Type: application/json" \
@@ -95,4 +95,4 @@ curl -s https://api.atlascloud.ai/v1/chat/completions \
 
 未验证：使用这些配置对 AgentTeams 进行 Helm 安装或本地安装、Higress 路由、任何 Manager/Worker 任务（第 3 级）。
 
-注意：网关会拒绝 `logprobs` 请求（HTTP 400）；`reasoning_effort` 除 `high`/`xhigh` 外只有部分模型支持。未经检查请勿发送这些参数。
+参数支持因模型而异（参见 [Atlas Cloud 协议文档](https://www.atlascloud.ai/docs/llm-protocols)）。2026-11-11 复测时，`deepseek-ai/deepseek-v4.1-flash` 对带 `logprobs: true` 的请求返回 HTTP 400，对 `reasoning_effort: "low"` 返回 HTTP 200。该结果仅适用于该模型和该日期，不代表整个网关的限制。请针对准备使用的模型检查任何可选参数。

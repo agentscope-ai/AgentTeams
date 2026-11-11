@@ -91,20 +91,14 @@ grep -Fq 'docker pull $latestTag' <<<"${powershell_resolver}" ||
 # Docker availability and daemon health must be checked before image resolution,
 # otherwise a missing/stopped runtime is misreported as an unavailable image.
 powershell_install_manager="$(extract_powershell_function Install-Manager)"
-docker_command_check_line="$(awk 'index($0, "Get-Command \"docker\"") { print NR; exit }' <<<"${powershell_install_manager}")"
-docker_running_check_line="$(awk 'index($0, "if (-not (Test-DockerRunning))") { print NR; exit }' <<<"${powershell_install_manager}")"
+runtime_check_line="$(awk '$0 ~ /^[[:space:]]*Ensure-ContainerRuntime[[:space:]]*$/ { print NR; exit }' <<<"${powershell_install_manager}")"
 embedded_resolve_line="$(awk '$0 ~ /^[[:space:]]*Resolve-EmbeddedImage[[:space:]]*$/ { print NR; exit }' <<<"${powershell_install_manager}")"
-
-[ -n "${docker_command_check_line}" ] ||
-    fail "PowerShell installer is missing the docker command availability check"
-[ -n "${docker_running_check_line}" ] ||
-    fail "PowerShell installer is missing the docker daemon health check"
-[ -n "${embedded_resolve_line}" ] ||
-    fail "PowerShell installer is missing the embedded image resolution call"
-[ "${docker_command_check_line}" -lt "${embedded_resolve_line}" ] ||
-    fail "PowerShell installer must check for docker/podman before resolving the embedded image"
-[ "${docker_running_check_line}" -lt "${embedded_resolve_line}" ] ||
-    fail "PowerShell installer must check container runtime health before resolving the embedded image"
+[ -n "${runtime_check_line}" ] || fail "PowerShell installer must check runtime readiness"
+[ -n "${embedded_resolve_line}" ] || fail "PowerShell installer is missing embedded image resolution"
+[ "${runtime_check_line}" -lt "${embedded_resolve_line}" ] || fail "Runtime readiness must precede image resolution"
+powershell_runtime_check="$(extract_powershell_function Ensure-ContainerRuntime)"
+grep -Fq 'Test-DockerRunning' <<<"${powershell_runtime_check}" || fail "Runtime guidance must check engine health"
+grep -Fq 'Get-Command podman' <<<"${powershell_runtime_check}" || fail "Runtime guidance must support Podman"
 
 powershell_install_pull_block="$(sed -n '/# Embedded image was already pulled by Resolve-EmbeddedImage unless overridden;/,/^        # Manager image/p' "${POWERSHELL_INSTALLER}")"
 grep -Fq 'if ($LASTEXITCODE -ne 0) { Exit-Script 1 }' <<<"${powershell_install_pull_block}" ||

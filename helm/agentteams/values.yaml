@@ -104,6 +104,14 @@ storage:
   provider: minio             # minio | oss | s3
   mode: managed               # managed | existing
   bucket: "agentteams-storage"
+  # Caller-reachable origin of the same storage, e.g. "https://files.example.com"
+  # (Ingress/LoadBalancer in front of the storage service). Used ONLY to mint
+  # presigned download URLs (?presign=1 on the human file API): the S3 V4
+  # signature binds the Host header, so the URL must be signed for the origin
+  # the caller can reach, not the internal cluster endpoint. Leave empty to
+  # disable presign: ?presign=1 then answers 501 presign_unsupported and
+  # clients fall back to the streamed GET.
+  publicEndpoint: ""
   # Required when provider=oss:
   oss:
     region: ""                # e.g. "cn-hangzhou"
@@ -257,10 +265,10 @@ controller:
 manager:
   enabled: true                 # create Manager CR during cluster initialization
   model: ""                     # LLM model; defaults to credentials.defaultModel
-  runtime: "openclaw"           # openclaw | qwenpaw
+  runtime: "openclaw"           # openclaw | qwenpaw | hermes | deepseek-harness | openhuman
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager
-    tag: ""                     # defaults to global.imageTag
+    repository: ""             # defaults to the selected Harness worker.defaultImage
+    tag: ""                     # defaults to the Harness tag, then global.imageTag
   resources:
     requests:
       cpu: 500m
@@ -304,7 +312,7 @@ cms:
 worker:
   defaultImage:
     openclaw:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw
       tag: ""                 # defaults to global.imageTag
     copaw:
       # Legacy CoPaw deployments only (issue #1310): new releases must not
@@ -320,14 +328,20 @@ worker:
       repository: ""
       tag: ""
     hermes:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-hermes
       tag: ""                 # defaults to global.imageTag
     openhuman:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openhuman
       tag: ""                 # defaults to global.imageTag
+    qwenpaw:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-qwenpaw
+      tag: ""
     deepseekHarness:
-      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-deepseek-harness-worker
-      tag: "v0.1.0"           # experimental; released independently from global.imageTag
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-deepseek
+      tag: "v0.1.2"           # experimental; released independently from global.imageTag
+    codex:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex
+      tag: "v0.1.0"            # released independently from global.imageTag
   defaultRuntime: "openclaw"
   resources:
     requests:

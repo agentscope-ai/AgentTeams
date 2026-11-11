@@ -2,9 +2,75 @@ package agentconfig
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+func TestOpenClawWorkerShortMention(t *testing.T) {
+	g := NewGenerator(Config{AdminUser: "admin"})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{WorkerName: "alice.dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Messages struct {
+			GroupChat struct {
+				MentionPatterns []string `json:"mentionPatterns"`
+			} `json:"groupChat"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Messages.GroupChat.MentionPatterns) != 1 {
+		t.Fatalf("missing Worker mention pattern: %s", data)
+	}
+	pattern := regexp.MustCompile(cfg.Messages.GroupChat.MentionPatterns[0])
+	for text, want := range map[string]bool{
+		"@alice.dev Task assigned":      true,
+		"Please ask @alice.dev, thanks": true,
+		"@alice.dev":                    true,
+		"@alice.dev，请执行任务":              true,
+		"你好，@alice.dev！":                true,
+		"@alice.dev-other task":         false,
+		"@aliceXdev task":               false,
+		"mail@alice.dev":                false,
+		"@@alice.dev task":              false,
+		"@alice.dev_extra task":         false,
+	} {
+		if got := pattern.MatchString(text); got != want {
+			t.Errorf("mention %q = %v, want %v", text, got, want)
+		}
+	}
+}
+
+func TestOpenClawWorkerDedicatedRoomDoesNotRequireMention(t *testing.T) {
+	g := NewGenerator(Config{MatrixDomain: "matrix.test", AdminUser: "admin"})
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName: "alice", PersonalRoomID: "!alice:matrix.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	matrix := cfg["channels"].(map[string]interface{})["matrix"].(map[string]interface{})
+	groups := matrix["groups"].(map[string]interface{})
+	room, ok := groups["!alice:matrix.test"].(map[string]interface{})
+	if !ok || room["requireMention"] != false {
+		t.Fatalf("dedicated room still requires a mention: %v", groups)
+	}
+	if groups["*"].(map[string]interface{})["requireMention"] != true {
+		t.Fatal("shared room mention requirement changed")
+	}
+	allowed := matrix["groupAllowFrom"].([]interface{})
+	if matrix["groupPolicy"] != "allowlist" || len(allowed) != 2 || allowed[0] != "@manager:matrix.test" || allowed[1] != "@admin:matrix.test" {
+		t.Fatalf("sender allowlist changed: %v", allowed)
+	}
+}
 
 func TestGenerateOpenClawConfig_Basic(t *testing.T) {
 	g := NewGenerator(Config{
@@ -610,20 +676,24 @@ func TestGenerateOpenClawConfig_SubagentModel(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	modelCfg := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})["model"].(map[string]interface{})
-	sub, ok := modelCfg["subagent"].(map[string]interface{})
+	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	subagents, ok := defaults["subagents"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("agents.defaults.model.subagent missing, want dict; got %v", modelCfg["subagent"])
+		t.Fatalf("agents.defaults.subagents missing, want object; got %v", defaults["subagents"])
 	}
-	if sub["provider_id"] != "agentteams-gateway" {
-		t.Errorf("subagent.provider_id = %v, want agentteams-gateway", sub["provider_id"])
-	}
-	if sub["model"] != "qwen3.5-flash" {
-		t.Errorf("subagent.model = %v, want qwen3.5-flash", sub["model"])
+	// OpenClaw zod schema: subagents.model is a single "provider/model"
+	// string (or {primary, fallbacks}); no provider_id key.
+	if subagents["model"] != "agentteams-gateway/qwen3.5-flash" {
+		t.Errorf("subagents.model = %v, want agentteams-gateway/qwen3.5-flash", subagents["model"])
 	}
 	// primary must stay the historical "provider/model" string form
+	modelCfg := defaults["model"].(map[string]interface{})
 	if modelCfg["primary"] != "agentteams-gateway/qwen3.5-plus" {
 		t.Errorf("primary = %v, want agentteams-gateway/qwen3.5-plus", modelCfg["primary"])
+	}
+	// the old QwenPaw-shape key must not come back
+	if _, present := modelCfg["subagent"]; present {
+		t.Errorf("agents.defaults.model.subagent = %v, want absent", modelCfg["subagent"])
 	}
 }
 
@@ -648,8 +718,89 @@ func TestGenerateOpenClawConfig_SubagentModelOmittedWhenEmpty(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	modelCfg := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})["model"].(map[string]interface{})
-	if _, present := modelCfg["subagent"]; present {
-		t.Errorf("agents.defaults.model.subagent = %v, want absent when SubagentModelName is empty", modelCfg["subagent"])
+	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	subagents := defaults["subagents"].(map[string]interface{})
+	if _, present := subagents["model"]; present {
+		t.Errorf("agents.defaults.subagents.model = %v, want absent when SubagentModelName is empty", subagents["model"])
+	}
+	// subagents itself stays present with its non-model settings
+	if subagents["maxConcurrent"] != float64(8) {
+		t.Errorf("subagents.maxConcurrent = %v, want 8", subagents["maxConcurrent"])
+	}
+}
+
+// TestGenerateOpenClawConfigUsesGatewayProvider pins the runtime projection:
+// ModelProvider is the AI-gateway provider name and must not become the local
+// openclaw provider-block id. Every local model reference uses the constant
+// agentteams-gateway block.
+func TestGenerateOpenClawConfigUsesGatewayProvider(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "matrix.test:8080",
+		MatrixServerURL: "http://matrix.test:8080",
+		AIGatewayURL:    "http://aigw.test:8080",
+		DefaultModel:    "qwen3.5-plus",
+		AdminUser:       "admin",
+	})
+	req := WorkerConfigRequest{
+		WorkerName:        "worker-alice",
+		MatrixToken:       "tok-matrix-alice",
+		GatewayKey:        "tok-gw",
+		ModelProvider:     "deepseek",
+		ModelName:         "qwen3.6-plus",
+		SubagentModelName: "qwen3.6-flash",
+		Runtime:           "qwenpaw",
+	}
+	data, err := g.GenerateOpenClawConfig(req)
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// The provider catalog is keyed by the projected provider.
+	providers, ok := config["models"].(map[string]interface{})["providers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("models.providers missing: %v", config["models"])
+	}
+	if len(providers) != 1 {
+		t.Fatalf("models.providers has %d entries, want 1: %v", len(providers), providers)
+	}
+	if _, present := providers["agentteams-gateway"]; !present {
+		t.Fatalf("models.providers[agentteams-gateway] missing: %v", providers)
+	}
+	if _, present := providers["deepseek"]; present {
+		t.Fatalf("models.providers must not use the gateway provider name as a local id: %v", providers)
+	}
+
+	defaults := config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	modelCfg := defaults["model"].(map[string]interface{})
+	if modelCfg["primary"] != "agentteams-gateway/qwen3.6-plus" {
+		t.Errorf("primary = %v, want agentteams-gateway/qwen3.6-plus", modelCfg["primary"])
+	}
+	subagents, ok := defaults["subagents"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("agents.defaults.subagents missing: %v", defaults["subagents"])
+	}
+	if subagents["model"] != "agentteams-gateway/qwen3.6-flash" {
+		t.Errorf("subagents.model = %v, want agentteams-gateway/qwen3.6-flash", subagents["model"])
+	}
+
+	// Every alias key must be qualified with the local gateway provider.
+	aliases, ok := defaults["models"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("agents.defaults.models missing: %v", defaults["models"])
+	}
+	for key := range aliases {
+		if !strings.HasPrefix(key, "agentteams-gateway/") {
+			t.Errorf("alias key %q does not start with agentteams-gateway/", key)
+		}
+	}
+	if _, present := aliases["agentteams-gateway/qwen3.6-plus"]; !present {
+		t.Errorf("alias key agentteams-gateway/qwen3.6-plus missing")
+	}
+	if _, present := aliases["agentteams-gateway/qwen3.6-flash"]; !present {
+		t.Errorf("alias key agentteams-gateway/qwen3.6-flash missing")
 	}
 }

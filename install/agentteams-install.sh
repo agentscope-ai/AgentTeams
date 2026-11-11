@@ -2,14 +2,15 @@
 # agentteams-install.sh - One-click installation for AgentTeams Manager, Worker, and Dashboard
 #
 # Usage:
-#   ./agentteams-install.sh                  # Interactive installation (choose Quick Start or Manual)
+#   ./agentteams-install.sh                  # Start locally and open Dashboard
+#   ./agentteams-install.sh --manual         # Customize installation interactively
 #   ./agentteams-install.sh manager          # Same as above (explicit)
+#   ./agentteams-install.sh reinstall        # Erase existing installation (typed confirmation)
 #   ./agentteams-install.sh worker --name <name> ...  # Worker installation
 #   ./agentteams-install.sh dashboard        # Start/stop agentteams-dashboard (AGENTTEAMS_DASHBOARD=0 to stop)
 #   ./agentteams-install.sh uninstall        # Stop and remove Manager + all Workers
 #
-# NOTE: agentteams-dashboard is currently only supported via the Bash installer.
-#       The PowerShell installer (agentteams-install.ps1) does not yet include dashboard support.
+# Bash and PowerShell installers both start Dashboard by default.
 #
 # Onboarding Modes:
 #   Quick Start  - Fast installation with all default values (recommended)
@@ -24,7 +25,7 @@
 #   AGENTTEAMS_AI_GATEWAY_URL     Higress Gateway data-plane URL for Manager and Worker model requests
 #   AGENTTEAMS_AI_GATEWAY_ADMIN_URL Higress Console URL for Dashboard shared authentication and management
 #   AGENTTEAMS_AI_GATEWAY_ADMIN_ALLOWED_HOSTS Comma-separated Console proxy allowlist hostnames
-#   AGENTTEAMS_LLM_API_KEY        LLM API key         (required)
+#   AGENTTEAMS_LLM_API_KEY        LLM API key         (optional; configure later in Dashboard)
 #   AGENTTEAMS_ADMIN_USER         Admin username       (default: admin)
 #   AGENTTEAMS_ADMIN_PASSWORD     Admin password       (auto-generated if not set, min 8 chars)
 #   AGENTTEAMS_MATRIX_DOMAIN      Matrix domain        (default: matrix-local.agentteams.io:18080)
@@ -32,8 +33,11 @@
 #   AGENTTEAMS_DATA_DIR           Docker volume name for persistent data (default: agentteams-data)
 #   AGENTTEAMS_WORKSPACE_DIR      Host directory for manager workspace (default: ~/agentteams-manager)
 #   AGENTTEAMS_VERSION            Image tag            (default: latest)
-#   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
+#   AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION DeepSeek Harness runtime image tag (default: v0.1.2; independent of AGENTTEAMS_VERSION)
+#   AGENTTEAMS_CODEX_WORKER_VERSION Codex runtime image tag (default: v0.1.0; independent of AGENTTEAMS_VERSION)
 #   AGENTTEAMS_REGISTRY           Image registry       (default: auto-detected by timezone)
+#   AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY
+#                                      WASM plugins (default: cn-hangzhou primary)
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE Override QwenPaw manager image (e.g., local build)
 #   AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE  Override legacy CoPaw manager image (e.g., local build)
@@ -42,6 +46,7 @@
 #   AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE Override QwenPaw worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE Override hermes worker image (e.g., local build)
 #   AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE Override experimental DeepSeek Harness worker image
+#   AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE Override Codex worker image
 #   AGENTTEAMS_NACOS_REGISTRY_URI          Default Nacos registry URI for Worker market search/import
 #                                      (default: nacos://market.agentteams.io:80/public)
 #   AGENTTEAMS_NACOS_USERNAME              Default Nacos username for nacos:// package imports (optional)
@@ -66,19 +71,22 @@
 #   AGENTTEAMS_PORT_MANAGER_CONSOLE  Host port for Manager console (default: 18888)
 #   AGENTTEAMS_WORKER_IDLE_TIMEOUT  Worker idle timeout in minutes (default: 720, i.e. 12 hours)
 #   AGENTTEAMS_DASHBOARD              Install agentteams-dashboard management UI (default: 1)
-#   AGENTTEAMS_DASHBOARD_VERSION      Dashboard version (default: v1.3.1, independent of AgentTeams version)
+#   AGENTTEAMS_DASHBOARD_VERSION      Dashboard version (default: v1.4.0, independent of AgentTeams version)
 #   AGENTTEAMS_PORT_DASHBOARD         Dashboard host port (default: 13000)
 #   AGENTTEAMS_DASHBOARD_IMAGE        Override dashboard image (default: <registry>/agentteams/agentteams-dashboard:<DASHBOARD_VERSION>)
 #   AGENTTEAMS_AI_GATEWAY_ADMIN_URL   Higress Console URL for shared auth (auto-detected)
 
 set -e
 
+# Remember caller overrides before installer defaults are applied.
+_INSTALL_ENV_KEYS=" $(env | sed -n 's/^\([A-Z][A-Z0-9_]*\)=.*/\1/p' | tr '\n' ' ') "
 AGENTTEAMS_VERSION="${AGENTTEAMS_VERSION:-}"
-AGENTTEAMS_KNOWN_STABLE_VERSION="v1.2.5"   # fallback if GitHub API is unreachable
+AGENTTEAMS_KNOWN_STABLE_VERSION="v1.2.6"   # fallback if GitHub API is unreachable
 AGENTTEAMS_FALLBACK_VERSION="${AGENTTEAMS_KNOWN_STABLE_VERSION}"
 AGENTTEAMS_AUTO_VERSION=0
 AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION="v1.2.4"
-AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION="${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION:-v0.1.0}"
+AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION="${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION:-v0.1.2}"
+AGENTTEAMS_CODEX_WORKER_VERSION="${AGENTTEAMS_CODEX_WORKER_VERSION:-v0.1.0}"
 
 _normalize_version() {
     local version="$1"
@@ -157,6 +165,11 @@ _controller_storage_prefix() {
     fi
 }
 AGENTTEAMS_NON_INTERACTIVE="${AGENTTEAMS_NON_INTERACTIVE:-0}"
+AGENTTEAMS_QUICKSTART="${AGENTTEAMS_QUICKSTART:-1}"
+if [ "${1:-}" = "--manual" ]; then
+    AGENTTEAMS_QUICKSTART=0
+    shift
+fi
 AGENTTEAMS_MOUNT_SOCKET="${AGENTTEAMS_MOUNT_SOCKET:-1}"
 AGENTTEAMS_DOCKER_PROXY="${AGENTTEAMS_DOCKER_PROXY:-1}"
 STEP_RESULT=""  # Used by state machine to signal "back" navigation
@@ -229,7 +242,7 @@ detect_timezone() {
         echo -e "\033[33m[AgentTeams WARNING]\033[0m Could not detect timezone automatically." >&2
         echo -e "\033[33m[AgentTeams]\033[0m Please enter your timezone (e.g., Asia/Shanghai, America/New_York)." >&2
         echo "" >&2
-        if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] || [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
             tz="Asia/Shanghai"
             log "Using default timezone: ${tz}" >&2
         else
@@ -296,6 +309,26 @@ msg() {
     local lang="${AGENTTEAMS_LANGUAGE:-en}"
     local text=""
     case "${key}.${lang}" in
+        "install.model_later.zh") text="模型尚未配置。启动后可在 Dashboard 中配置 API Key。" ;;
+        "install.model_later.en") text="No model configured yet. Add your API key in Dashboard after startup." ;;
+        "upgrade.summary.zh") text="保留数据升级：%s → %s。保留账号、模型配置、聊天记录和工作空间；核心服务将短暂中断。" ;;
+        "upgrade.summary.en") text="Upgrade with data preserved: %s → %s. Accounts, model settings, messages and workspaces are retained; core services will briefly restart." ;;
+        "upgrade.confirm.zh") text="继续升级？[Y/n]" ;;
+        "upgrade.confirm.en") text="Continue upgrading? [Y/n]" ;;
+        "upgrade.recovered.zh") text="已从现有容器恢复安装配置，将复用原数据卷和工作空间。" ;;
+        "upgrade.recovered.en") text="Recovered installation settings from the existing container; original storage and workspace will be reused." ;;
+        "upgrade.recovery_failed.zh") text="发现已有安装数据，但无法完整恢复配置。已停止，不会清理或替换原数据。请恢复 agentteams-manager.env 后重试。" ;;
+        "upgrade.recovery_failed.en") text="Existing installation data was found, but its configuration could not be fully recovered. Stopped without deleting or replacing data. Restore agentteams-manager.env and retry." ;;
+        "install.password_copied.zh") text="登录密码已复制到剪贴板。粘贴密码后点击登录即可。" ;;
+        "install.password_copied.en") text="Login password copied to clipboard. Paste it in Dashboard and sign in." ;;
+        "install.password_copy_failed.zh") text="无法自动复制密码，请复制下方显示的登录密码。" ;;
+        "install.password_copy_failed.en") text="Could not copy the password automatically. Copy the login password shown below." ;;
+        "install.dashboard_unavailable.zh") text="Dashboard 尚未就绪，请检查 agentteams-dashboard 容器日志后重试。" ;;
+        "install.dashboard_unavailable.en") text="Dashboard is not ready. Check the agentteams-dashboard container logs and retry." ;;
+        "install.runtime_wait.zh") text="请完成容器工具安装并启动。此窗口会等待引擎就绪，然后自动继续（Ctrl+C 取消）。" ;;
+        "install.runtime_wait.en") text="Install and start your container tool. This window will continue when the engine is ready (Ctrl+C to cancel)." ;;
+        "install.runtime_timeout.zh") text="容器引擎仍不可用。启动 OrbStack、Docker Desktop 或 Podman 后重新运行安装命令。" ;;
+        "install.runtime_timeout.en") text="Container engine is still unavailable. Start OrbStack, Docker Desktop or Podman and run this command again." ;;
         # --- Timezone detection messages ---
         "tz.warning.title.zh") text="无法自动检测时区。" ;;
         "tz.warning.title.en") text="Could not detect timezone automatically." ;;
@@ -524,8 +557,8 @@ msg() {
         "llm.codingplan.models_title.en") text="Select Qwen Cloud default model:" ;;
         "llm.codingplan.model.qwen36plus.zh") text="  1) qwen3.6-plus  - 千问 3.6（推荐）" ;;
         "llm.codingplan.model.qwen36plus.en") text="  1) qwen3.6-plus  - Qwen 3.6 (recommended)" ;;
-        "llm.codingplan.model.glm5.zh") text="  2) glm-5  - 智谱 GLM-5（编程推荐）" ;;
-        "llm.codingplan.model.glm5.en") text="  2) glm-5  - Zhipu GLM-5 (recommended for coding)" ;;
+        "llm.codingplan.model.glm5.zh") text="  2) glm-5.2  - 智谱 GLM-5.2（编程推荐）" ;;
+        "llm.codingplan.model.glm5.en") text="  2) glm-5.2  - Zhipu GLM-5.2 (recommended for coding)" ;;
         "llm.codingplan.model.kimi.zh") text="  3) kimi-k2.5  - Moonshot Kimi K2.5" ;;
         "llm.codingplan.model.kimi.en") text="  3) kimi-k2.5  - Moonshot Kimi K2.5" ;;
         "llm.codingplan.model.minimax.zh") text="  4) MiniMax-M2.5  - MiniMax M2.5" ;;
@@ -699,8 +732,8 @@ msg() {
         "manager_runtime.qwenpaw.en") text="QwenPaw (recommended)" ;;
         "manager_runtime.copaw.zh") text="CoPaw（旧版本，建议升级为 QwenPaw）" ;;
         "manager_runtime.copaw.en") text="CoPaw (legacy; upgrade to QwenPaw recommended)" ;;
-        "manager_runtime.choice.zh") text="请选择 [1/2]" ;;
-        "manager_runtime.choice.en") text="Enter choice [1/2]" ;;
+        "manager_runtime.choice.zh") text="请选择 [1-2]" ;;
+        "manager_runtime.choice.en") text="Enter choice [1-2]" ;;
         "manager_runtime.selected.zh") text="Manager 运行时: %s" ;;
         "manager_runtime.selected.en") text="Manager runtime: %s" ;;
         "manager_runtime.title_short.zh") text="Manager 运行时" ;;
@@ -1170,20 +1203,44 @@ WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-}"
 COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
 QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-}"
 HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}"
+OPENHUMAN_WORKER_IMAGE="${AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE:-}"
+CODEX_WORKER_IMAGE="${AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE:-${AGENTTEAMS_CODEX_WORKER_IMAGE:-}}"
 DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-}"
 CONTROLLER_IMAGE="${AGENTTEAMS_INSTALL_CONTROLLER_IMAGE:-}"
 
 resolve_image_tags() {
+    local _shared_manager_images
     AGENTTEAMS_VERSION="$(_normalize_version "${AGENTTEAMS_VERSION}")"
     MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager:${AGENTTEAMS_VERSION}}"
     MANAGER_QWENPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-manager-qwenpaw:${AGENTTEAMS_VERSION}}"
     # CoPaw images are no longer built; only an explicit legacy override is honored.
     MANAGER_COPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE:-}"
-    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-worker:${AGENTTEAMS_VERSION}}"
+    WORKER_IMAGE="${AGENTTEAMS_INSTALL_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-openclaw:${AGENTTEAMS_VERSION}}"
     COPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}"
-    QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-qwenpaw-worker:${AGENTTEAMS_VERSION}}"
-    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-hermes-worker:${AGENTTEAMS_VERSION}}"
-    DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-deepseek-harness-worker:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}}"
+    QWENPAW_WORKER_IMAGE="${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-qwenpaw:${AGENTTEAMS_VERSION}}"
+    HERMES_WORKER_IMAGE="${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-hermes:${AGENTTEAMS_VERSION}}"
+    OPENHUMAN_WORKER_IMAGE="${AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-openhuman:${AGENTTEAMS_VERSION}}"
+    DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-deepseek:${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}}"
+    CODEX_WORKER_IMAGE="${AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE:-${AGENTTEAMS_CODEX_WORKER_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-harness-codex:${AGENTTEAMS_CODEX_WORKER_VERSION}}}"
+    # Historical releases keep their original repositories; explicit images stay pinned.
+    case "${AGENTTEAMS_VERSION}" in
+        latest|local-*|sha-*) ;;
+        *) if _ver_lt "${AGENTTEAMS_VERSION}" v1.2.7; then
+            [ -n "${AGENTTEAMS_INSTALL_WORKER_IMAGE:-}" ] || WORKER_IMAGE="${WORKER_IMAGE/agentteams-harness-openclaw/agentteams-worker}"
+            [ -n "${AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE:-}" ] || QWENPAW_WORKER_IMAGE="${QWENPAW_WORKER_IMAGE/agentteams-harness-qwenpaw/agentteams-qwenpaw-worker}"
+            [ -n "${AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE:-}" ] || HERMES_WORKER_IMAGE="${HERMES_WORKER_IMAGE/agentteams-harness-hermes/agentteams-hermes-worker}"
+            [ -n "${AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE:-}" ] || OPENHUMAN_WORKER_IMAGE="${OPENHUMAN_WORKER_IMAGE/agentteams-harness-openhuman/agentteams-openhuman-worker}"
+            if [ -z "${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ] && [ "${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}" = v0.1.2 ]; then
+                case "${_INSTALL_ENV_KEYS:- }" in
+                    *' AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION '*) ;;
+                    *) DEEPSEEK_HARNESS_WORKER_IMAGE="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-deepseek-harness-worker:v0.1.1" ;;
+                esac
+            fi
+        fi ;;
+    esac
+    if [ -z "${AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION}" v0.1.2; then
+        DEEPSEEK_HARNESS_WORKER_IMAGE="${DEEPSEEK_HARNESS_WORKER_IMAGE/agentteams-harness-deepseek/agentteams-deepseek-harness-worker}"
+    fi
     EMBEDDED_IMAGE="${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-embedded:${AGENTTEAMS_VERSION}}"
     # CoPaw Worker introduced in v1.0.4; Hermes Worker introduced in v1.1.0
     if [ -z "${AGENTTEAMS_INSTALL_COPAW_WORKER_IMAGE:-}" ] && _ver_lt "${AGENTTEAMS_VERSION}" "v1.0.4"; then
@@ -1195,6 +1252,14 @@ resolve_image_tags() {
     if ! _supports_deepseek_harness "${AGENTTEAMS_VERSION}"; then
         DEEPSEEK_HARNESS_WORKER_IMAGE=""
     fi
+    case "${AGENTTEAMS_VERSION}" in
+        latest|local-*|sha-*) _shared_manager_images=1 ;;
+        *) if _ver_lt "${AGENTTEAMS_VERSION}" v1.2.7; then _shared_manager_images=0; else _shared_manager_images=1; fi ;;
+    esac
+    if [ "${_shared_manager_images}" = 1 ]; then
+        MANAGER_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${WORKER_IMAGE}}"
+        MANAGER_QWENPAW_IMAGE="${AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE:-${QWENPAW_WORKER_IMAGE}}"
+    fi
 }
 
 manager_image_for_runtime() {
@@ -1203,6 +1268,9 @@ manager_image_for_runtime() {
         # Legacy alias: route to the QwenPaw manager image unless an explicit
         # AGENTTEAMS_INSTALL_MANAGER_COPAW_IMAGE override is provided.
         copaw) printf '%s' "${MANAGER_COPAW_IMAGE:-${MANAGER_QWENPAW_IMAGE}}" ;;
+        hermes) printf '%s' "${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${HERMES_WORKER_IMAGE}}" ;;
+        deepseek-harness) printf '%s' "${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${DEEPSEEK_HARNESS_WORKER_IMAGE}}" ;;
+        openhuman) printf '%s' "${AGENTTEAMS_INSTALL_MANAGER_IMAGE:-${OPENHUMAN_WORKER_IMAGE}}" ;;
         *) printf '%s' "${MANAGER_IMAGE}" ;;
     esac
 }
@@ -1235,9 +1303,7 @@ _check_version_images() {
         AGENTTEAMS_VERSION="$1"
         local platform="$2" image status
         resolve_image_tags
-        for image in "${EMBEDDED_IMAGE}" "$(manager_image_for_runtime "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}")" \
-            "${WORKER_IMAGE}" "${COPAW_WORKER_IMAGE}" "${QWENPAW_WORKER_IMAGE}" \
-            "${HERMES_WORKER_IMAGE}" "${DEEPSEEK_HARNESS_WORKER_IMAGE}"; do
+        for image in "${EMBEDDED_IMAGE}" "$(manager_image_for_runtime "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}")"; do
             [ -n "${image}" ] || continue
             if _check_install_image "${image}" "${platform}"; then
                 :
@@ -1247,7 +1313,7 @@ _check_version_images() {
             fi
         done
         if [ "${AGENTTEAMS_DASHBOARD:-1}" = "1" ]; then
-            _check_install_image "${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION:-v1.3.1}}" "${platform}" || return $?
+            _check_install_image "${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}}" "${platform}" || return $?
         fi
         return 0
     )
@@ -1363,7 +1429,7 @@ resolve_embedded_image() {
 # ============================================================
 # Known models list — used to detect custom models during install
 # ============================================================
-KNOWN_MODELS="gpt-5.4 gpt-5.3-codex gpt-5-mini gpt-5-nano claude-opus-4-6 claude-sonnet-4-6 claude-haiku-4-5 qwen3.6-plus qwen3.5-plus deepseek-chat deepseek-reasoner kimi-k2.5 glm-5 MiniMax-M2.7 MiniMax-M2.7-highspeed MiniMax-M2.5"
+KNOWN_MODELS="gpt-5.4 gpt-5.3-codex gpt-5-mini gpt-5-nano claude-opus-4-6 claude-sonnet-4-6 claude-haiku-4-5 qwen3.6-plus qwen3.5-plus deepseek-chat deepseek-reasoner kimi-k2.5 glm-5.2 glm-5 MiniMax-M2.7 MiniMax-M2.7-highspeed MiniMax-M2.5"
 
 is_known_model() {
     local model="$1"
@@ -1550,6 +1616,7 @@ load_current_params_from_env() {
         [ -z "${AGENTTEAMS_HIGRESS_ADAPTER_MODE:+x}" ] && AGENTTEAMS_HIGRESS_ADAPTER_MODE="$(grep '^AGENTTEAMS_HIGRESS_ADAPTER_MODE=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_AI_GATEWAY_URL:+x}" ] && AGENTTEAMS_AI_GATEWAY_URL="$(grep '^AGENTTEAMS_AI_GATEWAY_URL=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         [ -z "${AGENTTEAMS_DATA_DIR:+x}" ] && AGENTTEAMS_DATA_DIR="$(grep '^AGENTTEAMS_DATA_DIR=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
+        [ -z "${AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY:+x}" ] && AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY="$(grep '^AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY=' "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '\r')"
         return 0
     fi
 }
@@ -1875,6 +1942,21 @@ detect_lan_ip() {
 # should_skip_step: returns 0 (skip) when the step is irrelevant in current mode
 should_skip_step() {
     local step_fn="$1"
+    # Apply shared upgrade rules before the per-step cases. A broad case here
+    # used to shadow the quick-start rules for encryption, proxy and idle time.
+    if [ "${AGENTTEAMS_UPGRADE:-0}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL:-0}" = "1" ]; then
+        case "${step_fn}" in step_lang|step_mode|step_version|step_existing) ;; *) return 0 ;; esac
+    fi
+    if [ "${AGENTTEAMS_QUICKSTART:-0}" = "1" ]; then
+        case "${step_fn}" in
+            step_lang|step_mode|step_version) return 0 ;;
+        esac
+        if [ "${AGENTTEAMS_UPGRADE:-0}" != "1" ]; then
+            case "${step_fn}" in
+                step_manager_runtime|step_runtime|step_network|step_e2ee|step_docker_proxy|step_idle|step_hostshare|step_podman_autostart) return 0 ;;
+            esac
+        fi
+    fi
     case "${step_fn}" in
         step_lang|step_mode)
             [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
@@ -1884,11 +1966,7 @@ should_skip_step() {
             ;;
         step_existing)
             local _env="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
-            [ ! -f "${_env}" ] && return 0
-            ;;
-        # Keep-All upgrade mode: skip all config steps (step_volume/step_workspace handled separately)
-        step_llm|step_admin|step_network|step_ports|step_domains|step_github|step_skills|step_runtime|step_manager_runtime|step_dashboard|step_e2ee|step_docker_proxy|step_idle|step_hostshare)
-            [ "${AGENTTEAMS_UPGRADE}" = "1" ] && [ "${AGENTTEAMS_UPGRADE_KEEP_ALL}" = "1" ] && return 0
+            [ ! -f "${_env}" ] && [ -z "${AGENTTEAMS_RECOVERED_CONFIG:-}" ] && return 0
             ;;
         step_volume|step_workspace)
             [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] && return 0
@@ -2059,6 +2137,66 @@ step_version() {
     resolve_image_tags
 }
 
+load_upgrade_config() {
+    local env_file="$1" key value
+    while IFS='=' read -r key value || [ -n "${key}" ]; do
+        case "${key}" in ''|\#*|*[!A-Z0-9_]*) continue ;; esac
+        case "${key}" in AGENTTEAMS_*|DASHBOARD_SESSION_SECRET|JVM_ARGS) ;; *) continue ;; esac
+        [ "${key}" = AGENTTEAMS_VERSION ] && continue
+        case "${_INSTALL_ENV_KEYS:- }" in *" ${key} "*) continue ;; esac
+        export "${key}=${value%$'\r'}"
+    done < <(if [ -f "${env_file}" ]; then cat "${env_file}"; else printf '%s\n' "${AGENTTEAMS_RECOVERED_CONFIG:-}"; fi)
+}
+
+prepare_upgrade_dashboard() {
+    AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
+    local old_version="${AGENTTEAMS_DASHBOARD_VERSION:-}" old_image="${AGENTTEAMS_DASHBOARD_IMAGE:-}"
+    case "${_INSTALL_ENV_KEYS:- }" in *' AGENTTEAMS_DASHBOARD_VERSION '*|*' AGENTTEAMS_DASHBOARD_IMAGE '*) return 0 ;; esac
+    # Recognize versions shipped as installer defaults. Custom images/tags and
+    # caller-specified versions remain pinned, including newer release tags.
+    case "${old_version}" in
+        ''|v1.2.4|v1.3.1|v1.4.0)
+            if [ -z "${old_image}" ] || [ "${old_image}" = "${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${old_version}" ]; then
+                AGENTTEAMS_DASHBOARD_VERSION=v1.4.0
+                AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}"
+            fi
+            ;;
+    esac
+    return 0
+}
+
+recover_existing_install() {
+    local names container saved data workspace required
+    names=$(${DOCKER_CMD} ps -a --format '{{.Names}}') || die "$(msg upgrade.recovery_failed)"
+    if printf '%s\n' "${names}" | grep -qx agentteams-controller; then
+        container=agentteams-controller
+    elif printf '%s\n' "${names}" | grep -qx agentteams-manager; then
+        container=agentteams-manager
+    else
+        data="${AGENTTEAMS_DATA_DIR:-agentteams-data}"
+        if ${DOCKER_CMD} volume inspect "${data}" >/dev/null 2>&1 || { [ -d "${data}" ] && [ -n "$(ls -A "${data}" 2>/dev/null)" ]; }; then
+            die "$(msg upgrade.recovery_failed)"
+        fi
+        return 0
+    fi
+    saved=$(${DOCKER_CMD} inspect "${container}" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null) || die "$(msg upgrade.recovery_failed)"
+    data=$(detect_installed_data_volume)
+    workspace=$(detect_installed_workspace "${container}")
+    [ -n "${data}" ] && [ -n "${workspace}" ] || die "$(msg upgrade.recovery_failed)"
+    for required in ADMIN_USER ADMIN_PASSWORD MANAGER_PASSWORD REGISTRATION_TOKEN MINIO_USER MINIO_PASSWORD MANAGER_GATEWAY_KEY; do
+        printf '%s\n' "${saved}" | grep -q "^AGENTTEAMS_${required}=." || die "$(msg upgrade.recovery_failed)"
+    done
+    if ! printf '%s\n' "${saved}" | grep -Eq '^AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=(false|0)$'; then
+        for required in MATRIX_APPSERVICE_AS_TOKEN MATRIX_APPSERVICE_HS_TOKEN; do
+            printf '%s\n' "${saved}" | grep -q "^AGENTTEAMS_${required}=." || die "$(msg upgrade.recovery_failed)"
+        done
+    fi
+    AGENTTEAMS_RECOVERED_CONFIG="${saved}
+AGENTTEAMS_DATA_DIR=${data}
+AGENTTEAMS_WORKSPACE_DIR=${workspace}"
+    log "$(msg upgrade.recovered)"
+}
+
 step_existing() {
     local existing_env="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
     log "$(msg install.existing.detected "${existing_env}")"
@@ -2068,73 +2206,45 @@ step_existing() {
     fi
     running_workers=$(${DOCKER_CMD} ps --format '{{.Names}}' | grep "^agentteams-worker-" || true)
     existing_workers=$(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^agentteams-worker-" || true)
-    local UPGRADE_CHOICE
-    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
-        log "$(msg install.existing.upgrade_noninteractive)"
-        UPGRADE_CHOICE="upgrade"
-    else
-        echo ""
-        echo "$(msg install.existing.choose)"
-        echo "$(msg install.existing.upgrade)"
-        echo "$(msg install.existing.reinstall)"
-        echo "$(msg install.existing.cancel)"
-        echo ""
-        read -e -p "$(msg install.existing.prompt): " UPGRADE_CHOICE
-        UPGRADE_CHOICE="${UPGRADE_CHOICE:-1}"
-        if [ "${UPGRADE_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
+    load_upgrade_config "${existing_env}"
+    local actual_data
+    actual_data=$(detect_installed_data_volume)
+    if [ -n "${actual_data}" ] && [ -n "${AGENTTEAMS_DATA_DIR:-}" ] && [ "${actual_data}" != "${AGENTTEAMS_DATA_DIR}" ]; then
+        die "$(msg data.volume_mismatch_warning "${actual_data}")"
     fi
+    [ -z "${actual_data}" ] || AGENTTEAMS_DATA_DIR="${actual_data}"
+    AGENTTEAMS_WORKSPACE_DIR="${AGENTTEAMS_WORKSPACE_DIR:-$(detect_installed_workspace)}"
+    local required
+    for required in AGENTTEAMS_ADMIN_USER AGENTTEAMS_ADMIN_PASSWORD AGENTTEAMS_MANAGER_PASSWORD AGENTTEAMS_REGISTRATION_TOKEN AGENTTEAMS_MINIO_USER AGENTTEAMS_MINIO_PASSWORD AGENTTEAMS_MANAGER_GATEWAY_KEY AGENTTEAMS_DATA_DIR AGENTTEAMS_WORKSPACE_DIR; do
+        [ -n "${!required}" ] || die "$(msg upgrade.recovery_failed)"
+    done
+    case "${AGENTTEAMS_MATRIX_APPSERVICE_ENABLED:-true}" in
+        false|0) ;;
+        *) [ -n "${AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN:-}" ] && [ -n "${AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN:-}" ] || die "$(msg upgrade.recovery_failed)" ;;
+    esac
+    case "${AGENTTEAMS_DATA_DIR}" in
+        /*) [ -d "${AGENTTEAMS_DATA_DIR}" ] || die "$(msg upgrade.recovery_failed)" ;;
+        *) ${DOCKER_CMD} volume inspect "${AGENTTEAMS_DATA_DIR}" >/dev/null 2>&1 || die "$(msg upgrade.recovery_failed)" ;;
+    esac
+    local UPGRADE_CHOICE=upgrade
+    [ "${AGENTTEAMS_COMMAND:-manager}" != reinstall ] || UPGRADE_CHOICE=reinstall
     case "${UPGRADE_CHOICE}" in
-        1|upgrade)
+        upgrade)
             AGENTTEAMS_UPGRADE=1
-            log "$(msg install.existing.upgrading)"
-            # Show upgrade mode sub-menu (unless already set via env var)
-            if [ "${AGENTTEAMS_UPGRADE_KEEP_ALL:-0}" != "1" ]; then
-                echo ""
-                echo "$(msg upgrade.mode.prompt)"
-                echo "$(msg upgrade.mode.keep_all)"
-                echo "$(msg upgrade.mode.confirm_each)"
-                echo "$(msg upgrade.mode.back)"
-                echo ""
-                local UPGRADE_MODE_CHOICE
-                read -e -p "$(msg install.existing.prompt): " UPGRADE_MODE_CHOICE
-                UPGRADE_MODE_CHOICE="${UPGRADE_MODE_CHOICE:-1}"
-                case "${UPGRADE_MODE_CHOICE}" in
-                    1|keep)
-                        AGENTTEAMS_UPGRADE_KEEP_ALL=1
-                        ;;
-                    2|confirm)
-                        AGENTTEAMS_UPGRADE_KEEP_ALL=0
-                        ;;
-                    3|b)
-                        STEP_RESULT="back"
-                        return 0
-                        ;;
-                    *)
-                        AGENTTEAMS_UPGRADE_KEEP_ALL=0
-                        ;;
-                esac
-            fi
-            # Load current parameters for both Keep-All and confirm-each modes
-            load_current_params_from_env
-            # Legacy CoPaw deployments: carry the pre-upgrade worker image
-            # forward (fresh installs keep the image-less default).
+            AGENTTEAMS_UPGRADE_KEEP_ALL=1
             inherit_legacy_copaw_worker_image "${existing_env}"
-            if [ -n "${running_manager}" ] || [ -n "${running_workers}" ]; then
-                echo ""
-                echo -e "\033[33m$(msg install.existing.warn_manager_stop)\033[0m"
-                if [ -n "${existing_workers}" ]; then
-                    echo -e "\033[33m$(msg install.existing.warn_worker_recreate)\033[0m"
-                fi
-                if [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
-                    echo ""
-                    local CONFIRM_STOP
-                    read -e -p "$(msg install.existing.continue_prompt): " CONFIRM_STOP
-                    if [ "${CONFIRM_STOP}" = "b" ]; then STEP_RESULT="back"; return 0; fi
-                    if [ "${CONFIRM_STOP}" != "y" ] && [ "${CONFIRM_STOP}" != "Y" ]; then
-                        log "$(msg install.existing.cancelled)"
-                        exit 0
-                    fi
-                fi
+            prepare_upgrade_dashboard
+            local current_image
+            current_image=$(${DOCKER_CMD} inspect agentteams-controller --format '{{.Config.Image}}' 2>/dev/null || true)
+            [ -n "${current_image}" ] || current_image=$(${DOCKER_CMD} inspect agentteams-manager --format '{{.Config.Image}}' 2>/dev/null || true)
+            log "$(msg upgrade.summary "${current_image:-unknown}" "${AGENTTEAMS_VERSION}")"
+            if [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
+                local confirm
+                read -r -p "$(msg upgrade.confirm): " confirm
+                case "${confirm}" in
+                    ''|y|Y|yes|YES) ;;
+                    *) log "$(msg install.existing.cancelled)"; exit 0 ;;
+                esac
             fi
             UPGRADE_EXISTING_WORKERS="${existing_workers}"
             ;;
@@ -2206,23 +2316,12 @@ step_existing() {
             exit 0
             ;;
     esac
-    # Load existing env file as fallback (shell env vars take priority)
-    if [ -f "${existing_env}" ]; then
-        log "$(msg install.loading_config "${existing_env}")"
-        while IFS='=' read -r key value; do
-            case "${key}" in \#*|"") continue ;; esac
-            value="${value%%#*}"
-            value="${value#"${value%%[![:space:]]*}"}"
-            value="${value%"${value##*[![:space:]]}"}"
-            eval "_existing_val=\"\${${key}+x}\""
-            if [ -z "${_existing_val}" ]; then export "${key}=${value}"; fi
-        done < "${existing_env}"
-    fi
+
 }
 
 step_llm() {
     log "$(msg llm.title)"
-    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] || [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
         if [ "${AGENTTEAMS_LANGUAGE}" = "zh" ]; then
             AGENTTEAMS_LLM_PROVIDER="${AGENTTEAMS_LLM_PROVIDER:-openai-compat}"
             AGENTTEAMS_DEFAULT_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-qwen3.6-plus}"
@@ -2236,8 +2335,12 @@ step_llm() {
             log "$(msg llm.provider.qwen_default "${AGENTTEAMS_LLM_PROVIDER}")"
         fi
         log "$(msg llm.model.default "${AGENTTEAMS_DEFAULT_MODEL}")"
-        prompt AGENTTEAMS_LLM_API_KEY "$(msg llm.apikey_prompt)" "" "true"
-        AGENTTEAMS_EMBEDDING_MODEL="${AGENTTEAMS_EMBEDDING_MODEL-text-embedding-v4}"
+        AGENTTEAMS_LLM_API_KEY="${AGENTTEAMS_LLM_API_KEY:-}"
+        AGENTTEAMS_EMBEDDING_MODEL="${AGENTTEAMS_EMBEDDING_MODEL-}"
+        if [ -z "${AGENTTEAMS_LLM_API_KEY}" ]; then
+            log "$(msg install.model_later)"
+        fi
+        export AGENTTEAMS_LLM_API_KEY
         export AGENTTEAMS_LLM_PROVIDER AGENTTEAMS_DEFAULT_MODEL AGENTTEAMS_EMBEDDING_MODEL
         [ -n "${AGENTTEAMS_OPENAI_BASE_URL+x}" ] && export AGENTTEAMS_OPENAI_BASE_URL
         return 0
@@ -2297,7 +2400,7 @@ step_llm() {
                     local _model_default
                     case "${AGENTTEAMS_DEFAULT_MODEL}" in
                         qwen3.6-plus) _model_default="1" ;;
-                        glm-5)        _model_default="2" ;;
+                        glm-5|glm-5.2) _model_default="2" ;;
                         kimi-k2.5)    _model_default="3" ;;
                         MiniMax-M2.5) _model_default="4" ;;
                         *)            _model_default="1" ;;
@@ -2314,7 +2417,7 @@ step_llm() {
                 if [ "${CODINGPLAN_MODEL_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
                 case "${CODINGPLAN_MODEL_CHOICE}" in
                     1|qwen3.6-plus) AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
-                    2|glm-5)        AGENTTEAMS_DEFAULT_MODEL="glm-5" ;;
+                    2|glm-5|glm-5.2) AGENTTEAMS_DEFAULT_MODEL="glm-5.2" ;;
                     3|kimi-k2.5)    AGENTTEAMS_DEFAULT_MODEL="kimi-k2.5" ;;
                     4|MiniMax-M2.5) AGENTTEAMS_DEFAULT_MODEL="MiniMax-M2.5" ;;
                     *)              AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
@@ -2368,7 +2471,7 @@ step_llm() {
                             local _model_default
                             case "${AGENTTEAMS_DEFAULT_MODEL}" in
                                 qwen3.6-plus) _model_default="1" ;;
-                                glm-5)        _model_default="2" ;;
+                                glm-5|glm-5.2) _model_default="2" ;;
                                 kimi-k2.5)    _model_default="3" ;;
                                 MiniMax-M2.5) _model_default="4" ;;
                                 *)            _model_default="1" ;;
@@ -2385,7 +2488,7 @@ step_llm() {
                         if [ "${CODINGPLAN_MODEL_CHOICE}" = "b" ]; then STEP_RESULT="back"; return 0; fi
                         case "${CODINGPLAN_MODEL_CHOICE}" in
                             1|qwen3.6-plus) AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
-                            2|glm-5)        AGENTTEAMS_DEFAULT_MODEL="glm-5" ;;
+                            2|glm-5|glm-5.2) AGENTTEAMS_DEFAULT_MODEL="glm-5.2" ;;
                             3|kimi-k2.5)    AGENTTEAMS_DEFAULT_MODEL="kimi-k2.5" ;;
                             4|MiniMax-M2.5) AGENTTEAMS_DEFAULT_MODEL="MiniMax-M2.5" ;;
                             *)              AGENTTEAMS_DEFAULT_MODEL="qwen3.6-plus" ;;
@@ -2691,6 +2794,10 @@ detect_installed_data_volume() {
     return 0
 }
 
+detect_installed_workspace() {
+    ${DOCKER_CMD} inspect "${1:-agentteams-controller}" --format '{{range .Mounts}}{{if or (eq .Destination "/root/agentteams-fs/agents/manager") (eq .Destination "/root/manager-workspace")}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true
+}
+
 # Ensure the data storage target exists and build the docker mount args.
 # Named volumes (no '/' — docker volume names cannot contain it) are created
 # when missing; host paths are created as directories. A bind path is never
@@ -2770,7 +2877,7 @@ step_workspace() {
 
 step_dashboard() {
     AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
-    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.3.1}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}"
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
     AGENTTEAMS_HIGRESS_ADAPTER_MODE="${AGENTTEAMS_HIGRESS_ADAPTER_MODE:-direct}"
     AGENTTEAMS_AI_GATEWAY_URL="${AGENTTEAMS_AI_GATEWAY_URL:-}"
@@ -3394,6 +3501,7 @@ WantedBy=default.target"
 # ============================================================
 
 _start_dashboard() {
+    AGENTTEAMS_DASHBOARD_READY=0
     local CTRL_CONTAINER="agentteams-controller"
     local DASHBOARD_CONTAINER="agentteams-dashboard"
 
@@ -3417,7 +3525,7 @@ _start_dashboard() {
     fi
 
     AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
-    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.3.1}"
+    AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}"
     AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
 
     # Embedded deployment marker: controller lives on the same network as the
@@ -3545,6 +3653,13 @@ _start_dashboard() {
         else
             env_args+=(-e AGENTTEAMS_FS_ENDPOINT="http://${CTRL_CONTAINER}:9000")
         fi
+
+        # Presigned download origin (#1501): pass through the controller's
+        # value verbatim — unlike AGENTTEAMS_FS_ENDPOINT it must stay
+        # host-reachable (the caller's browser is the consumer), so the
+        # container-name rewrite above does NOT apply.
+        local fs_public_endpoint; fs_public_endpoint=$(_env AGENTTEAMS_FS_PUBLIC_ENDPOINT)
+        [ -n "${fs_public_endpoint}" ] && env_args+=(-e AGENTTEAMS_FS_PUBLIC_ENDPOINT="${fs_public_endpoint}")
 
         local fs_bucket; fs_bucket=$(_env AGENTTEAMS_FS_BUCKET)
         [ -z "${fs_bucket}" ] && fs_bucket=$(_env AGENTTEAMS_MINIO_BUCKET)
@@ -3822,6 +3937,7 @@ _start_dashboard() {
     while [ $waited -lt $max_wait ]; do
         if curl -sf "http://127.0.0.1:${AGENTTEAMS_PORT_DASHBOARD}/" >/dev/null 2>&1; then
             log "Dashboard ready on port ${AGENTTEAMS_PORT_DASHBOARD}"
+            AGENTTEAMS_DASHBOARD_READY=1
             return 0
         fi
         sleep 2
@@ -3847,7 +3963,7 @@ install_manager() {
 
     # Non-interactive fallback: resolve version immediately so image tags are available
     # before the step state machine runs. Interactive mode lets step_version handle it.
-    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+    if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ] || [ "${AGENTTEAMS_QUICKSTART}" = "1" ]; then
         [ -n "${AGENTTEAMS_VERSION}" ] || AGENTTEAMS_AUTO_VERSION=1
         if [ -z "${AGENTTEAMS_VERSION}" ] || [ "${AGENTTEAMS_VERSION}" = "latest" ]; then
             _refresh_known_stable_version
@@ -3863,51 +3979,9 @@ install_manager() {
         mv "./agentteams-manager.env" "${existing_env}"
     fi
 
-    # Orphan volume detection (only when no env file — step_existing handles the env-file case)
+    # Recover metadata from existing containers; never discard orphaned data.
     if [ ! -f "${existing_env}" ]; then
-        local data_vol="${AGENTTEAMS_DATA_DIR:-agentteams-data}"
-        if ${DOCKER_CMD} volume ls -q | grep -q "^${data_vol}$"; then
-            echo ""
-            log "$(msg install.orphan_volume.detected "${data_vol}")"
-            log "$(msg install.orphan_volume.warn)"
-            if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
-                log "$(msg install.orphan_volume.clean_noninteractive)"
-                ${DOCKER_CMD} stop agentteams-manager 2>/dev/null || true
-                ${DOCKER_CMD} rm agentteams-manager 2>/dev/null || true
-                for w in $(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^agentteams-worker-" || true); do
-                    ${DOCKER_CMD} stop "${w}" 2>/dev/null || true
-                    ${DOCKER_CMD} rm "${w}" 2>/dev/null || true
-                done
-                log "$(msg install.orphan_volume.cleaning)"
-                ${DOCKER_CMD} volume rm "${data_vol}" 2>/dev/null || true
-                log "$(msg install.orphan_volume.cleaned)"
-            else
-                echo ""
-                echo "$(msg install.orphan_volume.choose)"
-                echo "$(msg install.orphan_volume.clean)"
-                echo "$(msg install.orphan_volume.keep)"
-                echo ""
-                local ORPHAN_CHOICE
-                read -e -p "$(msg install.orphan_volume.prompt): " ORPHAN_CHOICE
-                ORPHAN_CHOICE="${ORPHAN_CHOICE:-1}"
-                case "${ORPHAN_CHOICE}" in
-                    1|clean)
-                        ${DOCKER_CMD} stop agentteams-manager 2>/dev/null || true
-                        ${DOCKER_CMD} rm agentteams-manager 2>/dev/null || true
-                        for w in $(${DOCKER_CMD} ps -a --format '{{.Names}}' | grep "^agentteams-worker-" || true); do
-                            ${DOCKER_CMD} stop "${w}" 2>/dev/null || true
-                            ${DOCKER_CMD} rm "${w}" 2>/dev/null || true
-                        done
-                        log "$(msg install.orphan_volume.cleaning)"
-                        ${DOCKER_CMD} volume rm "${data_vol}" 2>/dev/null || true
-                        log "$(msg install.orphan_volume.cleaned)"
-                        ;;
-                    2|keep)
-                        log "$(msg install.orphan_volume.keeping)"
-                        ;;
-                esac
-            fi
-        fi
+        recover_existing_install
     fi
 
     # ── State machine ─────────────────────────────────────────────────────────
@@ -3942,11 +4016,14 @@ install_manager() {
     done
     # ── End state machine ──────────────────────────────────────────────────────
 
+    # Saved registry and image overrides are now available, including explicit-version upgrades.
+    resolve_image_tags
     # Runtime and dashboard choices are now known. Verify before saving configuration
     # or stopping existing containers, and never downgrade an upgrade automatically.
     _select_available_auto_version
 
     # Post-machine defaults for any steps that were skipped
+    AGENTTEAMS_LOCAL_ONLY="${AGENTTEAMS_LOCAL_ONLY:-1}"
     local _detected_data_vol
     _detected_data_vol="$(detect_installed_data_volume)"
     if [ -z "${AGENTTEAMS_DATA_DIR:-}" ]; then
@@ -3961,6 +4038,7 @@ install_manager() {
     AGENTTEAMS_DATA_DIR="${AGENTTEAMS_DATA_DIR:-agentteams-data}"
     if [ -n "${_detected_data_vol}" ] && [ "${AGENTTEAMS_DATA_DIR}" != "${_detected_data_vol}" ]; then
         echo -e "\033[31m$(msg data.volume_mismatch_warning "${_detected_data_vol}")\033[0m"
+        [ "${AGENTTEAMS_UPGRADE:-0}" != "1" ] || die "$(msg data.volume_mismatch_abort)"
         if [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
             local _vol_confirm
             read -r -p "$(msg data.volume_mismatch_confirm): " _vol_confirm
@@ -4026,8 +4104,136 @@ install_manager() {
         JVM_ARGS="-XX:+UnlockDiagnosticVMOptions -XX:-UseAESCTRIntrinsics -XX:UseSVE=0"
     fi
 
+    # Detect container runtime socket
+    SOCKET_MOUNT_ARGS=""
+    if [ "${AGENTTEAMS_MOUNT_SOCKET}" = "1" ]; then
+        # Actively ensure the API socket is enabled and active before detection.
+        if [ "${DOCKER_CMD:-}" = "podman" ]; then
+            ensure_podman_socket
+        fi
+        CONTAINER_SOCK=$(detect_socket)
+        if [ -n "${CONTAINER_SOCK}" ]; then
+            log "$(msg install.socket_detected "${CONTAINER_SOCK}")"
+            SOCKET_MOUNT_ARGS="-v ${CONTAINER_SOCK}:/var/run/docker.sock --security-opt label=disable"
+        else
+            log "$(msg install.socket_not_found)"
+            # Interactive confirmation when socket not found
+            if [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
+                echo ""
+                echo -e "\033[33m$(msg install.socket_confirm.title)\033[0m"
+                echo ""
+                echo -e "$(msg install.socket_confirm.message)"
+                echo ""
+                read -p "$(msg install.socket_confirm.prompt)" SOCKET_CONFIRM
+                if [ "${SOCKET_CONFIRM}" != "y" ] && [ "${SOCKET_CONFIRM}" != "Y" ]; then
+                    log "$(msg install.socket_confirm.cancelled)"
+                    exit 0
+                fi
+            fi
+        fi
+    fi
+
+    # Manager workspace mount (always a host directory, defaulting to ~/agentteams-manager)
+    WORKSPACE_MOUNT_ARGS="-v ${AGENTTEAMS_WORKSPACE_DIR}:/root/manager-workspace"
+
+    # Pass host timezone to container so date/time commands reflect local time
+    TZ_ARGS="-e TZ=${AGENTTEAMS_TIMEZONE}"
+
+    # Host directory mount
+    if [ -d "${AGENTTEAMS_HOST_SHARE_DIR}" ]; then
+        HOST_SHARE_MOUNT_ARGS="-v ${AGENTTEAMS_HOST_SHARE_DIR}:/host-share"
+        log "$(msg host_share.sharing "${AGENTTEAMS_HOST_SHARE_DIR}")"
+    else
+        log "$(msg host_share.not_exist "${AGENTTEAMS_HOST_SHARE_DIR}")"
+        HOST_SHARE_MOUNT_ARGS="-v ${AGENTTEAMS_HOST_SHARE_DIR}:/host-share"
+    fi
+
+    # YOLO mode: pass through if set in environment (enables autonomous decisions)
+    YOLO_ARGS=""
+    if [ "${AGENTTEAMS_YOLO:-}" = "1" ]; then
+        YOLO_ARGS="-e AGENTTEAMS_YOLO=1"
+        log "$(msg install.yolo)"
+    fi
+
+    # Matrix-plugin debug tracing: pass through if AGENTTEAMS_MATRIX_DEBUG=1.
+    # The container entrypoints translate this to OPENCLAW_MATRIX_DEBUG=1
+    # so the AgentTeams matrix plugin (the legacy env-var name is kept
+    # for the worker-entrypoint's backward-compat shim — see
+    # worker/scripts/worker-entrypoint.sh:316) emits structured
+    # INFO-level lifecycle traces (sync state transitions,
+    # room.invite/join, message handler arrival + filter outcomes).
+    # Used to diagnose worker/manager hangs.
+    MATRIX_DEBUG_ARGS=""
+    if [ "${AGENTTEAMS_MATRIX_DEBUG:-}" = "1" ]; then
+        MATRIX_DEBUG_ARGS="-e AGENTTEAMS_MATRIX_DEBUG=1"
+    fi
+
+    # E2EE is already in the env file; but also pass explicitly in case env file is not the source
+    # (AGENTTEAMS_MATRIX_E2EE is written to ENV_FILE below via --env-file)
+
+    # Prepare service images before saving settings or stopping existing services.
+    _is_local_image() {
+        case "$1" in
+            agentteams/*) return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+
+    _local_image_exists() {
+        local _img="$1"
+        [ -z "${_img}" ] && return 1
+        _is_local_image "${_img}" || return 1
+        ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1
+    }
+
+    # Helper: pull or skip a single image
+    # Args: $1=image  $2=exists_msg_key  $3=pulling_msg_key
+    _pull_image() {
+        local _img="$1" _exists_key="$2" _pull_key="$3"
+        [ -z "${_img}" ] && return 0
+        if _local_image_exists "${_img}"; then
+            log "$(msg "${_exists_key}" "${_img}")"
+            return 0
+        fi
+        log "$(msg "${_pull_key}" "${_img}")"
+        local _attempt=1
+        while [ $_attempt -le 3 ]; do
+            if ${DOCKER_CMD} pull "${_img}"; then
+                return 0
+            fi
+            if [ $_attempt -lt 3 ]; then
+                log "Pull failed (attempt ${_attempt}/3), retrying in 5s..."
+                sleep 5
+            fi
+            _attempt=$((_attempt + 1))
+        done
+        die "Failed to pull ${_img} after 3 attempts"
+        return 1
+    }
+
+    # Embedded controller image (resolve versioned tag, fallback to latest)
+    resolve_embedded_image
+    if [ "${AGENTTEAMS_USE_EMBEDDED}" = "1" ] && [ -n "${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-}" ]; then
+        _pull_image "${EMBEDDED_IMAGE}" "install.image.embedded_exists" "install.image.pulling_embedded"
+    fi
+
+    # Manager image is always required (select based on runtime)
+    local _selected_manager_image
+    _selected_manager_image="$(manager_image_for_runtime "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}")"
+    _pull_image "${_selected_manager_image}" "install.image.exists" "install.image.pulling_manager"
+    if [ "${AGENTTEAMS_DASHBOARD:-1}" = "1" ]; then
+        _pull_image "${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}}" "install.image.exists" "install.image.pulling_manager"
+    fi
+
     # Write .env file
+    AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY="${AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY:-higress-registry.cn-hangzhou.cr.aliyuncs.com}"
     ENV_FILE="${AGENTTEAMS_ENV_FILE:-${HOME}/agentteams-manager.env}"
+    if [ "${AGENTTEAMS_UPGRADE:-0}" = "1" ] && [ -f "${ENV_FILE}" ]; then
+        local backup="${ENV_FILE}.before-upgrade-$(date +%Y%m%d%H%M%S)"
+        cp -p "${ENV_FILE}" "${backup}"
+        chmod 600 "${backup}"
+        log "Config backup: ${backup}"
+    fi
     cat > "${ENV_FILE}" << EOF
 # AgentTeams Manager Configuration
 # Generated by agentteams-install.sh on $(date)
@@ -4059,7 +4265,7 @@ AGENTTEAMS_PORT_CONSOLE=${AGENTTEAMS_PORT_CONSOLE}
 AGENTTEAMS_PORT_ELEMENT_WEB=${AGENTTEAMS_PORT_ELEMENT_WEB}
 AGENTTEAMS_PORT_MANAGER_CONSOLE=${AGENTTEAMS_PORT_MANAGER_CONSOLE:-18888}
 
-# Manager runtime (qwenpaw | openclaw | copaw)
+# Manager runtime (qwenpaw | openclaw | copaw | hermes | deepseek-harness | openhuman)
 AGENTTEAMS_MANAGER_RUNTIME=${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}
 
 # Matrix
@@ -4110,7 +4316,9 @@ AGENTTEAMS_WORKER_IMAGE=${WORKER_IMAGE}
 AGENTTEAMS_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
 AGENTTEAMS_QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}
 AGENTTEAMS_HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}
+AGENTTEAMS_OPENHUMAN_WORKER_IMAGE=${OPENHUMAN_WORKER_IMAGE}
 AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=${DEEPSEEK_HARNESS_WORKER_IMAGE}
+AGENTTEAMS_CODEX_WORKER_IMAGE=${CODEX_WORKER_IMAGE}
 
 # Default Worker runtime (qwenpaw | openclaw | hermes | copaw | deepseek-harness [experimental])
 AGENTTEAMS_DEFAULT_WORKER_RUNTIME=${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}
@@ -4138,8 +4346,9 @@ AGENTTEAMS_PODMAN_AUTOSTART=${AGENTTEAMS_PODMAN_AUTOSTART:-0}
 # JVM Args for Higress Console (fixes SIGILL on Apple Silicon)
 JVM_ARGS=${JVM_ARGS:-}
 
-# Higress WASM plugin image registry (auto-selected by timezone)
-HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${AGENTTEAMS_REGISTRY}
+# Higress WASM plugins are independent of the regional AgentTeams images.
+AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY=${AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY}
+HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY}
 
 # Data persistence
 AGENTTEAMS_DATA_DIR=${AGENTTEAMS_DATA_DIR:-agentteams-data}
@@ -4150,143 +4359,30 @@ AGENTTEAMS_HOST_SHARE_DIR=${AGENTTEAMS_HOST_SHARE_DIR:-}
 
 # agentteams-dashboard (management UI)
 AGENTTEAMS_DASHBOARD=${AGENTTEAMS_DASHBOARD:-1}
-AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.3.1}
+AGENTTEAMS_DASHBOARD_VERSION=${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}
 AGENTTEAMS_PORT_DASHBOARD=${AGENTTEAMS_PORT_DASHBOARD:-13000}
 AGENTTEAMS_DASHBOARD_IMAGE=${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}
 DASHBOARD_SESSION_SECRET=${DASHBOARD_SESSION_SECRET:-}
 EOF
 
+    # Keep saved settings outside the generated template (for example external storage).
+    if [ "${AGENTTEAMS_UPGRADE:-0}" = "1" ]; then
+        local key value
+        while IFS='=' read -r key value || [ -n "${key}" ]; do
+            case "${key}" in ''|\#*|*[!A-Z0-9_]*) continue ;; esac
+            case "${key}" in AGENTTEAMS_*|DASHBOARD_SESSION_SECRET|JVM_ARGS) ;; *) continue ;; esac
+            grep -q "^${key}=" "${ENV_FILE}" && continue
+            printf '%s=%s\n' "${key}" "${!key}" >> "${ENV_FILE}"
+        done < <(if [ -n "${backup:-}" ]; then cat "${backup}"; else printf '%s\n' "${AGENTTEAMS_RECOVERED_CONFIG:-}"; fi)
+    fi
     chmod 600 "${ENV_FILE}"
     log "$(msg install.config_saved "${ENV_FILE}")"
-
-    # Detect container runtime socket
-    SOCKET_MOUNT_ARGS=""
-    if [ "${AGENTTEAMS_MOUNT_SOCKET}" = "1" ]; then
-        # Actively ensure the API socket is enabled and active before detection.
-        if [ "${DOCKER_CMD:-}" = "podman" ]; then
-            ensure_podman_socket
-        fi
-        CONTAINER_SOCK=$(detect_socket)
-        if [ -n "${CONTAINER_SOCK}" ]; then
-            log "$(msg install.socket_detected "${CONTAINER_SOCK}")"
-            SOCKET_MOUNT_ARGS="-v ${CONTAINER_SOCK}:/var/run/docker.sock --security-opt label=disable"
-        else
-            log "$(msg install.socket_not_found)"
-            # Interactive confirmation when socket not found
-            if [ "${AGENTTEAMS_NON_INTERACTIVE}" != "1" ]; then
-                echo ""
-                echo -e "\033[33m$(msg install.socket_confirm.title)\033[0m"
-                echo ""
-                echo -e "$(msg install.socket_confirm.message)"
-                echo ""
-                read -p "$(msg install.socket_confirm.prompt)" SOCKET_CONFIRM
-                if [ "${SOCKET_CONFIRM}" != "y" ] && [ "${SOCKET_CONFIRM}" != "Y" ]; then
-                    log "$(msg install.socket_confirm.cancelled)"
-                    exit 0
-                fi
-            fi
-        fi
-    fi
 
     # Create the data volume (or host bind directory) if missing, and build
     # the mount args (named volume vs bind path are handled distinctly).
     prepare_data_volume
 
-    # Manager workspace mount (always a host directory, defaulting to ~/agentteams-manager)
-    WORKSPACE_MOUNT_ARGS="-v ${AGENTTEAMS_WORKSPACE_DIR}:/root/manager-workspace"
-
-    # Pass host timezone to container so date/time commands reflect local time
-    TZ_ARGS="-e TZ=${AGENTTEAMS_TIMEZONE}"
-
-    # Host directory mount
-    if [ -d "${AGENTTEAMS_HOST_SHARE_DIR}" ]; then
-        HOST_SHARE_MOUNT_ARGS="-v ${AGENTTEAMS_HOST_SHARE_DIR}:/host-share"
-        log "$(msg host_share.sharing "${AGENTTEAMS_HOST_SHARE_DIR}")"
-    else
-        log "$(msg host_share.not_exist "${AGENTTEAMS_HOST_SHARE_DIR}")"
-        HOST_SHARE_MOUNT_ARGS="-v ${AGENTTEAMS_HOST_SHARE_DIR}:/host-share"
-    fi
-
-    # YOLO mode: pass through if set in environment (enables autonomous decisions)
-    YOLO_ARGS=""
-    if [ "${AGENTTEAMS_YOLO:-}" = "1" ]; then
-        YOLO_ARGS="-e AGENTTEAMS_YOLO=1"
-        log "$(msg install.yolo)"
-    fi
-
-    # Matrix-plugin debug tracing: pass through if AGENTTEAMS_MATRIX_DEBUG=1.
-    # The container entrypoints translate this to OPENCLAW_MATRIX_DEBUG=1
-    # so the AgentTeams matrix plugin (the legacy env-var name is kept
-    # for the worker-entrypoint's backward-compat shim — see
-    # worker/scripts/worker-entrypoint.sh:316) emits structured
-    # INFO-level lifecycle traces (sync state transitions,
-    # room.invite/join, message handler arrival + filter outcomes).
-    # Used to diagnose worker/manager hangs.
-    MATRIX_DEBUG_ARGS=""
-    if [ "${AGENTTEAMS_MATRIX_DEBUG:-}" = "1" ]; then
-        MATRIX_DEBUG_ARGS="-e AGENTTEAMS_MATRIX_DEBUG=1"
-    fi
-
-    # E2EE is already in the env file; but also pass explicitly in case env file is not the source
-    # (AGENTTEAMS_MATRIX_E2EE is already written to ENV_FILE above via --env-file)
-
-    # Pull images (manager based on runtime config; all worker runtimes always pulled)
-    _is_local_image() {
-        case "$1" in
-            agentteams/*) return 0 ;;
-            *) return 1 ;;
-        esac
-    }
-
-    _local_image_exists() {
-        local _img="$1"
-        [ -z "${_img}" ] && return 1
-        _is_local_image "${_img}" || return 1
-        ${DOCKER_CMD} image inspect "${_img}" >/dev/null 2>&1
-    }
-
-    # Helper: pull or skip a single image
-    # Args: $1=image  $2=exists_msg_key  $3=pulling_msg_key
-    _pull_image() {
-        local _img="$1" _exists_key="$2" _pull_key="$3"
-        [ -z "${_img}" ] && return 0
-        if _local_image_exists "${_img}"; then
-            log "$(msg "${_exists_key}" "${_img}")"
-            return 0
-        fi
-        log "$(msg "${_pull_key}" "${_img}")"
-        local _attempt=1
-        while [ $_attempt -le 3 ]; do
-            if ${DOCKER_CMD} pull "${_img}"; then
-                return 0
-            fi
-            if [ $_attempt -lt 3 ]; then
-                log "Pull failed (attempt ${_attempt}/3), retrying in 5s..."
-                sleep 5
-            fi
-            _attempt=$((_attempt + 1))
-        done
-        die "Failed to pull ${_img} after 3 attempts"
-        return 1
-    }
-
-    # Embedded controller image (resolve versioned tag, fallback to latest)
-    resolve_embedded_image
-    if [ "${AGENTTEAMS_USE_EMBEDDED}" = "1" ] && [ -n "${AGENTTEAMS_INSTALL_EMBEDDED_IMAGE:-}" ]; then
-        _pull_image "${EMBEDDED_IMAGE}" "install.image.embedded_exists" "install.image.pulling_embedded"
-    fi
-
-    # Manager image is always required (select based on runtime)
-    local _selected_manager_image
-    _selected_manager_image="$(manager_image_for_runtime "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}")"
-    _pull_image "${_selected_manager_image}" "install.image.exists" "install.image.pulling_manager"
-
-    # Pull all worker runtime images (workers may use any runtime regardless of the default)
-    _pull_image "${WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
-    _pull_image "${COPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
-    _pull_image "${QWENPAW_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
-    _pull_image "${HERMES_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
-    _pull_image "${DEEPSEEK_HARNESS_WORKER_IMAGE}" "install.image.worker_exists" "install.image.pulling_worker"
+    # The controller pulls the selected Worker image when you create a Worker.
 
     # --- Pre-upgrade: extract Matrix passwords from running old containers ---
     # Only needed when upgrading FROM old architecture (v1.0.9) TO embedded.
@@ -4416,8 +4512,8 @@ CREDEOF
         ${DOCKER_CMD} rm agentteams-manager 2>/dev/null || true
     fi
 
-    # Stop and remove worker containers (controller will recreate via CR reconciliation)
-    if [ -n "${UPGRADE_EXISTING_WORKERS:-}" ]; then
+    # Only legacy architecture migration needs Worker containers to be recreated.
+    if [ "${_is_old_arch:-0}" = "1" ] && [ -n "${UPGRADE_EXISTING_WORKERS:-}" ]; then
         log "$(msg install.existing.stopping_workers)"
         for w in ${UPGRADE_EXISTING_WORKERS}; do
             ${DOCKER_CMD} stop "${w}" 2>/dev/null || true
@@ -4516,12 +4612,15 @@ CREDEOF
             -e "${_ctrl_env_prefix}COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}QWENPAW_WORKER_IMAGE=${QWENPAW_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}HERMES_WORKER_IMAGE=${HERMES_WORKER_IMAGE}"
+            -e "${_ctrl_env_prefix}OPENHUMAN_WORKER_IMAGE=${OPENHUMAN_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}DEEPSEEK_HARNESS_WORKER_IMAGE=${DEEPSEEK_HARNESS_WORKER_IMAGE}"
+            -e "${_ctrl_env_prefix}CODEX_WORKER_IMAGE=${CODEX_WORKER_IMAGE}"
             -e "${_ctrl_env_prefix}MATRIX_DOMAIN=${_matrix_domain}"
             -e "${_ctrl_env_prefix}ELEMENT_HOMESERVER_URL=http://127.0.0.1:${AGENTTEAMS_PORT_GATEWAY}"
             -e "${_ctrl_env_prefix}MATRIX_URL=http://127.0.0.1:6167"
             -e "${_ctrl_env_prefix}MATRIX_E2EE=${AGENTTEAMS_MATRIX_E2EE:-0}"
             -e "${_ctrl_env_prefix}HIGRESS_ADAPTER_MODE=${AGENTTEAMS_HIGRESS_ADAPTER_MODE:-direct}"
+            -e "HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY}"
             -e "${_ctrl_env_prefix}MINIO_ENDPOINT=http://127.0.0.1:9000"
             -e "${_ctrl_env_prefix}MINIO_BUCKET=agentteams-storage"
             -e "${_ctrl_env_prefix}STORAGE_PREFIX=${_storage_prefix}"
@@ -4627,6 +4726,20 @@ CREDEOF
             _ctrl_env_args+=(-e "${_ctrl_env_prefix}CMS_WORKSPACE=${AGENTTEAMS_CMS_WORKSPACE}")
         fi
 
+        # The Controller advertises its own in-network URL to the Manager and
+        # Workers it provisions; the image default (127.0.0.1) only resolves
+        # inside the Controller container itself.
+        _ctrl_env_args+=(-e "${_ctrl_env_prefix}CONTROLLER_URL=http://agentteams-controller:8090")
+        # Presigned download origin (#1501): every URL handed to a client
+        # carries this host, so it must be reachable from the CALLER's
+        # browser. The embedded Controller runs on a bridge network and
+        # publishes only 8080/8001/8088 — the in-container 127.0.0.1:9000 is
+        # not a browser endpoint, so presign stays disabled (501) unless the
+        # operator supplies a reachable origin.
+        if [ -n "${AGENTTEAMS_FS_PUBLIC_ENDPOINT:-}" ]; then
+            _ctrl_env_args+=(-e "${_ctrl_env_prefix}FS_PUBLIC_ENDPOINT=${AGENTTEAMS_FS_PUBLIC_ENDPOINT}")
+        fi
+
         # shellcheck disable=SC2086
         ${DOCKER_CMD} run -d \
             --name agentteams-controller \
@@ -4725,7 +4838,7 @@ CREDEOF
         # where the file may be empty / absent — the loop's silent retry
         # handles that the same way it handles the manager-not-yet-running
         # case below.
-        if ${DOCKER_CMD} exec agentteams-controller sh -c 'command -v agt' >/dev/null 2>&1; then
+        if [ "${AGENTTEAMS_QUICKSTART:-0}" != "1" ] && [ -n "${AGENTTEAMS_LLM_API_KEY:-}" ] && ${DOCKER_CMD} exec agentteams-controller sh -c 'command -v agt' >/dev/null 2>&1; then
             log "$(msg install.welcome_msg.waiting)"
             local _welcome_wait=0
             local _welcome_max="${AGENTTEAMS_WELCOME_TIMEOUT:-300}"
@@ -4791,7 +4904,9 @@ CREDEOF
                     -e AGENTTEAMS_COPAW_WORKER_IMAGE="${COPAW_WORKER_IMAGE}" \
                     -e AGENTTEAMS_QWENPAW_WORKER_IMAGE="${QWENPAW_WORKER_IMAGE}" \
                     -e AGENTTEAMS_HERMES_WORKER_IMAGE="${HERMES_WORKER_IMAGE}" \
+                    -e AGENTTEAMS_OPENHUMAN_WORKER_IMAGE="${OPENHUMAN_WORKER_IMAGE}" \
                     -e AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE="${DEEPSEEK_HARNESS_WORKER_IMAGE}" \
+                    -e AGENTTEAMS_CODEX_WORKER_IMAGE="${CODEX_WORKER_IMAGE}" \
                     ${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES:+-e AGENTTEAMS_PROXY_ALLOWED_REGISTRIES="${AGENTTEAMS_PROXY_ALLOWED_REGISTRIES}"} \
                     --restart unless-stopped \
                     "${_proxy_image}"
@@ -4861,6 +4976,11 @@ CREDEOF
 
     # ── Start Dashboard (optional) ────────────────────────────────────
     _start_dashboard
+    if [ "${AGENTTEAMS_DASHBOARD_READY:-0}" = "1" ]; then
+        open_dashboard
+    elif [ "${AGENTTEAMS_DASHBOARD:-0}" = "1" ]; then
+        die "$(msg install.dashboard_unavailable)"
+    fi
 
     # Apply Podman autostart if selected and environment matches
     if [ "${DOCKER_CMD}" = "podman" ] && [ "${AGENTTEAMS_PODMAN_AUTOSTART:-0}" = "1" ]; then
@@ -4878,7 +4998,11 @@ CREDEOF
     echo -e "\033[33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
     echo -e "\033[33m  $(msg success.open_url)\033[0m"
     echo -e "\033[33m                                                                                 \033[0m"
-    echo -e "\033[1;36m    http://127.0.0.1:${AGENTTEAMS_PORT_ELEMENT_WEB:-18088}/#/login\033[0m"
+    if [ "${AGENTTEAMS_DASHBOARD_READY:-0}" = "1" ]; then
+        echo -e "\033[1;36m    http://127.0.0.1:${AGENTTEAMS_PORT_DASHBOARD:-13000}/\033[0m"
+    else
+        echo -e "\033[1;36m    http://127.0.0.1:${AGENTTEAMS_PORT_ELEMENT_WEB:-18088}/#/login\033[0m"
+    fi
     echo -e "\033[33m                                                                                 \033[0m"
     echo -e "\033[33m  $(msg success.login_with)\033[0m"
     echo -e "\033[33m    $(msg success.username "${AGENTTEAMS_ADMIN_USER}")\033[0m"
@@ -5244,36 +5368,102 @@ uninstall_agentteams() {
 # ============================================================
 # Check container runtime (docker or podman) and environment
 # ============================================================
+open_url() {
+    if [ "$(uname -s)" = "Darwin" ]; then
+        open "$1" >/dev/null 2>&1
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$1" >/dev/null 2>&1
+    elif command -v wslview >/dev/null 2>&1; then
+        wslview "$1" >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+open_dashboard() {
+    local url="http://127.0.0.1:${AGENTTEAMS_PORT_DASHBOARD:-13000}/"
+    case "${AGENTTEAMS_ADMIN_USER:-admin}" in
+        *[!a-zA-Z0-9_.-]*) ;;
+        *) url="${url}?username=${AGENTTEAMS_ADMIN_USER:-admin}" ;;
+    esac
+    log "Dashboard: ${url}"
+    [ "${AGENTTEAMS_NON_INTERACTIVE:-0}" = "1" ] && return 0
+    [ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ] && return 0
+    local copied=0
+    if command -v pbcopy >/dev/null 2>&1; then
+        printf '%s' "${AGENTTEAMS_ADMIN_PASSWORD}" | pbcopy && copied=1
+    elif command -v wl-copy >/dev/null 2>&1; then
+        printf '%s' "${AGENTTEAMS_ADMIN_PASSWORD}" | wl-copy && copied=1
+    elif command -v xclip >/dev/null 2>&1; then
+        printf '%s' "${AGENTTEAMS_ADMIN_PASSWORD}" | xclip -selection clipboard && copied=1
+    elif command -v clip.exe >/dev/null 2>&1; then
+        printf '%s' "${AGENTTEAMS_ADMIN_PASSWORD}" | clip.exe && copied=1
+    fi
+    if [ "${copied}" = "1" ]; then
+        log "$(msg install.password_copied)"
+    else
+        log "$(msg install.password_copy_failed)"
+    fi
+    open_url "${url}" || log "$(msg success.open_url) ${url}"
+}
+
+container_runtime_ready() {
+    if command -v docker >/dev/null 2>&1 && docker ps >/dev/null 2>&1; then
+        DOCKER_CMD=docker
+        docker --version 2>/dev/null | grep -qi podman && DOCKER_CMD=podman
+        return 0
+    fi
+    if command -v podman >/dev/null 2>&1 && podman ps >/dev/null 2>&1; then
+        DOCKER_CMD=podman
+        return 0
+    fi
+    return 1
+}
+
 check_container_runtime() {
     # Ensure the rootless environment baseline (XDG_RUNTIME_DIR) is ready before engine detection.
     if [ "$(id -u)" -ne 0 ] && [ -z "${XDG_RUNTIME_DIR:-}" ]; then
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
     fi
 
-    if command -v docker >/dev/null 2>&1; then
-        DOCKER_CMD="docker"
-        # Check for podman disguised as docker (alias or podman-docker package)
-        if docker --version 2>/dev/null | grep -qi "podman"; then
-            DOCKER_CMD="podman"
+    container_runtime_ready && return 0
+    if [ "${AGENTTEAMS_NON_INTERACTIVE:-0}" = "1" ] || { [ "${AGENTTEAMS_COMMAND:-manager}" != "manager" ] && [ "${AGENTTEAMS_COMMAND}" != "reinstall" ]; }; then
+        die "$(msg install.runtime_timeout)"
+    fi
+    local guide="https://docs.docker.com/engine/install/"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if [ -d /Applications/OrbStack.app ] || [ -d "${HOME}/Applications/OrbStack.app" ]; then
+            open -a OrbStack || true
+        elif [ -d /Applications/Docker.app ] || [ -d "${HOME}/Applications/Docker.app" ]; then
+            open -a Docker || true
+        elif command -v podman >/dev/null 2>&1; then
+            log "podman machine start"
+        else
+            guide="https://orbstack.dev/download"
+            log "OrbStack (macOS): ${guide}"
+            open_url "${guide}" || true
         fi
-    elif command -v podman >/dev/null 2>&1; then
-        DOCKER_CMD="podman"
+        export PATH="${PATH}:${HOME}/.orbstack/bin:${HOME}/.docker/bin:/usr/local/bin:/opt/homebrew/bin"
     else
-        echo -e "\033[31m[AgentTeams ERROR]\033[0m $(msg error.docker_not_found)" >&2
-        exit 1
+        log "Docker Engine: ${guide}"
+        log "Podman: https://podman.io/docs/installation"
+        open_url "${guide}" || true
     fi
-
-    # Unified health check (Validates runtime responsiveness)
-    if ! ${DOCKER_CMD} ps >/dev/null 2>&1; then
-        echo -e "\033[31m[AgentTeams ERROR]\033[0m $(msg error.docker_not_running)" >&2
-        exit 1
-    fi
+    log "$(msg install.runtime_wait)"
+    local waited=0
+    while [ "${waited}" -lt "${AGENTTEAMS_RUNTIME_WAIT_TIMEOUT:-900}" ]; do
+        container_runtime_ready && return 0
+        sleep 3
+        waited=$((waited + 3))
+    done
+    die "$(msg install.runtime_timeout)"
 }
 
+AGENTTEAMS_COMMAND="${1:-manager}"
 check_container_runtime
 
 case "${1:-}" in
-    manager|"")
+    manager|reinstall|"")
         install_manager
         ;;
     worker)
@@ -5284,7 +5474,7 @@ case "${1:-}" in
         check_container_runtime
         load_current_params_from_env
         AGENTTEAMS_DASHBOARD="${AGENTTEAMS_DASHBOARD:-1}"
-        AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.3.1}"
+        AGENTTEAMS_DASHBOARD_VERSION="${AGENTTEAMS_DASHBOARD_VERSION:-v1.4.0}"
         AGENTTEAMS_PORT_DASHBOARD="${AGENTTEAMS_PORT_DASHBOARD:-13000}"
         AGENTTEAMS_DASHBOARD_IMAGE="${AGENTTEAMS_DASHBOARD_IMAGE:-${AGENTTEAMS_REGISTRY}/agentteams/agentteams-dashboard:${AGENTTEAMS_DASHBOARD_VERSION}}"
         AGENTTEAMS_USE_EMBEDDED=1
@@ -5294,18 +5484,18 @@ case "${1:-}" in
         uninstall_agentteams
         ;;
     *)
-        echo "Usage: $0 [manager|worker [options]|dashboard|uninstall]"
+        echo "Usage: $0 [manager|reinstall|worker [options]|dashboard|uninstall]"
         echo ""
         echo "Commands:"
-        echo "  manager              Interactive Manager installation (default)"
-        echo "                       Choose Quick Start (all defaults) or Manual mode"
+        echo "  manager              Start locally and open Dashboard (default)"
+        echo "  --manual             Customize installation interactively"
+        echo "  reinstall            Erase an existing installation (requires typed confirmation)"
         echo "  worker               Worker installation (requires --name and connection params)"
         echo "  dashboard            Start/stop agentteams-dashboard (use with AGENTTEAMS_DASHBOARD=0 to stop)"
         echo "  uninstall            Stop and remove Manager + all Worker containers"
         echo ""
         echo "Quick Start (fastest):"
         echo "  $0"
-        echo "  # Then select '1' for Quick Start mode"
         echo ""
         echo "Non-interactive (for automation):"
         echo "  AGENTTEAMS_NON_INTERACTIVE=1 AGENTTEAMS_LLM_API_KEY=sk-xxx $0"

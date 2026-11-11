@@ -174,6 +174,12 @@ func (f *fakeTeamMatrix) SetRoomState(_ context.Context, roomID, eventType, stat
 		}
 		f.powerStates[roomID] = rt
 	}
+	if eventType == "room.meta" {
+		sender := f.senderFor(token)
+		if !f.isMember(roomID, sender) || f.levelIn(roomID, sender) < 50 {
+			return fakeForbidden("insufficient power for room.meta")
+		}
+	}
 	return nil
 }
 
@@ -366,7 +372,9 @@ func (fakeGateway) UnexposePort(context.Context, gateway.PortExposeRequest) erro
 func (fakeGateway) EnsureServiceSource(context.Context, string, string, int, string) error {
 	return nil
 }
-func (fakeGateway) EnsureStaticServiceSource(context.Context, string, string, int) error { return nil }
+func (fakeGateway) EnsureStaticServiceSource(context.Context, string, string, int, string) error {
+	return nil
+}
 func (fakeGateway) EnsureRoute(context.Context, string, []string, string, int, string) error {
 	return nil
 }
@@ -438,6 +446,19 @@ func TestRefreshWorkerCredentialsRestoresMinIOAccess(t *testing.T) {
 	}
 	if got := admin.policies[0]; got.WorkerName != "leader" || got.TeamName != "alpha" {
 		t.Fatalf("EnsurePolicy=%+v, want worker leader team alpha", got)
+	}
+}
+
+func TestManagerMatrixRefreshUsesRuntimeIdentity(t *testing.T) {
+	creds := fakeCredentialStore{"default": {MatrixToken: "old-token"}}
+	p := NewProvisioner(ProvisionerConfig{Matrix: newFakeTeamMatrix(), Creds: creds})
+	p.matrixConfig.AppServiceEnabled = true
+	result, err := p.ForceRefreshManagerMatrixToken(context.Background(), "default")
+	if err != nil || result.MatrixToken != "as-token-manager" {
+		t.Fatalf("Manager login must use runtime identity: %+v, %v", result, err)
+	}
+	if creds["default"].MatrixToken != "as-token-manager" || creds["manager"] != nil {
+		t.Fatal("Manager credential ownership changed from its CR name")
 	}
 }
 
@@ -721,6 +742,29 @@ func TestProvisionTeamRoomsInvitesExplicitTeamAdminAndLeavesNewLeaderDM(t *testi
 	}
 }
 
+func TestProvisionTeamRoomsKeepsExplicitGlobalAdminMember(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	matrixClient.tokenUsers["team-admin-token"] = "@alice:localhost"
+	p := NewProvisioner(ProvisionerConfig{Matrix: matrixClient, AdminUser: "admin"})
+	_, err := p.ProvisionTeamRooms(context.Background(), TeamRoomRequest{
+		TeamName: "alpha", LeaderName: "lead",
+		AdminSpec:           &v1beta1.TeamAdminSpec{Name: "alice", MatrixUserID: "@alice:localhost"},
+		HumanMembers:        []v1beta1.TeamMemberSpec{{Name: "admin", MatrixUserID: "@admin:localhost", Role: "coordinator"}},
+		TeamAdminActorToken: "team-admin-token", TeamAdminActorName: "alice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(matrixClient.createRooms[0].Invite, "@admin:localhost") {
+		t.Fatal("explicit global admin not invited")
+	}
+	for _, leave := range matrixClient.leaves {
+		if leave == "!team:localhost" {
+			t.Fatal("explicit global admin removed from team room")
+		}
+	}
+}
+
 func TestProvisionTeamRoomsInvitesCoordinatorMembersLikeTeamAdmin(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	matrixClient.tokenUsers["team-admin-token"] = "@alice:example.com"
@@ -867,6 +911,10 @@ func TestProvisionTeamRoomsDoesNotLeaveExistingLeaderDM(t *testing.T) {
 	// Existing rooms: alice (the team admin) created and owns both.
 	matrixClient.seedOwnedRoom("!team:localhost", "@alice:localhost")
 	matrixClient.seedOwnedRoom("!leader-dm:localhost", "@alice:localhost")
+	matrixClient.powerStates = map[string]map[string]interface{}{
+		"!team:localhost":      {"users": map[string]interface{}{"@alice:localhost": 100.0}},
+		"!leader-dm:localhost": {"users": map[string]interface{}{"@alice:localhost": 100.0}},
+	}
 	matrixClient.created = false
 	p := NewProvisioner(ProvisionerConfig{
 		Matrix:    matrixClient,
@@ -949,6 +997,10 @@ func TestProvisionTeamRoomsUsesTeamAdminTokenForExistingTeamRoom(t *testing.T) {
 	// Existing rooms: alice (the team admin) created and owns both.
 	matrixClient.seedOwnedRoom("!team:localhost", "@alice:localhost")
 	matrixClient.seedOwnedRoom("!leader-dm:localhost", "@alice:localhost")
+	matrixClient.powerStates = map[string]map[string]interface{}{
+		"!team:localhost":      {"users": map[string]interface{}{"@alice:localhost": 100.0}},
+		"!leader-dm:localhost": {"users": map[string]interface{}{"@alice:localhost": 100.0}},
+	}
 	matrixClient.created = false
 	p := NewProvisioner(ProvisionerConfig{
 		Matrix:    matrixClient,
@@ -980,6 +1032,39 @@ func TestProvisionTeamRoomsUsesTeamAdminTokenForExistingTeamRoom(t *testing.T) {
 	}
 	if len(matrixClient.kicks) != 0 {
 		t.Fatalf("team room should not use admin kicks, got %v", matrixClient.kicks)
+	}
+}
+
+func TestProvisionTeamRoomsAddsAdminToExistingRooms(t *testing.T) {
+	m := newFakeTeamMatrix()
+	m.created = false
+	m.tokenUsers["leader-token"] = "@lead:localhost"
+	m.tokenUsers["alice-token"] = "@alice:localhost"
+	m.powerStates = map[string]map[string]interface{}{}
+	for _, room := range []string{"!team:localhost", "!leader-dm:localhost"} {
+		m.members[room] = []matrix.RoomMember{{UserID: "@lead:localhost", Membership: "join"}}
+		m.powerStates[room] = map[string]interface{}{
+			"users":         map[string]interface{}{"@lead:localhost": 100.0, "@admin:localhost": 100.0},
+			"state_default": 50.0,
+		}
+	}
+	p := NewProvisioner(ProvisionerConfig{Matrix: m, AdminUser: "admin", Creds: fakeCredentialStore{
+		"lead-cr": {MatrixToken: "leader-token"},
+	}})
+	req := TeamRoomRequest{TeamName: "alpha", LeaderName: "lead", LeaderCredentialName: "lead-cr",
+		AdminSpec: &v1beta1.TeamAdminSpec{Name: "alice"}, TeamAdminActorToken: "alice-token", TeamAdminActorName: "alice"}
+	for i := 0; i < 2; i++ {
+		if _, err := p.ProvisionTeamRooms(context.Background(), req); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+	}
+	for _, room := range []string{"!team:localhost", "!leader-dm:localhost"} {
+		if got := m.levelIn(room, "@alice:localhost"); got != 100 {
+			t.Fatalf("%s admin power=%d, want 100", room, got)
+		}
+		if m.powerStates[room]["state_default"] != 50.0 {
+			t.Fatalf("%s lost existing state_default", room)
+		}
 	}
 }
 

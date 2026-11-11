@@ -121,6 +121,8 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 
 ## Management Skills
 
+For Worker tracing, Langfuse, AgentLoop, or Collector configuration, read `skills/observability-management/SKILL.md` before guiding the user.
+
 Each skill's `SKILL.md` has the full how-to. For a quick-reference cheat sheet of when to reach for each skill, see `TOOLS.md`.
 
 ## Group Rooms

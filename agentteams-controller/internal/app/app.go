@@ -176,6 +176,7 @@ func (a *App) Start(ctx context.Context) error {
 		logger.Info("elected as leader, running cluster initialization")
 
 		init := &initializer.Initializer{
+			Client:  a.mgr.GetClient(),
 			OSS:     a.oss,
 			Matrix:  a.matrix,
 			Gateway: a.gateway,
@@ -581,6 +582,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 	}
 	if _, err := (&controller.WorkerReconciler{
 		Client:                      a.mgr.GetClient(),
+		ObservabilityReader:         a.mgr.GetAPIReader(),
 		Provisioner:                 a.provisioner,
 		Deployer:                    a.deployer,
 		Backend:                     a.registry,
@@ -617,8 +619,10 @@ func (a *App) initReconcilers(_ context.Context) error {
 	}
 
 	if err := (&controller.HumanReconciler{
-		Client:      a.mgr.GetClient(),
-		Provisioner: a.provisioner,
+		SystemAdminUser: a.cfg.MatrixAdminUser,
+		Client:          a.mgr.GetClient(),
+		Provisioner:     a.provisioner,
+		Deployer:        a.deployer,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup HumanReconciler: %w", err)
 	}

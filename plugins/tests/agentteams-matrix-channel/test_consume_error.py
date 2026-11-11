@@ -87,7 +87,7 @@ def test_cancellation_path_suppressed():
         )
     edit.assert_awaited_once_with(ROOM, {ROOT_KEY: ROOT_ID}, "已取消")
     room_send.assert_not_awaited()
-    typing.assert_awaited_once_with(ROOM, False)
+    typing.assert_awaited_once_with(ROOM, False, lifecycle_token=None)
 
 
 def test_generic_error_sanitized(caplog):

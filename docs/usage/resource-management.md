@@ -4,6 +4,12 @@ AgentTeams uses Kubernetes CRD-style declarative YAML to manage platform resourc
 
 ## Core Concepts
 
+### Resource authority
+
+Platform Admin and Manager own global deployment resource management. A Team Leader coordinates tasks and reads its team's Worker status, but cannot create, update, or delete deployment resources or wake, sleep, or ensure-ready another Worker. If a Worker is unavailable, the Leader reports the blocked task to Manager or platform Admin and waits for a fresh ready status before assigning work.
+
+Task/project coordination and the Leader runtime's own readiness report and credential refresh remain available. Existing human self-service permissions are unchanged; this boundary applies to the Leader service identity, not every human who can access a team.
+
 ### Organization Structure
 
 AgentTeams uses a three-tier organization that maps to real enterprise team structures:
@@ -231,8 +237,10 @@ When the Controller receives a Worker resource, it executes:
 | Role | Scope | Fields |
 |------|-------|--------|
 | admin / manager | any worker | all fields |
-| team leader | workers in their team | all fields |
+| team leader | own-team workers (read only) | none — every field is `403` |
 | L2 human (`permissionLevel: 2`) | workers in `accessibleTeams` only | `skills` |
+
+Team leaders are read-only on this endpoint: worker configuration writes are reserved for Admin/Manager (#1536).
 
 L2 humans manage the built-in skill assignments of the workers they coordinate without escalating to the admin. `remoteSkills` and `mcpServers` are not L2-writable yet: the MCP path can exfiltrate the gateway consumer key (the generator attaches `Authorization: Bearer <gatewayKey>` to every MCP entry), so both fields return `400` for L2 callers until the elevated-capability design lands (see the L2 permission design issue #1220). Other fields — `model`, `image`, `soul`, `agents`, `runtime`, `package`, `expose`, `channelPolicy`, `resources`, `containerManaged`, `state` — stay in the team owner's domain; a body that touches them is rejected with `400`. Out-of-scope workers (cross-team or standalone) are invisible to L2 humans on both read and update (`404`), keeping the endpoint probe-resistant. See [L2 Human Worker-Scoped Write](../design/l2-worker-scoped-write.md).
 
@@ -484,7 +492,7 @@ spec:
 | `spec.permissionLevel` | int | Yes | — | Permission level: 1, 2, or 3 |
 | `spec.accessibleTeams` | []string | No | — | Accessible Team list (effective for L2) |
 | `spec.accessibleWorkers` | []string | No | — | Accessible standalone Worker list (effective for L2/L3) |
-| `spec.capabilities` | []string | No | — | Sensitive-surface privileges beyond the L2 baseline: `full_access`, `channel_secrets`, `external_sources`, `approval_policy`, `secret_reveal` (see [capability-foundation](../design/capability-foundation.md)) |
+| `spec.capabilities` | []string | No | — | Sensitive-surface privileges beyond the L2 baseline: `full_access`, `channel_secrets`, `external_sources`, `approval_policy`, `secret_reveal`, `file_sync` (see [capability-foundation](../design/capability-foundation.md); `file_sync` is described in [Human file sync (server half)](#human-file-sync-server-half)) |
 | `spec.note` | string | No | — | Notes |
 
 ### Three-Level Permission Model
@@ -600,6 +608,74 @@ If SMTP is not configured or `spec.email` is empty, email sending is skipped wit
 - Target Workers must exist before creating an L3 Human
 - Changing permissionLevel triggers a full recalculation of groupAllowFrom
 
+### File Area Downloads (Presigned URLs)
+
+Each Human's file area supports two download modes:
+
+| Mode | Request | Behavior |
+|------|---------|----------|
+| Streamed (always available) | `GET /api/v1/humans/{name}/files/{path}` | The Controller streams the object through its own API response |
+| Presigned (opt-in) | `GET .../files/{path}?presign=1` | The Controller returns a time-limited URL; the client fetches the object **directly from storage** without going through the Controller |
+
+**Enabling presigned downloads.** Set `AGENTTEAMS_FS_PUBLIC_ENDPOINT` (Helm: `storage.publicEndpoint`) to a storage origin that is **reachable from your clients** — the host in every returned URL is exactly this value. Point it at the public address of your MinIO/RustFS, typically an Ingress or a dedicated domain fronting the S3 endpoint (e.g. `https://files.example.com`), and make sure that origin serves the same bucket as `AGENTTEAMS_FS_ENDPOINT`. The embedded install does **not** publish the storage port to the host (the Controller container exposes only 8080/8001/8088), so presigning is **disabled by default** there: set `AGENTTEAMS_FS_PUBLIC_ENDPOINT` to a storage origin your browser can actually reach (an extra published port or an ingress), or keep using the streamed GET.
+
+**When no public endpoint is configured**, presigning is disabled and `?presign=1` answers:
+
+```
+501 Not Implemented
+{"error":"presign_unsupported","reason":"storage endpoint is not caller-reachable; set AGENTTEAMS_FS_PUBLIC_ENDPOINT or use the streamed GET"}
+```
+
+Clients should treat this as a capability signal and fall back to the streamed GET on the same path — that mode works regardless of storage reachability.
+
+**Presigned URL semantics.** A returned URL is anonymous (no credentials needed), valid for `AGENTTEAMS_PRESIGN_TTL` (Go duration, default 5 minutes, max 60 minutes), and bound to the public endpoint's host: the S3 V4 signature covers the `Host` header, so fetch the URL exactly as returned — rewriting the hostname (even to an alias of the same host) makes storage reject it with `403 SignatureDoesNotMatch`.
+
+## Human file sync (server half)
+
+1.2.6 ships the **server half** of the per-human file sync protocol (#1414 P3). The controller exposes a per-human sync manifest that a sync client can read and write; **clients drive the sync** — local scanning, byte transfer, and conflict resolution all happen client-side. The server stores the manifest and never merges it.
+
+### What 1.2.6 delivers (server side only)
+
+| Endpoint | Behavior |
+|----------|----------|
+| `GET /api/v1/humans/{name}/sync/manifest` | The stored manifest verbatim, with an `ETag` header. `404` before the first write. |
+| `PUT /api/v1/humans/{name}/sync/manifest` | Conditional writes only: `If-Match <etag>` for updates, `If-None-Match: *` for the first write. |
+| `GET /api/v1/humans/{name}/sync/status` | Entry/tombstone counts, generation, last update. `200` with a zero summary before the first write. |
+
+The manifest is the client's sync state: `entries` maps `files/**` paths to opaque per-file records (the server stores them verbatim, never interprets them), and `tombstones` records files the client deleted. The server validates that the body is version 1, stays inside `files/**` (`memory/`, `digest/`, `.trash/`, `.sync/`, and path traversal are rejected), and is at most 2 MiB, then stores it at `humans/<u>/.sync/manifest.json` in object storage.
+
+**Not included in 1.2.6:** no local directory scan, no file byte transfer, and no client conflict loop. The server provides the state and the conditional write; it does not sync anything by itself.
+
+### Who does the sync
+
+**No sync client ships with 1.2.6 — only the server-side protocol above.** The client side is planned as #1414 P4 (the sync carriers: a host CLI `agt human files sync`, browser presigned upload, and a Matrix small-file fallback for ≤5 MiB), tracked in the F10 optional file sync research. No release timing is committed; until a client lands, any conforming client can use the protocol below directly.
+
+### Conflict semantics (client read-modify-write)
+
+Sync is a client read-modify-write loop against the conditional PUT:
+
+1. `GET …/sync/manifest` → current state + `ETag`.
+2. Compute the merged manifest locally — scan, diff, and the conflict decision are the client's.
+3. `PUT …/sync/manifest` with `If-Match: <etag from step 1>`.
+4. On `412 etag_mismatch` — the manifest changed since the read (the code also covers a manifest that does not exist yet) — re-read from step 1 and merge again. Bound the retries; if the conflict persists, stop and report instead of overwriting.
+5. On `409 manifest_exists` — a first-write race on `If-None-Match: *` — re-read and switch to `If-Match`.
+
+The server never mediates a conflict and returns no merge result: a `412` body carries only the coded error, so the client re-reads for the current state.
+
+`generation` is **server-owned**: every accepted write bumps it under a per-human path lease, so two devices cannot both read the same base and silently lose an update. Client-supplied `generation`, `updatedAt`, and `updatedBy` are ignored and rewritten by the server.
+
+| Condition | Response |
+|-----------|----------|
+| `If-Match` stale, or the manifest does not exist yet | `412 etag_mismatch` |
+| First write (`If-None-Match: *`) but a manifest already exists | `409 manifest_exists` |
+| No conditional header (or both) | `400 conditional_write_required` |
+| Body over 2 MiB | `413 manifest_too_large` |
+| Invalid version, out-of-scope path, malformed tombstone | `400 invalid_manifest` |
+
+### The `file_sync` capability
+
+Granting `spec.capabilities: [file_sync]` to an L2 human only unlocks the three sync endpoints for that human. It is **not a switch that completes bidirectional sync**: without a sync client (P4) the endpoints stay unused, and the files themselves remain governed by the human file area's own access and quota rules. Team identities (team leaders, workers) are never granted the sync surface — sync is per person, not per team.
+
 ## Package URI
 
 Both Workers and Team Workers support custom configuration packages via `spec.package`. Three URI formats are supported:
@@ -648,7 +724,7 @@ Regardless of URI format, the extracted package follows a unified structure:
     "suggested_name": "my-worker",
     "model": "qwen3.5-plus",
     "runtime": "openclaw",
-    "base_image": "agentteams/worker-agent:latest",
+    "base_image": "agentteams/agentteams-harness-openclaw:latest",
     "apt_packages": ["ffmpeg"],
     "pip_packages": [],
     "npm_packages": []

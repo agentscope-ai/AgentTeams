@@ -30,6 +30,7 @@
 
 ## ニュース
 
+- **2026-11-08**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.6) — AgentTeams v1.2.6：Dashboard v1.4.0 と連携し、新しいワークスペース、音声入力、オプションの QwenPaw/Hermes セッショントレースを提供。タスクの一時停止・再開とチームの人間対応事項受信箱を追加し、マルチユーザー権限とモデル利用権限を強化。ランタイム設定、ユーザー専用ファイル領域、S3 互換ストレージ対応を拡充し、実験的な DeepSeek Harness Worker イメージを v0.1.1 に更新。Matrix 連携とアップグレードの信頼性も改善。
 - **2026-10-16**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams v1.2.5：コーディングツールへの委任、Worker 設定管理、QwenPaw ランタイムのインプレースアップグレードを強化し、Dashboard v1.3.1 をデフォルトで同梱。MCP 登録、Matrix メッセージ連携、Worker 復旧に関する複数の問題を修正。
 - **2026-09-20**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4：TeamHarness のタスク状態履歴、進捗トラッキング、完了通知を追加。QwenPaw 2.2.1 と Dashboard v1.2.4.9 にアップグレードし、チーム権限・監査・スキル管理を拡充、実験的な DeepSeek Harness Worker を導入。Worker の状態永続化とインストールの信頼性を改善。
 - **2026-08-22**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3：新しい Controller API、`agt` コマンド、Dashboard v1.2.4 により、長時間実行される Project ワークフローを可視化・制御可能に。監査記録付きの人による介入、Project 履歴、QwenPaw Worker チェックポイントを追加。QwenPaw をローカル Manager / Worker の推奨ランタイムに昇格し、Skill の復旧、Windows での AppService 起動、ランタイムの信頼性を改善。
@@ -195,7 +196,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-各コンポーネントのイメージはランタイムに基づいて自動的に選択されます（Manager: `agentteams-manager` / `agentteams-manager-qwenpaw`、Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-hermes-worker`）。
+各コンポーネントのイメージはランタイムに基づいて自動的に選択されます（Manager: `agentteams-manager` / `agentteams-manager-qwenpaw`、Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-harness-hermes`）。
 
 </details>
 

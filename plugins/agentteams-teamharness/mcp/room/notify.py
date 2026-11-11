@@ -24,6 +24,19 @@ from mcp.common.paths import _task_state_path
 from .matrix import _matrix_room_member_user_ids, _team_human_matrix_ids, _team_leader_matrix_id
 from .mention import MATRIX_ROOM_RE, _matrix_content
 
+# Frozen notification-gap vocabulary. The Matrix core side hosts the
+# same frozen table (core/outcomes.py DROP_REASONS); the shared codes
+# must stay word-for-word identical on both sides and the tests pin
+# the exact strings.
+NOTIFICATION_GAP_REASONS = (
+    "leader_not_in_room",  # the team leader's mxid is not in the task room
+    "human_not_in_room",  # a human team member is not in the task room
+    "no_room_id",  # the task has no room_id, nothing to notify
+    "no_leader_mxid",  # no leader Matrix ID in the runtime config
+    "matrix_env_missing",  # AGENTTEAMS_MATRIX_URL / token missing
+    "room_send_failed",  # homeserver rejected the send or network failed
+)
+
 # Monkeypatch-sensitive (15-name set): resolve at call time so a test patch
 # of server._write_task stays visible to this module's call sites.
 _write_task = refs.proxy("_write_task")
@@ -270,6 +283,7 @@ def _send_task_completion_notification(
     humans: list[str] | None = None,
     event_token: str = "",
     txn_prefix: str = "submit",
+    conclusions: list[str] | None = None,
 ) -> dict[str, Any]:
     """Send the automatic Worker completion notification for submit_task.
 
@@ -292,6 +306,12 @@ def _send_task_completion_notification(
     status, and the recorded event id is reused on an exact retry, so
     the event is sent exactly once (the durable-continuation digest
     fence rejects a resubmission with a changed result).
+
+    When ``conclusions`` (TH-9 completion-report conclusions) is a
+    non-empty list, a ``- Conclusions:`` block (numbered entries, capped
+    at 5 with a pointer to the task meta for the rest) is appended AFTER
+    the status/result/worker lines; an empty or absent list leaves the
+    text byte-identical to the legacy contract.
     """
     homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
     token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "")
@@ -335,6 +355,20 @@ def _send_task_completion_notification(
         # The Result line names the file; keep the short summary preview
         # as the detail line (legacy contract, leader-side prompts read it).
         notification_text += f"\n{summary_preview}"
+    if conclusions:
+        # Conclusions block (TH-9): appended only when non-empty so a
+        # conclusions-less submission keeps the legacy byte-exact text.
+        # The notification caps at 5; the full list stays on the task
+        # meta (the pointer names it).
+        lines = ["- Conclusions:"]
+        for index, conclusion in enumerate(conclusions[:5], 1):
+            lines.append(f"  {index}. {conclusion}")
+        hidden = len(conclusions) - 5
+        if hidden > 0:
+            lines.append(
+                f"  …{hidden} more conclusions in shared/tasks/{task_id}/meta.json"
+            )
+        notification_text += "\n" + "\n".join(lines)
     mentions = [leader]
     for human in humans or []:
         if human and human != leader and human not in mentions:
@@ -396,6 +430,15 @@ def _send_attention_notification(
     mentions the leader and the human members of the team. The
     transaction ID is stable per task, kind and attempt so a retry
     cannot duplicate the event while a new attempt produces a new one.
+
+    Alongside the Matrix result the return carries a delivery receipt:
+    ``recipients[]`` lists the mxids written into this send's
+    ``m.mentions`` (``delivered`` = the mention was written AND the
+    room send succeeded — it is not a read or an answer) and ``gaps[]``
+    records why a recipient could not be reached (NOTIFICATION_GAP_
+    REASONS vocabulary, per-recipient ``error`` attached for failed
+    membership checks). A non-empty ``gaps`` list is not a failure:
+    only ``sent=false`` is.
     """
     homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
     token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "")
@@ -403,13 +446,50 @@ def _send_attention_notification(
         return {
             "sent": False,
             "error": "AGENTTEAMS_MATRIX_URL and AGENTTEAMS_WORKER_MATRIX_TOKEN are required",
+            "recipients": [],
+            "gaps": [{"reason": "matrix_env_missing"}],
         }
 
     matrix_room_id = str(room_id or "").strip()
     if matrix_room_id.startswith("room:"):
         matrix_room_id = matrix_room_id[len("room:") :].strip()
     if not matrix_room_id.startswith("!"):
-        return {"sent": False, "error": f"invalid Matrix room target: {room_id}"}
+        return {
+            "sent": False,
+            "error": f"invalid Matrix room target: {room_id}",
+            "recipients": [],
+            "gaps": [{"reason": "no_room_id"}],
+        }
+
+    # Per-recipient membership check: every human is verified against
+    # the task room; a failed or unverifiable check lands in gaps with
+    # its error and never blocks the leader ping. The mention set is
+    # unchanged from the pre-receipt behavior (all team humans).
+    unique_humans: list[str] = []
+    for human in humans or []:
+        if human and human != leader and human not in unique_humans:
+            unique_humans.append(human)
+    verified_humans: list[str] = []
+    human_gaps: list[dict[str, Any]] = []
+    for human in unique_humans:
+        check = _validate_assignee_membership(matrix_room_id, human)
+        if check.get("ok"):
+            verified_humans.append(human)
+        else:
+            gap: dict[str, Any] = {
+                "recipient": human,
+                "role": "human",
+                "reason": "human_not_in_room",
+            }
+            if check.get("error"):
+                gap["error"] = str(check["error"])[:300]
+            human_gaps.append(gap)
+
+    def _receipt(sent_ok: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        recipients = [{"mxid": leader, "role": "leader", "delivered": sent_ok}]
+        for human in verified_humans:
+            recipients.append({"mxid": human, "role": "human", "delivered": sent_ok})
+        return recipients, list(human_gaps)
 
     question_preview = (question or "")[:500]
     if len(question or "") > 500:
@@ -440,22 +520,41 @@ def _send_attention_notification(
             data = json.loads(response.read().decode("utf-8") or "{}")
         event_id = str(data.get("event_id") or "").strip()
         if not event_id:
-            return {"sent": False, "error": "Matrix send returned no event_id"}
+            error = "Matrix send returned no event_id"
+            recipients, gaps = _receipt(False)
+            gaps.append({"reason": "room_send_failed", "error": error})
+            return {"sent": False, "error": error, "recipients": recipients, "gaps": gaps}
+        recipients, gaps = _receipt(True)
         return {
             "sent": True,
             "eventId": event_id,
             "roomId": matrix_room_id,
             "leader": leader,
             "humans": mentions[1:],
+            "recipients": recipients,
+            "gaps": gaps,
         }
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:200]
+        error = f"Matrix API error: HTTP {exc.code}: {body}"
+        recipients, gaps = _receipt(False)
+        gaps.append({"reason": "room_send_failed", "error": error[:300]})
         return {
             "sent": False,
-            "error": f"Matrix API error: HTTP {exc.code}: {body}",
+            "error": error,
+            "recipients": recipients,
+            "gaps": gaps,
         }
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        return {"sent": False, "error": f"Matrix API error: {exc}"}
+        error = f"Matrix API error: {exc}"
+        recipients, gaps = _receipt(False)
+        gaps.append({"reason": "room_send_failed", "error": error[:300]})
+        return {
+            "sent": False,
+            "error": error,
+            "recipients": recipients,
+            "gaps": gaps,
+        }
 
 
 def _task_completion_notification(
@@ -508,6 +607,16 @@ def _task_completion_notification(
             "skipped": True,
             "error": str(membership.get("error") or "room membership check failed"),
         }
+    # TH-9: the completion report's conclusions persist on the task meta
+    # (digest-excluded); render them in the event when present. A
+    # conclusions-less submission passes an empty list and keeps the
+    # legacy byte-exact text.
+    raw_conclusions = task.get("conclusions")
+    conclusions = [
+        str(item)
+        for item in (raw_conclusions if isinstance(raw_conclusions, list) else [])
+        if str(item or "").strip()
+    ]
     notification = _send_task_completion_notification(
         room_id=room_id,
         task_id=task_id,
@@ -517,6 +626,7 @@ def _task_completion_notification(
         worker=str(task.get("assigned_to") or ""),
         result_path=str(task.get("result_path") or ""),
         humans=_team_human_matrix_ids(),
+        conclusions=conclusions or None,
     )
     if notification.get("sent"):
         # If the persist below fails, the event id is lost but the

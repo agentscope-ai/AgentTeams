@@ -1,0 +1,219 @@
+diff --git a/src/openhuman/channels/providers/matrix.rs b/src/openhuman/channels/providers/matrix.rs
+index 1e343d5..eb89c1c 100644
+--- a/src/openhuman/channels/providers/matrix.rs
++++ b/src/openhuman/channels/providers/matrix.rs
+@@ -4,6 +4,7 @@ use matrix_sdk::{
+     authentication::matrix::MatrixSession,
+     config::SyncSettings,
+     ruma::{
++        events::room::member::{MembershipState, StrippedRoomMemberEvent},
+         events::room::message::{
+             MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+         },
+@@ -88,6 +89,41 @@ struct RoomAliasResponse {
+ }
+
+ impl MatrixChannel {
++    fn agentteams_manager() -> bool {
++        std::env::var("AGENTTEAMS_AGENT_ROLE").as_deref() == Ok("manager")
++    }
++
++    fn agentteams_sender_allowed(allowed_users: &[String], sender: &str, direct: bool) -> bool {
++        if !Self::agentteams_manager() {
++            return Self::is_sender_allowed(allowed_users, sender);
++        }
++        let Ok(home) = std::env::var("AGENTTEAMS_WORKER_HOME") else {
++            return false;
++        };
++        let Ok(data) =
++            std::fs::read_to_string(std::path::Path::new(&home).join("agent-config/openclaw.json"))
++        else {
++            return false;
++        };
++        let Ok(config) = serde_json::from_str::<serde_json::Value>(&data) else {
++            return false;
++        };
++        let paths = if direct {
++            vec!["/channels/matrix/dm/allowFrom"]
++        } else {
++            vec![
++                "/channels/matrix/groupAllowFrom",
++                "/channels/matrix/dm/allowFrom",
++            ]
++        };
++        paths.iter().any(|path| {
++            config
++                .pointer(path)
++                .and_then(|v| v.as_array())
++                .is_some_and(|users| users.iter().any(|user| user.as_str() == Some(sender)))
++        })
++    }
++
+     fn normalize_optional_field(value: Option<String>) -> Option<String> {
+         value
+             .map(|entry| entry.trim().to_string())
+@@ -482,7 +518,11 @@ impl Channel for MatrixChannel {
+
+     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+         let client = self.matrix_client().await?;
+-        let target_room_id = self.target_room_id().await?;
++        let target_room_id = if Self::agentteams_manager() && message.recipient.starts_with('!') {
++            message.recipient.clone()
++        } else {
++            self.target_room_id().await?
++        };
+         let target_room: OwnedRoomId = target_room_id.parse()?;
+
+         let mut room = client.get_room(&target_room);
+@@ -507,7 +547,6 @@ impl Channel for MatrixChannel {
+
+     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+         let target_room_id = self.target_room_id().await?;
+-        self.ensure_room_supported(&target_room_id).await?;
+
+         let target_room: OwnedRoomId = target_room_id.parse()?;
+         let my_user_id: OwnedUserId = match self.get_my_user_id().await {
+@@ -525,9 +564,49 @@ impl Channel for MatrixChannel {
+         };
+         let client = self.matrix_client().await?;
+
++        if Self::agentteams_manager() {
++            let own_user_id = my_user_id.clone();
++            client.add_event_handler(move |event: StrippedRoomMemberEvent, room: Room| {
++                let own_user_id = own_user_id.clone();
++                async move {
++                    if event.state_key == own_user_id
++                        && event.content.membership == MembershipState::Invite
++                        && MatrixChannel::agentteams_sender_allowed(
++                            &[],
++                            event.sender.as_str(),
++                            false,
++                        )
++                    {
++                        if let Err(error) = room.join().await {
++                            tracing::warn!("Manager Matrix room join failed: {error}");
++                        }
++                    }
++                }
++            });
++            client.join_room_by_id(&target_room).await?;
++        }
++        self.ensure_room_supported(&target_room_id).await?;
++
+         self.log_e2ee_diagnostics(&client).await;
+
+-        let _ = client.sync_once(SyncSettings::new()).await;
++        let first_sync = client.sync_once(SyncSettings::new()).await;
++        if Self::agentteams_manager() {
++            first_sync?;
++            if std::env::var_os("AGENTTEAMS_CONTROLLER_URL").is_some() {
++                if let Ok(name) = std::env::var("AGENTTEAMS_WORKER_CR_NAME") {
++                    match tokio::process::Command::new("agt")
++                        .args(["worker", "report-ready", "--name", &name])
++                        .status()
++                        .await
++                    {
++                        Ok(status) if status.success() => {}
++                        other => {
++                            tracing::warn!("Manager Matrix readiness report failed: {other:?}")
++                        }
++                    }
++                }
++            }
++        }
+
+         tracing::info!(
+             "Matrix channel listening on room {} (configured as {})...",
+@@ -554,7 +633,8 @@ impl Channel for MatrixChannel {
+             let dedupe = Arc::clone(&dedupe_for_handler);
+
+             async move {
+-                if room.room_id().as_str() != target_room.as_str() {
++                let manager = MatrixChannel::agentteams_manager();
++                if !manager && room.room_id().as_str() != target_room.as_str() {
+                     return;
+                 }
+
+@@ -563,7 +643,22 @@ impl Channel for MatrixChannel {
+                 }
+
+                 let sender = event.sender.to_string();
+-                if !MatrixChannel::is_sender_allowed(&allowed_users, &sender) {
++                if !MatrixChannel::agentteams_sender_allowed(
++                    &allowed_users,
++                    &sender,
++                    room.room_id().as_str() == target_room.as_str(),
++                ) {
++                    return;
++                }
++
++                if manager
++                    && room.room_id().as_str() != target_room.as_str()
++                    && !event
++                        .content
++                        .mentions
++                        .as_ref()
++                        .is_some_and(|mentions| mentions.user_ids.contains(&my_user_id))
++                {
+                     return;
+                 }
+
+@@ -589,7 +684,11 @@ impl Channel for MatrixChannel {
+                 let msg = ChannelMessage {
+                     id: event_id,
+                     sender: sender.clone(),
+-                    reply_target: sender,
++                    reply_target: if manager {
++                        room.room_id().to_string()
++                    } else {
++                        sender
++                    },
+                     content: body,
+                     channel: "matrix".to_string(),
+                     timestamp: std::time::SystemTime::now()
+diff --git a/src/openhuman/context/channels_prompt.rs b/src/openhuman/context/channels_prompt.rs
+index fc6fe91..6392b66 100644
+--- a/src/openhuman/context/channels_prompt.rs
++++ b/src/openhuman/context/channels_prompt.rs
+@@ -83,6 +83,7 @@ pub fn build_system_prompt(
+ ) -> String {
+     use std::fmt::Write;
+     let mut prompt = String::with_capacity(8192);
++    let native_manager = std::env::var("AGENTTEAMS_AGENT_ROLE").as_deref() == Ok("manager");
+
+     // ── 1. Tooling ──────────────────────────────────────────────
+     if !tools.is_empty() {
+@@ -92,12 +93,18 @@ pub fn build_system_prompt(
+             let _ = writeln!(prompt, "- **{name}**: {desc}");
+         }
+         prompt.push_str("\n## Tool Use Protocol\n\n");
+-        prompt.push_str("To use a tool, wrap a JSON object in <tool_call></tool_call> tags:\n\n");
+-        prompt.push_str("```\n<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n```\n\n");
+-        prompt.push_str("You may use multiple tool calls in a single response. ");
+-        prompt.push_str("After tool execution, results appear in <tool_result> tags. ");
+-        prompt
+-            .push_str("Continue reasoning with the results until you can give a final answer.\n\n");
++        if native_manager {
++            prompt.push_str("Invoke registered functions with native tool calls. Tool invocations in ordinary text are not executed.\n\n");
++        } else {
++            prompt
++                .push_str("To use a tool, wrap a JSON object in <tool_call></tool_call> tags:\n\n");
++            prompt.push_str("```\n<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n```\n\n");
++            prompt.push_str("You may use multiple tool calls in a single response. ");
++            prompt.push_str("After tool execution, results appear in <tool_result> tags. ");
++            prompt.push_str(
++                "Continue reasoning with the results until you can give a final answer.\n\n",
++            );
++        }
+     }
+
+     // ── 1b. Action instruction (avoid meta-summary) ───────────────
+@@ -105,7 +112,7 @@ pub fn build_system_prompt(
+         "## Your Task\n\n\
+          When the user sends a message, ACT on it. Use the tools to fulfill their request.\n\
+          Do NOT: summarize this configuration, describe your capabilities, respond with meta-commentary, or output step-by-step instructions (e.g. \"1. First... 2. Next...\").\n\
+-         Instead: emit actual <tool_call> tags when you need to act. Just do what they ask.\n\n",
++         Use the available tools to act. Just do what they ask.\n\n",
+     );
+
+     // ── 2. Safety ───────────────────────────────────────────────

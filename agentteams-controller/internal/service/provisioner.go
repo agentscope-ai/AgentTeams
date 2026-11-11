@@ -605,6 +605,16 @@ func (p *Provisioner) ensureMatrixToken(ctx context.Context, matrixUsername stri
 // worker/manager, bypassing the cache. Called when the caller reports a 401
 // from the homeserver. Persists the new token to the credential store.
 func (p *Provisioner) ForceRefreshMatrixToken(ctx context.Context, name string) (*RefreshResult, error) {
+	return p.forceRefreshMatrixToken(ctx, name, name)
+}
+
+// ForceRefreshManagerMatrixToken preserves the Manager CR credential owner
+// while logging in as its stable Matrix runtime identity.
+func (p *Provisioner) ForceRefreshManagerMatrixToken(ctx context.Context, name string) (*RefreshResult, error) {
+	return p.forceRefreshMatrixToken(ctx, name, "manager")
+}
+
+func (p *Provisioner) forceRefreshMatrixToken(ctx context.Context, name, matrixUsername string) (*RefreshResult, error) {
 	creds, err := p.creds.Load(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("load credentials for %s: %w", name, err)
@@ -618,9 +628,9 @@ func (p *Provisioner) ForceRefreshMatrixToken(ctx context.Context, name string) 
 
 	var tok string
 	if p.MatrixAppServiceEnabled() {
-		tok, err = p.matrix.LoginAppServiceUser(ctx, name)
+		tok, err = p.matrix.LoginAppServiceUser(ctx, matrixUsername)
 	} else {
-		tok, err = p.matrix.Login(ctx, name, creds.MatrixPassword)
+		tok, err = p.matrix.Login(ctx, matrixUsername, creds.MatrixPassword)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("re-login for %s: %w", name, err)
@@ -834,10 +844,15 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		if err := p.matrix.JoinRoom(ctx, teamRoom.RoomID, req.TeamAdminActorToken); err != nil {
 			return nil, fmt.Errorf("team admin join team room: %w", err)
 		}
+		if !teamRoom.Created {
+			if err := p.ensureExistingRoomTeamAdminPower(ctx, teamRoom.RoomID, teamAdminID, req); err != nil {
+				return nil, err
+			}
+		}
 		if err := p.ReconcileRoomMembershipWithActorToken(ctx, teamRoom.RoomID, teamDesired, req.TeamAdminActorToken, req.TeamAdminActorName); err != nil {
 			return nil, fmt.Errorf("reconcile team room membership as team admin: %w", err)
 		}
-		if teamAdminID != adminMatrixID {
+		if teamAdminID != adminMatrixID && !containsString(teamDesired, adminMatrixID) {
 			if present, _, err := p.observedRoomMembershipWithToken(ctx, teamRoom.RoomID, adminMatrixID, req.TeamAdminActorToken); err != nil {
 				return nil, fmt.Errorf("check global admin team room membership: %w", err)
 			} else if present {
@@ -889,6 +904,11 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		if err := p.ensureTeamAdminJoinedLeaderDM(ctx, leaderDMRoom.RoomID, teamAdminID, req.TeamAdminActorToken, req.LeaderCredentialName, req.LeaderName, req.TeamName, leaderDMRoom.Created); err != nil {
 			return nil, err
 		}
+		if !leaderDMRoom.Created {
+			if err := p.ensureExistingRoomTeamAdminPower(ctx, leaderDMRoom.RoomID, teamAdminID, req); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	leaderDMInviteToken := ""
@@ -926,6 +946,29 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		TeamRoomID:     teamRoom.RoomID,
 		LeaderDMRoomID: leaderDMRoom.RoomID,
 	}, nil
+}
+
+// Alias resolution does not apply CreateRoom's power-level overrides to an
+// existing room. Use its leader to grant the configured admin power before
+// switching membership and metadata writes to the new admin's token.
+func (p *Provisioner) ensureExistingRoomTeamAdminPower(ctx context.Context, roomID, teamAdminID string, req TeamRoomRequest) error {
+	state, err := p.matrix.GetRoomState(ctx, roomID, "m.room.power_levels", "", req.TeamAdminActorToken)
+	if err != nil {
+		return fmt.Errorf("read team admin power in %s: %w", roomID, err)
+	}
+	if users, ok := state["users"].(map[string]interface{}); ok {
+		if level, ok := users[teamAdminID].(float64); ok && level >= 100 {
+			return nil
+		}
+	}
+	token, err := p.leaderInviteToken(ctx, req.LeaderCredentialName, req.LeaderName, req.TeamName)
+	if err != nil {
+		return fmt.Errorf("load leader token to grant team admin power: %w", err)
+	}
+	if err := p.matrix.JoinRoom(ctx, roomID, token); err != nil {
+		return fmt.Errorf("leader join room to grant team admin power: %w", err)
+	}
+	return p.EnsureRoomPowerLevel(ctx, roomID, teamAdminID, 100, token, "")
 }
 
 func (p *Provisioner) ensureTeamAdminJoinedLeaderDM(ctx context.Context, roomID, teamAdminID, teamAdminToken, leaderCredentialName, leaderName, teamName string, created bool) error {
@@ -1629,12 +1672,15 @@ const llmAuthProbePromptTemplate = `{"model":%q,"messages":[{"role":"user","cont
 // so unit tests and bring-your-own-gateway deploys (where the
 // controller doesn't know the data-plane URL or the model) do not
 // stall the welcome forever.
-func (p *Provisioner) IsManagerLLMAuthReady(ctx context.Context, gatewayKey string) (bool, error) {
-	if p.aiGatewayURL == "" || p.managerModel == "" || gatewayKey == "" {
+func (p *Provisioner) IsManagerLLMAuthReady(ctx context.Context, gatewayKey, model string) (bool, error) {
+	if model == "" {
+		model = p.managerModel
+	}
+	if p.aiGatewayURL == "" || model == "" || gatewayKey == "" {
 		return true, nil
 	}
 	url := strings.TrimRight(p.aiGatewayURL, "/") + "/v1/chat/completions"
-	body := fmt.Sprintf(llmAuthProbePromptTemplate, p.managerModel)
+	body := fmt.Sprintf(llmAuthProbePromptTemplate, model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
 		return false, fmt.Errorf("welcome: build llm probe: %w", err)
@@ -1657,7 +1703,7 @@ func (p *Provisioner) IsManagerLLMAuthReady(ctx context.Context, gatewayKey stri
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return false, nil
 	default:
-		return false, fmt.Errorf("welcome: llm probe %s returned HTTP %d (model=%q)", url, resp.StatusCode, p.managerModel)
+		return false, fmt.Errorf("welcome: llm probe %s returned HTTP %d (model=%q)", url, resp.StatusCode, model)
 	}
 }
 
@@ -1842,6 +1888,15 @@ func (p *Provisioner) WorkerGatewayKey(ctx context.Context, name string) (string
 	creds, err := p.loadWorkerCredentials(ctx, name)
 	if err != nil || creds == nil || creds.GatewayKey == "" {
 		return "", fmt.Errorf("worker gateway credentials unavailable")
+	}
+	return creds.GatewayKey, nil
+}
+
+// ManagerGatewayKey reads the saved Manager identity for server-side probes.
+func (p *Provisioner) ManagerGatewayKey(ctx context.Context, name string) (string, error) {
+	creds, err := p.creds.Load(ctx, name)
+	if err != nil || creds == nil || creds.GatewayKey == "" {
+		return "", fmt.Errorf("manager gateway credentials unavailable")
 	}
 	return creds.GatewayKey, nil
 }

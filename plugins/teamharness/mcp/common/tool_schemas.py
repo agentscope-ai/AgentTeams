@@ -1,4 +1,4 @@
-# TOOL_SCHEMAS registration table for the 7 MCP tools (W1-a2: real module)
+# TOOL_SCHEMAS registration table for the 8 MCP tools (W1-a2: real module)
 from __future__ import annotations
 
 from typing import Any
@@ -491,6 +491,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "cancel_task",
                         "report_progress",
                         "request_attention",
+                        "review_task",
                     ],
                     "description": (
                         "Task lifecycle operation. report_progress records a "
@@ -500,7 +501,22 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "escalation / other) out of the group chat while the task "
                         "is still in flight. Pass payload.resolved=true to close "
                         "the open record of that kind (no new ping); the call is "
-                        "rejected when no record of that kind exists."
+                        "rejected when no record of that kind exists. "
+                        "review_task records a critic/leader review (verdict: "
+                        "pass / fail, optional note and scorecard) on a "
+                        "submitted task; the reviewer must differ from the "
+                        "submitting identity. With the protocol.enforce switch "
+                        "on, delegate_task requires payload.decisionClass "
+                        "(r1..r6) and unanswered attention re-requests stall "
+                        "the task (2 -> decision_status blocked, 3 -> frozen; "
+                        "only a resolved approval record unfreezes a frozen "
+                        "task). Operator contract: closing a kind=approval "
+                        "record (and unfreezing a frozen task) requires a "
+                        "trusted human runtime role (AGENTTEAMS_AGENT_ROLE=human "
+                        "or member.role=human in the runtime config); a caller "
+                        "without a trusted role is denied by design — payload "
+                        "role / channel / decider / evidence strings are "
+                        "provenance, never authority."
                     ),
                 },
                 "projectId": {
@@ -536,6 +552,19 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "description": "Shared deliverable paths included in submit_task.",
                     "items": {"type": "string"},
                 },
+                "conclusions": {
+                    "type": "array",
+                    "description": (
+                        "Completion-report conclusions for submit_task: 3-5 "
+                        "short one-line strings (what was done, verified, or "
+                        "left open). Fewer than 3 warns by default and is "
+                        "rejected when AGENTTEAMS_TASK_CONCLUSIONS_STRICT is "
+                        "on; more than 5 are all recorded on the task meta, "
+                        "but the completion event shows the first 5 with a "
+                        "pointer to shared/tasks/{taskId}/meta.json."
+                    ),
+                    "items": {"type": "string"},
+                },
                 "reason": {
                     "type": "string",
                     "description": "Required cancellation reason for cancel_task.",
@@ -548,9 +577,42 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "Worker Matrix id or stable member name assigned to delegate_task.",
                 },
+                "decisionClass": {
+                    "type": "string",
+                    "description": "Delegate_task decision class r1..r6 (contracts/decision-classes.json); required while the protocol.enforce switch is on.",
+                },
                 "workspaceDir": {
                     "type": "string",
                     "description": "Runtime workspace containing shared/tasks.",
+                },
+            },
+            "additionalProperties": True,
+        },
+    },
+    "build_review_context": {
+        "description": (
+            "Assemble the review context for one task: exactly two ref "
+            "classes — S2 signal refs (the closed SIG-* event types "
+            "emitted for this task, read from the local events mirror) "
+            "and artifact refs (the task's deliverables and result_path). "
+            "Group history and chat noise are never included; a task with "
+            "no refs returns an empty set, not an error. Read-only and "
+            "local: this tool never contacts Matrix."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "taskId": {
+                    "type": "string",
+                    "description": "Safe task id used under shared/tasks/{taskId}.",
+                },
+                "team": {
+                    "type": "string",
+                    "description": "Team whose S2 event stream to read (default: the current runtime team).",
+                },
+                "workspaceDir": {
+                    "type": "string",
+                    "description": "Runtime workspace containing shared/; usually inferred.",
                 },
             },
             "additionalProperties": True,

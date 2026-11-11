@@ -19,6 +19,7 @@ abort("missing qwenpaw adapter: #{adapter_root}") unless adapter_root.directory?
 
 manifest = YAML.load_file(manifest_path)
 name = manifest.fetch("metadata").fetch("name")
+plugin_id = YAML.load_file(adapter_root / "plugin.json").fetch("id")
 version = manifest.fetch("metadata").fetch("version")
 package_name = "#{name}-qwenpaw-#{version}"
 
@@ -78,7 +79,7 @@ stable_zip = out_dir / "agentteams-teamharness-qwenpaw.zip"
 
 Dir.mktmpdir("teamharness-qwenpaw-") do |tmp|
   tmp_root = Pathname.new(tmp)
-  staging = tmp_root / package_name
+  staging = tmp_root / plugin_id
   asset_dir = staging / "teamharness"
   staging.mkpath
   asset_dir.mkpath
@@ -100,6 +101,8 @@ Dir.mktmpdir("teamharness-qwenpaw-") do |tmp|
   end
 
   copy_entry(adapter_root, staging, "plugin.py")
+  # QwenPaw registers one skill root per plugin; Managers use skills/manager.
+  FileUtils.cp_r(plugin_root / "skills/agent/task-diagnosis", asset_dir / "skills/manager")
   copy_entry(adapter_root, staging, "task_trace.py")
 
   qwenpaw_manifest = {
@@ -139,7 +142,7 @@ Dir.mktmpdir("teamharness-qwenpaw-") do |tmp|
   validate = adapter_root / "scripts/validate-qwenpaw-plugin.rb"
   system("ruby", validate.to_s, staging.to_s) || abort("qwenpaw plugin validation failed")
 
-  zip_dir(tmp_root, package_name, out_zip)
+  zip_dir(tmp_root, plugin_id, out_zip)
   FileUtils.cp(out_zip, stable_zip)
 end
 

@@ -3,6 +3,9 @@ name: Check Node Pins
 on:
   pull_request:
     paths:
+      - 'hermes'
+      - 'worker'
+      - '.gitmodules'
       - '**/Dockerfile'
       - '**/Dockerfile.*'
       - 'hack/mirror-images.sh'
@@ -20,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Verify Node 24.22.1 pins
         run: bash hack/check-node-pins.sh

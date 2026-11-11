@@ -15,6 +15,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credprovider"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/executor"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
@@ -32,6 +33,7 @@ type WorkerDeployRequest struct {
 	HumanMatrixIDs         []string
 	ReconcileChannelPolicy bool
 	Name                   string
+	PersonalRoomID         string
 	Spec                   v1beta1.WorkerSpec
 	// SubagentModel is the resolved subagent model for this worker
 	// (explicit spec value or the team default, resolved by the caller).
@@ -361,9 +363,11 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
 		WorkerName:        req.Name,
+		PersonalRoomID:    req.PersonalRoomID,
 		MatrixToken:       req.MatrixToken,
 		GatewayKey:        req.GatewayKey,
 		ModelName:         req.Spec.Model,
+		ModelProvider:     req.Spec.ModelProvider,
 		SubagentModelName: resolvedSubagentModel(req),
 		AIGatewayURL:      req.AIGatewayURL,
 		TeamLeaderName:    req.TeamLeaderName,
@@ -794,7 +798,10 @@ func (d *Deployer) InjectChannelPolicy(ctx context.Context, req InjectChannelPol
 		return nil
 	}
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
-	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	existing, err := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
+	if err != nil {
+		return fmt.Errorf("read existing Worker channel config: %w", err)
+	}
 	updated := agentconfig.InjectChannelPolicy(existing, req.GroupAllowFrom, req.DMAllowFrom)
 	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
 }
@@ -1530,11 +1537,30 @@ func (d *Deployer) ensureDirectoryObject(ctx context.Context, key string) error 
 	return d.oss.PutObject(ctx, key+".agentteams-keep", []byte(""))
 }
 
+// EnsureHumanStorage creates the per-human file area (#1414 P1) under
+// humans/<username>/: a files/ directory (the human's working files,
+// served by the human-file API) and a .trash/ directory (soft-deleted
+// files). Idempotent — marker objects are re-put on every reconcile.
+// memory/ and digest/ are deliberately NOT created in P1.
+func (d *Deployer) EnsureHumanStorage(ctx context.Context, human *v1beta1.Human) error {
+	username := human.Spec.EffectiveUsername(human.Name)
+	prefix := fmt.Sprintf("humans/%s/", username)
+	for _, subdir := range []string{"files/", ".trash/"} {
+		if err := d.oss.PutObject(ctx, prefix+subdir+".keep", []byte("")); err != nil {
+			return fmt.Errorf("create %s%s: %w", prefix, subdir, err)
+		}
+	}
+	return nil
+}
+
 // --- Manager Config Deployment ---
 
 // ManagerDeployRequest describes a Manager config deployment (create or update).
 type ManagerDeployRequest struct {
 	Name           string
+	Generation     int64
+	MatrixUserID   string
+	RoomID         string
 	Spec           v1beta1.ManagerSpec
 	MatrixToken    string
 	GatewayKey     string
@@ -1551,11 +1577,17 @@ type ManagerDeployRequest struct {
 }
 
 // DeployManagerConfig generates and pushes Manager configuration files to OSS.
-// Unlike Worker, AGENTS.md and builtin skills are managed by the Manager container
-// itself (via upgrade-builtins.sh), so we only push runtime-generated files.
+// Role identity is shared across Harnesses. Legacy adapters also receive their
+// native config projection and the common Manager prompt/skills.
 func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployRequest) error {
+	if req.Spec.Runtime == "qwenpaw" || req.Spec.Runtime == "copaw" {
+		req.Spec.Runtime = "qwenpaw"
+	}
+	if backend.UsesMemberRuntimeConfig(req.Spec.Runtime) {
+		return d.deployManagerRuntimeConfig(ctx, req)
+	}
 	logger := log.FromContext(ctx)
-	agentPrefix := fmt.Sprintf("agents/%s", req.Name)
+	agentPrefix := "agents/manager"
 
 	// --- openclaw.json ---
 	// Manager's Matrix username is always "manager" regardless of the Manager
@@ -1565,12 +1597,13 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 	// silently never sees admin messages. See commit 3f8f84b which fixed this
 	// originally before the controller refactor accidentally reverted it.
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
-		WorkerName:   "manager",
-		MatrixToken:  req.MatrixToken,
-		GatewayKey:   req.GatewayKey,
-		ModelName:    req.Spec.Model,
-		AIGatewayURL: req.AIGatewayURL,
-		Runtime:      req.Spec.Runtime,
+		WorkerName:    "manager",
+		MatrixToken:   req.MatrixToken,
+		GatewayKey:    req.GatewayKey,
+		ModelName:     req.Spec.Model,
+		ModelProvider: req.Spec.ModelProvider,
+		AIGatewayURL:  req.AIGatewayURL,
+		Runtime:       req.Spec.Runtime,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)
@@ -1595,12 +1628,27 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 		}
 	}
 
-	// --- AGENTS.md: inline > external ref ---
 	agentsContent := req.Spec.Agents
-	if agentsContent != "" {
-		if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(agentsContent)); err != nil {
-			logger.Error(err, "AGENTS.md push failed (non-fatal)")
+	if agentsContent == "" && req.Spec.Package != "" {
+		if content, err := d.oss.GetObject(ctx, agentPrefix+"/AGENTS.md"); err == nil {
+			agentsContent = string(content)
+		} else if !os.IsNotExist(err) {
+			return err
 		}
+	}
+	if err := d.prepareAndPushAgentsMD(ctx, "manager", agentPrefix, "manager", req.Spec.Runtime, "", "", "", nil, agentsContent); err != nil {
+		return err
+	}
+	if _, err := d.oss.GetObject(ctx, agentPrefix+"/SOUL.md"); os.IsNotExist(err) {
+		if err := d.oss.PutObject(ctx, agentPrefix+"/SOUL.md", []byte("You coordinate resources and teams for your administrator.\n")); err != nil {
+			return err
+		}
+	}
+	if err := d.pushBuiltinSkills(ctx, "manager", agentPrefix, "manager", req.Spec.Runtime); err != nil {
+		return err
+	}
+	if err := d.pushBuiltinTopLevelFiles(ctx, "manager", agentPrefix, "manager", req.Spec.Runtime); err != nil {
+		return err
 	}
 
 	// --- mcporter-servers.json ---
@@ -1631,7 +1679,7 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 		}
 	}
 
-	return nil
+	return d.deployManagerRuntimeConfig(ctx, req)
 }
 
 // --- Internal helpers ---
@@ -1684,6 +1732,11 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 			logger.Info("AGENTS.md package/OSS source loaded", "worker", workerName, "key", agentPrefix+"/AGENTS.md", "bytes", len(existing), "hasBuiltinMarkers", strings.Contains(string(existing), "<!-- agentteams-builtin-start -->"))
 		}
 		content = string(existing)
+		// Old Manager builtins can name a different Harness's CLI. Replace
+		// those instructions while preserving custom text outside marked builtins.
+		if role == "manager" && !strings.Contains(content, "<!-- agentteams-builtin-end -->") {
+			content = ""
+		}
 	}
 	logger.Info("AGENTS.md source selected", "worker", workerName, "source", source, "bytes", len(content), "hasBuiltinMarkers", strings.Contains(content, "<!-- agentteams-builtin-start -->"))
 	if len(builtinContent) > 0 {
@@ -1694,7 +1747,7 @@ func (d *Deployer) prepareAndPushAgentsMD(ctx context.Context, workerName, agent
 
 	// Team leaders get their coordination context from TeamReconciler.InjectCoordinationContext
 	// which has the full context (room IDs, worker list). Skip here to avoid overwriting.
-	if role != "team_leader" {
+	if role != "team_leader" && role != "manager" {
 		if role == "standalone" && hasTeamContext(content) {
 			logger.Info("AGENTS.md team coordination context preserved", "worker", workerName, "role", role, "reason", "worker is likely referenced by a Team-reference Team")
 			if err := d.oss.PutObject(ctx, agentPrefix+"/AGENTS.md", []byte(content)); err != nil {

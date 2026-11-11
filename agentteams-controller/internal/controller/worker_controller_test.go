@@ -230,7 +230,7 @@ func (g *workerTestGateway) UnexposePort(context.Context, gateway.PortExposeRequ
 func (g *workerTestGateway) EnsureServiceSource(context.Context, string, string, int, string) error {
 	return nil
 }
-func (g *workerTestGateway) EnsureStaticServiceSource(context.Context, string, string, int) error {
+func (g *workerTestGateway) EnsureStaticServiceSource(context.Context, string, string, int, string) error {
 	return nil
 }
 func (g *workerTestGateway) EnsureRoute(context.Context, string, []string, string, int, string) error {
@@ -2393,6 +2393,9 @@ func TestWorkerReconcileConfigOnlyUpdateWritesOSSConfigWithoutRecreate(t *testin
 		t.Fatalf("updated worker config calls=%d, want 1", got)
 	}
 	updatedConfig := rig.deployer.Calls.DeployWorkerConfig[0]
+	if updatedConfig.PersonalRoomID == "" || updatedConfig.PersonalRoomID != out.Status.RoomID {
+		t.Fatalf("dedicated room not passed to config: got %q, want %q", updatedConfig.PersonalRoomID, out.Status.RoomID)
+	}
 	if updatedConfig.Spec.Model != "qwen-max" {
 		t.Fatalf("updated model=%q, want qwen-max", updatedConfig.Spec.Model)
 	}

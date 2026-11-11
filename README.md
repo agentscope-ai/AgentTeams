@@ -31,6 +31,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 ## News
 
+- **2026-11-08**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.6) — AgentTeams v1.2.6: pairs with Dashboard v1.4.0 for a refreshed workspace, voice input, and optional QwenPaw/Hermes session tracing; adds task pause/resume controls and a team attention inbox; strengthens multi-user permissions and model grants; expands runtime configuration, human file areas, and S3-compatible storage; updates the experimental DeepSeek Harness Worker image to v0.1.1; and improves Matrix collaboration and upgrade reliability.
 - **2026-10-16**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams v1.2.5: strengthens coding-tool delegation, Worker configuration management, and in-place QwenPaw runtime upgrades; ships with Dashboard v1.3.1 by default; and fixes multiple issues in MCP registration, Matrix message collaboration, and Worker recovery.
 - **2026-09-20**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4: adds TeamHarness task state history, progress tracking, and completion notifications; upgrades to QwenPaw 2.2.1 and Dashboard v1.2.4.9; expands team permissions, auditing, and skill management; introduces the experimental DeepSeek Harness Worker; and improves Worker state persistence and installation reliability.
 - **2026-08-22**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.3) — AgentTeams v1.2.3: makes long-running Project workflows visible and controllable through new Controller APIs, `agt` commands, and Dashboard v1.2.4; adds audited human interventions, Project history, and QwenPaw Worker checkpoints; promotes QwenPaw as the recommended local Manager and Worker runtime; and improves Skill recovery, Windows AppService startup, and runtime reliability.
@@ -63,7 +64,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 ## Quick Start
 
-**Prerequisites**: Docker Desktop (Windows/macOS) or Docker Engine (Linux).
+**Prerequisites**: OrbStack, Docker Desktop, Docker Engine, or compatible Podman. If no engine is ready, the installer guides you to install/start one and waits before continuing.
 
 **Resources**: 2 CPU cores + 4 GB RAM minimum. For multiple Workers, 4 cores + 8 GB recommended.
 
@@ -79,21 +80,21 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
 ```
 
-The installer walks you through:
-1. Choose your LLM provider (OpenAI-compatible APIs supported)
-2. Enter your API key
-3. Select network mode (local-only or external access)
-4. Wait for setup to complete
+The default command starts the local services and Dashboard without configuration questions. API keys, embedding and Worker runtimes can be configured later. For the interactive setup, add `--manual` (PowerShell: `-Manual`).
 
 ### Access
 
-Open http://127.0.0.1:18088 in your browser and log in to Element Web. The Manager will greet you and explain how to create your first Worker.
+Dashboard opens automatically at http://127.0.0.1:13000 with `admin` prefilled and the generated password copied to your clipboard. Paste the password and sign in; if the browser or clipboard is unavailable, use the address and credentials printed in the terminal.
+
+If no model is configured, use the Manager conversation's configuration link to open model management, enter your API key and choose a model. An exported `AGENTTEAMS_LLM_API_KEY` is preserved. Ask the Manager to create your first Worker and choose its runtime then; Worker images download on demand. See the [quickstart](docs/quickstart.md) for details.
 
 **Mobile**: Use any Matrix client (Element, FluffyChat) and connect to your server address.
 
 **That's it.** No bot applications. No external services. Your AI team runs entirely on your machine.
 
 ## Upgrade
+
+Run the same command again and confirm once to keep the original accounts, model settings, data and workspaces. Images are prepared before services are replaced, and the original configuration is backed up. See [upgrade instructions](install/README.md#upgrade-an-existing-local-installation) for recovery and database backup/rollback options.
 
 ```bash
 # Upgrade to latest (preserves all data)
@@ -438,6 +439,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 | [docs/usage/worker-guide.md](docs/usage/worker-guide.md) | Worker deployment |
 | [docs/usage/single-and-multi-user.md](docs/usage/single-and-multi-user.md) | One deployment for one person or many: roles, permission levels, and what changes when you add people (also available in [中文](docs/zh-cn/usage/single-and-multi-user.md)) |
 | [docs/usage/project-workflow-api.md](docs/usage/project-workflow-api.md) | Project / workflow inspection API (also available in [中文](docs/zh-cn/usage/project-workflow-api.md)) |
+| [docs/usage/module-update.md](docs/usage/module-update.md) | Module update & distribution: Millforge channels, release index, and the three install planes (also available in [中文](docs/zh-cn/usage/module-update.md)) |
 | [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) (also available in [中文](docs/zh-cn/usage/higress-gateway-api.md)) |
 | [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev (also available in [中文](docs/zh-cn/usage/development.md)) |
 

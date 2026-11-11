@@ -23,6 +23,32 @@ grep -q 'name: agentteams-controller' "${render}"
 grep -q 'app.kubernetes.io/name: agentteams' "${render}"
 
 echo "PASS: AgentTeams Helm release renders canonical resource names"
+grep -qF -- 'value: "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"' "${render}"
+
+# Old releases using --reuse-values can omit the new Codex map. Null removes
+# the chart default so this render exercises the same missing-map boundary.
+helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set worker.defaultImage.codex=null > "${upg_render}"
+if grep -qF -- "- name: AGENTTEAMS_CODEX_WORKER_IMAGE" "${upg_render}"; then
+    echo "FAIL: old values without Codex must not inject a Codex image"
+    exit 1
+fi
+echo "PASS: old values without a Codex map remain renderable"
+
+helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set worker.defaultImage.codex.repository=example.test/codex \
+    --set worker.defaultImage.codex.tag=v0.1.0 > "${upg_render}"
+grep -qF -- "- name: AGENTTEAMS_CODEX_WORKER_IMAGE" "${upg_render}"
+grep -qF -- 'value: "example.test/codex:v0.1.0"' "${upg_render}"
+if helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set worker.defaultImage.codex.repository=example.test/codex \
+    --set worker.defaultImage.codex.tag= \
+    --set global.imageTag=v9.9.9 > /dev/null 2> "${drift_err}"; then
+    echo "FAIL: Codex image requires its independent tag"
+    exit 1
+fi
+grep -qF "worker.defaultImage.codex.tag is required" "${drift_err}"
+echo "PASS: Codex has a default image and requires its independent tag"
 
 # ---------------------------------------------------------------------------
 # Legacy CoPaw worker image (issue #1310 / PR #1335)

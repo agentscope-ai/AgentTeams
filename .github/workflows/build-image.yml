@@ -36,6 +36,10 @@ jobs:
         run: |
           case "$TARGET" in
             openclaw-base|agentteams-controller) image="$TARGET" ;;
+            worker) image="agentteams-harness-openclaw" ;;
+            qwenpaw-worker) image="agentteams-harness-qwenpaw" ;;
+            hermes-worker) image="agentteams-harness-hermes" ;;
+            openhuman-worker) image="agentteams-harness-openhuman" ;;
             *) image="agentteams-${TARGET}" ;;
           esac
           ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
@@ -86,6 +90,8 @@ jobs:
           swap-storage: true
 
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
         if: steps.existing.outputs.ready != 'true'
       - uses: docker/setup-qemu-action@v3
         if: steps.existing.outputs.ready != 'true'
@@ -98,7 +104,7 @@ jobs:
           # The caller has already published the Controller dependency.
           # Preserve Makefile dependencies for local builds, but do not rebuild it here.
           args=()
-          if [[ "$TARGET" == embedded || "$TARGET" == manager ]]; then
+          if [[ "$TARGET" != agentteams-controller ]]; then
             args+=(-o push-agentteams-controller)
           fi
           make "${args[@]}" "push-${TARGET}" \

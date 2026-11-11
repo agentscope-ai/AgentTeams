@@ -47,15 +47,16 @@ import (
 // Response schema is aligned with LangGraph Graph.to_json() / StateSnapshot
 // (MIT License, © LangChain, Inc.) — see the workflow API design doc.
 type ProjectHandler struct {
-	client    client.Client
-	namespace string
-	oss       oss.StorageClient
-	matrix    matrix.Client // for intervention notifications; nil to skip
+	client       client.Client
+	configReader client.Reader
+	namespace    string
+	oss          oss.StorageClient
+	matrix       matrix.Client // for intervention notifications; nil to skip
 }
 
 // NewProjectHandler creates a handler reading project state from object storage.
 func NewProjectHandler(c client.Client, namespace string, o oss.StorageClient, m ...matrix.Client) *ProjectHandler {
-	h := &ProjectHandler{client: c, namespace: namespace, oss: o}
+	h := &ProjectHandler{client: c, configReader: c, namespace: namespace, oss: o}
 	if len(m) > 0 {
 		h.matrix = m[0]
 	}
@@ -697,6 +698,15 @@ func (e *accessDeniedError) Error() string { return e.msg }
 
 // GET /api/v1/projects
 func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
+	h.listProjects(w, r, false)
+}
+
+// ListTasks lists graph tasks using the same authoritative project scope.
+func (h *ProjectHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
+	h.listProjects(w, r, true)
+}
+
+func (h *ProjectHandler) listProjects(w http.ResponseWriter, r *http.Request, tasksOnly bool) {
 	caller := authpkg.CallerFromContext(r.Context())
 	teamFilter := r.URL.Query().Get("team")
 
@@ -704,6 +714,11 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeK8sError(w, "list projects: resolve prefixes", err)
 		return
+	}
+	if tasksOnly {
+		if effective := crToEffective[teamFilter]; effective != "" {
+			teamFilter = effective
+		}
 	}
 
 	type projectSummary struct {
@@ -721,6 +736,8 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt string `json:"updated_at,omitempty"`
 	}
 	projects := make([]projectSummary, 0)
+	tasks := make([]teamTask, 0)
+	skippedProjects := 0
 	seen := map[string]bool{}
 
 	// Team leaders (legacy single-team SA or L2 human multi-team) only scan
@@ -785,6 +802,7 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 
 	for _, res := range results {
 		if res.err != nil {
+			skippedProjects++
 			if errors.Is(res.err, os.ErrNotExist) {
 				continue // project dir without meta.json yet; skip, not 500
 			}
@@ -796,9 +814,11 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		}
 		var meta projectMeta
 		if err := json.Unmarshal(res.data, &meta); err != nil {
+			skippedProjects++
 			continue // skip malformed meta instead of failing the whole list
 		}
 		if meta.ProjectID == "" {
+			skippedProjects++
 			continue
 		}
 		team := teamFromPrefix(res.prefix)
@@ -818,6 +838,11 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		if teamFilter != "" && meta.TeamID != teamFilter {
 			continue
 		}
+		if tasksOnly {
+			for _, task := range projectTraceTasks(&meta) {
+				tasks = append(tasks, teamTask{projectTaskMeta: task, ProjectID: meta.ProjectID, TeamID: meta.TeamID})
+			}
+		}
 		projects = append(projects, projectSummary{
 			ProjectID: meta.ProjectID,
 			Title:     meta.Title,
@@ -831,6 +856,13 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 
 	// Deterministic ordering across prefixes.
 	sort.Slice(projects, func(i, j int) bool { return projects[i].ProjectID < projects[j].ProjectID })
+	if tasksOnly {
+		sort.Slice(tasks, func(i, j int) bool {
+			return tasks[i].TeamID+"/"+tasks[i].ProjectID+"/"+tasks[i].TaskID < tasks[j].TeamID+"/"+tasks[j].ProjectID+"/"+tasks[j].TaskID
+		})
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"tasks": tasks, "total": len(tasks), "complete": skippedProjects == 0, "skipped_projects": skippedProjects})
+		return
+	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"projects": projects, "total": len(projects)})
 }
@@ -2998,12 +3030,21 @@ func (h *ProjectHandler) writeProjectMeta(ctx context.Context, w http.ResponseWr
 	h.snapshotProjectMeta(ctx, key)
 
 	if etag != "" {
-		err = h.oss.PutObjectIfMatch(ctx, key, data, etag)
+		// Strict: project meta is critical metadata — a 501 provider must
+		// fail the write closed (503) rather than degrade to the racy
+		// Stat-then-Put, which could clobber a concurrent _sync_project
+		// version (#1426 P1).
+		err = strictPut(ctx, h.oss, key, data, etag)
 		if err == nil {
 			return true
 		}
 		if errors.Is(err, oss.ErrPreconditionFailed) {
 			httputil.WriteError(w, http.StatusConflict, "conflict: project was modified concurrently")
+			return false
+		}
+		if errors.Is(err, oss.ErrConditionalUnsupported) {
+			httputil.WriteError(w, http.StatusServiceUnavailable,
+				"conditional_write_unsupported: storage provider does not support conditional writes")
 			return false
 		}
 		httputil.WriteError(w, http.StatusInternalServerError, "write project meta: "+err.Error())
@@ -3178,6 +3219,27 @@ func pauseSourcesContain(sources []string, source string) bool {
 // Idempotency is intrinsic to If-Match: re-sending the same body against
 // the same version succeeds once; the second attempt sees the new ETag and
 // fails with 409 until it re-reads.
+// GetProjectMeta serves GET /api/v1/projects/{id}/meta: the stored meta.json
+// verbatim plus its ETag — the read half of the conditional commit pair
+// (PutProjectMeta requires that ETag as If-Match). Access rules are the same
+// as every other project read (W4: scoped callers see 404, never 403).
+func (h *ProjectHandler) GetProjectMeta(w http.ResponseWriter, r *http.Request) {
+	pwc, failed := h.readProjectWriteContext(w, r)
+	if failed {
+		return
+	}
+	data, err := h.oss.GetObject(r.Context(), pwc.key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read project meta: "+err.Error())
+		return
+	}
+	etag := contentETag(data)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("ETag", etag)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
 func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 	if projectID == "" {
@@ -3568,7 +3630,11 @@ func (h *ProjectHandler) persistControlActionAudit(ctx context.Context, key, eta
 		return
 	}
 	if etag != "" {
-		err = h.oss.PutObjectIfMatch(ctx, key, data, etag)
+		// Strict: the audit write re-binds the whole meta to the resolve-time
+		// ETag, so on a 501 provider the degraded Stat-then-Put could clobber
+		// a concurrent meta version. Dropping the audit entry (logged) is the
+		// designed best-effort loss; clobbering meta is not.
+		err = strictPut(ctx, h.oss, key, data, etag)
 	} else {
 		err = h.oss.PutObject(ctx, key, data)
 	}

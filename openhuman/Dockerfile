@@ -20,7 +20,7 @@
 #
 # Build:   docker build -t agentteams/openhuman-worker:latest -f openhuman/Dockerfile .
 #          # (optional) pin to a specific upstream ref:
-#          docker build --build-arg OPENHUMAN_GIT_REF=v0.1.0 \
+#          docker build --build-arg OPENHUMAN_GIT_REF=v0.54.0 \
 #                       -t agentteams/openhuman-worker:latest -f openhuman/Dockerfile .
 # Run:     docker run --env-file .env agentteams/openhuman-worker:latest
 # ---------------------------------------------------------------------------
@@ -94,10 +94,18 @@ ARG OPENHUMAN_GIT_REF=v0.54.0
 # Pinning to a tag / commit makes builds reproducible.
 RUN git clone --depth 1 --branch "${OPENHUMAN_GIT_REF}" "${OPENHUMAN_REPO_URL}" /build/openhuman-src
 
+COPY openhuman/patches/manager-matrix.patch /tmp/manager-matrix.patch
+RUN git -C /build/openhuman-src apply /tmp/manager-matrix.patch
+
 WORKDIR /build/openhuman-src
 
 # Build with channel-matrix feature enabled (native Matrix support).
-RUN cargo build --release --bin openhuman-core --features channel-matrix
+ARG TARGETARCH
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,id=agentteams-openhuman-target-${TARGETARCH},target=/build/openhuman-src/target,sharing=locked \
+    GGML_NATIVE=OFF cargo build --release --bin openhuman-core --features channel-matrix \
+    && cp target/release/openhuman-core /usr/local/bin/openhuman-core
 
 # ==========================================================================
 # Stage 3: Minimal runtime image with AgentTeams integration
@@ -165,11 +173,12 @@ RUN chmod +x /usr/local/bin/openhuman-worker-entrypoint.sh
 COPY manager/agent/openhuman-worker-agent/ /opt/agentteams/agent/openhuman-worker-agent/
 
 # AgentTeams CLI — for worker lifecycle management via controller REST API
-COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt
+COPY --from=agentteams-controller /usr/local/bin/agt /usr/local/bin/agt.bin
+COPY --chmod=755 openhuman/scripts/agt /usr/local/bin/agt
 
 # Copy the built binary and upstream license (GPL-3.0 compliance: recipients
 # must be able to identify the license of the included GPL component).
-COPY --from=builder /build/openhuman-src/target/release/openhuman-core /usr/local/bin/openhuman-core
+COPY --from=builder /usr/local/bin/openhuman-core /usr/local/bin/openhuman-core
 COPY --from=builder /build/openhuman-src/LICENSE /usr/share/licenses/openhuman/LICENSE
 
 # The entrypoint runs as root to set up mc credentials and volumes,
@@ -186,5 +195,11 @@ EXPOSE 7788
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -sf http://localhost:7788/health || exit 1
+
+COPY --from=agentteams-controller \
+    /opt/agentteams/agent/skills/worker-management/scripts/install-worker-skill.sh \
+    /opt/agentteams/agent/skills/worker-management/scripts/safe-extract-worker-skill.py \
+    /opt/agentteams/agent/skills/worker-management/scripts/push-worker-skills.sh \
+    /opt/agentteams/agent/skills/worker-management/scripts/
 
 ENTRYPOINT ["/usr/local/bin/openhuman-worker-entrypoint.sh"]

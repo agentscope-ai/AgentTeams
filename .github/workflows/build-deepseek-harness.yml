@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Independent DeepSeek Harness runtime version (e.g. v0.1.0)'
+        description: 'Independent DeepSeek Harness runtime version (e.g. v0.1.2)'
         required: true
         type: string
-        default: 'v0.1.0'
+        default: 'v0.1.2'
   push:
     branches:
       - main
@@ -15,6 +15,7 @@ on:
       - 'deepseek-harness-v[0-9]+.[0-9]+.[0-9]+'
       - 'deepseek-harness-v[0-9]+.[0-9]+.[0-9]+-*'
     paths:
+      - 'deepseek-harness'
       - 'deepseek-harness/**'
       - 'plugins/teamharness/**'
       - 'shared/lib/**'
@@ -44,6 +45,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Resolve runtime version
         id: meta
@@ -89,6 +92,8 @@ jobs:
           RUNTIME_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           make push-deepseek-harness-worker \
+            VERSION="sha-${GITHUB_SHA:0:12}" \
+            PUSH_LATEST= \
             DEEPSEEK_HARNESS_WORKER_VERSION="${RUNTIME_VERSION}" \
             REGISTRY="${REGISTRY}" \
             REPO="${REPO}" \
@@ -98,7 +103,7 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          IMAGE="${REGISTRY}/${REPO}/agentteams-deepseek-harness-worker:${VERSION}"
+          IMAGE="${REGISTRY}/${REPO}/agentteams-harness-deepseek:${VERSION}"
           docker buildx imagetools inspect "${IMAGE}"
           MANIFEST="$(docker buildx imagetools inspect --raw "${IMAGE}")"
           # jq -e alone accepts empty stdin, so reject it explicitly.

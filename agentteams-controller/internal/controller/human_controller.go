@@ -28,8 +28,12 @@ import (
 // set of room memberships in sync with Spec.AccessibleWorkers/Teams.
 type HumanReconciler struct {
 	client.Client
+	SystemAdminUser string
 
 	Provisioner service.HumanProvisioner
+	// Deployer creates the per-human file area (humans/<username>/files,
+	// .trash) idempotently. Optional: nil skips the storage phase (tests).
+	Deployer service.HumanDeployer
 }
 
 func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) (retres reconcile.Result, reterr error) {
@@ -81,6 +85,11 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 	}()
 
 	if !human.DeletionTimestamp.IsZero() {
+		if r.isSystemAdmin(&human) {
+			base := human.DeepCopy()
+			controllerutil.RemoveFinalizer(&human, finalizerName)
+			return reconcile.Result{}, r.Patch(ctx, &human, client.MergeFrom(base))
+		}
 		if controllerutil.ContainsFinalizer(&human, finalizerName) {
 			if err := r.resolveHumanScope(s); err != nil && human.Status.MatrixUserID == "" {
 				logger.Error(err, "failed to resolve deleting human identity; continuing best-effort cleanup", "name", human.Name)
@@ -96,23 +105,34 @@ func (r *HumanReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 		if err := r.Patch(ctx, &human, client.MergeFrom(base)); err != nil {
 			return reconcile.Result{}, err
 		}
+		// Keep the finalizer's resourceVersion change out of the deferred
+		// status patch, so concurrent spec edits cannot lose new credentials.
+		patchBase = client.MergeFrom(human.DeepCopy())
 	}
 
 	return r.reconcileHumanNormal(ctx, s)
 }
 
 // reconcileHumanNormal runs the declarative convergence loop. Phases in
-// order: infrastructure (Matrix account), then rooms (membership). Only
-// infrastructure is fatal; room reconciliation logs errors but never returns
-// them, so a transient Matrix hiccup
-// on room invite/kick does not block the next reconcile.
+// order: infrastructure (Matrix account), then the per-human file area
+// (object storage), then rooms (membership). Only infrastructure is fatal;
+// the storage phase logs errors but never returns them (same non-fatal
+// contract as team shared storage) and requeues sooner on failure, so a
+// transient storage hiccup does not block Matrix user/room sync; room
+// reconciliation likewise never returns errors.
 func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScope) (reconcile.Result, error) {
 	if err := r.resolveHumanScope(s); err != nil {
 		s.human.Status.Phase = "Degraded"
 		s.human.Status.Message = err.Error()
 		return reconcile.Result{RequeueAfter: reconcileInterval}, nil
 	}
-	if err := r.reconcileHumanInfra(ctx, s); err != nil {
+	systemAdmin := r.isSystemAdmin(s.human)
+	if systemAdmin {
+		s.human.Status.MatrixUserID = s.identity.MatrixUserID
+		s.human.Status.InitialPassword = ""
+		s.human.Status.Phase = "Active"
+		s.human.Status.Message = ""
+	} else if err := r.reconcileHumanInfra(ctx, s); err != nil {
 		if errors.Is(err, matrix.ErrAppServiceNotReady) {
 			log.FromContext(ctx).Info("Matrix AppService not active yet; requeueing human provisioning",
 				"name", s.human.Name)
@@ -120,9 +140,25 @@ func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScop
 		}
 		return reconcile.Result{RequeueAfter: reconcileInterval}, err
 	}
-	r.reconcileHumanRooms(ctx, s)
 
-	return reconcile.Result{RequeueAfter: reconcileInterval}, nil
+	requeueAfter := reconcileInterval
+	if r.Deployer != nil {
+		if err := r.Deployer.EnsureHumanStorage(ctx, s.human); err != nil {
+			log.FromContext(ctx).Error(err, "human file area init failed (non-fatal)",
+				"name", s.human.Name)
+			requeueAfter = reconcileRetryDelay
+		}
+	}
+
+	if !systemAdmin {
+		r.reconcileHumanRooms(ctx, s)
+	}
+
+	return reconcile.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func (r *HumanReconciler) isSystemAdmin(h *v1beta1.Human) bool {
+	return r.SystemAdminUser != "" && h.Labels[v1beta1.LabelSystemAdmin] == "true" && h.Spec.PermissionLevel == 1 && h.Spec.EffectiveUsername(h.Name) == r.SystemAdminUser
 }
 
 func (r *HumanReconciler) resolveHumanScope(s *humanScope) error {

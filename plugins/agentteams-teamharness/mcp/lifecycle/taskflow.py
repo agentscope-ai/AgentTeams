@@ -13,6 +13,7 @@ from typing import Any
 # transitions.py: mcp/ on sys.path makes the identity identical in both
 # `import server` and `import mcp.server` modes.
 from mcp.common import refs
+from mcp.common.config import _protocol_enforce_enabled
 from mcp.common.constants import ALLOWED_TASK_RESULT_STATUSES
 from mcp.common.errors import (
     _persisted_state_failure_result,
@@ -20,7 +21,7 @@ from mcp.common.errors import (
     _sync_failure_result,
     _uncommitted_state_failure_result,
 )
-from mcp.common.identity import _canonical_assignee
+from mcp.common.identity import _canonical_account, _canonical_assignee
 from mcp.common.io import _read_json, _safe_read_bytes, _utc_timestamp
 from mcp.common.payload import _first_text, _payload, _safe_id
 from mcp.common.paths import _project_state_path, _task_dir, _task_state_path
@@ -29,17 +30,29 @@ from mcp.artifact.publish import (
     _normalize_workspace_artifact_path,
     _path_is_under,
 )
+from mcp.artifact.sync import _load_authoritative_task, _load_authoritative_task_optional
 from mcp.project.state import _loop_pause_state
 from mcp.room.matrix import _team_human_matrix_ids, _team_leader_matrix_id
 from mcp.room.notify import _send_attention_notification, _task_completion_notification
+from .review import (
+    ProtocolGuardError,
+    _account_of,
+    _approval_authorized,
+    _guard_delegate_decision_class,
+    _review_task_action,
+)
 from .signal_events import _emit_signal_event
 from .transitions import (
     IllegalTransitionError,
     _append_transition_history,
+    _attention_resolved_status,
+    _attention_stall_escalate,
+    _decision_status_of,
     _reject_task_transition,
     _require_task_mutable,
     _terminal_task_status,
     _transition_actor,
+    _transition_actor_source,
     _transition_guidance,
 )
 
@@ -66,6 +79,10 @@ _validate_assignee_membership = refs.proxy("_validate_assignee_membership")
 _write_json = refs.proxy("_write_json")
 _role = refs.proxy("_role")
 _transition_task = refs.proxy("_transition_task")
+# The trusted runtime role (server.py): operator-set env / runtime config,
+# never the tool payload — the only authority an approval close may rely
+# on (#1467 round 4).
+_runtime_role = refs.proxy("_runtime_role")
 
 
 _TASKFLOW_MUTATING_ACTIONS = frozenset({
@@ -75,7 +92,42 @@ _TASKFLOW_MUTATING_ACTIONS = frozenset({
     "cancel_task",
     "report_progress",
     "request_attention",
+    "review_task",
 })
+
+# Completion-report conclusions (TH-9): submit_task carries a 3-5 item
+# conclusions array. Fewer than 3 is a warning by default and a rejection
+# when AGENTTEAMS_TASK_CONCLUSIONS_STRICT is on; more than 5 are all
+# persisted, but the completion notification caps at 5 and points to the
+# task meta for the rest. Conclusions are deliberately EXCLUDED from the
+# result digest: reworded conclusions do not change the submission
+# identity, so an exact retry of the digest inputs may still carry a
+# repaired list.
+_MIN_CONCLUSIONS = 3
+_MAX_CONCLUSIONS = 5
+
+
+def _conclusions_strict_mode() -> bool:
+    return os.getenv("AGENTTEAMS_TASK_CONCLUSIONS_STRICT", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _normalize_conclusions(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError("conclusions must be a list of strings")
+    normalized: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if len(text) > 500:
+            text = text[:500] + "..."
+        normalized.append(text)
+    return normalized
 
 
 def _load_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
@@ -282,6 +334,11 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
         if action == "delegate_task":
             if role != "leader":
                 raise ValueError("delegate_task requires leader role")
+            # W2 protocol guard: with the protocol switch on the decision
+            # class is required and must be a known r1..r6 class; the
+            # result is persisted on the task meta below. With the switch
+            # off the field is ignored (pre-W2 behaviour, byte-for-byte).
+            decision_class = _guard_delegate_decision_class(payload)
             project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             assigned_to = str(payload.get("assignedTo") or payload.get("assigned_to") or "").strip()
@@ -298,8 +355,17 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         assigned_to = str(item.get("assigned_to") or item.get("assignedTo") or "").strip()
                         break
             _validate_assignment_room(project, room_id)
+            # W2 round 11 (#1467): a re-delegation rewrites the whole task
+            # record, so the existing copy must come from shared storage, not
+            # from the leader's cache (a stale cache would erase a peer's
+            # freeze / approval record). A genuinely absent task keeps the
+            # creation path; a FAILED pull fails closed.
+            existing_task = _load_authoritative_task_optional(arguments, task_id)
+            if existing_task is None:
+                existing_task = _read_json(
+                    _task_state_path(arguments, task_id), {"project_id": project_id}
+                )
             _validate_task_redelegation(arguments, project, task_id, room_id)
-            existing_task = _read_json(_task_state_path(arguments, task_id), {"project_id": project_id})
             _require_task_mutable(arguments, existing_task, task_id, action, to_status="assigned")
             assigned_to = str(payload.get("assignedTo") or payload.get("assigned_to") or "").strip()
             if not assigned_to:
@@ -435,6 +501,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "spec_path": f"shared/tasks/{task_id}/spec.md",
                 "notifyTxn": notify_txn,
             }
+            if decision_class:
+                task["decision_class"] = decision_class
             if assigned_to:
                 task["assigned_to"] = assigned_to
             if source_room_id:
@@ -637,8 +705,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             local_task = _read_json(_task_state_path(arguments, task_id))
             if local_task:
                 _require_task_mutable(arguments, local_task, task_id, action, to_status="in_progress")
-            pulled = _pull_task(arguments, task_id)
-            task = _load_task(arguments, task_id)
+            # W2 round 11 (#1467): the authoritative task first — a worker
+            # write-back mirrors the WHOLE local directory, so the stale
+            # cached copy must never be the write base (fail closed on a
+            # failed pull).
+            task = _load_authoritative_task(arguments, task_id)
+            pulled = True
             _require_task_mutable(arguments, task, task_id, action, to_status="in_progress")
             if task.get("status") != "submitted":
                 # Tightening: ack only makes sense after the assignment
@@ -682,7 +754,11 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if role not in {"worker", "remote-member"}:
                 raise ValueError("submit_task requires worker or remote-member role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-            task = _load_task(arguments, task_id)
+            # W2 round 11 (#1467): same invariant as ack/report/review — the
+            # whole task directory is mirrored back, so the write must start
+            # from the authoritative copy (a stale cache would drop a peer's
+            # freeze or approval record). Fail closed on a failed pull.
+            task = _load_authoritative_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action, to_status="submitted")
             summary = str(payload.get("summary") or "")
             status = _validate_task_result_status(payload.get("status"))
@@ -690,6 +766,34 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(deliverables, list):
                 raise ValueError("deliverables must be a list")
             deliverables = _validate_task_deliverables(task_id, deliverables)
+            # TH-9: the completion report must carry a 3-5 item conclusions
+            # array. Normalize before the strict check so whitespace-only
+            # items cannot dodge it; the rejection happens before any write
+            # (the resubmit path only writes during its backfill/repair).
+            if "conclusions" in payload:
+                conclusions = _normalize_conclusions(payload["conclusions"])
+            else:
+                conclusions = None
+            if _conclusions_strict_mode() and (
+                conclusions is None or len(conclusions) < _MIN_CONCLUSIONS
+            ):
+                raise ValueError(
+                    "submit_task requires 3-5 completion-report conclusions "
+                    f"(got {0 if conclusions is None else len(conclusions)}); "
+                    "AGENTTEAMS_TASK_CONCLUSIONS_STRICT is on"
+                )
+            conclusions_warnings: list[str] = []
+            if conclusions is None or len(conclusions) < _MIN_CONCLUSIONS:
+                conclusions_warnings.append(
+                    "completion report should include 3-5 conclusions; "
+                    f"got {0 if conclusions is None else len(conclusions)}"
+                )
+            if conclusions and len(conclusions) > _MAX_CONCLUSIONS:
+                conclusions_warnings.append(
+                    f"completion report carries {len(conclusions)} conclusions; "
+                    "the notification shows the first 5 and points to "
+                    f"shared/tasks/{task_id}/meta.json for the rest"
+                )
             submitted_result = {
                 "status": status,
                 "summary": summary,
@@ -713,6 +817,22 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     raise ValueError("legacy submitted task has no submission identity and cannot be resubmitted")
                 if not task.get("result_digest"):
                     task["result_digest"] = persisted_digest
+                    try:
+                        _write_task(arguments, task)
+                    except OSError as exc:
+                        return _persisted_state_failure_result(
+                            tool="taskflow",
+                            action=action,
+                            error=exc,
+                            task=task,
+                        )
+                # Conclusions are digest-excluded, so a retry may repair or
+                # reword them without conflicting with the fence: persist
+                # the latest provided list, no write when unchanged.
+                if conclusions is not None and conclusions != (
+                    task.get("conclusions") or []
+                ):
+                    task["conclusions"] = conclusions
                     try:
                         _write_task(arguments, task)
                     except OSError as exc:
@@ -784,6 +904,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         summary=f"submit_task: {task_id} ({status})",
                     ),
                 }
+                if conclusions_warnings:
+                    result["warnings"] = conclusions_warnings
                 if not synced:
                     return _sync_failure_result(result, "submit_task")
                 result["notification"] = _task_completion_notification(
@@ -840,6 +962,19 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             else:
                 result_path_extra = {}
                 task.pop("result_path", None)
+            if conclusions is not None:
+                result_path_extra["conclusions"] = conclusions
+            # W2: record the submitting actor identity (role:account) so
+            # review_task can enforce reviewer != submitted_by, plus its
+            # provenance (runtime / payload) so a trusted member
+            # literally named 'default' is not read as the legacy
+            # sentinel (#1467 round 7). Written only while protocol
+            # enforce is on: with the switch off the meta shape is
+            # byte-for-byte the pre-W2 one.
+            submission_extra = {}
+            if _protocol_enforce_enabled():
+                submission_extra["submitted_by"] = _transition_actor(arguments)
+                submission_extra["submitted_by_source"] = _transition_actor_source(arguments)
             try:
                 _transition_task(
                     arguments,
@@ -862,6 +997,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                             submission_id,
                         ),
                     },
+                    **submission_extra,
                     **result_path_extra,
                 )
             except OSError as exc:
@@ -923,6 +1059,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     summary=f"submit_task: {task_id} ({status})",
                 ),
             }
+            if conclusions_warnings:
+                result["warnings"] = conclusions_warnings
             if not synced:
                 return _sync_failure_result(result, "submit_task")
             result["notification"] = _task_completion_notification(
@@ -955,8 +1093,10 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "report_progress requires worker or remote-member role"
                 )
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-            _pull_task(arguments, task_id)
-            task = _load_task(arguments, task_id)
+            # W2 round 11 (#1467): authoritative task, fail closed — the
+            # previous pull ignored its own failure and fell back to the
+            # stale local copy.
+            task = _load_authoritative_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action)
             # Progress notes only exist while the task is actually in flight.
             _progress_from = str(task.get("status") or "")
@@ -1001,12 +1141,25 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             }
 
         if action == "request_attention":
-            if role not in {"worker", "leader", "remote-member"}:
+            # Human decision channel (#1467 round 3): with the protocol
+            # switch on a 'human' caller (trusted runtime role or payload
+            # role) may also reach request_attention — it is the channel
+            # that closes an approval record. With the switch off the
+            # gate is the pre-W2 one, byte for byte.
+            attention_roles = {"worker", "leader", "remote-member"}
+            if _protocol_enforce_enabled():
+                attention_roles.add("human")
+            if role not in attention_roles:
                 raise ValueError(
                     "request_attention requires worker, leader, or remote-member role"
                 )
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-            task = _load_task(arguments, task_id)
+            # W2 round 11 (#1467): request_attention appends to the task and
+            # mirrors the whole directory back, so an ordinary question on a
+            # stale cache would erase a peer's persisted freeze, approval
+            # record and decision_status_history. Load the authoritative task
+            # first and fail closed when it cannot be retrieved.
+            task = _load_authoritative_task(arguments, task_id)
             _require_task_mutable(arguments, task, task_id, action)
             kind = str(payload.get("kind") or "other").strip().lower()
             if kind not in {"approval", "decision", "escalation", "other"}:
@@ -1143,16 +1296,109 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         f"no attention record of kind '{kind}' to resolve; "
                         "call request_attention without resolved to raise one"
                     )
+                if (
+                    _protocol_enforce_enabled()
+                    and _decision_status_of(task) == "frozen"
+                    and kind != "approval"
+                ):
+                    # W2 stall chain: a frozen task is released only
+                    # through the approval channel (the resolved
+                    # kind=approval record), never by any other answer —
+                    # and that close itself needs the trusted human role.
+                    raise ProtocolGuardError(
+                        "frozen_unfreeze_requires_approval",
+                        "task is frozen; only a resolved approval record "
+                        "(kind=approval) can unfreeze it, and that close "
+                        "requires a trusted human runtime role: enable a "
+                        "human integration with AGENTTEAMS_AGENT_ROLE=human "
+                        "(or member.role=human in the runtime config); a "
+                        "tool caller without a trusted role cannot approve "
+                        "or unfreeze",
+                    )
+                if (
+                    _protocol_enforce_enabled()
+                    and kind == "approval"
+                    and not _approval_authorized(
+                        _transition_actor(arguments),
+                        resolve_via,
+                        resolved_by=resolve_by,
+                        resolve_evidence=resolve_evidence,
+                    )
+                ):
+                    # W2 trusted authority (#1467 round 4): closing an
+                    # approval record is an authorized human decision,
+                    # and the only authority is the trusted runtime role
+                    # (operator-set env / runtime config). Every payload
+                    # field — role, channel, decider, evidence — is
+                    # provenance, never authorization: with no trusted
+                    # 'human' role the close is refused, and the task
+                    # keeps its current decision_status (a frozen task
+                    # stays frozen).
+                    raise ProtocolGuardError(
+                        "approval_requires_human",
+                        "closing an approval record (and unfreezing a "
+                        "frozen task) requires a trusted human runtime "
+                        "role: enable a human integration with "
+                        "AGENTTEAMS_AGENT_ROLE=human (or member.role=human "
+                        "in the runtime config); a tool caller without a "
+                        "trusted role cannot approve or unfreeze",
+                    )
                 target["resolved"] = True
                 # S0 resolve provenance (#1394): who closed the loop and
                 # how. A human reply in a room is recorded as im_reply with
                 # the evidence cited, never conflated with a tool flip.
+                # resolvedVia / resolvedBy / resolveEvidence are display
+                # provenance only — authority is the server-written marker
+                # below (#1467 round 4).
                 target["resolvedVia"] = resolve_via
                 if resolve_by:
                     target["resolvedBy"] = resolve_by
                 if resolve_evidence:
                     target["resolveEvidence"] = resolve_evidence
                 target["resolvedAt"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                if _protocol_enforce_enabled():
+                    # The answer arrived: zero the stall counter and
+                    # return a stall-driven blocked/frozen sub-state to
+                    # open (audited in decision_status_history).
+                    resolver = _transition_actor(arguments)
+                    if kind == "approval":
+                        # W2 trusted authority (#1467 round 4): the
+                        # server writes the authority marker itself — the
+                        # trusted runtime role (the authorization above
+                        # guarantees "human" when reached) plus the
+                        # account behind the transition actor. A
+                        # payload-supplied resolvedRole / resolvedActor
+                        # is never copied: the r1 gate reads this marker,
+                        # not the caller's strings. The account is
+                        # canonicalized (#1467 round 8): the shared
+                        # _canonical_account is the one identity form
+                        # used here AND by the r1 self-approval
+                        # comparison, so the MXID localpart and the
+                        # runtimeName of the same member are the same
+                        # identity.
+                        trusted_role = _runtime_role()
+                        target["resolvedRole"] = trusted_role
+                        target["resolvedActor"] = (
+                            f"{trusted_role}:{_canonical_account(_account_of(resolver))}"
+                        )
+                    else:
+                        # Non-approval close provenance: the record
+                        # carries the closing actor so the loop close is
+                        # auditable on the record itself.
+                        target["resolvedActor"] = resolver
+                    _attention_resolved_status(
+                        task,
+                        target,
+                        actor=resolver,
+                        # Frozen is absorbing (#1467 round 5): only the
+                        # authorized kind=approval close — the branch
+                        # that passed the approval-authority check
+                        # above — may leave a frozen task; every other
+                        # resolve kind is refused and audited by the
+                        # choke point (belt and braces with the
+                        # frozen_unfreeze_requires_approval guard).
+                        unfreeze_authority="approval" if kind == "approval" else "",
+                    )
                 _write_task(arguments, task)
                 synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
                 event_id = str(target.get("eventId") or "") or None
@@ -1212,12 +1458,16 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 ):
                     continue
                 if existing.get("eventId"):
-                    # Sync-first, like the resolved close: when the
-                    # original post-send push failed, the recorded
-                    # eventId/outcome is still local-only. Push it before
-                    # reporting success — a retry of an already-notified
-                    # record must never re-send the Matrix event.
                     event_id = str(existing["eventId"])
+                    if _protocol_enforce_enabled():
+                        # W2 stall chain: an unanswered re-request of the
+                        # open loop counts as one more stall; the
+                        # decision_status sub-state escalates at the
+                        # contracts/attention.json thresholds
+                        # (2 -> blocked, 3 -> frozen).
+                        existing["stall_count"] = int(existing.get("stall_count") or 0) + 1
+                        _attention_stall_escalate(task, existing)
+                        _write_task(arguments, task)
                     synced = _sync_task(arguments, task_id, exclude=["spec.md", "base/"])
                     if not synced:
                         return {
@@ -1259,7 +1509,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                                 "reused": True,
                             },
                         },
-                        "synced": True,
+                        "synced": synced,
                     }
                 if pending is None:
                     pending = existing
@@ -1301,6 +1551,10 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 # The deadline is recorded under the canonical timeoutAt;
                 # the expiresAt alias is echoed (same value) only when the
                 # caller used it, so the #1449/#1434 readers keep working.
+                if _protocol_enforce_enabled():
+                    # W2 stall chain: a freshly raised loop starts at zero
+                    # unanswered re-requests.
+                    record["stall_count"] = 0
                 if attention_options:
                     record["options"] = attention_options
                 if suggested:
@@ -1326,12 +1580,18 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                             "is recorded — retry request_attention (idempotent)."
                         ),
                     }
+            # Every skip path carries an explicit delivery receipt
+            # (recipients/gaps, NOTIFICATION_GAP_REASONS vocabulary) so
+            # the notification_log entry below is never "sent without a
+            # record": a skip is a gap, not a silence.
             room_id = str(task.get("room_id") or "").strip()
             if not room_id:
                 notification = {
                     "sent": False,
                     "skipped": True,
                     "error": "task has no room_id",
+                    "recipients": [],
+                    "gaps": [{"reason": "no_room_id"}],
                 }
             else:
                 leader = _team_leader_matrix_id()
@@ -1340,14 +1600,28 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         "sent": False,
                         "skipped": True,
                         "error": "team leader Matrix ID not found in runtime config",
+                        "recipients": [],
+                        "gaps": [{"reason": "no_leader_mxid"}],
                     }
                 else:
                     membership = _validate_assignee_membership(room_id, leader)
                     if not membership.get("ok"):
+                        membership_error = str(
+                            membership.get("error") or "room membership check failed"
+                        )
                         notification = {
                             "sent": False,
                             "skipped": True,
-                            "error": str(membership.get("error") or "room membership check failed"),
+                            "error": membership_error,
+                            "recipients": [],
+                            "gaps": [
+                                {
+                                    "recipient": leader,
+                                    "role": "leader",
+                                    "reason": "leader_not_in_room",
+                                    "error": membership_error[:300],
+                                }
+                            ],
                         }
                     else:
                         notification = _send_attention_notification(
@@ -1368,11 +1642,14 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # `room_accepted` is Matrix's acceptance of the room event;
             # `channel_accepted` is the per-recipient receipt and stays
             # null unless an adapter reports it — never inferred from room
-            # acceptance. A first request appends the entry; a retry of
-            # the same pending record (same attempt) re-uses it — the
-            # entry's previous physical outcome is demoted into
-            # `retries` and the entry is re-pointed at the new outcome,
-            # so the log never grows a second entry per attempt.
+            # acceptance. `recipients`/`gaps` is the per-recipient
+            # delivery receipt from the send result (a gap is not a
+            # failure; only room_accepted=false is). A first request
+            # appends the entry; a retry of the same pending record
+            # (same attempt) re-uses it — the entry's previous physical
+            # outcome (including its receipt) is demoted into `retries`
+            # and the entry is re-pointed at the new outcome, so the log
+            # never grows a second entry per attempt.
             outcome_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
             log_entries = record.setdefault("notification_log", [])
             folded_entry = None
@@ -1386,12 +1663,18 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "room_accepted": bool(folded_entry.get("room_accepted")),
                     "channel_accepted": folded_entry.get("channel_accepted"),
                 }
+                if "recipients" in folded_entry:
+                    previous_outcome["recipients"] = list(folded_entry["recipients"])
+                if "gaps" in folded_entry:
+                    previous_outcome["gaps"] = list(folded_entry["gaps"])
                 if folded_entry.get("error"):
                     previous_outcome["error"] = str(folded_entry["error"])[:300]
                 folded_entry.setdefault("retries", []).append(previous_outcome)
                 folded_entry["ts"] = outcome_ts
                 folded_entry["room_accepted"] = bool(notification.get("sent"))
                 folded_entry["channel_accepted"] = notification.get("channel_accepted")
+                folded_entry["recipients"] = list(notification.get("recipients") or [])
+                folded_entry["gaps"] = list(notification.get("gaps") or [])
                 folded_entry.pop("error", None)
                 if notification.get("error"):
                     folded_entry["error"] = str(notification["error"])[:300]
@@ -1401,6 +1684,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "ts": outcome_ts,
                     "room_accepted": bool(notification.get("sent")),
                     "channel_accepted": notification.get("channel_accepted"),
+                    "recipients": list(notification.get("recipients") or []),
+                    "gaps": list(notification.get("gaps") or []),
                     "retries": list(notification.get("retries") or []),
                 }
                 if notification.get("error"):
@@ -1458,11 +1743,20 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "synced": True,
             }
 
+        if action == "review_task":
+            return _review_task_action(arguments, payload, role)
+
         if action == "cancel_task":
             if role != "leader":
                 raise ValueError("cancel_task requires leader role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-            task = _load_task(arguments, task_id)
+            # W2 round 9 (#1467): cancel is a cross-actor write like
+            # review — the leader's local copy may be a stale cache, and
+            # the whole-directory write-back would swallow a
+            # decision_status=frozen with the approval records the worker
+            # persisted after the cache was pulled. Load the
+            # authoritative task (pull first, fail closed on failure).
+            task = _load_authoritative_task(arguments, task_id)
             requested_submission_id = _first_text(
                 payload.get("submissionId"),
                 payload.get("submission_id"),
@@ -1624,6 +1918,14 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             "from": exc.from_status,
             "to": exc.to_status,
             "detail": str(exc),
+        }
+    except ProtocolGuardError as exc:
+        return {
+            "ok": False,
+            "tool": "taskflow",
+            "action": action,
+            "error_code": exc.error_code,
+            "message": exc.message,
         }
     except ValueError as exc:
         return {"ok": False, "tool": "taskflow", "action": action, "error": str(exc)}

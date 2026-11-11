@@ -729,7 +729,7 @@ both Manager values start the QwenPaw-based Python implementation.
 
 For Workers, keep the runtime and image paired instead of rewriting the value
 alone: existing deployments may map `copaw` to `agentteams-copaw-worker`, while
-the newer QwenPaw path uses `agentteams-qwenpaw-worker`. The QwenPaw Manager
+the newer QwenPaw path uses `agentteams-harness-qwenpaw`. The QwenPaw Manager
 image is `agentteams-manager-qwenpaw`.
 
 ---

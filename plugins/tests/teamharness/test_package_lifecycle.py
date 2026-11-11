@@ -41,7 +41,7 @@ INSTALL = BUNDLE / "scripts" / "install.sh"
 UNINSTALL = BUNDLE / "scripts" / "uninstall.sh"
 PLUGIN_ID = "agentteams-teamharness"
 RUNTIME_BINARIES = ("qwenpaw", "openclaw", "hermes")
-SKILL_COUNT = 10
+SKILL_COUNT = 11
 
 BASH32_SKIP_MESSAGE = (
     "set TEAMHARNESS_BASH32 or install bash3.2; macOS system bash is the target"

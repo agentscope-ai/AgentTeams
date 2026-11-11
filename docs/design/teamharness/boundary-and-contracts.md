@@ -83,6 +83,8 @@ Prompts:
 
 Skills:
 
+- Manager skills: `resource-management`. This role package calls the Controller
+  through `agt`; it does not move resource lifecycle ownership into TeamHarness.
 - Agent skills: `mcporter`, `find-skills`.
 - Team skills: `organization`, `communication`, `file-sharing`,
   `team-coordination`, `project-management`, `task-delegation`,

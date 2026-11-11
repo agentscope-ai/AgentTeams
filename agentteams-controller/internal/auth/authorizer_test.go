@@ -169,11 +169,7 @@ func TestAuthorizer_TeamLeaderOwnTeam(t *testing.T) {
 	allowedCases := []AuthzRequest{
 		{Action: ActionGet, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
 		{Action: ActionReady, ResourceKind: "worker", ResourceName: "alpha-lead", ResourceTeam: "alpha-team"},
-		{Action: ActionCreate, ResourceKind: "worker", ResourceTeam: "alpha-team"},
-		{Action: ActionWake, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
-		{Action: ActionSleep, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
-		{Action: ActionEnsureReady, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
-		{Action: ActionReady, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
+		{Action: ActionStatus, ResourceKind: "worker", ResourceName: "alpha-dev", ResourceTeam: "alpha-team"},
 		{Action: ActionList, ResourceKind: "worker"},
 		{Action: ActionGet, ResourceKind: "status"},
 	}

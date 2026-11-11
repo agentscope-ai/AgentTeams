@@ -26,7 +26,15 @@ from mcp.common.io import _read_json
 from mcp.common.payload import _payload, _safe_id, _string_list
 from mcp.common.paths import _optional_workspace_dir
 from mcp.roomflow_tool import RoomDescribeDeps, describe_room as _describe_room_impl
-from .matrix import _ensure_matrix_room_members, _matrix_env, _matrix_user_id
+from .matrix import (
+    _ensure_matrix_room_members,
+    _matrix_env,
+    _matrix_invite_to_room,
+    _matrix_room_member_user_ids,
+    _matrix_user_id,
+    _team_human_matrix_ids,
+    _team_leader_matrix_id,
+)
 from .mention import _matrix_target
 from mcp.transport.route import _reply_route_from_requester
 
@@ -140,6 +148,34 @@ def _task_room_name(value: Any) -> str:
     return f"TASK\uff1a{name}" if name else ""
 
 
+def _accountable_user_ids(creator: str = "") -> list[str]:
+    """Accountable users (TH-10): the team leader first, then the human
+    team members (which include the team admin), deduped, minus the
+    creator (the creator is in the task room as its creator)."""
+    users: list[str] = []
+    leader = _team_leader_matrix_id()
+    if leader and leader != creator:
+        users.append(leader)
+    for user in _team_human_matrix_ids():
+        if user and user != creator and user not in users:
+            users.append(user)
+    return users
+
+
+def _verify_accountable_in_room(room_id: str, accountable: list[str]) -> dict[str, Any]:
+    """Post-create member check (TH-10): every accountable user must be
+    joined or invited — an existing invite already counts, which keeps
+    repeated create_task_room calls idempotent. Missing users are
+    re-invited and reported in ``reInvited``."""
+    if not accountable:
+        return {"invited": [], "verified": True, "reInvited": []}
+    members = set(_matrix_room_member_user_ids(room_id))
+    missing = [user for user in accountable if user not in members]
+    for user in missing:
+        _matrix_invite_to_room(room_id, user)
+    return {"invited": list(accountable), "verified": True, "reInvited": missing}
+
+
 def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     try:
         raw_project_id = payload.get("projectId") or payload.get("project_id") or payload.get("taskId")
@@ -161,6 +197,13 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
         invite.append(admin)
 
     creator = _matrix_user_id()
+    # TH-10: accountable users (team leader + human members) must be in
+    # the task room: they join the invite pre-create (after the admin),
+    # and the post-create check re-invites anyone still missing.
+    accountable = _accountable_user_ids(creator)
+    for user in accountable:
+        if user not in invite:
+            invite.append(user)
     power_users: dict[str, int] = {}
     if creator:
         power_users[creator] = 100
@@ -209,6 +252,7 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
         try:
             _ensure_matrix_room_members(existing_room_id, invite)
             _write_matrix_room_meta(existing_room_id, room_meta)
+            base["accountable"] = _verify_accountable_in_room(existing_room_id, accountable)
         except ValueError as exc:
             return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": str(exc)}
         except urllib.error.HTTPError as exc:
@@ -255,7 +299,17 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
         return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": f"Matrix API error: HTTP {exc.code}: {error}"}
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": f"Matrix API error: {exc}"}
+    # TH-10: the room binding is written before the accountable check,
+    # so a failed check is retryable through the reuse path instead of
+    # creating a second room.
     _write_roomflow_project_room_binding(binding, room_id, base)
+    try:
+        base["accountable"] = _verify_accountable_in_room(room_id, accountable)
+    except urllib.error.HTTPError as exc:
+        error = exc.read().decode("utf-8", errors="replace")[:200]
+        return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": f"Matrix API error: HTTP {exc.code}: {error}"}
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": f"Matrix API error: {exc}"}
     return base
 
 

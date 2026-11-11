@@ -524,12 +524,13 @@ func (c *Config) ManagerResources() *backend.ResourceRequirements {
 func (c *Config) DockerConfig() backend.DockerConfig {
 	return backend.DockerConfig{
 		SocketPath:                 c.SocketPath,
-		WorkerImage:                envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
+		WorkerImage:                envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-harness-openclaw:latest"),
 		CopawWorkerImage:           envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
-		HermesWorkerImage:          envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
-		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
-		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.0"),
+		HermesWorkerImage:          envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-harness-hermes:latest"),
+		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-harness-openhuman:latest"),
+		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
+		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
+		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
 		DefaultNetwork:             envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
 	}
 }
@@ -577,12 +578,13 @@ func (c *Config) UsesExternalS3() bool {
 func (c *Config) K8sConfig() backend.K8sConfig {
 	return backend.K8sConfig{
 		Namespace:                  c.K8sNamespace,
-		WorkerImage:                envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
+		WorkerImage:                envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-harness-openclaw:latest"),
 		CopawWorkerImage:           envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
-		HermesWorkerImage:          envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
-		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
-		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.0"),
+		HermesWorkerImage:          envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-harness-hermes:latest"),
+		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-harness-openhuman:latest"),
+		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
+		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
+		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
 		WorkerCPU:                  c.K8sWorkerCPU,
 		WorkerMemory:               c.K8sWorkerMemory,
 		ControllerName:             c.ControllerName,
@@ -595,12 +597,13 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 		Namespace:                    c.K8sNamespace,
 		ProviderType:                 c.SandboxProviderType,
 		AgentRuntimeImage:            os.Getenv("AGENTTEAMS_SANDBOX_AGENT_RUNTIME_IMAGE"),
-		WorkerImage:                  envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-worker:latest"),
+		WorkerImage:                  envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-harness-openclaw:latest"),
 		CopawWorkerImage:             envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
-		HermesWorkerImage:            envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
-		OpenHumanWorkerImage:         envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
-		QwenPawWorkerImage:           envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-qwenpaw-worker:latest"),
-		DeepSeekHarnessWorkerImage:   envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-deepseek-harness-worker:v0.1.0"),
+		HermesWorkerImage:            envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-harness-hermes:latest"),
+		OpenHumanWorkerImage:         envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-harness-openhuman:latest"),
+		QwenPawWorkerImage:           envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
+		DeepSeekHarnessWorkerImage:   envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
+		CodexWorkerImage:             envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
 		WorkerCPU:                    c.K8sWorkerCPU,
 		WorkerMemory:                 c.K8sWorkerMemory,
 		SandboxPrewarmSize:           c.SandboxPrewarmSize,
@@ -801,6 +804,11 @@ func (c *Config) OSSConfig() oss.Config {
 		Endpoint:      normalizeMinIOS3Endpoint(endpoint),
 		AccessKey:     accessKey,
 		SecretKey:     secretKey,
+		// Caller-reachable origin for presigned downloads (#1501). It is an
+		// operator-explicit external URL (ingress/domain), so it is used as
+		// given — the internal-endpoint S3-port normalization must NOT
+		// apply to it. Empty keeps presign disabled (501 presign_unsupported).
+		PublicEndpoint: strings.TrimSpace(os.Getenv("AGENTTEAMS_FS_PUBLIC_ENDPOINT")),
 	}
 }
 

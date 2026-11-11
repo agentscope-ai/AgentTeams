@@ -44,6 +44,7 @@ reset_case() {
     AGENTTEAMS_KNOWN_STABLE_VERSION=v1.2.4
     AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION=v1.2.4
     AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.0
+    AGENTTEAMS_CODEX_WORKER_VERSION=v0.1.0
     AGENTTEAMS_REGISTRY=registry.example
     AGENTTEAMS_MANAGER_RUNTIME=qwenpaw
     AGENTTEAMS_DEFAULT_WORKER_RUNTIME=qwenpaw
@@ -62,13 +63,15 @@ reset_case() {
 reset_case
 _select_available_auto_version
 [ "$AGENTTEAMS_VERSION" = v1.2.4 ] || fail 'complete release rejected'
-[ "$(wc -l < "$CALLS" | tr -d ' ')" = 7 ] || fail 'incomplete image set'
+[ "$(wc -l < "$CALLS" | tr -d ' ')" = 3 ] || fail 'incomplete image set'
 grep -q 'agentteams-manager-qwenpaw:v1.2.4' "$CALLS" || fail 'selected manager missing'
-grep -q 'agentteams-deepseek-harness-worker:v0.1.0' "$CALLS" || fail 'independent runtime tag lost'
-grep -q 'agentteams-dashboard:v1.3.1' "$CALLS" || fail 'dashboard missing'
+[ "$DEEPSEEK_HARNESS_WORKER_IMAGE" = registry.example/agentteams/agentteams-deepseek-harness-worker:v0.1.0 ] || fail 'independent runtime tag lost'
+! grep -q 'agentteams-.*worker' "$CALLS" || fail 'Worker images must be pulled on demand'
+[ "$CODEX_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-codex:v0.1.0 ] || fail 'Codex default image missing'
+grep -q 'agentteams-dashboard:v1.4.0' "$CALLS" || fail 'dashboard missing'
 for FAILURE_KIND in missing arch; do
     reset_case
-    BAD_IMAGE=agentteams-hermes-worker:v1.2.4
+    BAD_IMAGE=agentteams-manager-qwenpaw:v1.2.4
     FAILURE=$FAILURE_KIND
     _select_available_auto_version
     [ "$AGENTTEAMS_VERSION" = v1.2.3 ] || fail 'incomplete release did not fall back'
@@ -76,16 +79,16 @@ for FAILURE_KIND in missing arch; do
 done
 for FAILURE_KIND in auth network; do
     reset_case
-    BAD_IMAGE=agentteams-worker:v1.2.4
+    BAD_IMAGE=agentteams-manager-qwenpaw:v1.2.4
     FAILURE=$FAILURE_KIND
     if ( _select_available_auto_version ); then fail 'ambiguous error accepted'; fi
     ! grep -q ':v1.2.3' "$CALLS" || fail 'ambiguous error caused downgrade'
 done
 reset_case
-BAD_IMAGE=agentteams-worker:
+BAD_IMAGE=agentteams-manager-qwenpaw:
 if ( _select_available_auto_version ); then fail 'incomplete fallback accepted'; fi
 reset_case
-BAD_IMAGE=agentteams-worker:v1.2.4
+BAD_IMAGE=agentteams-manager-qwenpaw:v1.2.4
 AGENTTEAMS_UPGRADE=1
 if ( _select_available_auto_version ); then fail 'upgrade silently downgraded'; fi
 ! grep -q ':v1.2.3' "$CALLS" || fail 'upgrade probed fallback'
@@ -114,11 +117,11 @@ LOCAL_PLATFORM=linux/amd64
 _select_available_auto_version
 [ -s "$CALLS" ] || fail 'wrong local architecture accepted'
 reset_case
-BAD_IMAGE=agentteams-worker:v1.2.4
+BAD_IMAGE=agentteams-manager-qwenpaw:v1.2.4
 AGENTTEAMS_DEFAULT_WORKER_RUNTIME=deepseek-harness
 if ( _select_available_auto_version ); then fail 'unsupported runtime fallback accepted'; fi
 reset_case
-BAD_IMAGE=agentteams-dashboard:v1.3.1
+BAD_IMAGE=agentteams-dashboard:v1.4.0
 if ( _select_available_auto_version ); then fail 'missing independent dashboard accepted'; fi
 reset_case
 PULLED_PLATFORM=linux/amd64

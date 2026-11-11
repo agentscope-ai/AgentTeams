@@ -315,13 +315,26 @@ wait_gateway() {
 }
 
 higress_plugin_check() {
-    local refs ref path missing=0
-    refs="$("${DOCKER_CMD}" exec "${CONTROLLER_NAME}" sh -c 'grep -Rho "plugins/[a-z-]*/[0-9.]*/plugin.wasm" /data 2>/dev/null | sort -u' 2>/dev/null || true)"
+    local refs ref path missing=0 image="${CONTROLLER_IMAGE:-}"
+    if [ -z "${image}" ]; then
+        warn "no target controller image; cannot check Higress wasm refs" >&2
+        printf '0'
+        return
+    fi
+    # WasmPlugin refs live in kine/CRs, not in a plaintext file; -a is
+    # required for the SQLite DB. Check the TARGET image, not the running
+    # one: the old image naturally has its own (old) plugin versions.
+    refs="$("${DOCKER_CMD}" exec "${CONTROLLER_NAME}" sh -c 'grep -Rhao "plugins/[a-z-]*/[0-9.]*/plugin.wasm" /data /etc/istio/proxy 2>/dev/null | sort -u' 2>/dev/null || true)"
+    if [ -z "${refs}" ]; then
+        warn "no Higress wasm refs found; pass --higress-backfill-dir when upgrading an existing deployment" >&2
+        printf '0'
+        return
+    fi
     for ref in ${refs}; do
         path="/usr/share/nginx/html/${ref}"
-        if ! "${DOCKER_CMD}" exec "${CONTROLLER_NAME}" test -f "${path}" >/dev/null 2>&1; then
+        if ! "${DOCKER_CMD}" run --rm --network none --entrypoint sh "${image}" -c "test -f '${path}'" >/dev/null 2>&1; then
             missing=$((missing + 1))
-            warn "Higress plugin missing in image: ${ref}"
+            warn "Higress plugin missing in target image: ${ref}" >&2
         fi
     done
     printf '%s' "${missing}"
@@ -1181,16 +1194,22 @@ build_run_args() {
     fi
 
     local p hostip hostport
-    while read -r p hostip hostport; do
+    # Delimit the fields: an empty HostIp collapsed under whitespace read
+    # and shifted the host port into $hostip ("6868::8001"), while println
+    # inserts spaces and left a trailing space in $p ("8001/tcp " -> invalid
+    # proto). printf + IFS='|' keeps empty fields and exact values.
+    while IFS='|' read -r p hostip hostport; do
         [ -n "${p}" ] || continue
-        if [ -n "${hostip}" ] && [ "${hostip}" != "0.0.0.0" ]; then
+        if [ -n "${hostip}" ]; then
+            # Keep explicit IPv4/IPv6 wildcards and both dual-stack bindings.
+            case "${hostip}" in *:*) hostip="[${hostip}]" ;; esac
             RUN_ARGS+=(-p "${hostip}:${hostport}:${p}")
         elif [ -n "${hostport}" ]; then
             RUN_ARGS+=(-p "${hostport}:${p}")
         else
             RUN_ARGS+=(-p "${p}")
         fi
-    done < <(inspect_fmt '{{range $p, $conf := .HostConfig.PortBindings}}{{range $conf}}{{println $p .HostIp .HostPort}}{{end}}{{end}}' "${CONTROLLER_NAME}")
+    done < <(inspect_fmt '{{range $p, $conf := .HostConfig.PortBindings}}{{range $conf}}{{printf "%s|%s|%s\n" $p .HostIp .HostPort}}{{end}}{{end}}' "${CONTROLLER_NAME}")
 
     local mtype mname msrc mdst mrw mprop mdriver spec
     local tmpfs_keys
@@ -1397,9 +1416,12 @@ cmd_controller() {
         die "cannot rename the old controller; nothing changed" "${EXIT_GATE}"
     fi
 
-    if ! "${DOCKER_CMD}" create "${RUN_ARGS[@]}" >/dev/null 2>&1; then
+    local create_log="${BACKUP_DIR}/controller-create.log"
+    mkdir -p "$(dirname "${create_log}")" 2>/dev/null || true
+    if ! "${DOCKER_CMD}" create "${RUN_ARGS[@]}" >"${create_log}" 2>&1; then
+        cat "${create_log}" >&2
         "${DOCKER_CMD}" rename "${OLD_NAME}" "${CONTROLLER_NAME}" >/dev/null 2>&1 || true
-        die "cannot create the new controller container; old controller restored as ${CONTROLLER_NAME}" "${EXIT_GATE}"
+        die "cannot create the new controller container; old controller restored as ${CONTROLLER_NAME} (create log: ${create_log})" "${EXIT_GATE}"
     fi
 
     if ! boundary_verify "${OLD_NAME}" "${CONTROLLER_NAME}"; then

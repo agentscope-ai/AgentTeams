@@ -3,6 +3,7 @@
 #
 # Patches config files in-place based on runtime:
 #   - OpenClaw: ~/manager-workspace/openclaw.json (model list + context window in one file)
+#   - QwenPaw: standard openclaw.json, applied by the existing background bridge
 #   - CoPaw: ~/.copaw.secret/providers.json (model list) + ~/.copaw/config.json (context window)
 #
 # OpenClaw detects the file change (~300ms) and reloads config automatically.
@@ -229,7 +230,12 @@ else
         log "Done. Model '${MODEL_NAME}' has been added to the models list."
     fi
     echo ""
-    echo "RESTART_REQUIRED: Run 'openclaw gateway restart' to apply the model switch."
+    if [ "${MANAGER_RUNTIME}" = "qwenpaw" ]; then
+        echo "CONFIG_UPDATED: QwenPaw will bridge the standard config on its next watcher cycle (normally within 60 seconds)."
+        echo "VERIFY_REQUIRED: Confirm QwenPaw's native active provider/model and the next request use '${MODEL_NAME}' before reporting completion."
+    else
+        echo "RESTART_REQUIRED: Run 'openclaw gateway restart' to apply the model switch."
+    fi
 fi
 
 rm -f "${TMP}"

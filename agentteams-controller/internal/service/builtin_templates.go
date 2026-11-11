@@ -16,6 +16,7 @@ var AllWorkerRuntimes = []string{
 	backend.RuntimeOpenHuman,
 	backend.RuntimeQwenPaw,
 	backend.RuntimeDeepSeekHarness,
+	backend.RuntimeCodex,
 }
 
 // BuiltinAgentDir returns the agent template directory that seeds the given
@@ -27,6 +28,8 @@ var AllWorkerRuntimes = []string{
 func BuiltinAgentDir(workerAgentDir, role, runtime string) string {
 	baseDir := filepath.Dir(workerAgentDir)
 	switch role {
+	case "manager":
+		return filepath.Join(baseDir, "manager-agent")
 	case "team_leader":
 		return filepath.Join(baseDir, "team-leader-agent")
 	default:

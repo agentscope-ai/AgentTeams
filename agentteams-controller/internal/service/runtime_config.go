@@ -13,10 +13,42 @@ import (
 const (
 	memberRuntimeConfigKind = "MemberRuntimeConfig"
 	nativeConfigModel       = "native-config"
+	// runtimeGatewayProviderID is the only provider id projected into a
+	// managed member's runtime config. The gateway provider named by
+	// spec.modelProvider is resolved separately for the AI route, gateway
+	// URL and consumer authorization; forwarding that name as a runtime
+	// provider id can collide with a QwenPaw built-in provider (for example
+	// "deepseek") and make the worker fail its base-URL readback.
+	runtimeGatewayProviderID = "agentteams-gateway"
 )
 
 func memberRuntimeConfigObjectKey(runtimeName string) string {
 	return fmt.Sprintf("agents/%s/runtime/runtime.yaml", runtimeName)
+}
+
+// Managers use the same desired-state contract as team members. The CR name
+// and Matrix/storage identity remain separate (default versus manager).
+func (d *Deployer) deployManagerRuntimeConfig(ctx context.Context, req ManagerDeployRequest) error {
+	spec := v1beta1.WorkerSpec{
+		Runtime: req.Spec.Runtime, Model: req.Spec.Model, ModelProvider: req.Spec.ModelProvider,
+		Soul: req.Spec.Soul, Agents: req.Spec.Agents, Skills: req.Spec.Skills,
+		McpServers: req.Spec.McpServers, Package: req.Spec.Package, State: req.Spec.State,
+	}
+	doc, err := d.memberRuntimeConfigDocument(MemberRuntimeConfigDeployRequest{
+		Name: req.Name, RuntimeName: "manager", Role: "manager", Spec: spec,
+		Generation: req.Generation, MatrixUserID: req.MatrixUserID,
+		PersonalRoomID: req.RoomID, AIGatewayURL: req.AIGatewayURL,
+	}, "manager")
+	if err != nil {
+		return err
+	}
+	doc.Credentials.MatrixTokenEnv = "AGENTTEAMS_MANAGER_MATRIX_TOKEN"
+	doc.Credentials.GatewayKeyEnv = "AGENTTEAMS_MANAGER_GATEWAY_KEY"
+	store := d.managerConfig
+	if store == nil {
+		store = NewManagerConfigStore(ManagerConfigStoreConfig{OSS: d.oss})
+	}
+	return store.PutManagerRuntimeConfig(ctx, doc)
 }
 
 type memberRuntimeConfigDocument struct {
@@ -273,7 +305,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 			gatewayURL = d.runtimeProjection.AIGatewayURL
 		}
 		desired.Model = &memberRuntimeConfigModel{
-			ProviderID: "agentteams-gateway",
+			ProviderID: providerIDFromSpec(req.Spec.ModelProvider),
 			Model:      req.Spec.Model,
 			GatewayURL: gatewayURL,
 			GatewayKey: strings.TrimSpace(req.GatewayKey),
@@ -286,7 +318,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	// startup/recreation, not only through the controller hot apply.
 	if req.SubagentModel != "" {
 		desired.SubagentModel = &memberRuntimeConfigModel{
-			ProviderID: "agentteams-gateway",
+			ProviderID: providerIDFromSpec(req.Spec.ModelProvider),
 			Model:      req.SubagentModel,
 		}
 	}
@@ -382,6 +414,16 @@ func runtimeSkillNames(spec v1beta1.WorkerSpec) []string {
 
 func isNativeConfigModel(model string) bool {
 	return strings.EqualFold(strings.TrimSpace(model), nativeConfigModel)
+}
+
+// providerIDFromSpec returns the runtime provider id projected into the
+// member's runtime config. It is intentionally independent of the gateway
+// provider name: spec.modelProvider is resolved by the controller for the AI
+// route and gateway URL, but the runtime always uses the non-built-in gateway
+// provider entry. This keeps arbitrary gateway provider names (including
+// names that match QwenPaw built-ins) from leaking into the runtime.
+func providerIDFromSpec(_ string) string {
+	return runtimeGatewayProviderID
 }
 
 func memberRuntimeConfigChannelsFromSpec(spec v1beta1.WorkerSpec) (*memberRuntimeConfigChannels, error) {

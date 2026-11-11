@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import os
 import subprocess  # noqa: F401 — kept as an attribute: tests patch server.subprocess.run
 import sys
@@ -30,7 +31,7 @@ from mcp.artifact import filesync, publish, sync
 
 from mcp.common import config, constants, errors, identity, io, payload, paths, refs, tool_schemas
 
-from mcp.lifecycle import signal_events, taskflow, transitions
+from mcp.lifecycle import review, review_context, signal_events, taskflow, transitions
 
 from mcp.project import flow, state
 
@@ -44,9 +45,9 @@ from mcp import roomflow_tool
 
 refs.register_modules((
     constants, tool_schemas, paths, config, io, payload, errors, identity,
-    transitions, signal_events, taskflow, state, flow, filesync, publish,
-    sync, mention, matrix, rooms, notify, route, message, message_tool,
-    roomflow_tool,
+    transitions, signal_events, review, review_context, taskflow, state, flow,
+    filesync, publish, sync, mention, matrix, rooms, notify, route,
+    message, message_tool, roomflow_tool,
 ))
 
 # Every test loads its own server instance (function-scoped) and the bind
@@ -55,11 +56,12 @@ refs.register_modules((
 # instance stay visible at every proxy call site.
 refs.bind(globals())
 
-from mcp.common.config import _load_runtime_config, _section
+from mcp.common.config import _load_runtime_config, _protocol_enforce_enabled, _section
 from mcp.common.constants import MESSAGE_TOOL_BLOCKED_ROLES, TOOL_NAMES
 from mcp.common.tool_schemas import TOOL_SCHEMAS
 from mcp.lifecycle.transitions import _append_transition_history, _assert_transition, _transition_actor
 from mcp.artifact.publish import _artifact
+from mcp.lifecycle.review_context import build_review_context
 from mcp.lifecycle.taskflow import _taskflow
 from mcp.project.flow import _projectflow
 from mcp.room.rooms import _roomflow
@@ -69,6 +71,7 @@ from mcp.transport.message import _message
 # test patch of this module's attribute stays visible at the call site.
 _filesync = refs.proxy("_filesync")
 _write_task = refs.proxy("_write_task")
+from mcp.message_tool import _message_type
 
 
 # Pinned in server.py: test_transition_validation.py statically audits this
@@ -106,6 +109,22 @@ refs.define("_transition_task", _transition_task)
 
 
 def _tool_schema(name: str) -> dict[str, Any]:
+    if name == "message" and _runtime_role() == "manager":
+        return {
+            "name": name,
+            "description": "Send an ordinary Matrix message to another room. Mention the Leader's full Matrix ID when forwarding a project. The sender is your current Manager identity. For the current room, reply directly.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["send"]},
+                    "channel": {"type": "string", "enum": ["matrix"]},
+                    "target": {"type": "string", "description": "Destination as room:!roomId:domain."},
+                    "message": {"type": "string", "description": "Text with the recipient's full Matrix mention, goal, and acceptance criteria."},
+                },
+                "required": ["target", "message"],
+                "additionalProperties": False,
+            },
+        }
     schema = TOOL_SCHEMAS[name]
     return {
         "name": name,
@@ -120,6 +139,16 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
     args = arguments or {}
     if name not in TOOL_NAMES:
         payload = {"ok": False, "error": "unknown_tool", "tool": name}
+    elif _runtime_role() == "manager" and name not in _visible_tool_names():
+        payload = {
+            "ok": False, "error": "forbidden_tool", "tool": name,
+            "message": "team workflow tools are not available to the Manager role",
+        }
+    elif name == "message" and _runtime_role() == "manager" and _message_type(args) == "PROJECT_REQUESTED":
+        payload = {
+            "ok": False, "error": "forbidden_action", "tool": name,
+            "message": "Manager handoffs must be ordinary cross-agent messages. Omit type, sender, and agentId; mention the Leader's full Matrix ID in message.",
+        }
     elif name == "message" and _message_tool_blocked_for_runtime_role():
         payload = {
             "ok": False,
@@ -141,6 +170,8 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
         payload = _projectflow(args)
     elif name == "taskflow":
         payload = _taskflow(args)
+    elif name == "build_review_context":
+        payload = build_review_context(args)
     else:
         payload = {
             "ok": True,
@@ -174,7 +205,38 @@ def _runtime_role() -> str:
         role = str(_section(_load_runtime_config(), "member").get("role") or "").strip()
     return _normalize_role(role)
 
+def _runtime_identity() -> str:
+    """The trusted runtime member identity (the account part of the
+    transition actor). Read from operator-set runtime data only, never
+    from a tool payload field (#1467 round 6: the identity used for an
+    authorization decision comes from the runtime, and two different
+    members must never collapse into one identity).
+
+    Resolution order (first non-empty wins): the AGENTTEAMS_WORKER_NAME
+    env var (the name env the message/trace layers already use), then
+    the runtime config member block: member.name, member.runtimeName,
+    then the matrixUserId localpart ('@user:server' -> 'user').
+    Normalized (strip, lowercase); '' when unknown — only then may the
+    payload's account_id carry the account (provenance for local /
+    test runs), and it can never override a trusted identity."""
+    identity = os.getenv("AGENTTEAMS_WORKER_NAME", "").strip()
+    if not identity:
+        member = _section(_load_runtime_config(), "member")
+        identity = (
+            str(member.get("name") or "").strip()
+            or str(member.get("runtimeName") or member.get("runtime_name") or "").strip()
+        )
+        if not identity:
+            user_id = str(
+                member.get("matrixUserId") or member.get("matrix_user_id") or ""
+            ).strip()
+            if user_id:
+                identity = user_id.lstrip("@").split(":", 1)[0].strip()
+    return identity.lower()
+
 def _visible_tool_names() -> list[str]:
+    if _runtime_role() == "manager":
+        return [name for name in TOOL_NAMES if name in {"health", "message", "filesync", "artifact"}]
     if _message_tool_blocked_for_runtime_role():
         return [name for name in TOOL_NAMES if name != "message"]
     return list(TOOL_NAMES)
@@ -205,7 +267,20 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any] | None:
         result = {"tools": list_tools()}
     elif method == "tools/call":
         params = request.get("params", {}) or {}
-        result = call_tool(str(params.get("name", "")), params.get("arguments", {}) or {})
+        scope = nullcontext()
+        if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in ("true", "1"):
+            try:
+                from at_trace_transport import mcp_request
+            except ImportError:
+                pass
+            else:
+                scope = mcp_request(params.get("_meta", {}), str(params.get("name", "")))
+        with scope as span:
+            result = call_tool(str(params.get("name", "")), params.get("arguments", {}) or {})
+            if span is not None:
+                from at_telemetry import set_io, outcome
+                set_io(span, input=params.get("arguments", {}), output=result)
+                outcome(span, json.loads(result["content"][0]["text"]))
     else:
         result = {
             "content": [

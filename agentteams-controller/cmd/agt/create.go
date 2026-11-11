@@ -131,7 +131,7 @@ func createWorkerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman|deepseek-harness)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman|deepseek-harness|codex)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content (inline)")
@@ -309,13 +309,16 @@ func createHumanCmd() *cobra.Command {
 		Long: `Create a new Human resource (Matrix account + room access).
 
   agt create human --name bob --display-name "Bob Chen"
-  agt create human --name alice --display-name "Alice" --email alice@example.com --permission-level 50`,
+  agt create human --name alice --display-name "Alice" --email alice@example.com --permission-level 2`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
 			}
 			if displayName == "" {
 				return fmt.Errorf("--display-name is required")
+			}
+			if permissionLevel < 1 || permissionLevel > 3 {
+				return fmt.Errorf("--permission-level must be 1 (Admin), 2 (Team-scoped), or 3 (Worker-only)")
 			}
 
 			req := map[string]interface{}{
@@ -345,7 +348,7 @@ func createHumanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Human username (required)")
 	cmd.Flags().StringVar(&displayName, "display-name", "", "Display name (required)")
 	cmd.Flags().StringVar(&email, "email", "", "Email address")
-	cmd.Flags().IntVar(&permissionLevel, "permission-level", 0, "Permission level (0-100)")
+	cmd.Flags().IntVar(&permissionLevel, "permission-level", 3, "Permission level: 1=Admin, 2=Team-scoped, 3=Worker-only")
 	cmd.Flags().StringVar(&accessibleTeams, "accessible-teams", "", "Comma-separated team names")
 	cmd.Flags().StringVar(&accessibleWorkers, "accessible-workers", "", "Comma-separated worker names")
 	cmd.Flags().StringVar(&note, "note", "", "Note for the Human user")

@@ -87,10 +87,17 @@ spec:
             {{- end }}
             - name: AGENTTEAMS_HERMES_WORKER_IMAGE
               value: {{ include "agentteams.worker.hermesImage" . | quote }}
+            - name: AGENTTEAMS_QWENPAW_WORKER_IMAGE
+              value: {{ printf "%s:%s" .Values.worker.defaultImage.qwenpaw.repository (.Values.worker.defaultImage.qwenpaw.tag | default (include "agentteams.globalImageTag" .)) | quote }}
             - name: AGENTTEAMS_OPENHUMAN_WORKER_IMAGE
               value: {{ include "agentteams.worker.openhumanImage" . | quote }}
             - name: AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE
               value: {{ include "agentteams.worker.deepseekHarnessImage" . | quote }}
+            {{- $codexImage := .Values.worker.defaultImage.codex | default dict }}
+            {{- if $codexImage.repository }}
+            - name: AGENTTEAMS_CODEX_WORKER_IMAGE
+              value: {{ include "agentteams.worker.codexImage" . | quote }}
+            {{- end }}
             - name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME
               value: {{ .Values.worker.defaultRuntime | quote }}
             - name: TZ
@@ -99,6 +106,12 @@ spec:
               value: {{ .Values.storage.provider | quote }}
             - name: AGENTTEAMS_FS_ENDPOINT
               value: {{ include "agentteams.storage.endpoint" . | quote }}
+            {{- if .Values.storage.publicEndpoint }}
+            # Caller-reachable origin for presigned download URLs (#1501);
+            # unset → ?presign=1 answers 501 presign_unsupported.
+            - name: AGENTTEAMS_FS_PUBLIC_ENDPOINT
+              value: {{ .Values.storage.publicEndpoint | quote }}
+            {{- end }}
             - name: AGENTTEAMS_FS_BUCKET
               value: {{ include "agentteams.storage.bucket" . | quote }}
             {{- if eq .Values.storage.provider "minio" }}

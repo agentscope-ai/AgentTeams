@@ -3,6 +3,7 @@ package initializer
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Config holds parameters for cluster initialization.
@@ -74,6 +76,7 @@ func (c Config) managesStorage() bool {
 // initializes storage structure, registers the admin account, sets up gateway
 // routes, and optionally creates the Manager CR.
 type Initializer struct {
+	Client  client.Client
 	OSS     oss.StorageClient
 	Matrix  matrix.Client
 	Gateway gateway.Client
@@ -104,6 +107,9 @@ func (i *Initializer) Run(ctx context.Context) error {
 		return fmt.Errorf("admin registration failed: %w", err)
 	}
 	logger.Info("admin account ready", "user", i.Config.AdminUser)
+	if err := i.ensureAdminHuman(ctx); err != nil {
+		return fmt.Errorf("admin Human registration failed: %w", err)
+	}
 
 	// Register Matrix AppService if enabled (must happen after admin is ready)
 	if i.Config.AppServiceEnabled {
@@ -175,6 +181,10 @@ func (i *Initializer) ensureOSSStructure(ctx context.Context) error {
 		"agentteams-config/teams/",
 		"agentteams-config/humans/",
 		"agents/",
+		// Top-level human file-area namespace (#1414 P1). Per-human
+		// subdirectories (humans/<username>/files, .trash) are created
+		// idempotently by the Human reconcile.
+		"humans/",
 	}
 	for _, dir := range dirs {
 		if err := i.OSS.PutObject(ctx, dir+".gitkeep", []byte("")); err != nil {
@@ -248,7 +258,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 
 		var svcSuffix string
 		if cfg.IsEmbedded {
-			if err := i.Gateway.EnsureStaticServiceSource(ctx, "tuwunel", host, port); err != nil {
+			if err := i.Gateway.EnsureStaticServiceSource(ctx, "tuwunel", host, port, "http"); err != nil {
 				logger.Error(err, "failed to register Tuwunel static service source (non-fatal)")
 			}
 			svcSuffix = "static"
@@ -273,7 +283,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 		} else {
 			var svcSuffix string
 			if cfg.IsEmbedded {
-				if err := i.Gateway.EnsureStaticServiceSource(ctx, "element-web", host, port); err != nil {
+				if err := i.Gateway.EnsureStaticServiceSource(ctx, "element-web", host, port, "http"); err != nil {
 					logger.Error(err, "failed to register Element Web static service source (non-fatal)")
 				}
 				svcSuffix = "static"
@@ -337,8 +347,8 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					logger.Error(err, "failed to create LLM provider (non-fatal)")
 				}
 			} else {
-				// Parse URL to create DNS service source
-				host, port, err := parseHostPort(cfg.OpenAIBaseURL)
+				// Parse URL to create an IP or DNS service source
+				host, port, err := parseCustomEndpoint(cfg.OpenAIBaseURL)
 				if err != nil {
 					logger.Error(err, "failed to parse AGENTTEAMS_OPENAI_BASE_URL (non-fatal)")
 				} else {
@@ -346,15 +356,15 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					if strings.HasPrefix(cfg.OpenAIBaseURL, "http://") {
 						proto = "http"
 					}
-					if err := i.Gateway.EnsureServiceSource(ctx, "openai-compat", host, port, proto); err != nil {
+					if err := i.ensureCustomServiceSource(ctx, "openai-compat", host, port, proto); err != nil {
 						logger.Error(err, "failed to register openai-compat service source (non-fatal)")
 					}
-					// Wait for DNS service source to propagate before creating provider
+					// Wait for the service source to propagate before creating provider
 					time.Sleep(2 * time.Second)
 					raw := map[string]interface{}{
 						"agentteamsMode":          true,
-						"openaiCustomUrl":         cfg.OpenAIBaseURL,
-						"openaiCustomServiceName": "openai-compat.dns",
+						"openaiCustomUrl":         customProviderURL(cfg.OpenAIBaseURL),
+						"openaiCustomServiceName": customServiceName("openai-compat", host),
 						"openaiCustomServicePort": port,
 					}
 					if err := i.Gateway.EnsureAIProvider(ctx, gateway.AIProviderRequest{
@@ -373,7 +383,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 			if cfg.OpenAIBaseURL != "" {
 				// Provider name is unrecognized but a custom base URL is provided —
 				// set up an openai-compatible provider with the custom endpoint.
-				host, port, err := parseHostPort(cfg.OpenAIBaseURL)
+				host, port, err := parseCustomEndpoint(cfg.OpenAIBaseURL)
 				if err != nil {
 					logger.Error(err, "failed to parse AGENTTEAMS_OPENAI_BASE_URL (non-fatal)")
 				} else {
@@ -381,14 +391,14 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 					if strings.HasPrefix(cfg.OpenAIBaseURL, "http://") {
 						proto = "http"
 					}
-					if err := i.Gateway.EnsureServiceSource(ctx, provider, host, port, proto); err != nil {
+					if err := i.ensureCustomServiceSource(ctx, provider, host, port, proto); err != nil {
 						logger.Error(err, "failed to register service source for provider (non-fatal)")
 					}
 					time.Sleep(2 * time.Second)
 					raw := map[string]interface{}{
 						"agentteamsMode":          true,
-						"openaiCustomUrl":         cfg.OpenAIBaseURL,
-						"openaiCustomServiceName": provider + ".dns",
+						"openaiCustomUrl":         customProviderURL(cfg.OpenAIBaseURL),
+						"openaiCustomServiceName": customServiceName(provider, host),
 						"openaiCustomServicePort": port,
 					}
 					if err := i.Gateway.EnsureAIProvider(ctx, gateway.AIProviderRequest{
@@ -437,6 +447,51 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (i *Initializer) ensureCustomServiceSource(ctx context.Context, name, host string, port int, protocol string) error {
+	if net.ParseIP(host) != nil {
+		return i.Gateway.EnsureStaticServiceSource(ctx, name, host, port, protocol)
+	}
+	return i.Gateway.EnsureServiceSource(ctx, name, host, port, protocol)
+}
+
+func parseCustomEndpoint(rawURL string) (string, int, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", 0, err
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return "", 0, fmt.Errorf("custom LLM endpoint must be an HTTP(S) URL without user credentials")
+	}
+	if strings.Contains(u.Hostname(), ":") {
+		return "", 0, fmt.Errorf("Higress Console static service sources do not support IPv6 endpoints")
+	}
+	host, port, err := parseHostPort(rawURL)
+	if err == nil && (port < 1 || port > 65535) {
+		err = fmt.Errorf("invalid endpoint port %d", port)
+	}
+	return host, port, err
+}
+
+func customServiceName(provider, host string) string {
+	if net.ParseIP(host) != nil {
+		return provider + ".static"
+	}
+	return provider + ".dns"
+}
+
+// The upstream port is carried separately by openaiCustomServicePort.
+func customProviderURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	} // parseHostPort reports malformed endpoints first.
+	u.Host = u.Hostname()
+	if strings.Contains(u.Host, ":") {
+		u.Host = "[" + u.Host + "]"
+	}
+	return u.String()
 }
 
 // parseHostPort extracts host and port from a URL like "http://host:port".

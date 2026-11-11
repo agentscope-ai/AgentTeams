@@ -72,9 +72,9 @@ fi
 MANAGER_IMAGE="agentteams/manager:local"
 QWENPAW_MANAGER_IMAGE="agentteams/manager-qwenpaw:local"
 CONTROLLER_IMAGE="agentteams/agentteams-controller:local"
-WORKER_IMAGE="agentteams/worker-agent:local"
-HERMES_WORKER_IMAGE="agentteams/hermes-worker:local"
-OPENHUMAN_WORKER_IMAGE="agentteams/openhuman-worker:local"
+WORKER_IMAGE="agentteams/agentteams-harness-openclaw:local"
+HERMES_WORKER_IMAGE="agentteams/agentteams-harness-hermes:local"
+OPENHUMAN_WORKER_IMAGE="agentteams/agentteams-harness-openhuman:local"
 HELM_IMAGE_OVERRIDES=""
 
 if [ "$SKIP_BUILD" = "0" ]; then
@@ -82,28 +82,16 @@ if [ "$SKIP_BUILD" = "0" ]; then
 
     # Controller
     log "Building controller image..."
-    docker build -t "$CONTROLLER_IMAGE" -f "${PROJECT_ROOT}/agentteams-controller/Dockerfile" "${PROJECT_ROOT}/agentteams-controller"
+    make -C "${PROJECT_ROOT}" build-agentteams-controller LOCAL_CONTROLLER="$CONTROLLER_IMAGE"
 
-    # Manager (choose between all-in-one and k8s-lightweight)
-    if [ "$BUILD_K8S_IMAGE" = "1" ]; then
-        log "Building manager image (lightweight k8s)..."
-        docker build -t "$MANAGER_IMAGE" \
-            --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base:${OPENCLAW_BASE_TAG} \
-            --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-            -f "${PROJECT_ROOT}/manager/Dockerfile.k8s" "${PROJECT_ROOT}"
-    else
-        log "Building manager image (all-in-one)..."
-        docker build -t "$MANAGER_IMAGE" \
-            --build-arg OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/openclaw-base:${OPENCLAW_BASE_TAG} \
-            --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-            -f "${PROJECT_ROOT}/manager/Dockerfile" "${PROJECT_ROOT}"
-    fi
-
-    # QwenPaw Manager (lightweight Python image with the agentteams_manager package)
-    log "Building QwenPaw manager image..."
+    # The same QwenPaw Harness image supports Manager and team roles.
+    log "Building shared QwenPaw Harness image..."
+    (cd "${PROJECT_ROOT}" && OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml)
+    (cd "${PROJECT_ROOT}" && OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml)
     docker build -t "$QWENPAW_MANAGER_IMAGE" \
         --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
-        -f "${PROJECT_ROOT}/manager/Dockerfile.qwenpaw" "${PROJECT_ROOT}"
+        --build-context shared="${PROJECT_ROOT}/shared/lib" \
+        -f "${PROJECT_ROOT}/qwenpaw/Dockerfile" "${PROJECT_ROOT}"
 
     # Worker images
     log "Building worker image (openclaw)..."
@@ -112,6 +100,7 @@ if [ "$SKIP_BUILD" = "0" ]; then
         --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
         --build-context shared="${PROJECT_ROOT}/shared/lib" \
         -f "${PROJECT_ROOT}/worker/Dockerfile" "${PROJECT_ROOT}/worker"
+    docker tag "$WORKER_IMAGE" "$MANAGER_IMAGE"
 
     log "Building worker image (hermes)..."
     docker build -t "$HERMES_WORKER_IMAGE" \
@@ -158,9 +147,9 @@ if [ "$SKIP_BUILD" = "0" ]; then
 
     HELM_IMAGE_OVERRIDES="--set manager.image.repository=agentteams/manager-qwenpaw --set manager.image.tag=local --set manager.image.pullPolicy=Never"
     HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set controller.image.repository=agentteams/agentteams-controller --set controller.image.tag=local --set controller.image.pullPolicy=Never"
-    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openclaw.repository=agentteams/worker-agent --set worker.defaultImage.openclaw.tag=local"
-    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.hermes.repository=agentteams/hermes-worker --set worker.defaultImage.hermes.tag=local"
-    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openhuman.repository=agentteams/openhuman-worker --set worker.defaultImage.openhuman.tag=local"
+    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openclaw.repository=agentteams/agentteams-harness-openclaw --set worker.defaultImage.openclaw.tag=local"
+    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.hermes.repository=agentteams/agentteams-harness-hermes --set worker.defaultImage.hermes.tag=local"
+    HELM_IMAGE_OVERRIDES="${HELM_IMAGE_OVERRIDES} --set worker.defaultImage.openhuman.repository=agentteams/agentteams-harness-openhuman --set worker.defaultImage.openhuman.tag=local"
 
     log "Local images built and loaded"
 else

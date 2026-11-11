@@ -4128,6 +4128,10 @@ func (c *conflictInjectingOSS) ListObjectsDetailed(ctx context.Context, prefix s
 	return c.mcLike.ListObjectsDetailed(ctx, prefix)
 }
 
+func (c *conflictInjectingOSS) ListObjectsRecursive(ctx context.Context, prefix, startAfter string, limit int) ([]oss.ObjectInfo, string, error) {
+	return c.mcLike.ListObjectsRecursive(ctx, prefix, startAfter, limit)
+}
+
 func (c *conflictInjectingOSS) GetObject(ctx context.Context, key string) ([]byte, error) {
 	data, err := c.mcLike.GetObject(ctx, key)
 	c.getCalls++
@@ -4140,6 +4144,10 @@ func (c *conflictInjectingOSS) GetObject(ctx context.Context, key string) ([]byt
 
 func (c *conflictInjectingOSS) PutObject(ctx context.Context, key string, data []byte) error {
 	return c.mcLike.PutObject(ctx, key, data)
+}
+
+func (c *conflictInjectingOSS) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	return c.mcLike.PutObjectIfAbsent(ctx, key, data)
 }
 
 // PutObjectIfMatch simulates the conditional write. When injectOnStat has
@@ -4155,6 +4163,21 @@ func (c *conflictInjectingOSS) PutObjectIfMatch(ctx context.Context, key string,
 		return oss.ErrPreconditionFailed
 	}
 	return c.mcLike.PutObject(ctx, key, data)
+}
+
+func (c *conflictInjectingOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	cur, err := c.mcLike.StatMeta(ctx, key)
+	if err != nil {
+		return err
+	}
+	if cur.ETag != matchETag {
+		return oss.ErrPreconditionFailed
+	}
+	return c.mcLike.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+func (c *conflictInjectingOSS) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	return c.PutObjectIfMatch(ctx, key, data, matchETag)
 }
 
 func (c *conflictInjectingOSS) Stat(ctx context.Context, key string) error {
@@ -4351,6 +4374,10 @@ func (f *snapshotFailGet) GetObject(ctx context.Context, key string) ([]byte, er
 	return nil, errors.New("get failed")
 }
 
+func (w *snapshotFailGet) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return w.StorageClient.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
 func TestCreateProject_NoSnapshot(t *testing.T) {
 	store := ossfake.NewMemory()
 	h := newSnapshotTestHandler(t, store, team("alpha-team"))
@@ -4480,6 +4507,17 @@ type failTaskPutOSS struct {
 	oss.StorageClient
 	failPrefix string
 	failures   int
+}
+
+func (f *failTaskPutOSS) PutObjectIfMatchWithType(ctx context.Context, key string, data []byte, contentType, matchETag string) error {
+	return f.StorageClient.PutObjectIfMatchWithType(ctx, key, data, contentType, matchETag)
+}
+
+// PutObjectIfMatchStrict forwards to the wrapped store so the strict
+// conditional-write path (writeProjectMeta, persistControlActionAudit)
+// stays transparent; only PutObject carries the injected failure.
+func (f *failTaskPutOSS) PutObjectIfMatchStrict(ctx context.Context, key string, data []byte, matchETag string) error {
+	return f.StorageClient.(strictConditionalWriter).PutObjectIfMatchStrict(ctx, key, data, matchETag)
 }
 
 func (f *failTaskPutOSS) PutObject(ctx context.Context, key string, data []byte) error {
@@ -6273,7 +6311,7 @@ func TestWorkflowStrongRereadFailureNotStrong(t *testing.T) {
 		getCounts:   getCounts,
 		advanceKey:  metaKey,
 		advanceData: v2,
-		advanceAt:   1, // advance invalidates the held snapshot → re-read ...
+		advanceAt:   1,    // advance invalidates the held snapshot → re-read ...
 		failReGet:   true, // ... which then fails
 	})
 
@@ -6318,7 +6356,7 @@ func TestWorkflowStrongRereadRacesAdvance(t *testing.T) {
 		getCounts:       getCounts,
 		advanceKey:      metaKey,
 		advanceData:     v2,
-		advanceAt:       1, // first advance: invalidates the held snapshot → re-read
+		advanceAt:       1,    // first advance: invalidates the held snapshot → re-read
 		races:           true, // second advance: lands after the re-read GetObject
 		advanceDataRace: v3,
 	})
@@ -6429,7 +6467,7 @@ func TestGetProjectEvents_CursorBoundToKind(t *testing.T) {
 	//    upgrade is one-way).
 	old := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"ts":"2026-09-09T09:00:00Z","task_id":"","seq":0}`))
 	wantMismatch("/api/v1/projects/p1/events?kind=control_action&cursor=" + old)
-	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events?cursor=" + old)
+	rec := doGetProjectEvents(t, h, "/api/v1/projects/p1/events?cursor="+old)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("old cursor on default feed status=%d body=%s, want 200 (kind check passed)", rec.Code, rec.Body.String())
 	}
@@ -6690,7 +6728,7 @@ func TestProjectWritePathsPreserveUnknownLoopKeys(t *testing.T) {
 			body:             `{"tasks":[{"taskId":"x","title":"X","assignedTo":"@w1"}]}`,
 			wantCode:         http.StatusConflict, // loop replan is rejected by design
 			wantProjectState: "active",
-	},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

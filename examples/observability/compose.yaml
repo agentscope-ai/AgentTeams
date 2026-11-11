@@ -1,0 +1,123 @@
+name: at-tracing-demo
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: tracing-local
+      POSTGRES_DB: langfuse
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    command: [redis-server, --requirepass, tracing-local]
+    healthcheck:
+      test: [CMD, redis-cli, -a, tracing-local, ping]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.3
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: tracing-local
+    volumes: [clickhouse:/var/lib/clickhouse]
+    healthcheck:
+      test: [CMD-SHELL, wget -q --spider http://localhost:8123/ping]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+  minio:
+    image: rustfs/rustfs:1.0.4
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: minio
+      RUSTFS_SECRET_KEY: tracing-local
+      RUSTFS_VOLUMES: /data
+      RUSTFS_CONSOLE_ENABLE: 'false'
+    volumes: [minio:/data]
+    healthcheck:
+      test: [CMD, curl, -fsS, http://localhost:9000/health]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  langfuse-worker:
+    image: ghcr.io/langfuse/langfuse-worker:3
+    restart: unless-stopped
+    depends_on: &dependencies
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      clickhouse: {condition: service_healthy}
+      minio: {condition: service_healthy}
+    environment: &langfuse-environment
+      DATABASE_URL: postgresql://postgres:tracing-local@postgres:5432/langfuse
+      SALT: at-tracing-local-demo-only
+      ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      TELEMETRY_ENABLED: 'false'
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: tracing-local
+      CLICKHOUSE_CLUSTER_ENABLED: 'false'
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_AUTH: tracing-local
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: tracing-local
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: 'true'
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: tracing-local
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: 'true'
+      LANGFUSE_INGESTION_QUEUE_DELAY_MS: '100'
+      LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: '1000'
+  langfuse:
+    image: ghcr.io/langfuse/langfuse:3
+    restart: unless-stopped
+    depends_on: *dependencies
+    ports: ['127.0.0.1:13100:3000']
+    environment:
+      <<: *langfuse-environment
+      NEXTAUTH_URL: http://localhost:13100
+      NEXTAUTH_SECRET: at-tracing-local-demo-only-nextauth
+      LANGFUSE_INIT_ORG_ID: at-demo
+      LANGFUSE_INIT_ORG_NAME: AgentTeams Demo
+      LANGFUSE_INIT_PROJECT_ID: at-workers
+      LANGFUSE_INIT_PROJECT_NAME: AT Worker Tracing
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-at-local-demo
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-at-local-demo
+      LANGFUSE_INIT_USER_EMAIL: demo@agentteams.local
+      LANGFUSE_INIT_USER_NAME: AT Demo
+      LANGFUSE_INIT_USER_PASSWORD: AgentTeams-demo-2026
+  collector:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.120.0
+    restart: unless-stopped
+    command: [--config=/etc/otelcol/config.yaml]
+    volumes: ['./collector.yaml:/etc/otelcol/config.yaml:ro', 'collector:/var/lib/otelcol']
+    ports: ['127.0.0.1:14318:4318', '127.0.0.1:14317:4317']
+    environment:
+      LANGFUSE_OTLP_BASE_URL: http://langfuse:3000/api/public/otel
+      LANGFUSE_BASIC_AUTH: cGstbGYtYXQtbG9jYWwtZGVtbzpzay1sZi1hdC1sb2NhbC1kZW1v
+    depends_on: [langfuse]
+volumes:
+  postgres:
+  clickhouse:
+  minio:
+  collector:
+    external: true
+    name: at-tracing-demo_collector

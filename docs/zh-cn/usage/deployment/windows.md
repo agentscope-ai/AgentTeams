@@ -199,7 +199,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 ```
 选择 CodingPlan 默认模型:
   1) qwen3.5-plus  - 千问 3.5（速度最快）
-  2) glm-5  - 智谱 GLM-5（编程推荐）
+  2) glm-5.2  - 智谱 GLM-5.2（编程推荐）
   3) kimi-k2.5  - Moonshot Kimi K2.5
   4) MiniMax-M2.5  - MiniMax M2.5
 
@@ -331,7 +331,7 @@ LLM API Key: ****
 ```
 [AgentTeams] 正在拉取嵌入式 controller 镜像: .../agentteams-embedded:...
 [AgentTeams] 正在拉取 Manager 镜像: .../agentteams-manager:latest
-[AgentTeams] 正在拉取 Worker 镜像: .../agentteams-worker:latest
+[AgentTeams] 正在拉取 Worker 镜像: .../agentteams-harness-openclaw:latest
 [AgentTeams] 正在启动 controller 容器...
 [AgentTeams] 等待 Manager Agent 容器...
 [AgentTeams] Manager Agent 已就绪！

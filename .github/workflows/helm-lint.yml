@@ -6,24 +6,45 @@ on:
       - 'helm/**'
       - 'install/agentteams-install.sh'
       - 'install/agentteams-install.ps1'
+      - 'install/agentteams-dashboard-tests.sh'
+      - 'install/test*install*'
       - 'install/agentteams-apply.sh'
       - 'Makefile'
       - '.github/workflows/build.yml'
       - '.github/workflows/build-image.yml'
+      - '.github/workflows/build-openclaw-base.yml'
       - '.github/workflows/helm-lint.yml'
       - 'tests/test-build-workflows.py'
+      - '.github/workflows/test-controller.yml'
+      - '.github/workflows/test-manager.yml'
       - '.github/workflows/build-rc.yml'
       - '.github/workflows/build-deepseek-harness.yml'
       - '.github/workflows/release.yml'
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
+      - 'tests/test_openhuman_native_tools.py'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
+      - 'tests/check-installer-token-plan-models.sh'
+      - 'tests/check-installer-controller-url.sh'
+      - 'tests/check-installer-presign-endpoint.sh'
+      - 'tests/check-plugin-release-tag.sh'
+      - 'plugins/scripts/check-release-tag.sh'
+      - 'tests/check-installer-wasm-registry.sh'
+      - 'tests/check-installer-wasm-registry.ps1'
+      - 'tests/check-custom-llm-endpoint.sh'
+      - 'tests/check-custom-llm-endpoint.ps1'
+      - 'manager/scripts/init/setup-higress.sh'
       - 'tests/check-installer-username-validation.sh'
       - 'tests/check-installer-username-validation.ps1'
       - 'tests/check-installer-env-data-dir-readback.sh'
       - 'tests/check-installer-dashboard-session-secret.sh'
       - 'tests/check-installer-embedded-latest-pull.sh'
       - 'tests/check-installer-auto-version-images.sh'
+      - 'tests/check-harness-image-names.ps1'
+      - 'tests/check-manager-shared-images.sh'
+      - 'tests/check-manager-dm-room.sh'
+      - 'tests/check-installer-codex-image.sh'
+      - 'tests/check-installer-codex-image.ps1'
       - 'tests/check-teamharness-acceptance-observer.sh'
       - 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh'
       - 'tests/check-installer-qwenpaw-runtime-options.sh'
@@ -42,6 +63,7 @@ on:
       - 'tests/lib/test29-readiness.sh'
       - 'hack/local-k8s-up.sh'
       - 'tests/check-create-project-grant-admin.sh'
+      - 'tests/check-create-project-team.sh'
       - 'manager/agent/skills/project-management/**'
       - 'manager/agent/skills/coding-cli-management/**'
       - 'manager/agent/worker-skills/coding-cli/**'
@@ -50,6 +72,9 @@ on:
       - 'tests/check-coding-cli-runs-metadata.sh'
       - 'manager/scripts/init/start-manager-agent.sh'
       - 'manager/tests/test-manager-startup-recovery.sh'
+      - 'tests/check-docs-zh-parity.sh'
+      - 'docs/usage/**'
+      - 'docs/zh-cn/usage/**'
   workflow_dispatch: ~
 
 jobs:
@@ -62,8 +87,52 @@ jobs:
       - name: Check AgentTeams rename contracts
         run: bash tests/check-agentteams-rename-defaults.sh
 
+      - name: Check one-click installation and data-preserving upgrades
+        run: python3 -m unittest discover -s install -p 'test_*install.py' -v
+
+      - name: Check PowerShell installation and upgrades
+        shell: pwsh
+        run: |
+          ./install/test-one-click-install.ps1
+          ./install/test-upgrade-install.ps1
+          ./tests/check-harness-image-names.ps1
+
+      - name: Check Dashboard installation
+        run: bash install/agentteams-dashboard-tests.sh
+
       - name: Check pre-v1.2 installer compatibility
         run: bash tests/check-installer-pre-1.2-env-compat.sh
+
+      - name: Check installer Token Plan models
+        run: bash tests/check-installer-token-plan-models.sh
+
+      - name: Check installer controller URL contract
+        run: bash tests/check-installer-controller-url.sh
+      - name: Check installer presign endpoint contract
+        run: bash tests/check-installer-presign-endpoint.sh
+      - name: Check plugin release tag controls
+        run: bash tests/check-plugin-release-tag.sh
+
+      - name: Check Bash installer WASM registry
+        run: bash tests/check-installer-wasm-registry.sh
+
+      - name: Check Codex default Worker image
+        run: bash tests/check-installer-codex-image.sh
+
+      - name: Check PowerShell Codex default Worker image
+        shell: pwsh
+        run: ./tests/check-installer-codex-image.ps1
+
+      - name: Check PowerShell installer WASM registry
+        shell: pwsh
+        run: ./tests/check-installer-wasm-registry.ps1
+
+      - name: Check Shell custom LLM endpoints
+        run: bash tests/check-custom-llm-endpoint.sh
+
+      - name: Check PowerShell custom LLM endpoints
+        shell: pwsh
+        run: ./tests/check-custom-llm-endpoint.ps1
 
       - name: Check Bash installer username validation
         run: bash tests/check-installer-username-validation.sh
@@ -83,6 +152,15 @@ jobs:
 
       - name: Check automatic installer version and platform selection
         run: bash tests/check-installer-auto-version-images.sh
+
+      - name: Check shared Manager Harness images
+        run: bash tests/check-manager-shared-images.sh
+
+      - name: Check OpenHuman native role tools
+        run: python3 tests/test_openhuman_native_tools.py
+
+      - name: Check Manager room discovery
+        run: bash tests/check-manager-dm-room.sh
 
       - name: Check TeamHarness acceptance observer
         run: bash tests/check-teamharness-acceptance-observer.sh
@@ -110,6 +188,9 @@ jobs:
 
       - name: Check create-project grant-admin wiring
         run: bash tests/check-create-project-grant-admin.sh
+
+      - name: Check create-project --team roster and join reporting
+        run: bash tests/check-create-project-team.sh
 
       - name: Check coding-cli Qoder PAT and .processing guard
         run: bash tests/check-coding-cli-qoder-pat-processing.sh
@@ -146,3 +227,16 @@ jobs:
       - name: Template dry-run
         run: |
           bash tests/check-helm-agentteams.sh
+
+  docs-zh-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check zh-cn docs parity self-test (missing counterpart fails, complete pairing passes)
+        run: bash tests/check-docs-zh-parity.sh --self-test
+
+      - name: Check zh-cn docs parity on the repository tree
+        run: bash tests/check-docs-zh-parity.sh

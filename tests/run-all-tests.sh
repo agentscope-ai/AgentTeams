@@ -172,7 +172,7 @@ else
     make -C "${PROJECT_ROOT}" uninstall 2>/dev/null || true
     AGENTTEAMS_NON_INTERACTIVE=1 AGENTTEAMS_YOLO=1 AGENTTEAMS_MOUNT_SOCKET=1 \
         AGENTTEAMS_INSTALL_MANAGER_IMAGE="agentteams/manager:${AGENTTEAMS_VERSION}" \
-        AGENTTEAMS_INSTALL_WORKER_IMAGE="agentteams/worker-agent:${AGENTTEAMS_VERSION}" \
+        AGENTTEAMS_INSTALL_WORKER_IMAGE="agentteams/agentteams-harness-openclaw:${AGENTTEAMS_VERSION}" \
         make -C "${PROJECT_ROOT}" install SKIP_BUILD=1
 
     # ============================================================
@@ -355,7 +355,7 @@ RESULTS=()
 
 # Determine which tests to run
 TESTS=()
-for test_file in "${SCRIPT_DIR}"/test-*.sh; do
+for test_file in "${SCRIPT_DIR}"/test-[0-9]*.sh; do
     test_num=$(basename "${test_file}" | grep -o '[0-9]\+')
     if [ -n "${TEST_FILTER}" ]; then
         if echo "${TEST_FILTER}" | grep -qw "${test_num}"; then

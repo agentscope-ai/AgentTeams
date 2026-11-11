@@ -52,6 +52,13 @@ doc = read(boundary_doc)
 end
 
 assert_file(runtime_design_doc)
+
+# Builtin Leader guidance must agree with Controller resource authorization.
+leader_root = repo_root / "manager/agent/team-leader-agent"
+leader_guidance = [leader_root / "AGENTS.md", leader_root / "HEARTBEAT.md", leader_root / "skills/organization/SKILL.md"].map { |path| read(path) }.join("\n")
+assert(!leader_guidance.match?(/^\s*agt worker (wake|sleep|ensure-ready)\b/), "Leader guidance must not prescribe resource lifecycle writes")
+assert(leader_guidance.include?("Manager or platform Admin"), "Leader runtime blockers must name the resource authority")
+
 runtime_design = read(runtime_design_doc)
 assert(runtime_design.include?("submission_id") && runtime_design.include?("submitted_at") && runtime_design.include?("不透明、不可变提交身份"), "runtime design must define opaque immutable submission identity")
 assert(runtime_design.include?("teamharness.task-result.v1") && runtime_design.include?("canonical_json"), "runtime design must define the cross-runtime result digest domain and canonical payload")
@@ -173,9 +180,12 @@ manager_prompt = read(plugin_root / manager_prompts.fetch("agents"))
 assert(manager_prompt.include?("control-plane"), "manager prompt must state the control-plane boundary")
 
 skills = manifest.fetch("skills")
-assert(!skills.key?("manager"), "manager control-plane skills are not part of TeamHarness v0.1 manifest")
 expected_skills = {
+  "manager" => {
+    "resource-management" => %w[manager]
+  },
   "agent" => {
+    "task-diagnosis" => %w[leader manager],
     "mcporter" => %w[leader worker manager remote-member],
     "find-skills" => %w[leader worker manager remote-member]
   },
@@ -199,7 +209,7 @@ expected_skills.each do |group, expected|
     skill_path = plugin_root / entry.fetch("path") / "SKILL.md"
     assert_file(skill_path)
     frontmatter = skill_frontmatter(skill_path)
-    expected_name = group == "agent" ? entry.fetch("id") : "teamharness-#{entry.fetch("id")}"
+    expected_name = group == "team" ? "teamharness-#{entry.fetch("id")}" : entry.fetch("id")
     assert(frontmatter.fetch("name", nil) == expected_name, "skill #{entry.fetch("id")} front matter name must be #{expected_name}")
     description = frontmatter.fetch("description", "").to_s.strip
     assert(!description.empty?, "skill #{entry.fetch("id")} front matter description must be present")
@@ -329,3 +339,20 @@ combined = plugin_files.map { |path| read(path) }.join("\n")
 end
 
 puts "ok: teamharness contracts"
+
+# The two shipped bundle trees must stay byte-identical for team skills.
+def tree_files(root)
+  Dir.glob((root / "**/*").to_s)
+     .select { |path| File.file?(path) }
+     .map { |path| Pathname.new(path).relative_path_from(root).to_s }
+     .sort
+end
+
+team_tree = repo_root / "plugins/teamharness/skills/team"
+agentteams_tree = repo_root / "plugins/agentteams-teamharness/skills/team"
+left = tree_files(team_tree)
+right = tree_files(agentteams_tree)
+assert(left == right, "team skill trees diverge: #{(left - right).inspect} / #{(right - left).inspect}")
+left.each do |rel|
+  assert(read(team_tree / rel) == read(agentteams_tree / rel), "team skill twin differs: #{rel}")
+end

@@ -20,7 +20,10 @@
     {
       "id": "hermes",
       "path": "adapters/hermes",
-      "pluginId": "agentteams-matrix-channel"
+      "pluginId": "agentteams_matrix",
+      "requires": {
+        "hermes": ">=0.22.5"
+      }
     }
   ]
 }

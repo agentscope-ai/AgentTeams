@@ -1,0 +1,147 @@
+name: Build integration images
+
+on:
+  workflow_call:
+    inputs:
+      targets:
+        required: true
+        type: string
+      controller:
+        type: boolean
+        default: false
+      local_openclaw_base:
+        type: boolean
+        default: false
+      published_base_ref:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.targets) }}
+    steps:
+      - name: Free Up Disk Space
+        # Only the manager target exports a tar large enough to hit ENOSPC on a
+        # stock runner; the other six targets never did, and this step costs
+        # ~2m50s of the job budget.
+        if: matrix.target == 'manager'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Higress registry (when credentials are available)
+        if: env.REGISTRY_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          registry: higress-registry.cn-hangzhou.cr.aliyuncs.com
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Download controller image
+        if: inputs.controller
+        uses: actions/download-artifact@v4
+        with:
+          name: image-controller
+          path: /tmp
+
+      - name: Load controller image
+        if: inputs.controller
+        run: gunzip -c /tmp/agentteams-controller.tar.gz | docker load
+
+      - name: Download local openclaw-base image
+        if: |
+          inputs.local_openclaw_base &&
+          (matrix.target == 'manager' || matrix.target == 'worker')
+        uses: actions/download-artifact@v4
+        with:
+          name: image-openclaw-base
+          path: /tmp
+
+      - name: Load local openclaw-base image
+        if: |
+          inputs.local_openclaw_base &&
+          (matrix.target == 'manager' || matrix.target == 'worker')
+        run: gunzip -c /tmp/agentteams-openclaw-base.tar.gz | docker load
+
+      - name: Build image
+        run: |
+          # Dependencies were built once by the caller and loaded above.
+          EXTRA=()
+          MAKE_ARGS=()
+          if [ "${{ inputs.controller }}" = true ]; then
+            MAKE_ARGS+=(-o build-agentteams-controller)
+          fi
+          if [ "${{ inputs.local_openclaw_base }}" = "true" ] && \
+             { [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; }; then
+            EXTRA+=(OPENCLAW_BASE_IMAGE=agentteams/openclaw-base OPENCLAW_BASE_VERSION=latest)
+            echo "Using the shared locally-built openclaw-base for ${{ matrix.target }}"
+          elif [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; then
+            BASE_REF="${{ inputs.published_base_ref }}"
+            test -n "$BASE_REF"
+            EXTRA+=("OPENCLAW_BASE_BUILD_ARG=--build-arg OPENCLAW_BASE_IMAGE=$BASE_REF")
+            echo "Using published base $BASE_REF for ${{ matrix.target }}"
+          fi
+          make "${MAKE_ARGS[@]}" build-${{ matrix.target }} \
+            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
+            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/" \
+            "${EXTRA[@]}"
+
+      - name: Smoke-test packaged DeepSeek Harness
+        if: matrix.target == 'deepseek-harness-worker'
+        run: |
+          docker run --rm --entrypoint python3 \
+            -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/headless_smoke.py:ro" \
+            agentteams/agentteams-harness-deepseek:latest /tmp/headless_smoke.py
+
+      - name: Save image
+        run: |
+          set -euo pipefail
+          # Exclude already-uploaded base images (controller, openclaw-base) so
+          # each per-target tar only contains its own deltas.
+          images=$(docker images --format '{{.Repository}}:{{.Tag}}' \
+            | grep -E '^agentteams/' \
+            | grep -v '<none>' \
+            | grep -v 'agentteams-controller' \
+            | grep -v 'openclaw-base' || true)
+          if [ -z "${images}" ]; then
+            echo "no agentteams images were built for ${{ matrix.target }}" >&2
+            docker images >&2
+            exit 1
+          fi
+          # pipefail: a failed export (e.g. "no space left on device") must fail
+          # this job instead of publishing a truncated tar, which only shows up
+          # much later as "open .../docker-import-*/repositories: no such file"
+          # in the consumer jobs.
+          docker save ${images} | gzip > /tmp/agentteams-${{ matrix.target }}.tar.gz
+          gzip -t /tmp/agentteams-${{ matrix.target }}.tar.gz
+          ls -l /tmp/agentteams-${{ matrix.target }}.tar.gz
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.target }}
+          path: /tmp/agentteams-${{ matrix.target }}.tar.gz
+          retention-days: 1

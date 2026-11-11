@@ -56,6 +56,81 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
         call_tool,
     )
 
+    # Task/project meta now commits through the Controller's conditional
+    # endpoint (fail-closed when absent); this harness runs without a live
+    # Controller, so a minimal in-process stand-in records the commits and the
+    # read helpers see them back. The fail-closed contract itself is covered
+    # by plugins/tests/teamharness/test_task_meta_commit.py.
+    import hashlib
+    import re
+    import mcp.artifact.sync as _sync_mod
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    _VIRTUAL_META = {}
+
+    def _fake_snapshot(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        return (entry[0] if entry else None), None
+
+    def _fake_etag(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        return (entry[1] if entry else None), None
+
+    def _fake_consistent_read(arguments, meta_path):
+        entry = _VIRTUAL_META.get(meta_path)
+        if entry is None:
+            return None, None, None
+        return entry[0], entry[1], None
+
+    _sync_mod._remote_meta_snapshot = _fake_snapshot
+    _sync_mod._remote_meta_etag = _fake_etag
+    _sync_mod._remote_meta_consistent_read = _fake_consistent_read
+
+    class _MetaController(BaseHTTPRequestHandler):
+        def _send(self, code, payload=None):
+            raw = b"" if payload is None else json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            if raw:
+                self.wfile.write(raw)
+
+        def do_PUT(self):  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            match = re.match(r"^/api/v1/(tasks|projects)/([^/]+)/meta$", parsed.path)
+            if not match:
+                return self._send(404, {"error": "not_found"})
+            kind = match.group(1)
+            item_id = urllib.parse.unquote(match.group(2))
+            meta_path = "shared/" + kind + "/" + item_id + "/meta.json"
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length)
+            current = _VIRTUAL_META.get(meta_path)
+            if self.headers.get("If-None-Match") == "*":
+                if current is not None:
+                    return self._send(409, {"error": "conflict"})
+            else:
+                expect = (self.headers.get("If-Match") or "").strip('"')
+                if current is None:
+                    return self._send(404, {"error": "not_found"})
+                if expect and expect != current[1]:
+                    return self._send(409, {"error": "conflict"})
+            try:
+                parsed_meta = json.loads(raw.decode("utf-8"))
+            except ValueError:
+                return self._send(422, {"error": "invalid_meta"})
+            etag = hashlib.md5(raw).hexdigest()
+            _VIRTUAL_META[meta_path] = (parsed_meta, etag)
+            return self._send(200, {"ok": True, "etag": etag})
+
+        def log_message(self, *args):
+            pass
+
+    _controller = ThreadingHTTPServer(("127.0.0.1", 0), _MetaController)
+    threading.Thread(target=_controller.serve_forever, daemon=True).start()
+    os.environ["AGENTTEAMS_CONTROLLER_URL"] = "http://127.0.0.1:%d" % _controller.server_address[1]
+
     workspace = pathlib.Path("#{workspace}")
     real_shared = pathlib.Path("#{root}") / "real-shared"
     workspace.mkdir(parents=True, exist_ok=True)

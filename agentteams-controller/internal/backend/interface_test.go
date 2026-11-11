@@ -41,6 +41,7 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeHermes, true},
 		{RuntimeQwenPaw, true},
 		{RuntimeDeepSeekHarness, true},
+		{RuntimeCodex, true},
 		{"unknown", false},
 	}
 	for _, tc := range cases {
@@ -54,6 +55,7 @@ func TestUsesMemberRuntimeConfig(t *testing.T) {
 	for runtime, want := range map[string]bool{
 		RuntimeQwenPaw:         true,
 		RuntimeDeepSeekHarness: true,
+		RuntimeCodex:           true,
 		RuntimeOpenClaw:        false,
 		RuntimeCopaw:           false,
 		RuntimeHermes:          false,

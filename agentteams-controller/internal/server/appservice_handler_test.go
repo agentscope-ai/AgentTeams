@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -1153,5 +1154,141 @@ func TestAppserviceRetryableFailureBatch(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&alphaUpdates); got != 1 {
 		t.Fatalf("alpha updates=%d, want 1 (successful mention must stay deduplicated on redelivery)", got)
+	}
+}
+
+// TestAppserviceDedupMapBounded: the dedup map must not retain every
+// distinct mention event for the process lifetime. The controller is a
+// long-running process and every mention of a worker/leader adds a
+// roomID/eventID/userID entry; with entries never expiring the map grows
+// without bound (a slow memory leak on any busy deployment). The flood
+// size is the implementation cap (8192, see appservice_handler.go) plus a
+// margin: if the map holds every distinct event, it is unbounded.
+func TestAppserviceDedupMapBounded(t *testing.T) {
+	const appserviceDedupFlood = 8256 // appserviceDedupMaxEntries (8192) + 64
+
+	scheme := newAppserviceTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		// State nil → Running: the wake path is skipped after the first
+		// event, so this test exercises only the dedup bookkeeping.
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@alpha-dev:example.com",
+			RoomID:       "!worker-dm:example.com",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+
+	handler := NewAppserviceHandler("test-hs-token", k8sClient, "default")
+
+	room := "!worker-dm:example.com"
+	events := make([]matrixEvent, 0, appserviceDedupFlood)
+	for i := 0; i < appserviceDedupFlood; i++ {
+		events = append(events, mentionEvent(room, fmt.Sprintf("$flood-%d", i),
+			"@human:example.com", []string{"@alpha-dev:example.com"}))
+	}
+	req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-flood",
+		txnBody(t, events))
+	req.Header.Set("Authorization", "Bearer test-hs-token")
+	rec := httptest.NewRecorder()
+	handler.HandleTransactions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", rec.Code)
+	}
+	if got := len(handler.seen); got >= appserviceDedupFlood {
+		t.Fatalf("dedup map holds %d entries after %d distinct events; it must be bounded, not grow with every mention",
+			got, appserviceDedupFlood)
+	}
+}
+
+// TestAppserviceDedupExpiresAfterTTL: dedup must expire. The homeserver
+// re-pushes a failed transaction within its sending queue's retry window
+// (minutes), so remembering an event for an hour covers every realistic
+// redelivery — but a redelivery arriving after the dedup window must be
+// processed again instead of being swallowed forever.
+func TestAppserviceDedupExpiresAfterTTL(t *testing.T) {
+	scheme := newAppserviceTestScheme(t)
+	sleeping := "Sleeping"
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Spec:       v1beta1.WorkerSpec{State: &sleeping},
+		Status: v1beta1.WorkerStatus{
+			MatrixUserID: "@alpha-dev:example.com",
+			RoomID:       "!worker-dm:example.com",
+		},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+
+	base := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	var offset atomic.Int64 // minutes after base
+	handler := NewAppserviceHandler("test-hs-token", k8sClient, "default")
+	handler.now = func() time.Time { return base.Add(time.Duration(offset.Load()) * time.Minute) }
+
+	room := "!worker-dm:example.com"
+	resetToSleeping := func() {
+		var w v1beta1.Worker
+		if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-dev", Namespace: "default"}, &w); err != nil {
+			t.Fatalf("get worker: %v", err)
+		}
+		w.Spec.State = &sleeping
+		if err := k8sClient.Update(context.Background(), &w); err != nil {
+			t.Fatalf("reset worker: %v", err)
+		}
+	}
+	deliver := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/_matrix/app/v1/transactions/txn-ttl",
+			txnBody(t, []matrixEvent{
+				mentionEvent(room, "$ev-ttl", "@human:example.com", []string{"@alpha-dev:example.com"}),
+			}))
+		req.Header.Set("Authorization", "Bearer test-hs-token")
+		rec := httptest.NewRecorder()
+		handler.HandleTransactions(rec, req)
+		return rec
+	}
+	state := func() string {
+		var w v1beta1.Worker
+		if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-dev", Namespace: "default"}, &w); err != nil {
+			t.Fatalf("get worker: %v", err)
+		}
+		return w.Spec.DesiredState()
+	}
+
+	// First delivery wakes the worker.
+	if rec := deliver(); rec.Code != http.StatusOK {
+		t.Fatalf("first delivery status=%d, want 200", rec.Code)
+	}
+	if got := state(); got != "Running" {
+		t.Fatalf("state=%q after first delivery, want Running", got)
+	}
+
+	// Redelivery 30 minutes later is still inside the dedup window and must
+	// be swallowed (existing behavior, pinned here).
+	resetToSleeping()
+	offset.Store(30)
+	if rec := deliver(); rec.Code != http.StatusOK {
+		t.Fatalf("in-window redelivery status=%d, want 200", rec.Code)
+	}
+	if got := state(); got != "Sleeping" {
+		t.Fatalf("state=%q after in-window redelivery, want Sleeping (still deduplicated)", got)
+	}
+
+	// Redelivery 2 hours later is past the dedup window and must be
+	// processed again: the mention is re-applied and wakes the worker.
+	resetToSleeping()
+	offset.Store(120)
+	if rec := deliver(); rec.Code != http.StatusOK {
+		t.Fatalf("post-window redelivery status=%d, want 200", rec.Code)
+	}
+	if got := state(); got != "Running" {
+		t.Fatalf("state=%q after post-window redelivery, want Running (dedup must expire)", got)
 	}
 }

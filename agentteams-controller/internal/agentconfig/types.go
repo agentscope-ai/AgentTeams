@@ -35,10 +35,15 @@ type HeartbeatConfig struct {
 
 // WorkerConfigRequest describes everything needed to generate a worker's config files.
 type WorkerConfigRequest struct {
-	WorkerName  string // e.g. "worker-alice"
-	MatrixToken string // worker's Matrix access token
-	GatewayKey  string // worker's gateway API key
-	ModelName   string // optional: override default model
+	WorkerName     string // e.g. "worker-alice"
+	PersonalRoomID string // dedicated Worker room; other rooms still require a mention
+	MatrixToken    string // worker's Matrix access token
+	GatewayKey     string // worker's gateway API key
+	ModelName      string // optional: override default model
+	// ModelProvider optionally names the AI gateway provider that serves
+	// ModelName/SubagentModelName. Empty means the built-in gateway
+	// provider (agentteams-gateway).
+	ModelProvider string
 	// SubagentModelName optionally names the model for spawned subagents
 	// (QwenPaw >= 2.1.1 native subagent_model). Written to
 	// agents.defaults.model.subagent when non-empty.

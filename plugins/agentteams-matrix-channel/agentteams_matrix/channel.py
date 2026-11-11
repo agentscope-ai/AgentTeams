@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import html
 import importlib
 import inspect
@@ -16,10 +17,12 @@ import random
 import re
 import time
 import urllib.parse
-from uuid import uuid4
+from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 import httpx
 
@@ -79,7 +82,8 @@ logger = logging.getLogger("qwenpaw.channels.matrix")
 
 # #1334: masked replacement sent to the room on non-cancellation consume
 # errors; the raw err_text is logged only and never reaches the room.
-_CONSUME_ERROR_NOTICE = '⚠️ 本轮处理遇到系统错误，已中断。请重新发送你的请求；若问题持续出现，请联系管理员查看日志。'
+_CONSUME_ERROR_NOTICE = "⚠️ 本轮处理遇到系统错误，已中断。请重新发送你的请求；若问题持续出现，请联系管理员查看日志。"
+
 
 CHANNEL_KEY = "agentteams_matrix"
 
@@ -89,10 +93,20 @@ TYPING_SERVER_TIMEOUT_MS = 30000
 TYPING_RENEWAL_INTERVAL_S = 25
 TYPING_MAX_DURATION_S = 120
 DM_CACHE_TTL_MS = 30_000
+DM_MEMBERSHIP_TIMEOUT_S = 5.0
+MATRIX_EVENT_CALLBACK_TIMEOUT_S = 120.0
+MATRIX_SYNC_STATE_FILENAME = "matrix_sync_state.json"
+MATRIX_SYNC_ACCEPTED_EVENT_RECOVERY_THRESHOLD = 4096
 TASK_ROOM_CACHE_TTL_MS = 30_000
 MATRIX_EVENT_PROTOCOL_LIMIT_BYTES = 64 * 1024
 MATRIX_TEXT_EVENT_SAFE_BYTES = (MATRIX_EVENT_PROTOCOL_LIMIT_BYTES * 3) // 4
 MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES = MATRIX_TEXT_EVENT_SAFE_BYTES - 1024
+#: A long-text summary is only a preview, so an encrypted room gets a much
+#: smaller plaintext budget: encryption adds base64 (4/3) plus the megolm
+#: envelope and the outer event fields, and the server rejects PDUs over
+#: 65535 bytes outright (M_TOO_LARGE). A 105 KB message must still leave room
+#: for the envelope; 16 KiB of preview is plenty for a summary.
+MATRIX_TEXT_EVENT_ENCRYPTED_BUDGET_BYTES = 16 * 1024
 MATRIX_LONG_MESSAGE_METADATA_KEY = "com.agentteams.long_message"
 TEAMHARNESS_TRIGGER_CONTENT_KEY = "m.teamharness.trigger"
 TEAMHARNESS_SELF_TRIGGER_TYPES = frozenset({"PROJECT_REQUESTED"})
@@ -172,6 +186,12 @@ _TOOL_OUTPUT_MESSAGE_TYPE_NAMES = frozenset(
 _MATRIX_STREAMING_REASONING_EVENT_ID_KEY = "matrix_streaming_reasoning_event_id"
 _MATRIX_STREAMING_REASONING_LAST_EDIT_KEY = "matrix_streaming_reasoning_last_edit_at"
 _MATRIX_STREAMING_REASONING_STREAM_ID_KEY = "matrix_streaming_reasoning_stream_id"
+_MATRIX_TYPING_LIFECYCLE_KEY = "matrix_typing_lifecycle"
+
+_CURRENT_CALLBACK_ACCEPTANCE: ContextVar[Optional[asyncio.Future[bool]]] = ContextVar(
+    "matrix_current_callback_acceptance",
+    default=None,
+)
 
 
 def _clean_control_response_text(text: str) -> str:
@@ -188,7 +208,8 @@ def _clean_control_response_text(text: str) -> str:
 
 def _ends_with_no_reply_control(text: str) -> bool:
     """Return true when the final non-empty output line is NO_REPLY."""
-    return bool(text) and text.rstrip().splitlines()[-1].strip() == "NO_REPLY"
+    lines = (text or "").rstrip().splitlines()
+    return bool(lines) and lines[-1].strip() == "NO_REPLY"
 
 
 def _is_teamharness_tool_display(text: str) -> bool:
@@ -367,6 +388,23 @@ class HistoryEntry:
     sender_id: Optional[str] = None
 
 
+def _with_trace_reply(method):
+    """Restore the request context when a reply is sent after stream yield."""
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in ("true", "1"):
+            try:
+                from at_trace_transport import reply_context
+            except ImportError:
+                pass
+            else:
+                meta = kwargs.get("meta") or (args[2] if len(args) > 2 else None)
+                with reply_context(meta):
+                    return await method(self, *args, **kwargs)
+        return await method(self, *args, **kwargs)
+    return wrapped
+
+
 class AgentTeamsMatrixChannel(BaseChannel):
     """QwenPaw channel that connects to a Matrix homeserver via matrix-nio."""
 
@@ -447,7 +485,20 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._client: Optional[AsyncClient] = None
         self._user_id: Optional[str] = None
         self._sync_task: Optional[asyncio.Task] = None
+        self._callback_tasks: set[asyncio.Task[Any]] = set()
+        self._room_callback_locks: Dict[str, asyncio.Lock] = {}
+        self._active_sync_callback_futures: Optional[list[asyncio.Future[bool]]] = None
+        self._callback_event_ids: Dict[asyncio.Future[bool], str] = {}
+        self._inflight_callback_futures: Dict[str, asyncio.Future[bool]] = {}
+        self._accepted_event_ids: set[str] = set()
+        self._durable_sync_token: Optional[str] = None
+        self._pending_sync_checkpoints: list[
+            tuple[str, set[asyncio.Future[bool]], set[str]]
+        ] = []
+        self._checkpoint_recovery_required = False
         self._typing_tasks: Dict[str, asyncio.Task] = {}
+        self._typing_locks: Dict[str, asyncio.Lock] = {}
+        self._typing_lifecycles: Dict[str, int] = {}
         self._room_histories: Dict[str, List[HistoryEntry]] = {}
         # Per-room history generation + cumulative record counters. The send
         # alignment gate (#1244) snapshots the generation into each turn's
@@ -476,6 +527,20 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._active_thread_roots: Dict[str, str] = {}
         self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
 
+    async def _access_control_gate(self, payload: Any) -> bool:
+        # Denials are bot notices, not new requests. Keep this metadata local
+        # to the ACL check so allowed messages retain their normal reply type.
+        if isinstance(payload, dict):
+            meta = dict(payload.get("meta") or {})
+            meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            payload = {**payload, "meta": meta}
+        else:
+            payload = copy.copy(payload)
+            meta = dict(getattr(payload, "channel_meta", None) or {})
+            meta[_MATRIX_FORCE_NOTICE_KEY] = True
+            payload.channel_meta = meta
+        return await super()._access_control_gate(payload)
+
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
     # ------------------------------------------------------------------
@@ -488,6 +553,52 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 return f"matrix:{room_id}"
             return payload.get("sender_id") or ""
         return getattr(payload, "session_id", "") or ""
+
+    async def _consume_with_tracker(self, request: Any, payload: Any) -> None:
+        # SDK reloads share a TaskTracker, but create separate channel queues.
+        # Keep accepted Matrix deliveries with that agent-scoped tracker so an
+        # old queue's shutdown cannot discard a follow-up or execute it twice.
+        workspace = self._workspace
+        tracker = workspace.task_tracker
+        if not hasattr(tracker, "_agentteams_matrix_deliveries"):
+            tracker._agentteams_matrix_deliveries = {}
+            tracker._agentteams_matrix_delivery_locks = {}
+        deliveries = tracker._agentteams_matrix_deliveries
+        session = (request.session_id, request.user_id)
+        event_id = (request.channel_meta or {}).get("event_id") or str(uuid4())
+        key = (*session, event_id)
+        if key not in deliveries:
+            lock = tracker._agentteams_matrix_delivery_locks.setdefault(session, asyncio.Lock())
+
+            async def deliver() -> None:
+                async with lock:
+                    # Workspace.start() starts channels before the SDK binds
+                    # the manager. A reload candidate must use the committed
+                    # workspace rather than retain its old execution context.
+                    while workspace._manager is None:
+                        await asyncio.sleep(0.01)
+                    manager = workspace._manager
+                    current = manager.get_loaded_agent(workspace.agent_id)
+                    chat = await current.chat_manager.get_or_create_chat(
+                        request.session_id, request.user_id, self.channel,
+                        name=self._extract_chat_name(payload),
+                    )
+                    active = await tracker.snapshot_active_tasks()
+                    if chat.id in active:
+                        await asyncio.gather(asyncio.shield(active[chat.id]), return_exceptions=True)
+                    current = manager.get_loaded_agent(workspace.agent_id)
+                    channel = await current.channel_manager.get_channel(self.channel)
+                    await BaseChannel._consume_with_tracker(channel, request, payload)
+
+            deliveries[key] = asyncio.create_task(deliver())
+            # Retain recent completed IDs for overlapping sync clients only;
+            # pending deliveries must never be evicted.
+            for previous, task in tuple(deliveries.items()):
+                if len(deliveries) <= 256:
+                    break
+                if task.done():
+                    deliveries.pop(previous)
+        await asyncio.shield(deliveries[key])
 
     # ------------------------------------------------------------------
     # Factory — from_config / from_env
@@ -640,14 +751,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return
         try:
             importlib.import_module("olm")
-        except ImportError:
-            logger.error(
-                "MatrixChannel: olm not installed — falling back to "
-                "non-encrypted mode. "
-                "To enable E2EE: pip install matrix-nio[e2e] && "
-                "apt/dnf install libolm-dev",
-            )
-            self.encryption = False
+        except ImportError as exc:
+            # Fail closed (#1469 round 13): the channel asked for E2EE; a
+            # plaintext fallback would send m.room.message into a room whose
+            # state says encrypted. Refuse to start instead of demoting.
+            raise RuntimeError(
+                "MatrixChannel: olm is not installed while encryption is "
+                "enabled — refusing to start in plaintext. To enable E2EE: "
+                "pip install matrix-nio[e2e] && apt/dnf install libolm-dev "
+                "(or disable encryption explicitly)"
+            ) from exc
 
     def _init_async_client(self, resolved_device_id: str) -> None:
         # E2EE: when encryption is enabled, provide store_path so matrix-nio
@@ -846,13 +959,319 @@ class AgentTeamsMatrixChannel(BaseChannel):
         logger.error("MatrixChannel: token login failed component=matrix response_type=%s", type(whoami).__name__)
         return False
 
+    def _schedule_event_callback(
+        self,
+        callback: Callable[[MatrixRoom, Any], Any],
+        room: MatrixRoom,
+        event: Any,
+    ) -> None:
+        """Schedule a room callback without blocking matrix-nio sync.
+
+        matrix-nio awaits event callbacks serially while handling a sync
+        response.  Matrix metadata and UX calls in the handlers are allowed
+        to use the network, so run them independently and keep their failures
+        visible instead of letting one callback stall all later events.
+        """
+        event_id = str(getattr(event, "event_id", "") or "")
+        acceptance: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        callback_event_ids = getattr(self, "_callback_event_ids", None)
+        if callback_event_ids is None:
+            callback_event_ids = {}
+            self._callback_event_ids = callback_event_ids
+        callback_event_ids[acceptance] = event_id
+        active_futures = getattr(self, "_active_sync_callback_futures", None)
+        if active_futures is not None:
+            active_futures.append(acceptance)
+
+        accepted_event_ids = getattr(self, "_accepted_event_ids", set())
+        if event_id and event_id in accepted_event_ids:
+            # The event was consumed before a previous checkpoint was
+            # persisted.  It is safe to acknowledge it without re-enqueueing
+            # the request when Matrix replays the durable token.
+            acceptance.set_result(True)
+            return
+
+        inflight_futures = getattr(self, "_inflight_callback_futures", None)
+        if inflight_futures is None:
+            inflight_futures = {}
+            self._inflight_callback_futures = inflight_futures
+        inflight = inflight_futures.get(event_id)
+        if event_id and inflight is not None and not inflight.done():
+            # matrix-nio should not deliver the same event twice in one sync,
+            # but sharing the acceptance future makes duplicate delivery
+            # harmless if it does happen during recovery.
+            if active_futures is not None:
+                active_futures[-1] = inflight
+            callback_event_ids.pop(acceptance, None)
+            return
+
+        callback_event_ids[acceptance] = event_id
+        if event_id:
+            inflight_futures[event_id] = acceptance
+        acceptance.add_done_callback(
+            lambda _future: self._flush_pending_sync_checkpoints(),
+        )
+        task = asyncio.create_task(
+            self._run_event_callback(callback, room, event, acceptance),
+            name=(
+                "matrix-event-"
+                f"{getattr(callback, '__name__', 'callback')}-"
+                f"{str(getattr(event, 'event_id', ''))[:16]}"
+            ),
+        )
+        self._callback_tasks.add(task)
+        task.add_done_callback(
+            lambda done_task: self._on_event_callback_task_done(
+                done_task,
+                acceptance,
+                event_id,
+            ),
+        )
+
+    def _on_event_callback_task_done(
+        self,
+        task: asyncio.Task[Any],
+        acceptance: asyncio.Future[bool],
+        event_id: str,
+    ) -> None:
+        """Remove a callback task and fail acceptance if it never started."""
+        self._callback_tasks.discard(task)
+        inflight_futures = getattr(self, "_inflight_callback_futures", {})
+        if event_id and inflight_futures.get(event_id) is acceptance:
+            inflight_futures.pop(event_id, None)
+        if not acceptance.done():
+            acceptance.set_result(False)
+
+    def _mark_event_callback_accepted(self) -> None:
+        """Mark the current callback safe to include in a sync checkpoint."""
+        acceptance = _CURRENT_CALLBACK_ACCEPTANCE.get()
+        if acceptance is not None and not acceptance.done():
+            if self._record_accepted_event(acceptance):
+                acceptance.set_result(True)
+
+    def _record_accepted_event(self, acceptance: asyncio.Future[bool]) -> bool:
+        """Persist an accepted event until its sync checkpoint is durable."""
+        event_id = getattr(self, "_callback_event_ids", {}).get(acceptance, "")
+        if not event_id:
+            return True
+        accepted_event_ids = getattr(self, "_accepted_event_ids", None)
+        if accepted_event_ids is None:
+            accepted_event_ids = set()
+            self._accepted_event_ids = accepted_event_ids
+        accepted_event_ids.add(event_id)
+        if len(accepted_event_ids) >= MATRIX_SYNC_ACCEPTED_EVENT_RECOVERY_THRESHOLD:
+            # The consumer already owns this request. Never forget its ID
+            # to enforce a size cap: recover the checkpoint instead, retaining
+            # every handoff until a durable token covers it.
+            self._checkpoint_recovery_required = True
+            logger.warning(
+                "MatrixChannel: accepted event ledger requires checkpoint "
+                "recovery component=matrix accepted_events=%s",
+                len(accepted_event_ids),
+            )
+        if not getattr(self, "_durable_sync_token", None):
+            # Unit-test/manual callback paths can run before a sync token is
+            # loaded.  The real sync loop always loads the durable token
+            # before scheduling callbacks, so this in-memory fallback cannot
+            # acknowledge an event across a restart.
+            return True
+        # Keep the in-memory handoff even when storage is unavailable. Recovery
+        # must persist these IDs before replaying the durable sync token.
+        return self._persist_sync_state()
+
+    def _get_room_callback_lock(self, room_id: str) -> asyncio.Lock:
+        """Return the lock that serializes callbacks for one Matrix room."""
+        locks = getattr(self, "_room_callback_locks", None)
+        if locks is None:
+            locks = {}
+            self._room_callback_locks = locks
+        return locks.setdefault(room_id, asyncio.Lock())
+
+    async def _run_event_callback(
+        self,
+        callback: Callable[[MatrixRoom, Any], Any],
+        room: MatrixRoom,
+        event: Any,
+        acceptance: asyncio.Future[bool],
+    ) -> None:
+        event_id = str(getattr(event, "event_id", "") or "")
+        room_id = str(getattr(room, "room_id", "") or "")
+        context_token = _CURRENT_CALLBACK_ACCEPTANCE.set(acceptance)
+        completed = False
+        async def _run_in_room() -> None:
+            async with self._get_room_callback_lock(room_id):
+                await callback(room, event)
+
+        try:
+            # Keep callbacks for one room ordered because handlers share
+            # room history and typing state.  Callbacks for other rooms can
+            # still make progress while this one waits or performs I/O.
+            await asyncio.wait_for(
+                _run_in_room(),
+                timeout=MATRIX_EVENT_CALLBACK_TIMEOUT_S,
+            )
+            completed = True
+        except asyncio.TimeoutError:
+            logger.error(
+                "MatrixChannel: event callback timed out component=matrix "
+                "callback=%s event_id=%s sender=%s timeout_s=%s",
+                getattr(callback, "__name__", "callback"),
+                event_id,
+                getattr(event, "sender", ""),
+                MATRIX_EVENT_CALLBACK_TIMEOUT_S,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "MatrixChannel: event callback failed component=matrix "
+                "callback=%s event_id=%s sender=%s",
+                getattr(callback, "__name__", "callback"),
+                event_id,
+                getattr(event, "sender", ""),
+            )
+        finally:
+            if not acceptance.done():
+                # Filtered/ignored events are safe to checkpoint once their
+                # handler has returned without an exception.  A callback
+                # that timed out, failed, or was cancelled must keep the
+                # sync token behind it so the event is replayed after a
+                # restart.
+                if completed:
+                    completed = self._record_accepted_event(acceptance)
+                acceptance.set_result(completed)
+            _CURRENT_CALLBACK_ACCEPTANCE.reset(context_token)
+
+    def _flush_pending_sync_checkpoints(self) -> None:
+        """Persist completed sync batches in order."""
+        batches = getattr(self, "_pending_sync_checkpoints", None)
+        if batches is None:
+            return
+        while batches:
+            token, acceptances, event_ids = batches[0]
+            if any(not acceptance.done() for acceptance in acceptances):
+                return
+            if any(acceptance.cancelled() or not acceptance.result() for acceptance in acceptances):
+                self._checkpoint_recovery_required = True
+                logger.error(
+                    "MatrixChannel: sync checkpoint requires replay after "
+                    "an unaccepted event callback component=matrix",
+                )
+                return
+            if self._save_sync_token(token, event_ids) is False:
+                self._checkpoint_recovery_required = True
+                logger.error(
+                    "MatrixChannel: sync checkpoint persistence failed; "
+                    "replaying from the last durable token component=matrix",
+                )
+                return
+            batches.pop(0)
+            callback_event_ids = getattr(self, "_callback_event_ids", {})
+            for acceptance in acceptances:
+                callback_event_ids.pop(acceptance, None)
+
+    def _queue_sync_checkpoint(
+        self,
+        token: Optional[str],
+        acceptances: list[asyncio.Future[bool]],
+    ) -> None:
+        """Delay checkpoint persistence until the batch is recoverable."""
+        if not token:
+            return
+        if getattr(self, "_checkpoint_recovery_required", False):
+            logger.debug(
+                "MatrixChannel: retaining sync checkpoint until callback "
+                "recovery completes component=matrix token=%s",
+                token,
+            )
+        callback_event_ids = getattr(self, "_callback_event_ids", {})
+        self._pending_sync_checkpoints.append(
+            (
+                token,
+                set(acceptances),
+                {
+                    event_id
+                    for acceptance in acceptances
+                    if (event_id := callback_event_ids.get(acceptance))
+                },
+            ),
+        )
+        self._flush_pending_sync_checkpoints()
+
+    async def _recover_sync_checkpoint(self) -> Optional[str]:
+        """Return to the durable token without waiting for unrelated I/O."""
+        if not getattr(self, "_checkpoint_recovery_required", False):
+            return None
+        durable_token = getattr(self, "_durable_sync_token", None)
+        if not durable_token:
+            durable_token = self._load_sync_token()
+        if not durable_token:
+            raise RuntimeError(
+                "MatrixChannel cannot recover a failed callback without "
+                "a durable sync token",
+            )
+        if not self._persist_sync_state():
+            raise RuntimeError("MatrixChannel cannot persist accepted events before replay")
+        self._pending_sync_checkpoints.clear()
+        # Replay shares the acceptance future of an in-flight callback. Keep
+        # its event binding until it finishes; clearing it loses its handoff.
+        self._callback_event_ids = {
+            acceptance: event_id
+            for acceptance, event_id in getattr(self, "_callback_event_ids", {}).items()
+            if not acceptance.done()
+        }
+        self._checkpoint_recovery_required = False
+        logger.warning(
+            "MatrixChannel: replaying callbacks from durable sync token "
+            "after callback failure component=matrix",
+        )
+        return durable_token
+
+    async def _sync_with_callback_tracking(
+        self,
+        **kwargs: Any,
+    ) -> tuple[Any, list[asyncio.Future[bool]]]:
+        """Run one sync while collecting its callback acceptance futures."""
+        acceptances: list[asyncio.Future[bool]] = []
+        previous = self._active_sync_callback_futures
+        self._active_sync_callback_futures = acceptances
+        try:
+            response = await self._client.sync(**kwargs)
+        finally:
+            self._active_sync_callback_futures = previous
+        return response, acceptances
+
+    def _schedule_room_event(self, room: MatrixRoom, event: Any) -> None:
+        self._schedule_event_callback(self._on_room_event, room, event)
+
+    def _schedule_room_media_event(
+        self,
+        room: MatrixRoom,
+        event: Any,
+    ) -> None:
+        self._schedule_event_callback(self._on_room_media_event, room, event)
+
+    def _schedule_room_encrypted_media_event(
+        self,
+        room: MatrixRoom,
+        event: Any,
+    ) -> None:
+        self._schedule_event_callback(
+            self._on_room_encrypted_media_event,
+            room,
+            event,
+        )
+
+    def _schedule_megolm_event(self, room: MatrixRoom, event: Any) -> None:
+        self._schedule_event_callback(self._on_megolm_event, room, event)
+
     def _register_plain_room_callbacks(self) -> None:
         self._client.add_event_callback(
-            self._on_room_event,
+            self._schedule_room_event,
             (RoomMessageText,),
         )
         self._client.add_event_callback(
-            self._on_room_media_event,
+            self._schedule_room_media_event,
             (
                 RoomMessageImage,
                 RoomMessageFile,
@@ -876,7 +1295,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Encrypted media events (decrypted by nio, delivered as
         # RoomEncrypted* types)
         self._client.add_event_callback(
-            self._on_room_encrypted_media_event,
+            self._schedule_room_encrypted_media_event,
             (
                 RoomEncryptedImage,
                 RoomEncryptedAudio,
@@ -886,7 +1305,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         )
         # Undecryptable events (missing session key)
         self._client.add_event_callback(
-            self._on_megolm_event,
+            self._schedule_megolm_event,
             (MegolmEvent,),
         )
         self._client.add_to_device_callback(
@@ -964,6 +1383,25 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 await self._sync_task
             except asyncio.CancelledError:
                 logger.debug("MatrixChannel: sync task cancelled during stop component=matrix")
+        if self._callback_tasks:
+            callback_tasks = tuple(self._callback_tasks)
+            for task in callback_tasks:
+                task.cancel()
+            await asyncio.gather(*callback_tasks, return_exceptions=True)
+            self._callback_tasks.clear()
+        getattr(self, "_pending_sync_checkpoints", []).clear()
+        getattr(self, "_callback_event_ids", {}).clear()
+        getattr(self, "_inflight_callback_futures", {}).clear()
+        self._room_callback_locks.clear()
+        if self._typing_tasks:
+            typing_tasks = tuple(self._typing_tasks.values())
+            for task in typing_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*typing_tasks, return_exceptions=True)
+            self._typing_tasks.clear()
+        self._typing_locks.clear()
+        self._typing_lifecycles.clear()
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
@@ -981,7 +1419,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
     @staticmethod
     def _sync_token_path() -> Optional[Path]:
         """Return the file path for persisting the Matrix sync token."""
-        return WORKING_DIR / "matrix_sync_token"
+        return Path(WORKING_DIR) / "matrix_sync_token"
+
+    @staticmethod
+    def _sync_state_path() -> Path:
+        """Return the durable token plus accepted-event ledger path."""
+        return Path(WORKING_DIR) / MATRIX_SYNC_STATE_FILENAME
 
     @staticmethod
     def _auth_state_path() -> Path:
@@ -1092,11 +1535,42 @@ class AgentTeamsMatrixChannel(BaseChannel):
         startup, so it's already on disk when this runs — even on a fresh
         container after destroy/recreate.
         """
+        state_path = self._sync_state_path()
+        if state_path.exists():
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                token = str(state.get("sync_token") or "").strip()
+                accepted_event_ids = state.get("accepted_event_ids", [])
+                if not isinstance(accepted_event_ids, list):
+                    accepted_event_ids = []
+                self._accepted_event_ids = {
+                    str(event_id)
+                    for event_id in accepted_event_ids
+                    if str(event_id)
+                }
+                self._durable_sync_token = token or None
+                if token:
+                    logger.info(
+                        "MatrixChannel: restored sync state from %s "
+                        "accepted_events=%s",
+                        state_path,
+                        len(self._accepted_event_ids),
+                    )
+                    return token
+            except Exception as exc:
+                logger.warning(
+                    "MatrixChannel: failed to read sync state from %s: %s",
+                    state_path,
+                    exc,
+                )
+
         path = self._sync_token_path()
         if path and path.exists():
             try:
-                token = path.read_text().strip()
+                token = path.read_text(encoding="utf-8").strip()
                 if token:
+                    self._accepted_event_ids = set()
+                    self._durable_sync_token = token
                     logger.info(
                         "MatrixChannel: restored sync token from %s",
                         path,
@@ -1107,20 +1581,77 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     "MatrixChannel: failed to read sync token: %s",
                     exc,
                 )
+        self._accepted_event_ids = set()
+        self._durable_sync_token = None
         return None
 
-    def _save_sync_token(self, token: str) -> None:
-        """Persist next_batch token to disk (push_loop uploads it to MinIO)."""
+    def _persist_sync_state(self) -> bool:
+        """Persist accepted events while retaining the durable token."""
+        token = getattr(self, "_durable_sync_token", None)
+        if not token:
+            return False
+        path = self._sync_state_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_name(f".{path.name}.tmp")
+            payload = {
+                "sync_token": token,
+                "accepted_event_ids": sorted(
+                    getattr(self, "_accepted_event_ids", set()),
+                ),
+            }
+            temp_path.write_text(
+                json.dumps(payload, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            temp_path.replace(path)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "MatrixChannel: failed to persist sync state: %s",
+                exc,
+            )
+            return False
+
+    def _save_sync_token(
+        self,
+        token: str,
+        retired_event_ids: Optional[set[str]] = None,
+    ) -> bool:
+        """Persist a token and retire only events covered by that token."""
+        state_path = self._sync_state_path()
         path = self._sync_token_path()
-        if path:
-            try:
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = state_path.with_name(f".{state_path.name}.tmp")
+            accepted_event_ids = set(
+                getattr(self, "_accepted_event_ids", set()),
+            )
+            if retired_event_ids is None:
+                accepted_event_ids.clear()
+            else:
+                accepted_event_ids.difference_update(retired_event_ids)
+            payload = {
+                "sync_token": token,
+                "accepted_event_ids": sorted(accepted_event_ids),
+            }
+            temp_path.write_text(
+                json.dumps(payload, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            temp_path.replace(state_path)
+            if path:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(token)
-            except Exception as exc:
-                logger.warning(
-                    "MatrixChannel: failed to save sync token: %s",
-                    exc,
-                )
+                path.write_text(token, encoding="utf-8")
+            self._durable_sync_token = token
+            self._accepted_event_ids = accepted_event_ids
+            return True
+        except Exception as exc:
+            logger.warning(
+                "MatrixChannel: failed to save sync token: %s",
+                exc,
+            )
+            return False
 
     async def _e2ee_maintenance(self) -> None:
         """Perform E2EE key maintenance tasks after each sync.
@@ -1625,6 +2156,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
     # pylint: disable=too-many-branches,too-many-statements
     async def _sync_loop(self) -> None:
+        # A restarted channel must be allowed to recover from the last
+        # durable token.  Any pending checkpoint state belongs to the
+        # previous sync loop and must not leak into the new run.
+        self._checkpoint_recovery_required = False
+        self._pending_sync_checkpoints.clear()
         next_batch: Optional[str] = self._load_sync_token()
 
         # When no persisted token exists (old version upgrade or first
@@ -1648,7 +2184,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 saved_cbs = self._client.event_callbacks[:]
                 self._client.event_callbacks.clear()
                 try:
-                    resp = await self._client.sync(
+                    resp, acceptances = await self._sync_with_callback_tracking(
                         timeout=0,
                         full_state=True,
                     )
@@ -1657,7 +2193,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 if isinstance(resp, SyncResponse):
                     next_batch = resp.next_batch
                     if next_batch is not None:
-                        self._save_sync_token(next_batch)
+                        self._queue_sync_checkpoint(next_batch, acceptances)
                     # Still auto-join invited rooms during catch-up
                     for room_id in resp.rooms.invite:
                         logger.info("MatrixChannel: auto-joining component=matrix room_id=%s", room_id)
@@ -1687,7 +2223,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "performing full-state sync component=matrix",
             )
             try:
-                resp = await self._client.sync(
+                resp, acceptances = await self._sync_with_callback_tracking(
                     timeout=self.sync_timeout_ms,
                     since=next_batch,
                     full_state=True,
@@ -1695,7 +2231,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 if isinstance(resp, SyncResponse):
                     next_batch = resp.next_batch
                     if next_batch is not None:
-                        self._save_sync_token(next_batch)
+                        self._queue_sync_checkpoint(next_batch, acceptances)
                     for room_id in resp.rooms.invite:
                         logger.info("MatrixChannel: auto-joining component=matrix room_id=%s", room_id)
                         await self._client.join(room_id)
@@ -1715,7 +2251,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         while True:
             try:
-                resp = await self._client.sync(
+                if self._checkpoint_recovery_required:
+                    recovered_token = await self._recover_sync_checkpoint()
+                    if recovered_token:
+                        next_batch = recovered_token
+                    continue
+                resp, acceptances = await self._sync_with_callback_tracking(
                     timeout=self.sync_timeout_ms,
                     since=next_batch,
                     full_state=False,
@@ -1723,7 +2264,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 if isinstance(resp, SyncResponse):
                     next_batch = resp.next_batch
                     if next_batch is not None:
-                        self._save_sync_token(next_batch)
+                        self._queue_sync_checkpoint(next_batch, acceptances)
                     # Auto-join invited rooms
                     for room_id in resp.rooms.invite:
                         logger.info("MatrixChannel: auto-joining component=matrix room_id=%s", room_id)
@@ -2414,9 +2955,6 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 )
                 return
 
-        await self._send_read_receipt(room_id, event.event_id)
-        await self._send_typing(room_id, True)
-
         body = event.body or ""
         mxc_url = getattr(event, "url", "") or ""
         key = getattr(event, "key", {}) or {}
@@ -2512,6 +3050,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 content_parts,
             )
 
+        typing_lifecycle = self._begin_typing_lifecycle(room_id)
         worker_name = (self._user_id or "").split(":")[0].lstrip("@")
         payload = {
             "channel_id": CHANNEL_KEY,
@@ -2525,6 +3064,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "worker_name": worker_name,
                 "event_id": event.event_id,
                 "sender_id": sender_id,
+                _MATRIX_TYPING_LIFECYCLE_KEY: typing_lifecycle,
+                "otel_carrier": (event.source.get("content", {}) or {}).get("com.agentteams.trace", {}),
+                "otel_received_at_ns": time.time_ns(),
             },
         }
 
@@ -2535,8 +3077,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
             self._enqueue(payload)
+            self._mark_event_callback_accepted()
             if not is_dm:
                 self._clear_history(room_id)
+
+        await self._send_read_receipt(room_id, event.event_id)
+        await self._send_typing(
+            room_id,
+            True,
+            lifecycle_token=typing_lifecycle,
+        )
 
     # ------------------------------------------------------------------
     # Media upload (local file → mxc://)
@@ -2544,10 +3094,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # send_media outbound path (same role as worker _upload_file).
     # ------------------------------------------------------------------
 
-    async def _upload_file(self, file_ref: str) -> Optional[str]:
-        """Upload a local file to Matrix; return mxc:// URI or None."""
+    async def _upload_file(
+        self, file_ref: str, *, encrypt: bool = False
+    ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Upload a local file; return ``(mxc:// URI, decryption info)``.
+
+        ``encrypt=True`` asks matrix-nio to encrypt the bytes and returns the
+        decryption descriptor the event's ``file`` object must carry; the
+        plaintext path returns ``(uri, None)`` unchanged.
+        """
         if not self._client:
-            return None
+            return None, None
         try:
             # file_ref may be a file:// URI or a plain path
             path = Path(file_url_to_local_path(file_ref) or file_ref)
@@ -2556,15 +3113,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     "MatrixChannel: upload source not found: %s",
                     file_ref,
                 )
-                return None
+                return None, None
             mime_type, _ = mimetypes.guess_type(str(path))
             mime_type = mime_type or "application/octet-stream"
             data = path.read_bytes()
-            resp, _ = await self._client.upload(
+            resp, decryption = await self._client.upload(
                 io.BytesIO(data),
                 content_type=mime_type,
                 filename=path.name,
                 filesize=len(data),
+                encrypt=encrypt,
             )
             if isinstance(resp, UploadResponse):
                 logger.debug(
@@ -2572,16 +3130,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     path.name,
                     resp.content_uri,
                 )
-                return resp.content_uri
+                return resp.content_uri, (decryption if encrypt else None)
             logger.warning("MatrixChannel: upload failed: %s", resp)
-            return None
+            return None, None
         except Exception as exc:
             logger.warning(
                 "MatrixChannel: upload error for %s: %s",
                 file_ref,
                 exc,
             )
-            return None
+            return None, None
 
     # ------------------------------------------------------------------
     # DM room detection (joined_members API + short-lived cache)
@@ -2727,7 +3285,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # Fetch from Matrix API
         try:
-            resp = await self._client.joined_members(room_id)
+            resp = await asyncio.wait_for(
+                self._client.joined_members(room_id),
+                timeout=DM_MEMBERSHIP_TIMEOUT_S,
+            )
             if isinstance(resp, JoinedMembersResponse):
                 members = [m.user_id for m in resp.members]
                 # Update cache
@@ -2857,10 +3418,6 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 )
                 return
 
-        # Mark as read + start typing immediately so the sender sees feedback
-        await self._send_read_receipt(room_id, event.event_id)
-        await self._send_typing(room_id, True)
-
         # Strip leading @mention so slash commands and NO_REPLY are detected
         # regardless of room type (group or DM).
         command_text = text
@@ -2920,6 +3477,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     content_parts,
                 )
 
+        typing_lifecycle = self._begin_typing_lifecycle(room_id)
         worker_name = (self._user_id or "").split(":")[0].lstrip("@")
         payload = {
             "channel_id": CHANNEL_KEY,
@@ -2934,7 +3492,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "event_id": event.event_id,
                 "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
+                _MATRIX_TYPING_LIFECYCLE_KEY: typing_lifecycle,
                 "is_thread_event": is_thread_event,
+                "otel_carrier": (event.source.get("content", {}) or {}).get("com.agentteams.trace", {}),
+                "otel_received_at_ns": time.time_ns(),
             },
         }
         if teamharness_self_trigger is not None:
@@ -2953,8 +3514,18 @@ class AgentTeamsMatrixChannel(BaseChannel):
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
             self._enqueue(payload)
+            self._mark_event_callback_accepted()
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
+
+        # These are best-effort UX operations.  Enqueue first so a slow
+        # homeserver cannot prevent an accepted message from reaching QwenPaw.
+        await self._send_read_receipt(room_id, event.event_id)
+        await self._send_typing(
+            room_id,
+            True,
+            lifecycle_token=typing_lifecycle,
+        )
 
     # ------------------------------------------------------------------
     # Incoming message handling — media (image / file / audio / video)
@@ -3002,9 +3573,6 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     room_id,
                 )
                 return
-
-        await self._send_read_receipt(room_id, event.event_id)
-        await self._send_typing(room_id, True)
 
         mxc_url: str = getattr(event, "url", "") or ""
         body: str = event.body or ""  # filename or caption
@@ -3098,6 +3666,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     content_parts,
                 )
 
+        typing_lifecycle = self._begin_typing_lifecycle(room_id)
         worker_name = (self._user_id or "").split(":")[0].lstrip("@")
         payload = {
             "channel_id": CHANNEL_KEY,
@@ -3112,7 +3681,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "event_id": event.event_id,
                 "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
+                _MATRIX_TYPING_LIFECYCLE_KEY: typing_lifecycle,
                 "is_thread_event": is_thread_event,
+                "otel_carrier": (event.source.get("content", {}) or {}).get("com.agentteams.trace", {}),
+                "otel_received_at_ns": time.time_ns(),
             },
         }
 
@@ -3123,8 +3695,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
             self._enqueue(payload)
+            self._mark_event_callback_accepted()
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
+
+        await self._send_read_receipt(room_id, event.event_id)
+        await self._send_typing(
+            room_id,
+            True,
+            lifecycle_token=typing_lifecycle,
+        )
 
     # ------------------------------------------------------------------
     # Read receipt & typing indicator
@@ -3149,11 +3729,29 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 exc,
             )
 
+    def _begin_typing_lifecycle(self, room_id: str) -> int:
+        """Start a typing lifecycle for a newly accepted inbound request."""
+        lifecycles = getattr(self, "_typing_lifecycles", None)
+        if lifecycles is None:
+            lifecycles = {}
+            self._typing_lifecycles = lifecycles
+        token = lifecycles.get(room_id, 0) + 1
+        lifecycles[room_id] = token
+        return token
+
+    @staticmethod
+    def _typing_lifecycle_from_meta(meta: Optional[Dict[str, Any]]) -> Optional[int]:
+        if not isinstance(meta, dict):
+            return None
+        token = meta.get(_MATRIX_TYPING_LIFECYCLE_KEY)
+        return token if isinstance(token, int) else None
+
     async def _send_typing(
         self,
         room_id: str,
         typing: bool,
         timeout: int = TYPING_SERVER_TIMEOUT_MS,
+        lifecycle_token: Optional[int] = None,
     ) -> None:
         """Set typing indicator on/off for a room.
 
@@ -3164,27 +3762,43 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """
         if not self._client:
             return
-        # Cancel any existing renewal task for this room
-        existing = self._typing_tasks.pop(room_id, None)
-        if existing and not existing.done():
-            existing.cancel()
-        try:
-            await self._client.room_typing(
-                room_id,
-                typing_state=typing,
-                timeout=timeout,
-            )
-        except Exception as exc:
-            logger.debug(
-                "MatrixChannel: typing indicator failed for %s: %s",
-                room_id,
-                exc,
-            )
-        # Start renewal loop if turning on
-        if typing:
-            self._typing_tasks[room_id] = asyncio.create_task(
-                self._typing_renewal_loop(room_id, timeout),
-            )
+        locks = getattr(self, "_typing_locks", None)
+        if locks is None:
+            locks = {}
+            self._typing_locks = locks
+        async with locks.setdefault(room_id, asyncio.Lock()):
+            if not self._client:
+                return
+            lifecycles = getattr(self, "_typing_lifecycles", None)
+            if lifecycles is None:
+                lifecycles = {}
+                self._typing_lifecycles = lifecycles
+            current_lifecycle = lifecycles.get(room_id, 0)
+            if lifecycle_token is not None and current_lifecycle != lifecycle_token:
+                return
+            if not typing:
+                lifecycles[room_id] = current_lifecycle + 1
+            # Cancel any existing renewal task for this room
+            existing = self._typing_tasks.pop(room_id, None)
+            if existing and not existing.done():
+                existing.cancel()
+            try:
+                await self._client.room_typing(
+                    room_id,
+                    typing_state=typing,
+                    timeout=timeout,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "MatrixChannel: typing indicator failed for %s: %s",
+                    room_id,
+                    exc,
+                )
+            # Start renewal loop if turning on
+            if typing:
+                self._typing_tasks[room_id] = asyncio.create_task(
+                    self._typing_renewal_loop(room_id, timeout),
+                )
 
     async def _typing_renewal_loop(
         self,
@@ -3228,7 +3842,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         room_id,
                         exc,
                     )
-            self._typing_tasks.pop(room_id, None)
+            current_task = asyncio.current_task()
+            if self._typing_tasks.get(room_id) is current_task:
+                self._typing_tasks.pop(room_id, None)
 
     # ------------------------------------------------------------------
     # build_agent_request_from_native (BaseChannel protocol)
@@ -3275,6 +3891,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
     def build_agent_request_from_native(self, native_payload: Any) -> Any:
         parts = native_payload.get("content_parts", [])
         meta = native_payload.get("meta", {})
+        if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in ("true", "1"):
+            # BaseChannel shallow-copies meta before Runtime.run starts.
+            meta.setdefault("otel_delivery", {})
         sender_id = native_payload.get("sender_id", "")
         room_id = meta.get("room_id", sender_id)
         session_id = f"matrix:{room_id}"
@@ -3867,6 +4486,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         file_ref: str,
         matrix_msgtype: str,
         mxc_uri: str,
+        decryption: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         path_str = file_url_to_local_path(file_ref) or file_ref
         filename = os.path.basename(path_str) or "file"
@@ -3876,15 +4496,31 @@ class AgentTeamsMatrixChannel(BaseChannel):
             file_size = os.path.getsize(path_str)
         except OSError:
             file_size = 0
-        return {
+        content: Dict[str, Any] = {
             "msgtype": matrix_msgtype,
             "body": filename,
-            "url": mxc_uri,
             "info": {
                 "mimetype": mime_type,
                 "size": file_size,
             },
         }
+        if decryption:
+            # Encrypted rooms carry the file descriptor (url + key/iv/hashes/
+            # v): a receiving client decrypts the room event and then requires
+            # `file`; a bare `url` is a BadEvent and the repository stored the
+            # plaintext bytes.
+            file_info: Dict[str, Any] = dict(decryption)
+            file_info.update(
+                {
+                    "url": mxc_uri,
+                    "mimetype": mime_type,
+                    "size": file_size,
+                }
+            )
+            content["file"] = file_info
+        else:
+            content["url"] = mxc_uri
+        return content
 
     async def _send_uploaded_media_event(
         self,
@@ -3893,11 +4529,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
         matrix_msgtype: str,
         mxc_uri: str,
         meta: Optional[Dict[str, Any]],
+        decryption: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         event_content = self._matrix_media_event_content(
             file_ref,
             matrix_msgtype,
             mxc_uri,
+            decryption,
         )
         meta_dict = meta or {}
         sender_id = meta_dict.get("sender_id") or meta_dict.get("user_id")
@@ -3982,6 +4620,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         path: Path,
         media_uri: Optional[str],
         build_content: Callable[[str], Dict[str, Any]],
+        budget_bytes: int = MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES,
     ) -> Dict[str, Any]:
         low = 0
         high = len(text or "")
@@ -3995,7 +4634,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 preview_chars,
             )
             content = build_content(summary)
-            if _matrix_event_payload_size(content) <= MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES:
+            if _matrix_event_payload_size(content) <= budget_bytes:
                 best_content = content
                 low = preview_chars + 1
             else:
@@ -4017,13 +4656,31 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return None
         path = self._write_long_message_file(text)
         file_ref = str(path)
-        media_uri = await self._upload_file(file_ref)
+        # #1469 P1: the long-text fallback follows the same room-aware
+        # attachment rule as send_media — an encrypted room never receives the
+        # full text as a plaintext upload behind a bare MXC URL.
+        if getattr(self, "encryption", False):
+            await self._prepare_room_send(room_id)
+        encrypted = self._room_will_encrypt(room_id)
+        media_uri, decryption = await self._upload_file(file_ref, encrypt=encrypted)
         if not media_uri:
             logger.warning(
                 "MatrixChannel: long text fallback upload failed for %s",
                 file_ref,
             )
-        long_message_metadata = _long_message_metadata(path, media_uri)
+        elif encrypted and not decryption:
+            logger.warning(
+                "MatrixChannel: encrypted long-text upload returned no "
+                "decryption metadata for %s; refusing to send a plaintext "
+                "attachment",
+                file_ref,
+            )
+            return None
+        # An encrypted room cannot use a bare MXC URL: the summary carries no
+        # media metadata and the file event below carries the descriptor.
+        long_message_metadata = _long_message_metadata(
+            path, None if encrypted else media_uri
+        )
 
         def build_content(summary: str) -> Dict[str, Any]:
             if edit_event_id:
@@ -4052,22 +4709,62 @@ class AgentTeamsMatrixChannel(BaseChannel):
             _attach_long_message_metadata(content, long_message_metadata)
             return content
 
+        budget = (
+            MATRIX_TEXT_EVENT_ENCRYPTED_BUDGET_BYTES
+            if encrypted
+            else MATRIX_TEXT_EVENT_FALLBACK_BUDGET_BYTES
+        )
         content = self._bounded_long_message_content(
             text,
             path,
             media_uri,
             build_content,
+            budget_bytes=budget,
         )
         resp = await self._room_send_with_retry(
             room_id,
             "m.room.message",
             content,
         )
+        if isinstance(resp, RoomSendError):
+            # M_TOO_LARGE (and friends) mean the server rejected the summary
+            # event. The attachment is the deliverable, so retry once with the
+            # smallest preview and never abandon the file event.
+            logger.warning(
+                "MatrixChannel: long-text summary rejected (%s %s) "
+                "room_id=%s; retrying with a minimal summary component=matrix",
+                getattr(resp, "status_code", "?"),
+                getattr(resp, "message", ""),
+                room_id,
+            )
+            content = self._bounded_long_message_content(
+                text,
+                path,
+                media_uri,
+                build_content,
+                budget_bytes=1024,
+            )
+            resp = await self._room_send_with_retry(
+                room_id,
+                "m.room.message",
+                content,
+            )
         event_id = getattr(resp, "event_id", None)
+        if isinstance(resp, RoomSendError):
+            logger.error(
+                "MatrixChannel: long-text summary still rejected (%s %s) "
+                "room_id=%s; delivering the attachment without a summary "
+                "component=matrix",
+                getattr(resp, "status_code", "?"),
+                getattr(resp, "message", ""),
+                room_id,
+            )
+            event_id = None
         parent_event_id = edit_event_id or event_id
-        if media_uri and parent_event_id:
+        if media_uri:
             file_meta = dict(meta or {})
-            file_meta["matrixAttachmentParentEventId"] = parent_event_id
+            if parent_event_id:
+                file_meta["matrixAttachmentParentEventId"] = parent_event_id
             try:
                 await self._send_uploaded_media_event(
                     room_id,
@@ -4075,6 +4772,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     "m.file",
                     media_uri,
                     file_meta,
+                    decryption,
                 )
             except Exception as exc:
                 logger.warning(
@@ -4204,7 +4902,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """Route completed messages behind a processing root."""
         del request
         message_type = getattr(event, "type", None)
-        if self._is_reasoning_message(message_type) and not self.show_thinking:
+        if self._is_reasoning_message(message_type) and not getattr(
+            self, "show_thinking", True
+        ):
             # show_thinking disabled: reasoning is never rendered to the room.
             return
         if self._is_tool_call_message(message_type) and not self.show_tool_calls:
@@ -4270,6 +4970,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if stream_type == "reasoning":
             send_meta.pop(_MATRIX_STREAMING_REASONING_EVENT_ID_KEY, None)
             send_meta.pop(_MATRIX_STREAMING_REASONING_LAST_EDIT_KEY, None)
+            if not getattr(self, "show_thinking", True):
+                return
             stream_id = getattr(event, "id", None)
             if stream_id:
                 send_meta[_MATRIX_STREAMING_REASONING_STREAM_ID_KEY] = stream_id
@@ -4302,7 +5004,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         del request
         text = (accumulated_text or "").strip()
         if stream_type == "reasoning":
-            if self.show_thinking:
+            if getattr(self, "show_thinking", True):
                 await self._ensure_thread_root(to_handle, send_meta)
                 if not text:
                     text = self._text_from_message_event(event)
@@ -4326,6 +5028,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if stream_type == "message":
             send_meta[_MATRIX_STREAMING_FINAL_TEXT_KEY] = text
 
+    @_with_trace_reply
     async def send_event(
         self,
         *,
@@ -4543,6 +5246,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
             or meta_dict.get("event_id"),
             "sender_id": sender_id,
             "send_gate_retrigger": True,
+            "otel_carrier": ((meta_dict.get("otel_delivery") or {}).get("otel_reply") or {}).get("carrier") or meta_dict.get("otel_carrier", {}),
+            "otel_received_at_ns": time.time_ns(),
         }
         # Reuse the in-flight thread-root placeholder: carrying the root id
         # over makes the retriggered turn edit the same message instead of
@@ -4588,6 +5293,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             await self._send_typing(room_id, True)
             self._enqueue(payload)
 
+    @_with_trace_reply
     async def _on_process_completed(
         self,
         request: Any,
@@ -4596,9 +5302,22 @@ class AgentTeamsMatrixChannel(BaseChannel):
     ) -> None:
         """Edit thread root with final reply, or send directly if no thread."""
         gate_action, gate_new_count = self._evaluate_send_gate(send_meta, to_handle)
+        if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in ("true", "1"):
+            try:
+                from at_telemetry import operation
+            except ImportError:
+                pass
+            else:
+                with operation("matrix.delivery_decision", attributes={
+                    "agentteams.delivery.action": gate_action,
+                    "agentteams.delivery.new_events": gate_new_count,
+                    "langfuse.observation.level": "WARNING" if gate_action == "retrigger" else "DEFAULT",
+                }):
+                    pass
         if gate_action == "retrigger":
             await self._retrigger_for_new_context(send_meta, to_handle, gate_new_count)
             return
+        typing_lifecycle = self._typing_lifecycle_from_meta(send_meta)
         pending = send_meta.pop(_MATRIX_PENDING_FINAL_MESSAGE_KEY, None)
         streaming_final_text = send_meta.pop(
             _MATRIX_STREAMING_FINAL_TEXT_KEY,
@@ -4655,6 +5374,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
             await self.send(to_handle, streaming_final_text.strip(), send_meta)
         elif pending is not None:
             await self.send_message_content(to_handle, pending, send_meta)
+        await self._send_typing(
+            to_handle,
+            False,
+            lifecycle_token=typing_lifecycle,
+        )
         if gate_action == "note":
             await self._send_plain_text(
                 to_handle,
@@ -4664,13 +5388,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "latest room state / 本回复起草期间房间新增 "
                 f"{gate_new_count} 条消息，可能未反映最新房间状态)",
             )
-        await self._send_typing(to_handle, False)
         base_completed = getattr(super(), "_on_process_completed", None)
         try:
             if base_completed:
                 await base_completed(request, to_handle, send_meta)
         finally:
-            await self._send_typing(to_handle, False)
+            await self._send_typing(
+                to_handle,
+                False,
+                lifecycle_token=typing_lifecycle,
+            )
 
     async def _on_consume_error(
         self,
@@ -4679,6 +5406,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         err_text: str,
     ) -> None:
         """Edit thread root on error; suppress cancellation noise; mask raw errors before room send."""
+        request_meta = getattr(request, "channel_meta", None)
+        typing_lifecycle = self._typing_lifecycle_from_meta(request_meta)
         root_id = self._active_thread_roots.pop(to_handle, None)
         if root_id:
             fallback_meta = {_MATRIX_OWN_THREAD_ROOT_KEY: root_id}
@@ -4689,9 +5418,18 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "MatrixChannel: suppressing cancellation error component=matrix handle=%s",
                 to_handle,
             )
-            await self._send_typing(to_handle, False)
+            await self._send_typing(
+                to_handle,
+                False,
+                lifecycle_token=typing_lifecycle,
+            )
             return
-        logger.warning('MatrixChannel: consume error masked before room send component=matrix handle=%s err_text=%r', to_handle, err_text)
+        logger.warning(
+            "MatrixChannel: consume error masked before room send "
+            "component=matrix handle=%s err_text=%r",
+            to_handle,
+            err_text,
+        )
         await super()._on_consume_error(request, to_handle, _CONSUME_ERROR_NOTICE)
 
     # ------------------------------------------------------------------
@@ -4872,6 +5610,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # Markdown→HTML (formatted_body); m.mentions when meta has sender_id.
     # ------------------------------------------------------------------
 
+    @_with_trace_reply
     async def send(
         self,
         to_handle: str,
@@ -4883,6 +5622,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return
 
         room_id = (meta or {}).get("room_id") or to_handle
+        meta_dict = meta if isinstance(meta, dict) else {}
+        typing_lifecycle = self._typing_lifecycle_from_meta(meta_dict)
 
         # NO_REPLY protocol: agent decided it has nothing to say.
         if _ends_with_no_reply_control(text):
@@ -4890,13 +5631,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "MatrixChannel: suppressing NO_REPLY send component=matrix room_id=%s",
                 room_id,
             )
-            await self._send_typing(room_id, False)
+            await self._send_typing(
+                room_id,
+                False,
+                lifecycle_token=typing_lifecycle,
+            )
             return
 
         text = _clean_control_response_text(text)
 
         html_body = _md_to_html(text)
-        meta_dict = meta if isinstance(meta, dict) else {}
         msgtype = "m.notice" if meta_dict.pop(_MATRIX_FORCE_NOTICE_KEY, False) else "m.text"
         content = self._matrix_text_content(
             room_id,
@@ -4949,12 +5693,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 exc,
             )
         finally:
-            await self._send_typing(room_id, False)
+            await self._send_typing(
+                room_id,
+                False,
+                lifecycle_token=typing_lifecycle,
+            )
 
     # ------------------------------------------------------------------
     # Outgoing send — media
     # ------------------------------------------------------------------
 
+    @_with_trace_reply
     async def send_media(
         self,
         to_handle: str,
@@ -4991,11 +5740,28 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if not file_ref:
             return None
 
+        # The destination room decides whether the attachment is encrypted
+        # (#1469 P1): an encrypted room's upload must store ciphertext and the
+        # event must carry the file descriptor. _prepare_room_send aligns the
+        # client's local encryption flags with the server first (the same
+        # helper the text path uses).
+        if getattr(self, "encryption", False):
+            await self._prepare_room_send(room_id)
+        encrypted = self._room_will_encrypt(room_id)
+
         # Upload to Matrix media repository
-        mxc_uri = await self._upload_file(file_ref)
+        mxc_uri, decryption = await self._upload_file(file_ref, encrypt=encrypted)
         if not mxc_uri:
             logger.warning(
                 "MatrixChannel: send_media upload failed for %s",
+                file_ref,
+            )
+            return None
+        if encrypted and not decryption:
+            logger.warning(
+                "MatrixChannel: encrypted upload returned no decryption "
+                "metadata for %s; refusing to send it as a plaintext "
+                "attachment",
                 file_ref,
             )
             return None
@@ -5008,6 +5774,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 matrix_msgtype,
                 mxc_uri,
                 meta,
+                decryption,
             )
             logger.debug(
                 "MatrixChannel: sent %s %s to %s",

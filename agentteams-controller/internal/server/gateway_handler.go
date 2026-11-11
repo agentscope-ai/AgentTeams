@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
@@ -12,11 +13,12 @@ import (
 
 // GatewayHandler handles /api/v1/gateway/* requests using the unified gateway.Client.
 type GatewayHandler struct {
-	gw gateway.Client
+	gw                     gateway.Client
+	fallbackConfigWritable bool
 }
 
 func NewGatewayHandler(gw gateway.Client) *GatewayHandler {
-	return &GatewayHandler{gw: gw}
+	return &GatewayHandler{gw: gw, fallbackConfigWritable: os.Getenv("AGENTTEAMS_HIGRESS_FALLBACK_CONFIG_WRITE_ENABLED") == "true"}
 }
 
 func (h *GatewayHandler) CreateConsumer(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +88,12 @@ func (h *GatewayHandler) DeleteConsumer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Higress refuses to delete a consumer still referenced by AI routes.
+	if err := h.gw.DeauthorizeAIRoutes(r.Context(), consumerName, ""); err != nil {
+		log.Printf("[ERROR] unbind consumer %s before delete: %v", consumerName, err)
+		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err := h.gw.DeleteConsumer(r.Context(), consumerName); err != nil {
 		log.Printf("[ERROR] delete consumer %s: %v", consumerName, err)
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())

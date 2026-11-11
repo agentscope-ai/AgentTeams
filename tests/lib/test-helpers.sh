@@ -180,8 +180,8 @@ wait_for_manager() {
         "curl -sf http://${TEST_MANAGER_HOST}:${TEST_GATEWAY_PORT}/ > /dev/null 2>&1"
 }
 
-# Wait for Manager Agent (OpenClaw or CoPaw) to be fully ready
-# Phase 1: Runtime health check (OpenClaw gateway or CoPaw process)
+# Wait for the selected Manager Harness to be fully ready
+# Phase 1: Native Harness readiness reported to the Controller
 # Phase 2: Manager has joined the specified DM room
 # Usage: wait_for_manager_agent_ready [timeout] [room_id] [access_token]
 wait_for_manager_agent_ready() {
@@ -197,36 +197,18 @@ wait_for_manager_agent_ready() {
 
     # Detect Manager runtime (check agent container first, then infra)
     local manager_runtime
-    manager_runtime=$(docker exec "${agent_container}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
-                      docker exec "${infra_container}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
-                      docker exec "${agent_container}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
-                      docker exec "${infra_container}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
+    manager_runtime=$(exec_in_agent printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
 
     # Phase 1: Wait for Manager Agent to be healthy (runtime-specific, on agent container)
     log_info "Waiting for Manager ${manager_runtime} runtime to be healthy (container: ${agent_container})..."
     local runtime_ready=false
 
     while [ "${elapsed}" -lt "${timeout}" ]; do
-        case "${manager_runtime}" in
-            copaw|qwenpaw)
-                # Both runtimes launch QwenPaw 2.0 in the same image; the process
-                # cmdline may be "copaw" (run_copaw_app.py via runpy) or "qwenpaw"
-                # (direct python3 -m qwenpaw app) — accept both (mirrors
-                # test-01-manager-boot.sh).
-                if { docker exec "${agent_container}" pgrep -f "copaw(_worker\\.run_copaw_app)? app" >/dev/null 2>&1 || \
-                     docker exec "${agent_container}" pgrep -f "qwenpaw app" >/dev/null 2>&1; } && \
-                   docker exec "${agent_container}" curl -sf http://127.0.0.1:18799/ >/dev/null 2>&1; then
-                    runtime_ready=true
-                    break
-                fi
-                ;;
-            *)
-                if docker exec "${agent_container}" openclaw gateway health --json 2>/dev/null | grep -q '"ok"'; then
-                    runtime_ready=true
-                    break
-                fi
-                ;;
-        esac
+        if exec_in_agent agt get managers "${AGENTTEAMS_MANAGER_NAME:-default}" -o json 2>/dev/null | \
+           jq -e '.ready == true' >/dev/null 2>&1; then
+            runtime_ready=true
+            break
+        fi
         sleep 5
         elapsed=$((elapsed + 5))
         printf "\r\033[36m[TEST INFO]\033[0m Waiting for %s runtime... (%ds/%ds)" "${manager_runtime}" "${elapsed}" "${timeout}"
@@ -451,6 +433,14 @@ read_worker_matrix_allowlist() {
     local agent_name="$1"
     local runtime="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
     local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
+    if [ "${agent_name}" = "manager" ]; then
+        runtime=$(exec_in_agent printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo openclaw)
+        if [ "${runtime}" = "qwenpaw" ] || [ "${runtime}" = "copaw" ]; then
+            exec_in_agent curl -sf http://127.0.0.1:18799/api/access-control/agentteams_matrix \
+                2>/dev/null | jq -r '.whitelist | keys[]?' 2>/dev/null
+            return
+        fi
+    fi
     if [ "${runtime}" = "qwenpaw" ] && [ "${agent_name}" != "manager" ]; then
         docker exec "$(worker_container_name "${agent_name}")" \
             curl -sf http://127.0.0.1:8088/api/access-control/agentteams_matrix \
@@ -503,7 +493,8 @@ wait_agent_matrix_allow_contains() {
     local elapsed=0
     local last=""
     while [ "${elapsed}" -lt "${timeout}" ]; do
-        if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}" = "qwenpaw" ] && [ "${agent_name}" != "manager" ]; then
+        if [ "${jq_path}" = ".channels.matrix.groupAllowFrom" ] || \
+           { [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}" = "qwenpaw" ] && [ "${agent_name}" != "manager" ]; }; then
             last=$(read_worker_matrix_allowlist "${agent_name}")
         else
             local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
@@ -906,7 +897,7 @@ start_worker_container() {
         -e "AGENTTEAMS_FS_BUCKET=agentteams-storage" \
         -e "AGENTTEAMS_FS_ACCESS_KEY=${TEST_MINIO_USER}" \
         -e "AGENTTEAMS_FS_SECRET_KEY=${TEST_MINIO_PASSWORD}" \
-        "agentteams/worker-agent:${AGENTTEAMS_VERSION:-latest}" 2>/dev/null
+        "agentteams/agentteams-harness-openclaw:${AGENTTEAMS_VERSION:-latest}" 2>/dev/null
 
     echo "${container_name}"
 }

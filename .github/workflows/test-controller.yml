@@ -3,7 +3,11 @@ name: AgentTeams Controller Tests
 on:
   pull_request:
     paths:
+      - 'worker'
+      - 'worker/**'
+      - '.gitmodules'
       - 'agentteams-controller/**'
+      - 'qwenpaw'
       - 'qwenpaw/**'
       - 'manager/src/**'
       - 'plugins/teamharness/**'
@@ -19,7 +23,11 @@ on:
   push:
     branches: [main]
     paths:
+      - 'worker'
+      - 'worker/**'
+      - '.gitmodules'
       - 'agentteams-controller/**'
+      - 'qwenpaw'
       - 'qwenpaw/**'
       - 'manager/src/**'
       - 'plugins/teamharness/**'
@@ -59,6 +67,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
@@ -73,7 +83,9 @@ jobs:
             'pytest-asyncio>=0.23,<2'
 
       - name: Run QwenPaw tests against repository source
-        run: python -m pytest qwenpaw/tests -q
+        run: |
+          python -m pytest qwenpaw/tests -q
+          python -m pytest plugins/tests/agentteams-matrix/test_qwenpaw_reload_delivery.py -q
 
   teamharness:
     runs-on: ubuntu-latest
@@ -114,6 +126,7 @@ jobs:
           python -m pytest plugins/tests/teamharness/test_attention_schema.py -q
           PYTHONPATH="${GITHUB_WORKSPACE}/manager/src/agentteams_manager" \
             python -m pytest manager/src/agentteams_manager/agentteams_manager/tests/ -q
+          python -m pytest plugins/tests/teamharness/test_task_meta_commit.py -q
           ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb
           ruby plugins/tests/teamharness/mcp/tools/test-transition-table.rb
 
@@ -122,6 +135,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
@@ -145,112 +160,57 @@ jobs:
         run: |
           python -m pytest plugins/tests/agentteams-matrix-channel/test_fake_completion_marker.py -q
 
-  matrix-channel-consume-error:
+  plugin-loader-smoke:
+    # Keyless smoke of the real QwenPaw plugin loader: install the
+    # runtime from public PyPI on a standard runner (no secrets, no
+    # external build machine) and drive PluginLoader against the
+    # shipped matrix-channel package. The negative-control step proves
+    # the smoke is red-reproducible: a deliberately broken package
+    # must be rejected, and if it ever loads cleanly this job fails.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install matrix-channel runtime dependencies
+      - name: Install QwenPaw runtime and smoke dependencies
         run: |
           python -m pip install \
+            'qwenpaw==2.2.1' \
             'matrix-nio>=0.25,<0.27' \
-            'qwenpaw>=2.2.1,<2.3' \
-            'pytest>=8.3,<10' \
-            'pytest-asyncio>=0.23,<2'
+            'pytest>=8.3,<10'
 
-      - name: Run matrix-channel consume-error tests
+      - name: Smoke-load the real matrix-channel package (green path)
+        run: python qwenpaw/scripts/smoke_plugin_loader.py
+
+      - name: Prove a broken package turns the smoke red
         run: |
-          python -m pytest plugins/tests/agentteams-matrix-channel/test_consume_error.py -q
+          BROKEN_ROOT="$(mktemp -d)"
+          cp -r plugins/agentteams-matrix-channel \
+            "$BROKEN_ROOT/agentteams-matrix-channel"
+          printf '\nraise RuntimeError("intentionally broken smoke package")\n' \
+            >> "$BROKEN_ROOT/agentteams-matrix-channel/plugin.py"
+          python qwenpaw/scripts/smoke_plugin_loader.py \
+            --plugin-dir "$BROKEN_ROOT/agentteams-matrix-channel" \
+            --expect-failure
 
-
-  matrix-channel-show-thinking-gate:
+  matrix-channel-regressions:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install matrix-channel runtime dependencies
-        run: |
-          python -m pip install             'matrix-nio>=0.25,<0.27'             'qwenpaw>=2.2.1,<2.3'             'pytest>=8.3,<10'             'pytest-asyncio>=0.23,<2'
-
-      - name: Verify matrix-nio is importable (tests must not skip)
-        run: |
-          python - <<'PY'
-          import importlib.metadata as md
-          import nio  # noqa: F401  the suite skips without matrix-nio
-          print("matrix-nio", md.version("matrix-nio"))
-          print("qwenpaw", md.version("qwenpaw"))
-          PY
-
-      - name: Run matrix-channel show_thinking gate tests
-        run: |
-          python -m pytest plugins/tests/agentteams-matrix-channel/test_show_thinking_gate.py -q -rs
-
-  matrix-channel-send-gate-retrigger-placeholder:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install matrix-channel runtime dependencies
-        run: |
-          python -m pip install \
-            'matrix-nio>=0.25,<0.27' \
-            'qwenpaw>=2.2.1,<2.3' \
-            'pytest>=8.3,<10' \
-            'pytest-asyncio>=0.23,<2'
-
-      - name: Verify matrix-nio is importable (tests must not skip)
-        run: |
-          python - <<'PY'
-          import importlib.metadata as md
-          import nio  # noqa: F401  the suite skips without matrix-nio
-          print("matrix-nio", md.version("matrix-nio"))
-          print("qwenpaw", md.version("qwenpaw"))
-          PY
-
-      - name: Run matrix-channel send-gate retrigger placeholder tests
-        run: |
-          python -m pytest plugins/tests/agentteams-matrix-channel/test_send_gate_retrigger_placeholder.py -q -rs
-
-  matrix-channel-mention-localpart:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install matrix-channel test dependencies
-        run: |
-          python -m pip install \
-            'matrix-nio>=0.25,<0.27' \
-            'qwenpaw>=2.2.1,<2.3' \
-            'pytest>=8.3,<10' \
-            'pytest-asyncio>=0.23,<2'
-
-      - name: Run mention localpart tests
-        run: |
-          python -m pytest plugins/tests/agentteams-matrix-channel/test_mention_localpart.py -q
-
-  matrix-channel-send-gate-retrigger-relevance:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: delivery
+            cases: consume_error mention_localpart retry_classifier sync_timeout_clamp
+          - suite: gates
+            cases: show_thinking_gate send_gate_retrigger_placeholder send_gate_retrigger_relevance no_reply_final_line
+    name: Matrix channel regressions (${{ matrix.suite }})
     steps:
       - uses: actions/checkout@v4
 
@@ -275,71 +235,17 @@ jobs:
           print("qwenpaw", md.version("qwenpaw"))
           PY
 
-      - name: Run matrix-channel send-gate retrigger relevance tests
+      - name: Run isolated Matrix regressions
+        env:
+          CASES: ${{ matrix.cases }}
+        # Each module keeps its own process: fixtures patch sys.modules and
+        # must not leak between suites. Only runner/dependency setup is shared.
         run: |
-          python -m pytest plugins/tests/agentteams-matrix-channel/test_send_gate_retrigger_relevance.py -q -rs
-
-  matrix-channel-retry-classifier:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install matrix-channel runtime dependencies
-        run: |
-          python -m pip install \
-            'matrix-nio>=0.25,<0.27' \
-            'qwenpaw>=2.2.1,<2.3' \
-            'pytest>=8.3,<10' \
-            'pytest-asyncio>=0.23,<2'
-
-      - name: Verify matrix-nio is importable (tests must not skip)
-        run: |
-          python - <<'PY'
-          import importlib.metadata as md
-          import nio  # noqa: F401  the suite skips without matrix-nio
-          print("matrix-nio", md.version("matrix-nio"))
-          print("qwenpaw", md.version("qwenpaw"))
-          PY
-
-      - name: Run matrix-channel retry-classifier regression tests
-        run: |
-          python -m pytest plugins/tests/agentteams-matrix-channel/test_retry_classifier.py -q -rs
-
-  matrix-channel-sync-timeout-clamp:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install matrix-channel runtime dependencies
-        run: |
-          python -m pip install \
-            'matrix-nio>=0.25,<0.27' \
-            'qwenpaw>=2.2.1,<2.3' \
-            'pytest>=8.3,<10' \
-            'pytest-asyncio>=0.23,<2'
-
-      - name: Verify matrix-nio is importable (tests must not skip)
-        run: |
-          python - <<'PY'
-          import importlib.metadata as md
-          import nio  # noqa: F401  the suite skips without matrix-nio
-          print("matrix-nio", md.version("matrix-nio"))
-          print("qwenpaw", md.version("qwenpaw"))
-          PY
-
-      - name: Run matrix-channel sync-timeout clamp regression tests
-        run: |
-          python -m pytest plugins/tests/agentteams-matrix-channel/test_sync_timeout_clamp.py -q -rs
+          failed=0
+          for case in $CASES; do
+            python -m pytest "plugins/tests/agentteams-matrix-channel/test_${case}.py" -q -rs || failed=1
+          done
+          exit "$failed"
 
   plugin-release-contract:
     runs-on: ubuntu-latest
@@ -360,7 +266,8 @@ jobs:
         run: |
           python -m pip install \
             'pytest>=8.3,<10' \
-            'PyYAML>=6.0,<7'
+            'PyYAML>=6.0,<7' \
+            'jsonschema>=4.20,<5'
 
       - name: Run plugin release contract tests
         run: |
@@ -408,6 +315,7 @@ jobs:
         run: |
           python -m pytest plugins/tests/agentteams-matrix/golden -q
           python -m pytest plugins/tests/agentteams-teamharness/golden -q
+          python -m pytest plugins/tests/teamharness/adapters/qwenpaw/test_manager_diagnosis_package.py -q
 
   openclaw-native-discovery:
     runs-on: ubuntu-latest
@@ -581,12 +489,13 @@ jobs:
             'pytest-asyncio>=0.23,<2'
 
       - name: Install mc and kube-apiserver
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           # dl.min.io is gone (410); this is the same mc release the
           # repo-standard S3 backend test pins (test/e2e/external-s3-backend.sh).
-          curl -fSL -o /usr/local/bin/mc \
-            https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z
-          sudo chmod +x /usr/local/bin/mc
+          python3 hack/install-mc.py "$RUNNER_TEMP/mc"
+          sudo install -m 755 "$RUNNER_TEMP/mc" /usr/local/bin/mc
           # embedded mode execs kube-apiserver by name; it must be on PATH.
           curl -fSL -o /usr/local/bin/kube-apiserver \
             https://dl.k8s.io/release/v1.31.3/bin/linux/amd64/kube-apiserver
@@ -744,3 +653,86 @@ jobs:
             kill "$(cat /tmp/at-e2e/controller.pid)" 2>/dev/null || true
           fi
           cat /tmp/at-e2e/controller.log || true
+  matrix-bundle-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install bundle dependencies
+        # matrix-nio[e2e] is required here: the bundle's crypto tests
+        # exercise real Olm initialisation (restore_login, encrypted
+        # send/receive, persisted keys). Without the extra nio raises an
+        # ImportWarning and the suite fails; the tests also skip cleanly
+        # when the backend is absent, so other environments stay green.
+        run: |
+          python -m pip install \
+            'matrix-nio[e2e]>=0.26,<0.27' \
+            'PyYAML>=6.0,<7' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'pytest>=8.3,<10' \
+            'pytest-asyncio>=0.23,<2'
+
+      - name: Run bundle core, transport and sidecar tests
+        run: python -m pytest plugins/tests/agentteams-matrix -q
+
+  matrix-bundle-hermes-sdk:
+    # Real-SDK compatibility for the Hermes adapter (#1469): shallow-clone
+    # hermes-agent at the declared minimum (v0.22.5) and run the adapter's
+    # register() against the real gateway modules. Independent of the
+    # bundle suite on purpose: a missing SDK symbol must fail this job
+    # even when the fake-SDK behaviour suite passes.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Shallow-clone hermes-agent at the declared minimum
+        id: sdk
+        env:
+          HERMES_SDK_REF: v0.22.5
+        run: |
+          SDK_ROOT="$(mktemp -d)"
+          git clone --depth 1 --branch "$HERMES_SDK_REF" \
+            https://github.com/NousResearch/hermes-agent.git "$SDK_ROOT"
+          echo "root=$SDK_ROOT" >> "$GITHUB_OUTPUT"
+          echo "ref=$HERMES_SDK_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Install real-SDK import closure and bundle test dependencies
+        # hermes-agent pins its dependencies to python_version >= '3.14',
+        # so a plain `pip install <sdk-tree>` provides no closure on 3.11:
+        # the import closure of the SDK modules under test is installed
+        # explicitly.
+        run: |
+          python -m pip install \
+            'ruamel.yaml>=0.18,<0.19' \
+            'matrix-nio>=0.25,<0.27' \
+            'PyYAML>=6.0,<7' \
+            'qwenpaw>=2.2.1,<2.3' \
+            'python-dotenv>=1.0,<2' \
+            'httpx>=0.27,<1' \
+            'openai>=1.0' \
+            'pydantic>=2.0,<3' \
+            'requests>=2.31' \
+            'rich>=13.0' \
+            'tenacity>=8.0' \
+            'Markdown>=3.5' \
+            'jinja2>=3.1' \
+            'packaging>=24.0' \
+            'pytest>=8.3,<10'
+
+      - name: Run real-SDK adapter compatibility tests
+        env:
+          HERMES_SDK_ROOT: ${{ steps.sdk.outputs.root }}
+          HERMES_SDK_REF: ${{ steps.sdk.outputs.ref }}
+        run: python -m pytest plugins/tests/agentteams-matrix/test_adapter_hermes_sdk.py -q

@@ -18,7 +18,14 @@ prompts:
     tools: prompts/manager/TOOLS.md
     heartbeat: prompts/manager/HEARTBEAT.md
 skills:
+  manager:
+    - id: resource-management
+      path: skills/manager/resource-management
+      roles: [manager]
   agent:
+    - id: task-diagnosis
+      path: skills/agent/task-diagnosis
+      roles: [leader, manager]
     - id: mcporter
       path: skills/agent/mcporter
       roles: [leader, worker, manager, remote-member]

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Bundle installer: projects the agentteams-matrix contract onto an
-# AgentTeams runtime via that runtime's adapter.
+# Bundle installer: installs the agentteams-matrix bundle onto an
+# AgentTeams runtime via that runtime's adapter (OpenClaw projects
+# the contract onto openclaw.json; Hermes stages the native platform
+# plugin into $HERMES_HOME; QwenPaw copies the channel plugin).
 #
 # Usage:
 #   install.sh [--adapter <qwenpaw|openclaw|hermes>] [adapter options]
@@ -13,8 +15,8 @@
 # $HOME/.openclaw/openclaw.json — so a Worker whose only signal is the
 # config path is detected without the binary on PATH. Adapter options
 # given after the adapter name (e.g. --config, --dry-run for the
-# openclaw/hermes adapters) are forwarded to the selected adapter's
-# install.sh.
+# openclaw adapter) are forwarded to the selected adapter's
+# install.sh; the qwenpaw and hermes adapters take no options.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,10 +36,12 @@ Adapters:
              (takes no options)
   openclaw   project channels.matrix into ~/.openclaw/openclaw.json
              (options: --config, --dry-run, --with-credentials)
-  hermes     project the matrix: block into ~/.hermes/config.yaml
-             (options: --config, --dry-run, --with-credentials,
-             --hermes-version <version>, --hermes-root <path>,
-             --hermes-capabilities full|basic, --allow-partial)
+  hermes     stage the native matrix platform plugin into $HERMES_HOME
+             (default ~/.hermes): the payload under
+             $HERMES_HOME/plugins/agentteams-matrix plus the per-file
+             ownership marker at
+             $HERMES_HOME/.agentteams/agentteams-matrix/installed.json
+             (takes no options; set HERMES_HOME to relocate)
 
 Without --adapter, the first detected runtime (search order: qwenpaw,
 openclaw, hermes) is installed. OpenClaw counts as present when its
@@ -93,11 +97,31 @@ runtime_present() {
   esac
 }
 
+# The Hermes config projector was replaced by the native platform
+# plugin adapter, which takes no options; the old projector flags are
+# rejected with a clear error instead of silently ignored.
+reject_hermes_projector_flags() {
+  local flag
+  for flag in "${FORWARD[@]}"; do
+    case "$flag" in
+      --hermes-version|--hermes-root|--hermes-capabilities|--allow-partial)
+        echo "ERROR: ${flag} is a removed Hermes projector flag; the native hermes adapter takes no options — it stages the platform plugin under \$HERMES_HOME/plugins/agentteams-matrix (set HERMES_HOME to relocate)" >&2
+        exit 2
+        ;;
+    esac
+  done
+}
+
 install_adapter() {
   local adapter="$1"
   if [ "${#FORWARD[@]}" -gt 0 ]; then
     if [ "${adapter}" = "qwenpaw" ]; then
       echo "ERROR: the qwenpaw adapter takes no options; drop: ${FORWARD[*]}" >&2
+      exit 2
+    fi
+    if [ "${adapter}" = "hermes" ]; then
+      reject_hermes_projector_flags
+      echo "ERROR: the hermes adapter takes no options; drop: ${FORWARD[*]}" >&2
       exit 2
     fi
     bash "${BUNDLE_DIR}/adapters/${adapter}/install.sh" "${FORWARD[@]}"
@@ -116,7 +140,7 @@ if [ -n "${ADAPTER}" ]; then
       ;;
   esac
   if ! runtime_present "${ADAPTER}"; then
-    echo "WARNING: ${ADAPTER} binary not found on PATH; the adapter still projects its config file" >&2
+    echo "WARNING: ${ADAPTER} binary not found on PATH; the adapter still installs its files" >&2
   fi
   install_adapter "${ADAPTER}"
   exit 0

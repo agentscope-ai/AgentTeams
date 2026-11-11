@@ -8,7 +8,9 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -475,8 +477,8 @@ func (c *HigressClient) EnsureServiceSource(ctx context.Context, name, domain st
 	return c.ensureServiceSource(ctx, name, domain, port, protocol)
 }
 
-func (c *HigressClient) EnsureStaticServiceSource(ctx context.Context, name, address string, port int) error {
-	return c.ensureStaticServiceSource(ctx, name, address, port)
+func (c *HigressClient) EnsureStaticServiceSource(ctx context.Context, name, address string, port int, protocol string) error {
+	return c.ensureStaticServiceSource(ctx, name, address, port, protocol)
 }
 
 func (c *HigressClient) EnsureRoute(ctx context.Context, name string, domains []string, serviceName string, port int, pathPrefix string) error {
@@ -498,6 +500,10 @@ func (c *HigressClient) EnsureAIProvider(ctx context.Context, req AIProviderRequ
 	if req.Raw != nil {
 		body["rawConfigs"] = req.Raw
 	}
+	if req.Raw != nil && req.Raw["openaiCustomServiceName"] != nil {
+		return c.ensureCustomEndpointResource(ctx, "/v1/ai/providers", req.Name, body)
+	}
+
 	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/ai/providers", body)
 	if err != nil {
 		return fmt.Errorf("ensure AI provider %s: %w", req.Name, err)
@@ -768,31 +774,77 @@ func (c *HigressClient) ensureServiceSource(ctx context.Context, name, dnsDomain
 		"properties": map[string]interface{}{},
 		"authN":      map[string]interface{}{"enabled": false},
 	}
-	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/service-sources", body)
+	return c.ensureCustomEndpointResource(ctx, "/v1/service-sources", name, body)
+}
+
+// ensureCustomEndpointResource also repairs existing bootstrap configuration.
+func (c *HigressClient) ensureCustomEndpointResource(ctx context.Context, path, name string, body map[string]interface{}) error {
+	_, status, err := c.doJSON(ctx, http.MethodPost, path, body)
 	if err != nil {
-		return fmt.Errorf("ensure service source %s: %w", name, err)
+		return err
 	}
-	if sc != 200 && sc != 201 && sc != 409 {
-		return fmt.Errorf("ensure service source %s: HTTP %d", name, sc)
+	if status == http.StatusOK || status == http.StatusCreated {
+		return nil
+	}
+	if status != http.StatusConflict {
+		return fmt.Errorf("ensure %s/%s: HTTP %d", path, name, status)
+	}
+	resourcePath := path + "/" + url.PathEscape(name)
+	existing, status, err := c.doJSON(ctx, http.MethodGet, resourcePath, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("read %s: HTTP %d", resourcePath, status)
+	}
+	var response struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	if err := json.Unmarshal(existing, &response); err != nil {
+		return err
+	}
+	if response.Data == nil {
+		return fmt.Errorf("read %s: missing resource data", resourcePath)
+	}
+	// Keep other source/provider options; update only bootstrap-owned fields.
+	for key, value := range body {
+		if (key == "properties" || key == "authN") && response.Data[key] != nil {
+			continue
+		}
+		if key == "rawConfigs" {
+			if current, ok := response.Data[key].(map[string]interface{}); ok {
+				for field, updated := range value.(map[string]interface{}) {
+					current[field] = updated
+				}
+				continue
+			}
+		}
+		response.Data[key] = value
+	}
+	_, status, err = c.doJSON(ctx, http.MethodPut, resourcePath, response.Data)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK && status != http.StatusCreated && status != http.StatusNoContent {
+		return fmt.Errorf("update %s: HTTP %d", resourcePath, status)
 	}
 	return nil
 }
 
-func (c *HigressClient) ensureStaticServiceSource(ctx context.Context, name, address string, port int) error {
+func (c *HigressClient) ensureStaticServiceSource(ctx context.Context, name, address string, port int, protocol string) error {
+	if strings.Contains(address, ":") {
+		return fmt.Errorf("Higress Console static service sources do not support IPv6 addresses: %s", address)
+	}
+	if protocol == "" {
+		protocol = "http"
+	}
 	body := map[string]interface{}{
-		"type": "static", "name": name, "domain": fmt.Sprintf("%s:%d", address, port),
-		"port": port, "protocol": "http",
+		"type": "static", "name": name, "domain": net.JoinHostPort(address, strconv.Itoa(port)),
+		"port": port, "protocol": protocol,
 		"properties": map[string]interface{}{},
 		"authN":      map[string]interface{}{"enabled": false},
 	}
-	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/service-sources", body)
-	if err != nil {
-		return fmt.Errorf("ensure static service source %s: %w", name, err)
-	}
-	if sc != 200 && sc != 201 && sc != 409 {
-		return fmt.Errorf("ensure static service source %s: HTTP %d", name, sc)
-	}
-	return nil
+	return c.ensureCustomEndpointResource(ctx, "/v1/service-sources", name, body)
 }
 
 func (c *HigressClient) ensureRoute(ctx context.Context, name string, domains []string, serviceName string, port int, pathPrefix string) error {

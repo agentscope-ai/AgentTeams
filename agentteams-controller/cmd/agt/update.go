@@ -41,7 +41,7 @@ func updateWorkerCmd() *cobra.Command {
 		Long: `Update an existing Worker resource. Only specified fields are changed.
 
   agt update worker --name alice --model claude-sonnet-4-6
-  agt update worker --name alice --image agentteams/agentteams-worker:v1.2.0
+  agt update worker --name alice --image agentteams/agentteams-harness-openclaw:v1.2.0
   agt update worker --name alice --skills github-operations,code-review
   To update CPU/memory resources, use a YAML manifest and pass it with 'agt apply -f worker.yaml'.
   To update mcpServers, use a YAML manifest and pass it with 'agt apply -f worker.yaml'.`,
@@ -93,7 +93,7 @@ func updateWorkerCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman|deepseek-harness)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman|deepseek-harness|codex)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content")

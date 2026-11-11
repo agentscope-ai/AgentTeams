@@ -89,6 +89,7 @@ COPY manager/agent/worker-skills/ /opt/agentteams/agent/worker-skills/
 
 # Plugin packages (skill catalog "plugin" source: plugin.yaml + skills/ trees)
 COPY plugins/ /opt/agentteams/plugins/
+COPY --from=agentteams-controller /opt/agentteams/agent/manager-agent/ /opt/agentteams/agent/manager-agent/
 
 # ---- Ports ----
 # 8080: Higress Gateway (unified entry point)

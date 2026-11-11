@@ -36,7 +36,9 @@ func getTasksCmd() *cobra.Command {
 }
 
 func tracingCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "tracing", Short: "Read task traces for evidence-based diagnosis"}
+	cmd := traceListCmd("tracing", "")
+	cmd.Short = "Query authorized execution traces by Agent, team, session or task"
+	cmd.Long = "Query execution traces using your Controller identity. Agent filters identify Worker resources, including team Leaders. Without time bounds, queries default to the last 24 hours; session queries cover all time. Results are paginated; use --page and --limit to read additional pages."
 	var team string
 	var related bool
 	task := &cobra.Command{
@@ -63,5 +65,6 @@ func tracingCmd() *cobra.Command {
 	task.Flags().StringVar(&team, "team", "", "Owning team (required when project IDs are ambiguous)")
 	task.Flags().BoolVar(&related, "related", false, "Include dependency ancestors/descendants and actual causal trace links")
 	cmd.AddCommand(task)
+	cmd.AddCommand(traceListCmd("list", ""), traceListCmd("worker <name>", "worker"), traceListCmd("session <id>", "session"), traceShowCmd())
 	return cmd
 }

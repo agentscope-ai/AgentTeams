@@ -5,12 +5,45 @@ description: Inspect team tasks and full execution traces to locate failures, sl
 
 # Diagnose Task Execution
 
-Use this skill when you need to explain why a task failed, stalled, retried,
-or produced an unexpected result. You use your own Controller identity:
+Use this skill when you need to explain why an Agent conversation, session,
+or task failed, stalled, retried, or produced an unexpected result. You use your own Controller identity:
 as Leader you can inspect your team; as Manager you can inspect authorized
 teams. Never request or extract Langfuse project credentials.
 
-1. Run `agt get tasks --team <team-name> -o json`. Select the exact project
+## Choose Your Query Scope
+
+You do not need a formal Project/Task to inspect a conversation trace. For
+direct Matrix conversations, start with the Agent, team, or session:
+
+```bash
+agt tracing --agent <worker-name> --since 1h --limit 20 -o table
+agt tracing --team <team-name> --since 24h -o json
+agt tracing session <session-id> -o json
+agt tracing --project <project-id> --task <task-id> -o json
+agt tracing show <trace-id> -o json
+```
+
+You can combine `--agent` (alias `--worker`), `--team`, `--session`, `--task`,
+`--project`, `--room`, and `--runtime`. `agt tracing list` is equivalent to
+`agt tracing`; `agt tracing worker <name>` also accepts the alias `agent`.
+Agent names identify Worker resources, including team Leaders; selecting a
+Manager without supported collection does not manufacture Manager traces.
+
+For `--since`, use a positive duration such as `1h` or an RFC3339 timestamp
+with a timezone, such as `2026-11-11T08:00:00+08:00`. `--until` requires an
+RFC3339 timestamp with a timezone. The interval includes `since` and excludes
+`until`. Without explicit bounds, queries cover the last 24 hours; session
+queries have no default time cutoff. Results still use `--limit` (1–100,
+default 20) and `--page`; inspect `meta.totalPages` and read all relevant
+pages before claiming a complete session. The list contains trace summaries;
+use `show` to inspect their model/tool observations and error events.
+
+If a task listing is empty, do not conclude that conversation traces are
+absent. Query the Agent/session and check collection and access independently.
+
+## Diagnose a Formal Task
+
+1. For a formal task, run `agt get tasks --team <team-name> -o json`. Select the exact project
    and task IDs; inspect `complete`, `skipped_projects`, status, assignee and
    `depends_on`. A partial task listing limits your diagnosis. For task results
    and history, use `agt get projects <project-id> --team <team-name>
@@ -43,5 +76,5 @@ reading Dashboard's private files yourself.
 
 Use your existing project/task tools for any authorized revision, new
 delegation or human decision. A diagnosis query does not retry tasks, change
-their status, or replace deliverable acceptance. This version's native
-collection acceptance covers QwenPaw only.
+their status, or replace deliverable acceptance. Built-in collection supports
+managed QwenPaw and Hermes images containing the telemetry adapters.

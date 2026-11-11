@@ -24,3 +24,25 @@ jobs:
           python3 tests/test-harness-publication.py
           python3 tests/test-harness-provenance.py
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= .github/workflows/publish-harnesses.yml .github/workflows/check-harness-publication.yml
+  published-amd64-pull:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: docker/setup-buildx-action@v3
+      - name: Pull exact published AMD64 child and verify packaged tools
+        env:
+          IMAGE: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw@sha256:ce91e9cf8846d26469c72b52ea1a81e780bdb00912b2b4f45a1654940f9ea77a
+          REVISION: 84d78999ed0c7be0e2768fd40ad9581ef9a79e0e
+        run: |
+          docker pull --platform linux/amd64 "$IMAGE"
+          test "$(docker image inspect "$IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          test "$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$REVISION"
+          test "$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = v1.2.7
+          docker run --rm --network none --platform linux/amd64 --entrypoint sh "$IMAGE" -ec \
+            'for command in list worker agent session show; do agt tracing "$command" --help >/dev/null; done'
+          docker run --rm --network none --platform linux/amd64 --entrypoint bash \
+            -v "$PWD/worker/tests/image-smoke.sh:/tmp/smoke.sh:ro" "$IMAGE" /tmp/smoke.sh

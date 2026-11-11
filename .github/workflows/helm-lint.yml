@@ -41,6 +41,7 @@ on:
       - 'tests/check-installer-auto-version-images.sh'
       - 'tests/check-harness-image-names.ps1'
       - 'tests/check-manager-shared-images.sh'
+      - 'tests/check-manager-dm-room.sh'
       - 'tests/check-installer-codex-image.sh'
       - 'tests/check-installer-codex-image.ps1'
       - 'tests/check-teamharness-acceptance-observer.sh'
@@ -153,6 +154,9 @@ jobs:
 
       - name: Check shared Manager Harness images
         run: bash tests/check-manager-shared-images.sh
+
+      - name: Check Manager room discovery
+        run: bash tests/check-manager-dm-room.sh
 
       - name: Check TeamHarness acceptance observer
         run: bash tests/check-teamharness-acceptance-observer.sh

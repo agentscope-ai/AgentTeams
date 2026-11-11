@@ -342,7 +342,14 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
         # project node status back (otherwise the write-back would clobber
         # the Controller's paused status with a stale active).
         pid = _project_id_for_pull(arguments, payload)
-        if not pid and action in _TASKFLOW_MUTATING_ACTIONS and action != "delegate_task":
+        if (
+            not pid
+            and os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip()
+            and _runtime_role() in {"worker", "remote-member"}
+            and _runtime_identity()
+            and action in _TASKFLOW_MUTATING_ACTIONS
+            and action != "delegate_task"
+        ):
             task_id = _first_text(payload.get("taskId"), payload.get("task_id"))
             if task_id:
                 # A Worker's first action has no cached task from which to

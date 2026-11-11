@@ -174,6 +174,58 @@ def test_retry_same_assignee_reuses_recorded_event(
     assert delegate_side_effects["notify"] == []
 
 
+def test_named_assignee_notification_uses_roster_matrix_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    delegate_side_effects: dict[str, list[Any]],
+) -> None:
+    _write_assigned_task(tmp_path, assignee="alice", event_id="")
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text(json.dumps({"team": {"members": [
+        {"name": "Alice", "runtimeName": "alice", "matrixUserId": WORKER_A},
+    ]}}))
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(runtime))
+    checked = []
+    monkeypatch.setattr(server, "_validate_assignee_membership",
+                        lambda room, assignee: checked.append(assignee) or {"ok": True})
+
+    result = _delegate(tmp_path, "redep-project-01", "alice")
+
+    assert result["ok"] is True
+    assert checked == [WORKER_A]
+    assert delegate_side_effects["notify"][0]["assignee"] == WORKER_A
+    assert result["task"]["assigned_to"] == "alice"
+
+    retried = _delegate(tmp_path, "redep-project-01", "alice")
+    assert retried["ok"] is True
+    assert retried["notification"]["reused"] is True
+    assert len(delegate_side_effects["notify"]) == 1
+
+
+@pytest.mark.parametrize("members", [[], [
+    {"name": "alice", "matrixUserId": WORKER_A},
+    {"runtimeName": "alice", "matrixUserId": WORKER_B},
+]])
+def test_unresolved_or_ambiguous_name_does_not_assign_or_notify(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    delegate_side_effects: dict[str, list[Any]],
+    members: list[dict[str, str]],
+) -> None:
+    _write_assigned_task(tmp_path, assignee="alice", event_id="")
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text(json.dumps({"team": {"members": members}}))
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(runtime))
+    before = (tmp_path / "shared/tasks/redep-project-01/meta.json").read_bytes()
+
+    result = _delegate(tmp_path, "redep-project-01", "alice")
+
+    assert result["ok"] is False
+    assert "Matrix" in result["error"]
+    assert delegate_side_effects["notify"] == []
+    assert (tmp_path / "shared/tasks/redep-project-01/meta.json").read_bytes() == before
+
+
 def test_retry_with_different_casing_of_same_assignee_reuses(
     tmp_path: Path,
     delegate_side_effects: dict[str, list[Any]],

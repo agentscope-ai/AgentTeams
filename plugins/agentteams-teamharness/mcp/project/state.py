@@ -45,7 +45,10 @@ def _project_id_from_payload(arguments: dict[str, Any], payload: dict[str, Any])
 
 
 def _normalize_task(raw: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    task_id = _safe_id(raw.get("taskId") or raw.get("task_id"), "taskId")
+    identity = raw.get("taskId") or raw.get("task_id")
+    if not identity:
+        raise ValueError("each task requires taskId or task_id; the generic id field is not supported")
+    task_id = _safe_id(identity, "taskId")
     previous = previous or {}
     status = str(raw.get("status") or previous.get("status") or "planned")
     if status == "pending":

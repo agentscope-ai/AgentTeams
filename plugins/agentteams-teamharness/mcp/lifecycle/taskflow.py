@@ -32,7 +32,7 @@ from mcp.artifact.publish import (
 )
 from mcp.artifact.sync import _load_authoritative_task, _load_authoritative_task_optional
 from mcp.project.state import _loop_pause_state
-from mcp.room.matrix import _team_human_matrix_ids, _team_leader_matrix_id
+from mcp.room.matrix import _assignee_matrix_id, _team_human_matrix_ids, _team_leader_matrix_id
 from mcp.room.notify import _send_attention_notification, _task_completion_notification
 from .review import (
     ProtocolGuardError,
@@ -377,7 +377,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     if isinstance(item, dict) and item.get("task_id") == task_id:
                         assigned_to = str(item.get("assigned_to") or "").strip()
                         break
-            assignment_mxid = str(assigned_to or "").strip()
+            assignment_mxid = _assignee_matrix_id(assigned_to)
+            if not assignment_mxid and os.getenv("AGENTTEAMS_MATRIX_URL", "").strip() and os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "").strip():
+                raise ValueError(
+                    f"cannot resolve assignee {assigned_to!r} to one Matrix identity; "
+                    "use a full Matrix user ID or an unambiguous team roster name"
+                )
 
             # Idempotent retry of a fully assigned task: the automatic
             # notification was already delivered (event_id recorded) - return
@@ -393,7 +398,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             existing_assignee = str(existing_task.get("assigned_to") or "").strip()
             redelegate = bool(
                 assignment_mxid
-                and _canonical_assignee(assignment_mxid) != _canonical_assignee(existing_assignee)
+                and _canonical_assignee(assignment_mxid) != _canonical_assignee(
+                    _assignee_matrix_id(existing_assignee) or existing_assignee
+                )
             )
             if (
                 str(existing_task.get("status") or "") == "assigned"

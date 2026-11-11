@@ -9,6 +9,54 @@ import (
 	"testing"
 )
 
+func TestTraceQueryRejectsInvalidBoundsAndPaging(t *testing.T) {
+	h := tracingFixture(t)
+	for _, query := range []string{"since=yesterday", "since=2026-11-11T08:00:00", "until=bad", "since=2026-11-12T00:00:00Z&until=2026-11-11T00:00:00Z", "limit=0", "limit=101", "worker=one&agent=two"} {
+		r := taskTraceRequest("alpha")
+		r.URL, _ = r.URL.Parse("/api/v1/traces?" + query)
+		rec := httptest.NewRecorder()
+		h.ListTraces(rec, r)
+		if rec.Code != 400 {
+			t.Fatalf("query %s: expected 400, got %d", query, rec.Code)
+		}
+	}
+}
+
+func TestTraceQueryBoundsAndLimitPreserveScope(t *testing.T) {
+	h := tracingFixture(t)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("fromTimestamp") != "2026-11-11T00:00:00Z" || q.Get("toTimestamp") != "2026-11-11T02:00:00Z" || q.Get("userId") != "worker" {
+			t.Errorf("wrong backend query: %v", q)
+		}
+		rows := []map[string]any{}
+		for _, id := range []string{"first", "second", "outside", "foreign"} {
+			worker, at := "worker", "2026-11-11T01:00:00Z"
+			if id == "foreign" {
+				worker = "foreign"
+			}
+			if id == "outside" {
+				at = "2026-11-11T03:00:00Z"
+			}
+			rows = append(rows, map[string]any{"id": id, "userId": worker, "timestamp": at, "tags": []string{"team:alpha"}, "metadata": map[string]any{"agentteams.team.id": "alpha"}})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": rows, "meta": map[string]any{"totalPages": 1}})
+	}))
+	defer backend.Close()
+	saveTraceBackend(t, h, backend.URL)
+	r := taskTraceRequest("alpha")
+	r.URL, _ = r.URL.Parse("/api/v1/traces?agent=worker-cr&since=2026-11-11T00:00:00Z&until=2026-11-11T02:00:00Z&limit=1&page=2")
+	rec := httptest.NewRecorder()
+	h.ListTraces(rec, r)
+	var result struct {
+		Data []struct{ ID string }
+		Meta struct{ TotalItems, TotalPages int }
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &result) != nil || len(result.Data) != 1 || result.Data[0].ID != "second" || result.Meta.TotalItems != 2 || result.Meta.TotalPages != 2 {
+		t.Fatalf("incorrect filtered page: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestTracingAPIUsesRuntimeIdentityAndRejectsForeignRows(t *testing.T) {
 	h := tracingFixture(t)
 	id := strings.Repeat("a", 32)

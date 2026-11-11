@@ -24,7 +24,7 @@ You can check a Worker's runtime and current phase with `agt get workers
 
 ## Guide the User Through Dashboard
 
-1. Ask the user to open **Settings → Management → Tracing** (the management
+1. Ask the user to open **Workbench → Tracing** when available, or **Settings → Management → Tracing** (the management
    group is labelled **运行与治理**). You can also point to the Dashboard URL
    with `/#console/governance/tracing` appended. In Tracing, an administrator
    opens **可观测配置**.
@@ -60,8 +60,14 @@ You can check a Worker's runtime and current phase with `agt get workers
 Never ask the user to paste credentials into chat. They enter Secret Key and
 Collector Headers in the password fields; query credentials stay in your
 Controller's persisted configuration. Do not put Langfuse query credentials
-into Worker env or repeat them in a response. To diagnose a task, load
-`task-diagnosis` and use `agt get tasks` followed by `agt tracing task`.
+into Worker env or repeat them in a response. To inspect a conversation,
+use `agt tracing --agent <worker-name> --since 1h -o json`, or
+`agt tracing --session <session-id> -o json`, then `agt tracing show
+<trace-id> -o json` for observations. You can also filter by `--team`,
+`--task`, `--project`, `--room`, and `--runtime`; inspect pagination before
+claiming completeness. An empty formal-task list does not mean no traces
+exist. For a formal task, load `task-diagnosis` and use `agt get tasks`
+followed by `agt tracing task` to inspect task dependencies and causal links.
 
 ## Verify End to End
 

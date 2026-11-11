@@ -791,6 +791,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # than turning a missing ACK into an opaque storage-sync failure.
             if (
                 os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip()
+                and _runtime_role() in {"worker", "remote-member"}
                 and task.get("status") not in {"in_progress", "submitted"}
             ):
                 raise ValueError(

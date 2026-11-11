@@ -37,9 +37,10 @@ def test_worker_can_write_only_the_assigned_task(tmp_path, monkeypatch, action, 
 
 
 @pytest.mark.parametrize("status", ["planned", "prepared", "assigned"])
-def test_controller_submission_requires_ack_before_any_mutation(tmp_path, monkeypatch, status):
+@pytest.mark.parametrize("runtime_role", ["worker", "remote-member"])
+def test_controller_submission_requires_ack_before_any_mutation(tmp_path, monkeypatch, status, runtime_role):
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.example.test")
-    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", runtime_role)
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
     monkeypatch.setattr(server, "_pull_project", lambda *a, **kw: True)
     monkeypatch.setattr(server, "_pull_task", lambda *a, **kw: True)

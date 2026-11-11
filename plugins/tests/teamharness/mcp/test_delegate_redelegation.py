@@ -442,3 +442,28 @@ def test_redelegation_rotates_txn(
         assert re.fullmatch(r"delegate-redep-project-01-[0-9a-f]{12}", txn_used)
     finally:
         httpd.shutdown()
+
+
+def test_declared_flat_arguments_can_retry_a_delegation(
+    tmp_path: Path,
+    delegate_side_effects: dict[str, list[Any]],
+) -> None:
+    """Schema-driven callers must be able to provide the required room."""
+    project_id, task_id = _write_assigned_task(tmp_path)
+    arguments = {
+        "role": "leader",
+        "action": "delegate_task",
+        "projectId": project_id,
+        "taskId": task_id,
+        "roomId": ROOM,
+        "assignedTo": WORKER_A,
+        "workspaceDir": str(tmp_path),
+    }
+    declared = server.TOOL_SCHEMAS["taskflow"]["inputSchema"]["properties"]
+    response = server.call_tool("taskflow", {
+        key: value for key, value in arguments.items() if key in declared
+    })
+    result = json.loads(response["content"][0]["text"])
+    assert result["ok"] is True, result
+    assert result["task"]["room_id"] == ROOM
+    assert result["notification"]["reused"] is True

@@ -586,6 +586,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "Worker Matrix id or stable member name assigned to delegate_task.",
                 },
+                "roomId": {
+                    "type": "string",
+                    "description": "Required for delegate_task: Matrix task room id. Can also be passed as payload.roomId.",
+                },
                 "decisionClass": {
                     "type": "string",
                     "description": "Delegate_task decision class r1..r6 (contracts/decision-classes.json); required while the protocol.enforce switch is on.",

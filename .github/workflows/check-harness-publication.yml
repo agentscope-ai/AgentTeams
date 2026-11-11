@@ -6,6 +6,7 @@ on:
       - '.github/workflows/check-harness-publication.yml'
       - 'scripts/release/**'
       - 'tests/test-harness-publication.py'
+      - 'tests/test-harness-provenance.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,5 +19,8 @@ jobs:
         with:
           go-version: '1.25'
       - run: bash -n scripts/release/build-harness-platform.sh
-      - run: python3 tests/test-harness-publication.py
+      - run: bash -n scripts/release/verify-harness-image.sh
+      - run: |
+          python3 tests/test-harness-publication.py
+          python3 tests/test-harness-provenance.py
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= .github/workflows/publish-harnesses.yml .github/workflows/check-harness-publication.yml

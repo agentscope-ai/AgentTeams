@@ -940,6 +940,39 @@ def test_pause_between_pull_and_submit_survives_write_back(
     assert sources == ["project", "user"]
 
 
+@pytest.mark.parametrize("concurrent", [False, True])
+def test_task_update_preserves_other_nodes_and_remote_plan(
+    server: Any, tmp_path: Path, monkeypatch: Any, concurrent: bool
+) -> None:
+    monkeypatch.setattr(server.sync, "_SYNC_PROJECT_RETRY_BACKOFFS", (0.0, 0.0))
+    workspace = tmp_path / "agent"
+    project_id = "peer-progress"
+    path = f"shared/projects/{project_id}/meta.json"
+    local = {"project_id": project_id, "status": "active", "title": "old title", "tasks": [
+        {"task_id": "own", "status": "assigned"},
+        {"task_id": "peer", "status": "planned"},
+    ]}
+    remote = json.loads(json.dumps(local))
+    remote["title"] = "current title"
+    remote["tasks"].append({"task_id": "new-node", "status": "planned"})
+    if not concurrent:
+        remote["tasks"][1]["status"] = "completed"
+    def advance_peer(meta):
+        meta["tasks"][1]["status"] = "completed"
+        return meta
+    storage = FakeProjectStorage({path: remote}, window_mutation=advance_peer if concurrent else None)
+    _install_sync_fakes(monkeypatch, server, storage)
+    _write_project(workspace, project_id, local)
+
+    assert server._update_project_task(_arguments(workspace, "noop"), project_id, "own", status="submitted")
+
+    final = storage.remote[path]
+    assert final["title"] == "current title"
+    assert [(t["task_id"], t["status"]) for t in final["tasks"]] == [
+        ("own", "submitted"), ("peer", "completed"), ("new-node", "planned")]
+    assert storage.commit_calls == (2 if concurrent else 1)
+
+
 def test_sync_project_retries_conflict_and_converges(
     server: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:

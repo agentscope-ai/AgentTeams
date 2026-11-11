@@ -264,7 +264,7 @@ EOF
     cat >> "${WORKSPACE}/config.toml" <<'EOF'
 
 [autonomy]
-allowed_commands = ["agt", "mc", "ls", "cat", "grep", "find", "echo", "pwd", "head", "tail"]
+allowed_commands = ["agt", "mc", "ls", "cat", "grep", "find", "echo", "pwd", "head", "tail", "printf", "mkdir"]
 EOF
     if [ "${AGENTTEAMS_YOLO:-0}" = "1" ]; then
         printf '\nlevel = "full"\nrequire_approval_for_medium_risk = false\n' >> "${WORKSPACE}/config.toml"

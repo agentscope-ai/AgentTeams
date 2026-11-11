@@ -35,6 +35,8 @@ class NativeToolsTests(unittest.TestCase):
                 self.assertTrue({'shell', 'file_read', 'file_write'} <= set(agent['tools']['named']))
                 self.assertIn('member.role: ' + role, (home / 'workspace/SOUL.md').read_text())
                 self.assertTrue((home / 'workspace/skills/task.md').exists())
+                policy = tomllib.loads((home / 'config.toml').read_text())['autonomy']
+                self.assertTrue({'mc', 'printf', 'mkdir'} <= set(policy['allowed_commands']))
 
 if __name__ == '__main__':
     unittest.main()

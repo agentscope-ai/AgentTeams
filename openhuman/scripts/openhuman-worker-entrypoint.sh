@@ -228,26 +228,27 @@ EOF
 
 log "config.toml generated at ${WORKSPACE}/config.toml"
 
-if [ "${AGENTTEAMS_AGENT_ROLE:-}" = "manager" ]; then
+if [ -n "${WORKER_NAME}" ]; then
     # Native channel turns route through orchestrator, whose builtin definition
-    # omits workspace identity and shell tools. Bind the Manager role explicitly.
+    # omits workspace identity and shell tools. Bind your assigned role explicitly.
     # OpenHuman resolves <config-dir>/workspace as its native workspace.
+    NATIVE_ROLE="${AGENTTEAMS_AGENT_ROLE:-${AGENTTEAMS_WORKER_ROLE:-worker}}"
     NATIVE_WORKSPACE="${WORKSPACE}/workspace"
     mkdir -p "${NATIVE_WORKSPACE}/agents" "${NATIVE_WORKSPACE}/skills"
-    write_manager_prompt() {
+    write_member_prompt() {
         cat "${WORKSPACE}/AGENTS.md"
-        printf '\nController member context:\nmember.name: %s\nmember.role: manager\nmember.personalRoomId: %s\nmember.matrixUserId: %s\n' \
-            "${WORKER_CR_NAME}" "${BRIDGE_ROOM_ID}" "${BRIDGE_USER_ID}"
+        printf '\nController member context:\nmember.name: %s\nmember.role: %s\nmember.personalRoomId: %s\nmember.matrixUserId: %s\n' \
+            "${WORKER_CR_NAME}" "${NATIVE_ROLE}" "${BRIDGE_ROOM_ID}" "${BRIDGE_USER_ID}"
         printf '\nYour existing personality:\n'
         cat "${WORKSPACE}/SOUL.md"
     }
     # Channel turns load SOUL.md directly; the definition supplies tool scope.
-    write_manager_prompt > "${NATIVE_WORKSPACE}/SOUL.md"
+    write_member_prompt > "${NATIVE_WORKSPACE}/SOUL.md"
     cp -a "${WORKSPACE}/skills/." "${NATIVE_WORKSPACE}/skills/"
     cat > "${NATIVE_WORKSPACE}/agents/orchestrator.toml" <<EOF
 id = "orchestrator"
-display_name = "Manager"
-when_to_use = "Coordinate your AgentTeams resources and delegate to Team Leaders."
+display_name = "${WORKER_NAME}"
+when_to_use = "Complete tasks using your assigned AgentTeams role and credentials."
 agent_tier = "chat"
 max_iterations = 15
 omit_identity = true
@@ -255,7 +256,7 @@ omit_skills_catalog = true
 omit_memory_md = false
 
 [system_prompt]
-inline = "Follow your workspace identity to coordinate AgentTeams resources and delegate to Team Leaders."
+inline = "Follow your workspace identity and use your available tools to complete your assigned tasks."
 
 [tools]
 named = ["shell", "file_read", "file_write", "query_memory", "memory_store", "memory_forget"]

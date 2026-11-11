@@ -21,6 +21,7 @@ on:
       - '.github/workflows/build-deepseek-harness.yml'
       - '.github/workflows/release.yml'
       - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
+      - 'tests/test_openhuman_native_tools.py'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
       - 'tests/check-installer-token-plan-models.sh'
@@ -153,6 +154,9 @@ jobs:
 
       - name: Check shared Manager Harness images
         run: bash tests/check-manager-shared-images.sh
+
+      - name: Check OpenHuman native role tools
+        run: python3 tests/test_openhuman_native_tools.py
 
       - name: Check TeamHarness acceptance observer
         run: bash tests/check-teamharness-acceptance-observer.sh

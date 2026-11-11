@@ -91,6 +91,13 @@ jobs:
           # Dependencies were built once by the caller and loaded above.
           EXTRA=()
           MAKE_ARGS=()
+          BUILD_NETWORK=()
+          # The all-in-one base's APT fetches fail DNS resolution in the
+          # BuildKit sandbox on hosted runners; use the runner network only
+          # for this build, without changing the resulting image network.
+          if [ "${{ matrix.target }}" = embedded ]; then
+            BUILD_NETWORK=(--network=host)
+          fi
           if [ "${{ inputs.controller }}" = true ]; then
             MAKE_ARGS+=(-o build-agentteams-controller)
           fi
@@ -106,7 +113,7 @@ jobs:
           fi
           make "${MAKE_ARGS[@]}" build-${{ matrix.target }} \
             HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
-            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/" \
+            DOCKER_BUILD_ARGS="${BUILD_NETWORK[*]} --build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/" \
             "${EXTRA[@]}"
 
       - name: Smoke-test packaged DeepSeek Harness

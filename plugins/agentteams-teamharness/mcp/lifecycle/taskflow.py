@@ -786,6 +786,17 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task = _load_authoritative_task(arguments, task_id)
             _require_task_assignee(task)
             _require_task_mutable(arguments, task, task_id, action, to_status="submitted")
+            # Controller-backed Workers may submit only after a durable ACK.
+            # Reject before local/project writes or artifact publication, rather
+            # than turning a missing ACK into an opaque storage-sync failure.
+            if (
+                os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip()
+                and task.get("status") not in {"in_progress", "submitted"}
+            ):
+                raise ValueError(
+                    "submit_task requires a durable acknowledgment: delegate the task first, "
+                    "then call ack_task and confirm synced=true before retrying submit_task"
+                )
             summary = str(payload.get("summary") or "")
             status = _validate_task_result_status(payload.get("status"))
             deliverables = payload.get("deliverables") or []

@@ -1826,12 +1826,12 @@ def test_r6_distinct_members_without_account_id(
     succeeds and both sides carry the runtime member identity, not the
     shared 'default' fallback."""
     _enforce_on(monkeypatch)
-    _write_project(tmp_path, task_status="assigned")
+    _write_project(tmp_path, task_status="assigned", assignee="worker")
     _write_task_meta(tmp_path, {
         "task_id": TASK_ID,
         "project_id": PROJECT_ID,
         "status": "assigned",
-        "assigned_to": WORKER_A,
+        "assigned_to": "worker",
     })
 
     _set_runtime_member(monkeypatch, tmp_path, {"name": "worker"}, "worker-config.json")
@@ -1858,12 +1858,12 @@ def test_r6_trusted_identity_beats_payload_evasion(
     reviewer resolves to 'leader:worker' and self_review_forbidden
     holds — the payload field is provenance, never authorization."""
     _enforce_on(monkeypatch)
-    _write_project(tmp_path, task_status="assigned")
+    _write_project(tmp_path, task_status="assigned", assignee="worker")
     _write_task_meta(tmp_path, {
         "task_id": TASK_ID,
         "project_id": PROJECT_ID,
         "status": "assigned",
-        "assigned_to": WORKER_A,
+        "assigned_to": "worker",
     })
 
     _set_runtime_member(monkeypatch, tmp_path, {"name": "worker"}, "worker-config.json")
@@ -1979,12 +1979,12 @@ def test_r7_trusted_default_member_self_review_forbidden(
     (reviewer_source='runtime') and is refused self_review_forbidden —
     a trusted name is never discarded as the legacy sentinel."""
     _enforce_on(monkeypatch)
-    _write_project(tmp_path, task_status="assigned")
+    _write_project(tmp_path, task_status="assigned", assignee="default")
     _write_task_meta(tmp_path, {
         "task_id": TASK_ID,
         "project_id": PROJECT_ID,
         "status": "assigned",
-        "assigned_to": WORKER_A,
+        "assigned_to": "default",
     })
 
     # The member's trusted runtime identity is literally "default".
@@ -2012,12 +2012,12 @@ def test_r7_trusted_concrete_member_control_unchanged(
     (a name that was never ambiguous) still ends
     self_review_forbidden — the round-6 behaviour is unchanged."""
     _enforce_on(monkeypatch)
-    _write_project(tmp_path, task_status="assigned")
+    _write_project(tmp_path, task_status="assigned", assignee="worker")
     _write_task_meta(tmp_path, {
         "task_id": TASK_ID,
         "project_id": PROJECT_ID,
         "status": "assigned",
-        "assigned_to": WORKER_A,
+        "assigned_to": "worker",
     })
 
     _set_runtime_member(monkeypatch, tmp_path, {"name": "worker"}, "worker-config.json")
@@ -2040,12 +2040,12 @@ def test_r7_distinct_trusted_member_reviews_default_named_submitter(
     are runtime-sourced and the accounts differ, and the review record
     carries its own provenance (reviewer_source='runtime')."""
     _enforce_on(monkeypatch)
-    _write_project(tmp_path, task_status="assigned")
+    _write_project(tmp_path, task_status="assigned", assignee="default")
     _write_task_meta(tmp_path, {
         "task_id": TASK_ID,
         "project_id": PROJECT_ID,
         "status": "assigned",
-        "assigned_to": WORKER_A,
+        "assigned_to": "default",
     })
 
     _set_runtime_member(monkeypatch, tmp_path, {"name": "default"}, "worker-config.json")

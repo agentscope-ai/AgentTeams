@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import sys
 import time
@@ -927,6 +928,7 @@ def _sync_project(
     project_id: str,
     *,
     authored_status: str | None = None,
+    task_update: tuple[str, dict[str, Any]] | None = None,
 ) -> bool:
     """Push a project's derived files and its meta.json to shared storage,
     commit-safe against a concurrent Controller pause (#1402).
@@ -1026,10 +1028,27 @@ def _sync_project(
                 first_push = dict(arguments)
                 first_push.update({"action": "push", "path": dir_path})
                 return bool(_filesync(first_push).get("ok"))
-            merged = _merge_project_pause_state(
-                _read_json(state_path), snapshot, authored_status=authored_status
-            )
+            local = _read_json(state_path)
+            if task_update is not None:
+                # A task write owns only this node's delta, not the cached
+                # plan or peer progress. Rebase on EACH versioned snapshot,
+                # including after a 409, rather than binding stale data to
+                # the latest ETag and silently undoing another writer.
+                local = copy.deepcopy(snapshot)
+                task_id, updates = task_update
+                loop = local.get("loop") if isinstance(local.get("loop"), dict) else {}
+                found = False
+                for nodes in (local.get("tasks", []), loop.get("tasks", [])):
+                    for node in nodes if isinstance(nodes, list) else []:
+                        if isinstance(node, dict) and node.get("task_id") == task_id:
+                            node.update(updates)
+                            found = True
+                if not found:
+                    return False  # A replan removed this node; do not resurrect it.
+            merged = _merge_project_pause_state(local, snapshot, authored_status=authored_status)
             _write_json(state_path, merged)
+            if task_update is not None:
+                _write_project_plan(_project_dir(arguments, project_id), merged)
         dir_args = dict(arguments)
         dir_args.update({
             "action": "push",

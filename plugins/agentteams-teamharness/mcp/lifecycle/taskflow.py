@@ -32,7 +32,7 @@ from mcp.artifact.publish import (
 )
 from mcp.artifact.sync import _load_authoritative_task, _load_authoritative_task_optional
 from mcp.project.state import _loop_pause_state
-from mcp.room.matrix import _team_human_matrix_ids, _team_leader_matrix_id
+from mcp.room.matrix import _assignee_matrix_id, _matrix_user_id, _team_human_matrix_ids, _team_leader_matrix_id
 from mcp.room.notify import _send_attention_notification, _task_completion_notification
 from .review import (
     ProtocolGuardError,
@@ -83,6 +83,23 @@ _transition_task = refs.proxy("_transition_task")
 # never the tool payload — the only authority an approval close may rely
 # on (#1467 round 4).
 _runtime_role = refs.proxy("_runtime_role")
+_runtime_identity = refs.proxy("_runtime_identity")
+
+
+def _require_task_assignee(task: dict[str, Any]) -> None:
+    assigned = str(task.get("assigned_to") or task.get("assignedTo") or "").strip()
+    actor = _runtime_identity()
+    if not assigned or not actor:
+        return  # Legacy/offline tasks may have no trusted assignment identity.
+    owner_mxid = _assignee_matrix_id(assigned)
+    actor_mxid = _matrix_user_id()
+    matches = (
+        _canonical_assignee(owner_mxid) == _canonical_assignee(actor_mxid)
+        if owner_mxid and actor_mxid
+        else _canonical_account(assigned) == _canonical_account(actor)
+    )
+    if not matches:
+        raise ValueError(f"task is assigned to {assigned}, not runtime member {actor}")
 
 
 _TASKFLOW_MUTATING_ACTIONS = frozenset({
@@ -325,6 +342,21 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
         # project node status back (otherwise the write-back would clobber
         # the Controller's paused status with a stale active).
         pid = _project_id_for_pull(arguments, payload)
+        if (
+            not pid
+            and os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip()
+            and _runtime_role() in {"worker", "remote-member"}
+            and _runtime_identity()
+            and action in _TASKFLOW_MUTATING_ACTIONS
+            and action != "delegate_task"
+        ):
+            task_id = _first_text(payload.get("taskId"), payload.get("task_id"))
+            if task_id:
+                # A Worker's first action has no cached task from which to
+                # resolve its project. Pull the task before the project so
+                # ACK/progress writes do not silently skip the project node.
+                task = _load_authoritative_task(arguments, _safe_id(task_id, "taskId"))
+                pid = _first_text(task.get("project_id"), task.get("projectId"))
         if pid and not _pull_project(arguments, pid):
             # Same rationale as _projectflow: ack/submit/cancel write the
             # project node status back — proceeding on stale local state
@@ -377,7 +409,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     if isinstance(item, dict) and item.get("task_id") == task_id:
                         assigned_to = str(item.get("assigned_to") or "").strip()
                         break
-            assignment_mxid = str(assigned_to or "").strip()
+            assignment_mxid = _assignee_matrix_id(assigned_to)
+            if assigned_to and not assignment_mxid and os.getenv("AGENTTEAMS_MATRIX_URL", "").strip() and os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "").strip():
+                raise ValueError(
+                    f"cannot resolve assignee {assigned_to!r} to one Matrix identity; "
+                    "use a full Matrix user ID or an unambiguous team roster name"
+                )
 
             # Idempotent retry of a fully assigned task: the automatic
             # notification was already delivered (event_id recorded) - return
@@ -393,7 +430,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             existing_assignee = str(existing_task.get("assigned_to") or "").strip()
             redelegate = bool(
                 assignment_mxid
-                and _canonical_assignee(assignment_mxid) != _canonical_assignee(existing_assignee)
+                and _canonical_assignee(assignment_mxid) != _canonical_assignee(
+                    _assignee_matrix_id(existing_assignee) or existing_assignee
+                )
             )
             if (
                 str(existing_task.get("status") or "") == "assigned"
@@ -710,6 +749,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # cached copy must never be the write base (fail closed on a
             # failed pull).
             task = _load_authoritative_task(arguments, task_id)
+            _require_task_assignee(task)
             pulled = True
             _require_task_mutable(arguments, task, task_id, action, to_status="in_progress")
             if task.get("status") != "submitted":
@@ -759,7 +799,20 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # from the authoritative copy (a stale cache would drop a peer's
             # freeze or approval record). Fail closed on a failed pull.
             task = _load_authoritative_task(arguments, task_id)
+            _require_task_assignee(task)
             _require_task_mutable(arguments, task, task_id, action, to_status="submitted")
+            # Controller-backed Workers may submit only after a durable ACK.
+            # Reject before local/project writes or artifact publication, rather
+            # than turning a missing ACK into an opaque storage-sync failure.
+            if (
+                os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip()
+                and _runtime_role() in {"worker", "remote-member"}
+                and task.get("status") not in {"in_progress", "submitted"}
+            ):
+                raise ValueError(
+                    "submit_task requires a durable acknowledgment: delegate the task first, "
+                    "then call ack_task and confirm synced=true before retrying submit_task"
+                )
             summary = str(payload.get("summary") or "")
             status = _validate_task_result_status(payload.get("status"))
             deliverables = payload.get("deliverables") or []
@@ -1097,6 +1150,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # previous pull ignored its own failure and fell back to the
             # stale local copy.
             task = _load_authoritative_task(arguments, task_id)
+            _require_task_assignee(task)
             _require_task_mutable(arguments, task, task_id, action)
             # Progress notes only exist while the task is actually in flight.
             _progress_from = str(task.get("status") or "")

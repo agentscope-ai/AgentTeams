@@ -69,6 +69,13 @@ directory if needed, then acknowledge with `taskflow`:
 If `ack_task` fails because the task is missing or assigned elsewhere, stop and
 report the blocker to the Leader in the current room. Do not invent task files.
 
+Do not skip acknowledgment for short tasks or retries. Before starting work,
+confirm the acknowledgment reached shared storage (`synced: true`). A local
+state change is not a successful handoff: the Controller accepts your result
+only after the task has entered `in_progress`. If a submission fails to sync,
+inspect the authoritative task state and report the error; do not edit metadata
+or claim completion to bypass the failure.
+
 Read:
 
 ```text

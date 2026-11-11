@@ -115,7 +115,7 @@ def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: st
     if changed:
         _write_json(path, project)
         _write_project_plan(_project_dir(arguments, project_id), project)
-    return _sync_project(arguments, project_id)
+    return _sync_project(arguments, project_id, task_update=(task_id, updates))
 
 
 refs.define("_update_project_task", _update_project_task)

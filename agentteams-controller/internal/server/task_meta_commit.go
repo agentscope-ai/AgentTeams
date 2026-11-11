@@ -215,7 +215,7 @@ func (h *ProjectHandler) resolveTaskMetaCommitKey(
 	if caller != nil {
 		switch caller.Role {
 		case authpkg.RoleWorker:
-			if !caller.TeamMatches(team) {
+			if !callerMatchesStorageTeam(caller, team, crToEffective) {
 				writeError(w, http.StatusForbidden, "worker can only commit the meta of a task in its own team")
 				return "", "", false
 			}

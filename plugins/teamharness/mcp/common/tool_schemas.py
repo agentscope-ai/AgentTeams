@@ -416,8 +416,17 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "tasks": {
                     "type": "array",
-                    "description": "DAG or Loop task nodes for planning actions.",
-                    "items": {"type": "object", "additionalProperties": True},
+                    "description": "DAG or Loop task nodes. Each node needs taskId (or task_id), not id; use assignedTo and dependsOn for assignment and dependencies.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "taskId": {"type": "string", "description": "Required safe task identifier (task_id is also accepted)."},
+                            "title": {"type": "string"},
+                            "assignedTo": {"type": "string"},
+                            "dependsOn": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "additionalProperties": True,
+                    },
                 },
                 "taskId": {
                     "type": "string",
@@ -576,6 +585,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "assignedTo": {
                     "type": "string",
                     "description": "Worker Matrix id or stable member name assigned to delegate_task.",
+                },
+                "roomId": {
+                    "type": "string",
+                    "description": "Required for delegate_task: Matrix task room id. Can also be passed as payload.roomId.",
                 },
                 "decisionClass": {
                     "type": "string",

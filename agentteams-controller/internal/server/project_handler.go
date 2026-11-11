@@ -690,6 +690,22 @@ func callerAccessiblePrefixes(caller *authpkg.CallerIdentity, crToEffective map[
 	return out
 }
 
+// A worker's token carries Team CR names; storage uses EffectiveTeamName.
+func callerMatchesStorageTeam(caller *authpkg.CallerIdentity, team string, crToEffective map[string]string) bool {
+	if team == "" {
+		return false
+	}
+	if caller.TeamMatches(team) {
+		return true
+	}
+	for crName, effective := range crToEffective {
+		if effective == team && caller.TeamMatches(crName) {
+			return true
+		}
+	}
+	return false
+}
+
 type accessDeniedError struct{ msg string }
 
 func (e *accessDeniedError) Error() string { return e.msg }
@@ -3296,7 +3312,7 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 	// workers. Admin/manager skip (full access); team leaders and L2 humans
 	// were already scoped above by checkProjectAccess (W4: 404, never 403).
 	if caller := authpkg.CallerFromContext(r.Context()); caller != nil && caller.Role == authpkg.RoleWorker {
-		if !caller.TeamMatches(pwc.team) {
+		if !callerMatchesStorageTeam(caller, pwc.team, pwc.crToEffective) {
 			writeError(w, http.StatusForbidden, "worker can only commit the meta of a project in its own team")
 			return
 		}
@@ -3649,10 +3665,11 @@ func (h *ProjectHandler) persistControlActionAudit(ctx context.Context, key, eta
 // a conditional write against it, so any concurrent modification between
 // read and write fails with 409 instead of being silently overwritten.
 type projectWriteContext struct {
-	meta *projectMeta
-	team string
-	key  string
-	etag string
+	meta          *projectMeta
+	team          string
+	key           string
+	etag          string
+	crToEffective map[string]string
 }
 
 // readProjectWriteContext resolves the project + key + access check for a
@@ -3683,7 +3700,7 @@ func (h *ProjectHandler) readProjectWriteContext(w http.ResponseWriter, r *http.
 	if !ok {
 		return nil, true
 	}
-	pwc := &projectWriteContext{meta: meta, team: team}
+	pwc := &projectWriteContext{meta: meta, team: team, crToEffective: crToEffective}
 	for _, m := range matches {
 		if m.meta == meta {
 			pwc.key = m.key

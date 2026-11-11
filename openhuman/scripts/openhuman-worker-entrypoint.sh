@@ -241,6 +241,10 @@ if [ -n "${WORKER_NAME}" ]; then
             "${WORKER_CR_NAME}" "${NATIVE_ROLE}" "${BRIDGE_ROOM_ID}" "${BRIDGE_USER_ID}"
         printf '\nYour existing personality:\n'
         cat "${WORKSPACE}/SOUL.md"
+        if [ -n "${AGENTTEAMS_STORAGE_PREFIX:-}" ]; then
+            printf '\nYour shared storage prefix: %s\n' "${AGENTTEAMS_STORAGE_PREFIX}"
+        fi
+        printf '\nUse file_write to create files. Your shell policy blocks environment-variable expansion and output redirection; use literal paths with mc for uploads.\n'
     }
     # Channel turns load SOUL.md directly; the definition supplies tool scope.
     write_member_prompt > "${NATIVE_WORKSPACE}/SOUL.md"
@@ -256,7 +260,7 @@ omit_skills_catalog = true
 omit_memory_md = false
 
 [system_prompt]
-inline = "Follow your workspace identity and use your available tools to complete your assigned tasks."
+inline = "You are the AgentTeams ${NATIVE_ROLE} named ${WORKER_NAME}. Follow your assigned role and credentials, and use your available tools to complete tasks."
 
 [tools]
 named = ["shell", "file_read", "file_write", "query_memory", "memory_store", "memory_forget"]
@@ -264,7 +268,7 @@ EOF
     cat >> "${WORKSPACE}/config.toml" <<'EOF'
 
 [autonomy]
-allowed_commands = ["agt", "mc", "ls", "cat", "grep", "find", "echo", "pwd", "head", "tail", "printf", "mkdir"]
+allowed_commands = ["agt", "mc", "ls", "cat", "grep", "find", "echo", "pwd", "head", "tail"]
 EOF
     if [ "${AGENTTEAMS_YOLO:-0}" = "1" ]; then
         printf '\nlevel = "full"\nrequire_approval_for_medium_risk = false\n' >> "${WORKSPACE}/config.toml"

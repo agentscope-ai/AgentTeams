@@ -27,6 +27,7 @@ class NativeToolsTests(unittest.TestCase):
                     env={**os.environ, 'WORKSPACE': directory, 'WORKER_NAME': 'demo',
                          'AGENTTEAMS_WORKER_NAME': 'demo', 'WORKER_CR_NAME': 'demo',
                          'AGENTTEAMS_AGENT_ROLE': role, 'BRIDGE_ROOM_ID': '!room:test',
+                         'AGENTTEAMS_STORAGE_PREFIX': 'agentteams/test-storage',
                          'BRIDGE_USER_ID': '@demo:test', 'AGENTTEAMS_YOLO': '0'})
                 self.assertEqual(result.returncode, 0, result.stderr)
                 definition = home / 'workspace/agents/orchestrator.toml'
@@ -36,7 +37,9 @@ class NativeToolsTests(unittest.TestCase):
                 self.assertIn('member.role: ' + role, (home / 'workspace/SOUL.md').read_text())
                 self.assertTrue((home / 'workspace/skills/task.md').exists())
                 policy = tomllib.loads((home / 'config.toml').read_text())['autonomy']
-                self.assertTrue({'mc', 'printf', 'mkdir'} <= set(policy['allowed_commands']))
+                self.assertIn('mc', policy['allowed_commands'])
+                self.assertIn('agentteams/test-storage', (home / 'workspace/SOUL.md').read_text())
+                self.assertIn('AgentTeams ' + role, agent['system_prompt']['inline'])
 
 if __name__ == '__main__':
     unittest.main()

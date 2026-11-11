@@ -26,11 +26,11 @@ if [[ "$runtime" != codex ]]; then
     "DOCKER_BUILD_ARGS=${common[*]}"
 fi
 # These containers have no credentials, mounts, or connection to the demo network.
-docker run --rm --platform "$platform" --entrypoint sh "$image" -ec 'command -v agt; agt tracing --help >/dev/null; test -d /opt/agentteams/plugins'
+docker run --rm --platform "$platform" --entrypoint sh "$image" -ec 'command -v agt; agt tracing --help >/dev/null; test -d /opt/agentteams/agent'
 case "$runtime" in
   openclaw) docker run --rm --platform "$platform" --entrypoint bash -v "$PWD/worker/tests/image-smoke.sh:/tmp/smoke.sh:ro" "$image" /tmp/smoke.sh ;;
   qwenpaw) docker run --rm --platform "$platform" --entrypoint /opt/venv/qwenpaw/bin/python "$image" -c 'import qwenpaw_worker' ;;
-  hermes) docker run --rm --platform "$platform" --entrypoint python3 "$image" -c 'import hermes_worker' ;;
+  hermes) docker run --rm --platform "$platform" --entrypoint /opt/venv/hermes/bin/python "$image" -c 'import hermes_worker' ;;
   deepseek) docker run --rm --platform "$platform" --entrypoint python3 -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/smoke.py:ro" "$image" /tmp/smoke.py ;;
   openhuman) docker run --rm --platform "$platform" --entrypoint openhuman-core "$image" --version ;;
   codex)

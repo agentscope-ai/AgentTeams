@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -703,5 +704,39 @@ func TestResolveModelProvider_Higress_NotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("error = %q, want it to contain 'not found'", err.Error())
+	}
+}
+
+func TestListConsumersPaginatesAndOmitsCredentials(t *testing.T) {
+	pages := 0
+	client := newGatewayTestClient(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/system/init", "/session/login":
+			w.WriteHeader(http.StatusOK)
+		case "/v1/consumers":
+			pages++
+			if r.URL.Query().Get("pageNum") != fmt.Sprint(pages) {
+				t.Error("incorrect page")
+			}
+			if pages == 1 {
+				fmt.Fprint(w, `{"data":[{"name":"first","credentials":[{"values":["private-key"]}]}],"total":2}`)
+			} else {
+				fmt.Fprint(w, `{"data":[{"name":"second"}],"total":2}`)
+			}
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+	})
+	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, client)
+	consumers, err := c.ListConsumers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages != 2 || len(consumers) != 2 || consumers[1].Name != "second" {
+		t.Fatal("list incomplete")
+	}
+	encoded, _ := json.Marshal(consumers)
+	if strings.Contains(string(encoded), "private-key") || strings.Contains(string(encoded), "credentials") {
+		t.Fatal("list exposed credentials")
 	}
 }

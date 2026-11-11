@@ -1,0 +1,174 @@
+name: Publish shared Harness images
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Shared Harness version (for example v1.2.7); does not create a Core tag'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-harnesses-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
+  CODEX_REF: 70251686f7df413f3d5d7978490cf16c5a097c25
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      candidate: ${{ steps.meta.outputs.candidate }}
+    steps:
+      - name: Freeze publication identity
+        id: meta
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "candidate=harness-${VERSION}-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+
+  controller-platform:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Build shared CLI and builtin assets on native runner
+        env:
+          CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          image="${REGISTRY}/agentteams/agentteams-controller:${CANDIDATE}-${ARCH}"
+          make build-agentteams-controller LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \
+            DOCKER_BUILD_ARGS="--label org.opencontainers.image.revision=${GITHUB_SHA}"
+          docker run --rm --entrypoint agt "$image" tracing --help
+          docker push "$image"
+
+  controller-index:
+    needs: [prepare, controller-platform]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Assemble immutable candidate dependency
+        env:
+          CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+        run: |
+          image="${REGISTRY}/agentteams/agentteams-controller:${CANDIDATE}"
+          docker buildx imagetools create --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t "$image" "${image}-amd64" "${image}-arm64"
+
+  harness-platform:
+    needs: [prepare, controller-index]
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/checkout@v4
+        if: matrix.runtime == 'codex'
+        with:
+          repository: agentteams-group/agentteams-harness-codex
+          ref: ${{ env.CODEX_REF }}
+          path: codex-harness
+      - uses: ruby/setup-ruby@v1
+        if: matrix.runtime == 'qwenpaw'
+        with:
+          ruby-version: '3.3'
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Build, smoke and push native platform staging image
+        env:
+          CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          RUNTIME: ${{ matrix.runtime }}
+        run: |
+          scripts/release/build-harness-platform.sh "$RUNTIME" "${CANDIDATE}-${ARCH}" "linux/$ARCH" \
+            "${REGISTRY}/agentteams/agentteams-controller:${CANDIDATE}"
+
+  publish:
+    needs: [prepare, harness-platform]
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Publish verified architecture index without overwriting existing release
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+          RUNTIME: ${{ matrix.runtime }}
+        run: |
+          image="${REGISTRY}/agentteams/agentteams-harness-${RUNTIME}"
+          final="${image}:${VERSION}"
+          if docker buildx imagetools inspect "$final" --raw > manifest.json 2>existing-error.txt; then
+            jq -e --arg revision "$GITHUB_SHA" '.annotations["org.opencontainers.image.revision"] == $revision and any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")' manifest.json || {
+              echo "Refusing to overwrite an unverified existing version $final" >&2
+              exit 1
+            }
+            echo "Reused already verified $final from $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          elif ! grep -qiE 'not found|manifest unknown' existing-error.txt; then
+            cat existing-error.txt >&2
+            exit 1
+          fi
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
+            --annotation "index:org.opencontainers.image.version=$VERSION" \
+            -t "$final" "${image}:${CANDIDATE}-amd64" "${image}:${CANDIDATE}-arm64"
+          docker buildx imagetools inspect "$final" --raw > manifest.json
+          jq -e 'any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64") and any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "arm64")' manifest.json
+          docker buildx imagetools inspect "$final" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifest-${{ matrix.runtime }}
+          path: manifest.json

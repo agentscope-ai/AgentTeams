@@ -1,0 +1,6 @@
+ARG CONTROLLER_IMAGE
+ARG CODEX_IMAGE
+FROM ${CONTROLLER_IMAGE} AS controller
+FROM ${CODEX_IMAGE}
+COPY --from=controller /usr/local/bin/agt /usr/local/bin/agt
+COPY --from=controller /opt/agentteams/agent/ /opt/agentteams/agent/

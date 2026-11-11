@@ -488,6 +488,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)
+	mux.Handle("GET /api/v1/gateway/consumers", mw.RequireAuthz(authpkg.ActionList, "gateway", nil)(http.HandlerFunc(gh.ListConsumers)))
 	mux.Handle("POST /api/v1/gateway/consumers", mw.RequireAuthz(authpkg.ActionCreate, "gateway", nil)(http.HandlerFunc(gh.CreateConsumer)))
 	mux.Handle("POST /api/v1/gateway/consumers/{id}/bind", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(http.HandlerFunc(gh.BindConsumer)))
 	mux.Handle("DELETE /api/v1/gateway/consumers/{id}", mw.RequireAuthz(authpkg.ActionDelete, "gateway", nil)(http.HandlerFunc(gh.DeleteConsumer)))

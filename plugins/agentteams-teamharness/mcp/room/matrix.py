@@ -14,6 +14,26 @@ import urllib.request
 # Cross-group imports are top-level absolutes (see lifecycle/transitions.py
 # note): mcp/ on sys.path keeps one module identity in both load modes.
 from mcp.common.config import _load_runtime_config, _section
+from .mention import MATRIX_MENTION_MXID_RE
+
+
+def _assignee_matrix_id(assignee: str) -> str:
+    """Resolve a roster name without guessing a homeserver or a user identity."""
+    identity = str(assignee or "").strip()
+    if MATRIX_MENTION_MXID_RE.fullmatch(identity):
+        return identity
+    members = _section(_load_runtime_config(), "team").get("members", [])
+    matches = set()
+    for member in members if isinstance(members, list) else []:
+        if not isinstance(member, dict):
+            continue
+        names = {str(member.get(key) or "").strip() for key in
+                 ("name", "runtimeName", "runtime_name")}
+        if identity and identity in names:
+            mxid = str(member.get("matrixUserId") or member.get("matrix_user_id") or "").strip()
+            if MATRIX_MENTION_MXID_RE.fullmatch(mxid):
+                matches.add(mxid)
+    return next(iter(matches)) if len(matches) == 1 else ""
 
 
 def _matrix_env(tool: str) -> tuple[str, str]:

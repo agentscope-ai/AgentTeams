@@ -103,6 +103,37 @@ func (h *ProjectHandler) ListTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
+	if agent := query.Get("agent"); agent != "" {
+		if worker := query.Get("worker"); worker != "" && worker != agent {
+			httputil.WriteError(w, 400, "agent and worker filters disagree")
+			return
+		}
+		query.Set("worker", agent)
+	}
+	limit := 20
+	if query.Has("limit") {
+		value, err := strconv.Atoi(query.Get("limit"))
+		if err != nil || value < 1 || value > 100 {
+			httputil.WriteError(w, 400, "limit must be 1..100")
+			return
+		}
+		limit = value
+	}
+	var since, until time.Time
+	for key, target := range map[string]*time.Time{"since": &since, "until": &until} {
+		if query.Has(key) {
+			value, err := time.Parse(time.RFC3339Nano, query.Get(key))
+			if err != nil {
+				httputil.WriteError(w, 400, key+" must be RFC3339 with a timezone")
+				return
+			}
+			*target = value
+		}
+	}
+	if !since.IsZero() && !until.IsZero() && !since.Before(until) {
+		httputil.WriteError(w, 400, "since must precede until")
+		return
+	}
 	page := 1
 	if query.Has("page") {
 		value, err := strconv.Atoi(query.Get("page"))
@@ -134,8 +165,14 @@ func (h *ProjectHandler) ListTraces(w http.ResponseWriter, r *http.Request) {
 	params.Set("filter", traceWorkerFilter(workers))
 	if session := query.Get("session"); session != "" {
 		params.Set("sessionId", session)
-	} else {
+	} else if since.IsZero() && until.IsZero() {
 		params.Set("fromTimestamp", time.Now().Add(-time.Duration(hours)*time.Hour).UTC().Format(time.RFC3339Nano))
+	}
+	if !since.IsZero() {
+		params.Set("fromTimestamp", since.UTC().Format(time.RFC3339Nano))
+	}
+	if !until.IsZero() {
+		params.Set("toTimestamp", until.UTC().Format(time.RFC3339Nano))
 	}
 	if worker := query.Get("worker"); worker != "" {
 		params.Set("userId", workers[worker].RuntimeName)
@@ -165,6 +202,12 @@ func (h *ProjectHandler) ListTraces(w http.ResponseWriter, r *http.Request) {
 		for _, row := range rows {
 			if !traceIsVisible(row, workers) {
 				continue
+			}
+			if !since.IsZero() || !until.IsZero() {
+				at, err := time.Parse(time.RFC3339Nano, str(row["timestamp"]))
+				if err != nil || (!since.IsZero() && at.Before(since)) || (!until.IsZero() && !at.Before(until)) {
+					continue
+				}
 			}
 			if runtime := query.Get("runtime"); runtime != "" {
 				actual := traceField(row, "agentteams.runtime")
@@ -202,15 +245,15 @@ func (h *ProjectHandler) ListTraces(w http.ResponseWriter, r *http.Request) {
 			visible = append(visible, item)
 		}
 	}
-	start := (page - 1) * 20
+	start := (page - 1) * limit
 	if start > len(visible) {
 		start = len(visible)
 	}
-	end := start + 20
+	end := start + limit
 	if end > len(visible) {
 		end = len(visible)
 	}
-	httputil.WriteJSON(w, 200, map[string]any{"data": visible[start:end], "meta": map[string]int{"page": page, "totalItems": len(visible), "totalPages": (len(visible) + 19) / 20}})
+	httputil.WriteJSON(w, 200, map[string]any{"data": visible[start:end], "meta": map[string]int{"page": page, "totalItems": len(visible), "totalPages": (len(visible) + limit - 1) / limit}})
 }
 
 func (h *ProjectHandler) GetTrace(w http.ResponseWriter, r *http.Request) {

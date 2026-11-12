@@ -254,8 +254,12 @@ AGENTTEAMS_REGISTRY=registry.example
 AGENTTEAMS_DASHBOARD_VERSION=v1.3.1
 AGENTTEAMS_DASHBOARD_IMAGE=registry.example/agentteams/agentteams-dashboard:v1.3.1
 prepare_upgrade_dashboard
-test "$AGENTTEAMS_DASHBOARD_VERSION" = v1.4.0
-test "$AGENTTEAMS_DASHBOARD_IMAGE" = registry.example/agentteams/agentteams-dashboard:v1.4.0
+test "$AGENTTEAMS_DASHBOARD_VERSION" = v1.4.1
+test "$AGENTTEAMS_DASHBOARD_IMAGE" = registry.example/agentteams/agentteams-dashboard:v1.4.1
+AGENTTEAMS_DASHBOARD_VERSION=v1.4.0
+AGENTTEAMS_DASHBOARD_IMAGE=registry.example/agentteams/agentteams-dashboard:v1.4.0
+prepare_upgrade_dashboard
+test "$AGENTTEAMS_DASHBOARD_VERSION" = v1.4.1
 AGENTTEAMS_DASHBOARD_IMAGE=private.example/dashboard:canary
 prepare_upgrade_dashboard
 test "$AGENTTEAMS_DASHBOARD_IMAGE" = private.example/dashboard:canary

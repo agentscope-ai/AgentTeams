@@ -24,3 +24,29 @@ jobs:
           python3 tests/test-harness-publication.py
           python3 tests/test-harness-provenance.py
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= .github/workflows/publish-harnesses.yml .github/workflows/check-harness-publication.yml
+
+  published-core:
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            digest: sha256:1953e8933e57d9b7f024b34cc058301ea6db8f065c7bbc2b7cb525b662fa2f3d
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            digest: sha256:38d683dcb4a0f6f52e75ac56659418daeae46af387397ac0deb0315c3b371ccc
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify immutable published stack without host Docker socket
+        env:
+          ARCH: ${{ matrix.arch }}
+          IMAGE: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-embedded@${{ matrix.digest }}
+        run: python3 scripts/release/verify-published-core.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: published-core-${{ matrix.arch }}
+          path: published-core-${{ matrix.arch }}.json

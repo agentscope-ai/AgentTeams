@@ -78,7 +78,7 @@ bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
 
 **Windows (PowerShell 7+ recommended):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/agentteams-install.ps1')
 ```
 
 The default command starts the local services and Dashboard without configuration questions. API keys, embedding and Worker runtimes can be configured later. For the interactive setup, add `--manual` (PowerShell: `-Manual`).
@@ -114,7 +114,7 @@ bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh) uninstall
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://agentteams.cloud/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
 This removes all AgentTeams containers (Manager, Workers, docker-proxy), Docker volume, network, env file, workspace directory, and install log.

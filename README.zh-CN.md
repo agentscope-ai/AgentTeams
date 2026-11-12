@@ -77,7 +77,7 @@ bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
 **Windows（建议 PowerShell 7+）输入以下安装命令：**
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/agentteams-install.ps1')
 ```
 
 第二步：等待本地服务和 Dashboard 启动。默认流程无需选择模型、embedding 或 Manager/Worker 运行时。需要逐项设置时，在命令末尾添加 `--manual`（PowerShell 使用 `-Manual`）。
@@ -120,7 +120,7 @@ bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh) uninstall
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://agentteams.cloud/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
 将移除所有 AgentTeams 容器（Manager、Worker、docker-proxy）、Docker 卷、网络、env 文件、工作空间目录和安装日志。

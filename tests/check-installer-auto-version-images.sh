@@ -68,7 +68,7 @@ grep -q 'agentteams-manager-qwenpaw:v1.2.4' "$CALLS" || fail 'selected manager m
 [ "$DEEPSEEK_HARNESS_WORKER_IMAGE" = registry.example/agentteams/agentteams-deepseek-harness-worker:v0.1.0 ] || fail 'independent runtime tag lost'
 ! grep -q 'agentteams-.*worker' "$CALLS" || fail 'Worker images must be pulled on demand'
 [ "$CODEX_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-codex:v0.1.0 ] || fail 'Codex default image missing'
-grep -q 'agentteams-dashboard:v1.4.0' "$CALLS" || fail 'dashboard missing'
+grep -q 'agentteams-dashboard:v1.4.1' "$CALLS" || fail 'dashboard missing'
 for FAILURE_KIND in missing arch; do
     reset_case
     BAD_IMAGE=agentteams-manager-qwenpaw:v1.2.4
@@ -121,7 +121,7 @@ BAD_IMAGE=agentteams-manager-qwenpaw:v1.2.4
 AGENTTEAMS_DEFAULT_WORKER_RUNTIME=deepseek-harness
 if ( _select_available_auto_version ); then fail 'unsupported runtime fallback accepted'; fi
 reset_case
-BAD_IMAGE=agentteams-dashboard:v1.4.0
+BAD_IMAGE=agentteams-dashboard:v1.4.1
 if ( _select_available_auto_version ); then fail 'missing independent dashboard accepted'; fi
 reset_case
 PULLED_PLATFORM=linux/amd64

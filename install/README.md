@@ -126,7 +126,7 @@ Run the same installation command again. It detects the saved configuration and 
 
 Service images are prepared before replacing services or saving the new configuration. The original configuration is copied to `agentteams-manager.env.before-upgrade-<timestamp>`. This is a configuration backup; use the separate upgrade tool below when you need a database backup and rollback workflow.
 
-Older installations without a Dashboard setting now enable it by default. An explicit `AGENTTEAMS_DASHBOARD=0` stays disabled. Standard Dashboard images at the previously shipped default versions (`v1.2.4`, `v1.3.1`) advance to the recommended `v1.4.0`; custom images and other versions stay unchanged. Export `AGENTTEAMS_DASHBOARD_VERSION` or `AGENTTEAMS_DASHBOARD_IMAGE` when running the installer to explicitly pin a version, including an old default.
+Older installations without a Dashboard setting now enable it by default. An explicit `AGENTTEAMS_DASHBOARD=0` stays disabled. Standard Dashboard images at the previously shipped default versions (`v1.2.4`, `v1.3.1`, `v1.4.0`) advance to the recommended `v1.4.1`; custom images and other versions stay unchanged. Export `AGENTTEAMS_DASHBOARD_VERSION` or `AGENTTEAMS_DASHBOARD_IMAGE` when running the installer to explicitly pin a version, including an old default.
 
 If the configuration file is missing, the installer attempts to recover the original mounts and credentials from the existing container. Incomplete recovery, conflicting data mounts or orphaned data stop installation without deleting data. Restore the original configuration and retry.
 

@@ -71,13 +71,13 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 第一步：打开终端，Mac 系统输入以下安装命令。
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
 ```
 
 **Windows（建议 PowerShell 7+）输入以下安装命令：**
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/agentteams-install.ps1')
 ```
 
 第二步：等待本地服务和 Dashboard 启动。默认流程无需选择模型、embedding 或 Manager/Worker 运行时。需要逐项设置时，在命令末尾添加 `--manual`（PowerShell 使用 `-Manual`）。
@@ -100,14 +100,14 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 每次更新新版本，您在终端执行以下命令，即可原地升级，默认升级到最新版本：
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
 ```
 检测到已有安装时，只需确认一次，即可保留原账号、模型配置、数据和工作空间。安装器先准备镜像，再备份原配置并替换服务。数据库备份、回滚及配置恢复说明参见[升级指南](install/README.md#upgrade-an-existing-local-installation)。全新重装是单独操作，会删除数据并要求额外确认。
 
 若要升级到指定版本，请使用以下命令：
 
 ```bash
-AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.7 bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
 ```
 
 
@@ -115,12 +115,12 @@ AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/age
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh) uninstall
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://agentteams.cloud/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
 将移除所有 AgentTeams 容器（Manager、Worker、docker-proxy）、Docker 卷、网络、env 文件、工作空间目录和安装日志。

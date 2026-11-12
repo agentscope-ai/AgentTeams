@@ -81,7 +81,7 @@ try:
             Path('published-core-' + arch + '.json').write_text(json.dumps(result, indent=2))
             print(json.dumps(result), flush=True)
             break
-        except (urllib.error.URLError, TimeoutError, AssertionError, KeyError) as error:
+        except (OSError, AssertionError, KeyError) as error:
             last = type(error).__name__
             time.sleep(3)
     else:

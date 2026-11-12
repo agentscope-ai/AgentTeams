@@ -76,7 +76,7 @@ param(
 $script:InstallEnvKeys = @{}
 foreach ($key in [Environment]::GetEnvironmentVariables('Process').Keys) { $script:InstallEnvKeys[$key] = $true }
 $script:AGENTTEAMS_VERSION = if ($env:AGENTTEAMS_VERSION) { $env:AGENTTEAMS_VERSION } else { "latest" }
-$script:AGENTTEAMS_KNOWN_STABLE_VERSION = "v1.2.6"
+$script:AGENTTEAMS_KNOWN_STABLE_VERSION = "v1.2.7"
 $script:AGENTTEAMS_DEEPSEEK_HARNESS_MIN_VERSION = "v1.2.4"
 $script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = if ($env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION) { $env:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION } else { "v1.2.7" }
 $script:AGENTTEAMS_CODEX_WORKER_VERSION = if ($env:AGENTTEAMS_CODEX_WORKER_VERSION) { $env:AGENTTEAMS_CODEX_WORKER_VERSION } else { "v1.2.7" }

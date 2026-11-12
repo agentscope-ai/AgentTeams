@@ -73,12 +73,12 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/install.sh)
 ```
 
 **Windows (PowerShell 7+ recommended):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/agentteams-install.ps1')
+iwr -UseBasicParsing https://agentteams.cloud/install.ps1 | iex
 ```
 
 The default command starts the local services and Dashboard without configuration questions. API keys, embedding and Worker runtimes can be configured later. For the interactive setup, add `--manual` (PowerShell: `-Manual`).
@@ -99,22 +99,22 @@ Run the same command again and confirm once to keep the original accounts, model
 
 ```bash
 # Upgrade to latest (preserves all data)
-bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/install.sh)
 
 # Upgrade to specific version
-AGENTTEAMS_VERSION=v1.2.7 bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.7 bash <(curl -fsSL https://agentteams.cloud/install.sh)
 ```
 
 ## Uninstall
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://agentteams.cloud/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://agentteams.cloud/install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
 This removes all AgentTeams containers (Manager, Workers, docker-proxy), Docker volume, network, env file, workspace directory, and install log.

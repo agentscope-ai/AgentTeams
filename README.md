@@ -73,7 +73,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 **macOS / Linux:**
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
 ```
 
 **Windows (PowerShell 7+ recommended):**
@@ -99,17 +99,17 @@ Run the same command again and confirm once to keep the original accounts, model
 
 ```bash
 # Upgrade to latest (preserves all data)
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
 
 # Upgrade to specific version
-AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.7 bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh)
 ```
 
 ## Uninstall
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/agentteams-install.sh) uninstall
 ```
 
 **Windows (PowerShell):**

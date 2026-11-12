@@ -1328,7 +1328,9 @@ _check_version_images() {
 _select_available_auto_version() {
     [ "${AGENTTEAMS_AUTO_VERSION:-0}" = "1" ] || return 0
     local platform status
-    platform=$(${DOCKER_CMD} info --format '{{.OSType}}/{{.Architecture}}') || die "Cannot determine the container engine platform."
+    platform=$(${DOCKER_CMD} info --format '{{.OSType}}/{{.Architecture}}' 2>/dev/null) ||
+        platform=$(${DOCKER_CMD} info --format '{{.Host.OS}}/{{.Host.Arch}}') ||
+        die "Cannot determine the container engine platform."
     case "${platform}" in
         linux/x86_64|linux/amd64) platform=linux/amd64 ;;
         linux/aarch64|linux/arm64) platform=linux/arm64 ;;

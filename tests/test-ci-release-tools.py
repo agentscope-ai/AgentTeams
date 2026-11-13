@@ -188,7 +188,7 @@ class WorkflowPlanTests(unittest.TestCase):
         self.assertEqual(len(suites), 2)
         expected = {'consume_error', 'show_thinking_gate', 'send_gate_retrigger_placeholder',
                     'mention_localpart', 'send_gate_retrigger_relevance', 'retry_classifier',
-                    'sync_timeout_clamp', 'no_reply_final_line'}
+                    'sync_timeout_clamp', 'no_reply_final_line', 'session_receipts'}
         actual = [case for suite in suites for case in suite['cases'].split()]
         self.assertEqual(set(actual), expected)
         self.assertEqual(len(actual), len(expected))

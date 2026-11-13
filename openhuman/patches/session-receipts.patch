@@ -11,24 +11,36 @@ index 2101542..8574a1f 100644
  #[cfg(test)]
  mod tests;
 diff --git a/src/openhuman/channels/providers/matrix.rs b/src/openhuman/channels/providers/matrix.rs
-index eb89c1c..3b18ea3 100644
+index eb89c1c..5a0288b 100644
 --- a/src/openhuman/channels/providers/matrix.rs
 +++ b/src/openhuman/channels/providers/matrix.rs
-@@ -539,8 +539,19 @@ impl Channel for MatrixChannel {
+@@ -539,8 +539,31 @@ impl Channel for MatrixChannel {
              anyhow::bail!("Matrix room '{}' is not in joined state", target_room_id);
          }
  
 -        room.send(RoomMessageEventContent::text_markdown(&message.content))
 -            .await?;
-+        let mut content = serde_json::to_value(RoomMessageEventContent::text_markdown(&message.content))?;
-+        let url = format!("{}/_matrix/client/v3/rooms/{}/joined_members", self.homeserver, Self::encode_path_segment(&target_room_id));
-+        if let Ok(response) = self.http_client.get(url).bearer_auth(&self.access_token).send().await {
++        let mut content =
++            serde_json::to_value(RoomMessageEventContent::text_markdown(&message.content))?;
++        let url = format!(
++            "{}/_matrix/client/v3/rooms/{}/joined_members",
++            self.homeserver,
++            Self::encode_path_segment(&target_room_id)
++        );
++        if let Ok(response) = self
++            .http_client
++            .get(url)
++            .bearer_auth(&self.access_token)
++            .send()
++            .await
++        {
 +            if let Ok(value) = response.json::<serde_json::Value>().await {
 +                if let Some(joined) = value.get("joined").and_then(|value| value.as_object()) {
 +                    let members: Vec<_> = joined.iter().map(|(user, member)| serde_json::json!({
 +                        "user_id": user, "display_name": member.get("display_name").and_then(|value| value.as_str()).unwrap_or(user), "kind": "member",
 +                    })).collect();
-+                    content["com.agentteams.read_audience"] = serde_json::json!({"version": 1, "members": members});
++                    content["com.agentteams.read_audience"] =
++                        serde_json::json!({"version": 1, "members": members});
 +                }
 +            }
 +        }
@@ -36,7 +48,7 @@ index eb89c1c..3b18ea3 100644
  
          Ok(())
      }
-@@ -684,11 +695,7 @@ impl Channel for MatrixChannel {
+@@ -684,11 +707,7 @@ impl Channel for MatrixChannel {
                  let msg = ChannelMessage {
                      id: event_id,
                      sender: sender.clone(),
@@ -50,10 +62,10 @@ index eb89c1c..3b18ea3 100644
                      channel: "matrix".to_string(),
                      timestamp: std::time::SystemTime::now()
 diff --git a/src/openhuman/channels/runtime/dispatch.rs b/src/openhuman/channels/runtime/dispatch.rs
-index fc0ea26..82d45b7 100644
+index fc0ea26..518305a 100644
 --- a/src/openhuman/channels/runtime/dispatch.rs
 +++ b/src/openhuman/channels/runtime/dispatch.rs
-@@ -856,6 +856,17 @@ pub(crate) async fn process_channel_message(
+@@ -856,6 +856,20 @@ pub(crate) async fn process_channel_message(
      let mut history = vec![ChatMessage::system(ctx.system_prompt.as_str())];
      history.append(&mut prior_turns);
      history.push(ChatMessage::user(&enriched_message));
@@ -62,7 +74,10 @@ index fc0ea26..82d45b7 100644
 +            .map(std::path::PathBuf::from)
 +            .unwrap_or_else(|| ctx.workspace_dir.as_ref().clone());
 +        if let Err(error) = crate::openhuman::channels::session_receipts::checkpoint(
-+            &receipt_workspace, &msg.reply_target, &msg.id, &history_key,
++            &receipt_workspace,
++            &msg.reply_target,
++            &msg.id,
++            &history_key,
 +            history.last().expect("native input was appended"),
 +        ) {
 +            tracing::warn!("Matrix session input checkpoint failed: {error}");

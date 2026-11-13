@@ -34,8 +34,13 @@ mod tests {
         let input = serde_json::json!({"role": "user", "content": "hello"});
         checkpoint(&root, "!room:hs", "$input", "native-session", &input).unwrap();
         let path = std::fs::read_dir(root.join(".agentteams/matrix-sessions"))
-            .unwrap().next().unwrap().unwrap().path();
-        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(saved["input"], input);
         assert_eq!(saved["session"], "native-session");
         assert_eq!(saved["receipts"][0]["event_id"], "$input");

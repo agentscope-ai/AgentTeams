@@ -71,12 +71,12 @@
 
 **macOS / Linux:**
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 **Windows（PowerShell 7+ 推奨）:**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
 ```
 
 インストーラーが以下の手順をガイドします：
@@ -97,22 +97,22 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 ```bash
 # 最新版にアップグレード（データはすべて保持）
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 
 # 特定バージョンにアップグレード
-AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 ## アンインストール
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://agentteams.cloud/install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
 すべての AgentTeams コンテナ（Manager、Worker、docker-proxy）、Docker ボリューム、ネットワーク、env ファイル、ワークスペースディレクトリ、インストールログが削除されます。

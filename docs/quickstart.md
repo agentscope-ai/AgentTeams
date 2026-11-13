@@ -26,7 +26,7 @@ This guide follows the recommended local deployment path. You will install Agent
 Run the installer in a terminal:
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 With no explicit version, the Bash installer checks the recommended Manager, embedded controller and Dashboard images against your container engine's architecture before saving configuration. Worker images are pulled when you create Workers. Missing image tags or architectures trigger a check of the bundled fallback; connection or authentication errors stop installation. Upgrades never fall back automatically. Dashboard and DeepSeek Harness keep their independent image versions.
@@ -152,5 +152,5 @@ After these checks pass, you have completed the smallest end-to-end AgentTeams w
 The following command removes AgentTeams containers, networks, data volumes, configuration files, and the local workspace. Run it only after confirming that you no longer need the data:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```

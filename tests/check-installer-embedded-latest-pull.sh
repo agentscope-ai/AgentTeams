@@ -6,8 +6,8 @@ set -euo pipefail
 # name and lets Docker reuse a stale local tag without contacting the registry.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASH_INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
-POWERSHELL_INSTALLER="${ROOT_DIR}/install/agentteams-install.ps1"
+BASH_INSTALLER="${ROOT_DIR}/.installer-source/public/install.sh"
+POWERSHELL_INSTALLER="${ROOT_DIR}/.installer-source/public/install.ps1"
 
 fail() {
     echo "FAIL: $*" >&2

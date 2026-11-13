@@ -32,7 +32,7 @@ docker build -t agentteams/manager-agent:latest .
 Use the installation script instead of running directly:
 
 ```bash
-../install/agentteams-install.sh manager
+.bash <(curl -fsSL https://agentteams.cloud/install.sh) manager
 ```
 
 ## Directory Structure

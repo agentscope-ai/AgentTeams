@@ -589,7 +589,7 @@ endif
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
-		bash ./install/agentteams-install.sh manager
+		bash -c 'bash <(curl -fsSL https://agentteams.cloud/install.sh) "$${@}"' -- manager
 
 install-interactive: ## Install Manager interactively (prompts for config)
 ifndef SKIP_BUILD
@@ -601,7 +601,7 @@ endif
 		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
-		bash ./install/agentteams-install.sh manager
+		bash -c 'bash <(curl -fsSL https://agentteams.cloud/install.sh) "$${@}"' -- manager
 
 uninstall: ## Stop and remove Manager + all Worker containers
 	@echo "==> Uninstalling AgentTeams..."
@@ -655,7 +655,7 @@ endif
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		AGENTTEAMS_MATRIX_E2EE=0 \
-		bash ./install/agentteams-install.sh
+		bash -c 'bash <(curl -fsSL https://agentteams.cloud/install.sh) "$${@}"' --
 
 wait-ready-embedded: ## Wait for embedded-mode services to be ready
 	@echo "==> Waiting for embedded services..."
@@ -941,7 +941,7 @@ install-dashboard:
 		AGENTTEAMS_DASHBOARD_VERSION=$(DASHBOARD_VERSION) \
 		AGENTTEAMS_DASHBOARD_IMAGE=$(DASHBOARD_IMAGE) \
 		AGENTTEAMS_PORT_DASHBOARD=$(AGENTTEAMS_PORT_DASHBOARD) \
-		bash ./install/agentteams-install.sh dashboard
+		bash -c 'bash <(curl -fsSL https://agentteams.cloud/install.sh) "$${@}"' -- dashboard
 	@echo "==> Dashboard installed. Access it at http://localhost:$(AGENTTEAMS_PORT_DASHBOARD)"
 
 .PHONY: update-dashboard
@@ -953,7 +953,7 @@ update-dashboard: build-dashboard
 		AGENTTEAMS_DASHBOARD_VERSION=$(DASHBOARD_VERSION) \
 		AGENTTEAMS_DASHBOARD_IMAGE=$(DASHBOARD_IMAGE) \
 		AGENTTEAMS_PORT_DASHBOARD=$(AGENTTEAMS_PORT_DASHBOARD) \
-		bash ./install/agentteams-install.sh dashboard
+		bash -c 'bash <(curl -fsSL https://agentteams.cloud/install.sh) "$${@}"' -- dashboard
 	@echo "==> Dashboard updated."
 
 .PHONY: uninstall-dashboard

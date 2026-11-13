@@ -6,8 +6,8 @@ set -euo pipefail
 # local installers at the same boundary as the other Worker runtimes.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASH_INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
-POWERSHELL_INSTALLER="${ROOT_DIR}/install/agentteams-install.ps1"
+BASH_INSTALLER="${ROOT_DIR}/.installer-source/public/install.sh"
+POWERSHELL_INSTALLER="${ROOT_DIR}/.installer-source/public/install.ps1"
 MAKEFILE="${ROOT_DIR}/Makefile"
 CORE_BUILD_WORKFLOW="${ROOT_DIR}/.github/workflows/build.yml"
 RC_BUILD_WORKFLOW="${ROOT_DIR}/.github/workflows/build-rc.yml"

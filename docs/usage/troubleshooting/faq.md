@@ -57,7 +57,7 @@ explicit `AGENTTEAMS_VERSION`.
 To install a specific version, use the `AGENTTEAMS_VERSION` environment variable during installation:
 
 ```bash
-AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 ---
@@ -291,7 +291,7 @@ During installation, set or enter `AGENTTEAMS_GITHUB_TOKEN` when the installer a
 for the optional GitHub Personal Access Token:
 
 ```bash
-AGENTTEAMS_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 When this variable is present, AgentTeams configures the GitHub MCP Server and
@@ -379,7 +379,7 @@ Increase Docker VM memory to at least 4 GB: Docker Desktop → Settings → Reso
 Re-run the install command and choose **delete and reinstall**:
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 When the installer detects an existing installation, it will ask how to proceed. Choosing delete will wipe the stale data and start fresh.

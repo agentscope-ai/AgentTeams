@@ -149,7 +149,7 @@ AGENTTEAMS_LLM_API_KEY="sk-xxx" make install
 
 This will:
 1. Build Manager and Worker images (`make build`)
-2. Run the install script (`install/agentteams-install.sh manager`)
+2. Run the install script (`bash <(curl -fsSL https://agentteams.cloud/install.sh) manager`)
 3. Mount the container runtime socket for direct Worker creation
 4. Save configuration to `./agentteams-manager.env`
 
@@ -169,7 +169,7 @@ make install
 ### Uninstall
 
 ```bash
-make uninstall   # Runs install/agentteams-install.sh uninstall (v1.1+: controller + manager + workers + volume + env)
+make uninstall   # Runs bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall (v1.1+: controller + manager + workers + volume + env)
 ```
 
 ### Replay (Send Task to Manager)

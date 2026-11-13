@@ -5,8 +5,8 @@ set -euo pipefail
 # Verify that QwenPaw is a first-class local installer runtime.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASH_INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
-POWERSHELL_INSTALLER="${ROOT_DIR}/install/agentteams-install.ps1"
+BASH_INSTALLER="${ROOT_DIR}/.installer-source/public/install.sh"
+POWERSHELL_INSTALLER="${ROOT_DIR}/.installer-source/public/install.ps1"
 INTEGRATION_WORKFLOW="${ROOT_DIR}/.github/workflows/test-integration.yml"
 RELEASE_WORKFLOW="${ROOT_DIR}/.github/workflows/release.yml"
 

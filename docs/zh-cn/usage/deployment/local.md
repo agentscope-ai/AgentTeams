@@ -96,7 +96,7 @@ Linux 没有 `lsof` 时，可以使用 `ss -lnt`。
 运行：
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 选择“快速开始”后，安装器仍会让你完成以下选择：
@@ -329,7 +329,7 @@ AGENTTEAMS_OPENAI_BASE_URL=https://provider.example.com/v1 \
 AGENTTEAMS_LLM_API_KEY=sk-example \
 AGENTTEAMS_DEFAULT_MODEL=example-model \
 AGENTTEAMS_ADMIN_PASSWORD=replace-with-a-strong-password \
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 非交互模式下，必填项缺失或管理员密码不足 8 个字符会直接失败。示例中的凭证是占位符，不要原样使用。
@@ -362,7 +362,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 | `AGENTTEAMS_DASHBOARD` | `1` |
 | `AGENTTEAMS_PORT_DASHBOARD` | `13000` |
 
-完整变量仍以 [`install/agentteams-install.sh`](../../../../install/agentteams-install.sh) 文件头部和各安装步骤为准。
+完整变量仍以 [`bash <(curl -fsSL https://agentteams.cloud/install.sh)`](https://agentteams.cloud/install.sh) 文件头部和各安装步骤为准。
 
 ### 镜像覆盖
 
@@ -440,7 +440,7 @@ docker exec agentteams-controller curl -fsS http://127.0.0.1:9000/minio/health/l
 重新运行安装器会检测现有配置，并进入升级流程：
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 升级模式提供：
@@ -452,7 +452,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 
 ```bash
 AGENTTEAMS_VERSION=vX.Y.Z \
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 升级会重启 Manager，并可能重建 Worker 容器。持久数据会保留，但应先结束进行中的任务并备份重要数据。
@@ -462,7 +462,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main
 > 警告：卸载会删除 AgentTeams 容器、Worker、网络、数据卷、Dashboard 数据、环境文件、安装日志和 Manager 工作空间。
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```
 
 如果只想停止服务而保留数据，请使用容器运行时停止相关容器，不要执行卸载命令。

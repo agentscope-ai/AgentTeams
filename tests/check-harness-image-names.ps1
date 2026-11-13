@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$source = Join-Path $PSScriptRoot '../install/agentteams-install.ps1'
+$source = Join-Path $PSScriptRoot '../.installer-source/public/install.ps1'
 $text = Get-Content -LiteralPath $source -Raw
 $tokens = $null
 $errors = $null

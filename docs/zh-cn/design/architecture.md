@@ -105,7 +105,7 @@ flowchart TB
 
 ### 1. 本地单机 - `install/`
 
-- **`install/agentteams-install.sh`** 拉取**嵌入式 controller** 镜像（`Dockerfile.embedded`）：基于 Higress **all-in-one**，额外包含 **Tuwunel**、**MinIO**、**mc**、**Element Web**、**`agentteams-controller`**、**`agt`** 和 **supervisord** 编排（`supervisord.embedded.conf`）。
+- **`bash <(curl -fsSL https://agentteams.cloud/install.sh)`** 拉取**嵌入式 controller** 镜像（`Dockerfile.embedded`）：基于 Higress **all-in-one**，额外包含 **Tuwunel**、**MinIO**、**mc**、**Element Web**、**`agentteams-controller`**、**`agt`** 和 **supervisord** 编排（`supervisord.embedded.conf`）。
 - 安装脚本启动 **`agentteams-controller`**，等待内部 Higress / Tuwunel / MinIO 健康检查通过，然后由 **ManagerReconciler** 创建 **`agentteams-manager`** 容器；添加 **Worker** CR 或使用 CLI 时，再创建 Worker。
 - 非 `aliyun` / `k8s` 场景下，**Manager** 使用 `AGENTTEAMS_RUNTIME` 的本地运行逻辑：只在文档明确说明的共址场景里等待宿主机网络命名空间中的 localhost 端口；安装脚本会把宿主机端口（例如 gateway **18080**）映射到 controller 容器。Manager 容器会收到 `AGENTTEAMS_CONTROLLER_URL`，并可选挂载 **Docker socket** 用于 Worker 生命周期管理。
 

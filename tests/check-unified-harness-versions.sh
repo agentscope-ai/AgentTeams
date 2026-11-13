@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 for fn in _normalize_version _ver_lt _supports_deepseek_harness resolve_image_tags; do
-    eval "$(sed -n "/^${fn}()/,/^}/p" "$ROOT_DIR/install/agentteams-install.sh")"
+    eval "$(sed -n "/^${fn}()/,/^}/p" "$ROOT_DIR/.installer-source/public/install.sh")"
 done
 AGENTTEAMS_REGISTRY=registry.example
 AGENTTEAMS_KNOWN_STABLE_VERSION=v1.2.6

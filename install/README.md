@@ -1,3 +1,5 @@
+> The installation scripts are maintained in the [website repository](https://github.com/agentteams-group/agentteams-group.github.io). Use `https://agentteams.cloud/install.sh` or `https://agentteams.cloud/install.ps1`; no installer implementation is shipped in this repository.
+
 # AgentTeams Installation
 
 One-click installation script for AgentTeams Manager and Worker Agents.
@@ -12,13 +14,13 @@ One-click installation script for AgentTeams Manager and Worker Agents.
 ### macOS / Linux
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/install.sh)
 ```
 
 ### Windows (PowerShell 7+)
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
 ```
 
 ## Installation Modes
@@ -35,7 +37,7 @@ To start with a model already configured, export `AGENTTEAMS_LLM_API_KEY` before
 
 Customize each option:
 
-Run `./agentteams-install.sh --manual` or `.\agentteams-install.ps1 -Manual` to use the interactive configuration flow.
+Run `bash <(curl -fsSL https://agentteams.cloud/install.sh) --manual` or `& ([scriptblock]::Create((iwr -UseBasicParsing https://agentteams.cloud/install.ps1).Content)) -Manual` to use the interactive configuration flow.
 - LLM Provider (Alibaba Cloud Bailian or OpenAI-compatible)
 - Admin credentials
 - Port configuration
@@ -49,16 +51,16 @@ Run `./agentteams-install.sh --manual` or `.\agentteams-install.ps1 -Manual` to 
 
 **macOS / Linux:**
 ```bash
-./agentteams-install.sh manager
+bash <(curl -fsSL https://agentteams.cloud/install.sh) manager
 # or simply
-./agentteams-install.sh
+bash <(curl -fsSL https://agentteams.cloud/install.sh)
 ```
 
 **Windows:**
 ```powershell
-.\agentteams-install.ps1 manager
+& ([scriptblock]::Create((iwr -UseBasicParsing https://agentteams.cloud/install.ps1).Content)) manager
 # or simply
-.\agentteams-install.ps1
+& ([scriptblock]::Create((iwr -UseBasicParsing https://agentteams.cloud/install.ps1).Content))
 ```
 
 With `--manual` / `-Manual`, interactive prompts ask for:
@@ -73,7 +75,7 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **macOS / Linux:**
 ```bash
-./agentteams-install.sh worker \
+bash <(curl -fsSL https://agentteams.cloud/install.sh) worker \
   --name alice \
   --fs http://fs-local.agentteams.io:18080 \
   --fs-key <ACCESS_KEY> \
@@ -82,7 +84,7 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **Windows:**
 ```powershell
-.\agentteams-install.ps1 worker `
+& ([scriptblock]::Create((iwr -UseBasicParsing https://agentteams.cloud/install.ps1).Content)) worker `
   -Name alice `
   -Fs http://fs-local.agentteams.io:18080 `
   -FsKey <ACCESS_KEY> `
@@ -93,7 +95,7 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **macOS / Linux:**
 ```bash
-./agentteams-install.sh worker --reset --name alice \
+bash <(curl -fsSL https://agentteams.cloud/install.sh) worker --reset --name alice \
   --fs http://fs-local.agentteams.io:18080 \
   --fs-key <ACCESS_KEY> \
   --fs-secret <SECRET_KEY>
@@ -101,7 +103,7 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **Windows:**
 ```powershell
-.\agentteams-install.ps1 worker -Reset `
+& ([scriptblock]::Create((iwr -UseBasicParsing https://agentteams.cloud/install.ps1).Content)) worker -Reset `
   -Name alice `
   -Fs http://fs-local.agentteams.io:18080 `
   -FsKey <ACCESS_KEY> `
@@ -112,12 +114,12 @@ Workers are created by the Manager Agent through conversation. The Manager provi
 
 **macOS / Linux:**
 ```bash
-./agentteams-install.sh uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```
 
 **Windows:**
 ```powershell
-.\agentteams-install.ps1 uninstall
+& ([scriptblock]::Create((iwr -UseBasicParsing https://agentteams.cloud/install.ps1).Content)) uninstall
 ```
 
 ### Upgrade an existing local installation
@@ -130,7 +132,7 @@ Older installations without a Dashboard setting now enable it by default. An exp
 
 If the configuration file is missing, the installer attempts to recover the original mounts and credentials from the existing container. Incomplete recovery, conflicting data mounts or orphaned data stop installation without deleting data. Restore the original configuration and retry.
 
-Destructive reinstallation is a separate command, `./agentteams-install.sh reinstall` or `.\agentteams-install.ps1 reinstall`, and still requires typing the workspace path. It is never the default upgrade action.
+Destructive reinstallation is a separate command, `bash <(curl -fsSL https://agentteams.cloud/install.sh) reinstall` or `& ([scriptblock]::Create((iwr -UseBasicParsing https://agentteams.cloud/install.ps1).Content)) reinstall`, and still requires typing the workspace path. It is never the default upgrade action.
 
 ### Controller upgrade with backup and rollback
 
@@ -216,14 +218,14 @@ Set environment variables to skip prompts:
 ```bash
 export AGENTTEAMS_NON_INTERACTIVE=1
 export AGENTTEAMS_LLM_API_KEY="your-api-key"
-./agentteams-install.sh
+bash <(curl -fsSL https://agentteams.cloud/install.sh)
 ```
 
 **Windows:**
 ```powershell
 $env:AGENTTEAMS_NON_INTERACTIVE = "1"
 $env:AGENTTEAMS_LLM_API_KEY = "your-api-key"
-.\agentteams-install.ps1
+& ([scriptblock]::Create((iwr -UseBasicParsing https://agentteams.cloud/install.ps1).Content))
 ```
 
 ## Environment Variables

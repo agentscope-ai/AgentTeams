@@ -304,7 +304,7 @@ docker run --rm -v agentteams-data:/data -v $(pwd):/backup ubuntu \
 
 ```bash
 # 示例 1：安装时启用主目录共享（推荐）
-AGENTTEAMS_LLM_API_KEY=your-key-here ./install/agentteams-install.sh manager
+AGENTTEAMS_LLM_API_KEY=your-key-here bash <(curl -fsSL https://agentteams.cloud/install.sh) manager
 
 # 示例 2：把需要 Agent 访问的文件放入主目录
 mkdir -p ~/project-inputs/

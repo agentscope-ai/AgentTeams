@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
+INSTALLER="${ROOT_DIR}/.installer-source/public/install.sh"
 
 # Regression for issue #1311: the installer never generated, persisted, or
 # passed DASHBOARD_SESSION_SECRET to the dashboard container, so the

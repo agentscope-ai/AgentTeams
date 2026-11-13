@@ -143,7 +143,7 @@ AGENTTEAMS_LLM_API_KEY="sk-xxx" make install
 
 此命令将：
 1. 构建 Manager 和 Worker 镜像（`make build`）
-2. 运行安装脚本（`install/agentteams-install.sh manager`）
+2. 运行安装脚本（`bash <(curl -fsSL https://agentteams.cloud/install.sh) manager`）
 3. 挂载容器运行时 socket 以支持直接创建 Worker
 4. 将配置保存到 `./agentteams-manager.env`
 
@@ -163,7 +163,7 @@ make install
 ### 卸载
 
 ```bash
-make uninstall   # 调用 install/agentteams-install.sh uninstall（v1.1+：controller、manager、workers、数据卷、env 等）
+make uninstall   # 调用 bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall（v1.1+：controller、manager、workers、数据卷、env 等）
 ```
 
 ### Replay（向 Manager 发送任务）

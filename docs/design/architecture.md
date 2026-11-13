@@ -105,7 +105,7 @@ flowchart TB
 
 ### 1. Local single machine — `install/`
 
-- **`install/agentteams-install.sh`** pulls the **embedded controller** image (`Dockerfile.embedded`): Higress **all-in-one** base, plus **Tuwunel**, **MinIO**, **mc**, **Element Web**, **`agentteams-controller`**, **`agt`**, and **supervisord** wiring (`supervisord.embedded.conf`).
+- **`bash <(curl -fsSL https://agentteams.cloud/install.sh)`** pulls the **embedded controller** image (`Dockerfile.embedded`): Higress **all-in-one** base, plus **Tuwunel**, **MinIO**, **mc**, **Element Web**, **`agentteams-controller`**, **`agt`**, and **supervisord** wiring (`supervisord.embedded.conf`).
 - The installer starts **`agentteams-controller`**, waits for internal Higress / Tuwunel / MinIO health, then the **ManagerReconciler** creates the **`agentteams-manager`** container (and Workers when you add **Worker** CRs or use the CLI).
 - **Manager** uses `AGENTTEAMS_RUNTIME` outside `aliyun`/`k8s`: it waits on **localhost** ports inside the **host** network namespace only where documented—when co-located, the install script maps host ports (e.g. gateway **18080**) into the controller container; the Manager container receives `AGENTTEAMS_CONTROLLER_URL` and optional **Docker socket** for Worker lifecycle.
 

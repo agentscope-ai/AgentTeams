@@ -127,7 +127,7 @@ chmod 600 ~/.agentteams-llm-key
   AGENTTEAMS_DEFAULT_WORKER_RUNTIME=<计划> \
   AGENTTEAMS_LOCAL_ONLY=<计划> \
   AGENTTEAMS_ADMIN_USER=admin \
-  bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/<计划>/install/agentteams-install.sh)
+  bash <(curl -sSL https://agentteams.cloud/install.sh)
   ```
   自建模（非内置模型）还需按服务商真实规格设置
   `AGENTTEAMS_MODEL_CONTEXT_WINDOW`、`AGENTTEAMS_MODEL_MAX_TOKENS`、
@@ -139,7 +139,7 @@ chmod 600 ~/.agentteams-llm-key
   - 安装器点名某个变量缺失/非法 → 在计划里修正该值后重跑（属于计划
     缺陷，不是主机问题）。
   - `curl`/下载失败 → 检查主机出口/代理；替代方案：按固定 tag 克隆
-    仓库后本地执行 `bash install/agentteams-install.sh`。
+    仓库后本地执行 `bash <(curl -fsSL https://agentteams.cloud/install.sh)`。
   - 模型连通性检查失败 → 安装器会指出失败的检查项；依次排查：key
     文件（人工重新放置）、Base URL（`openai-compat` 需以 `/v1` 结
     尾）、模型 ID、账户余额/配额、到服务商的网络路径。
@@ -198,7 +198,7 @@ chmod 600 ~/.agentteams-llm-key
 
 | 检查项 | 状态 | 证据 |
 |---|---|---|
-| 引用的每个环境变量都存在于 `install/agentteams-install.sh` | 已验证（静态） | 变量集与[本地部署指南](local.md#常用环境变量)的表格一致，该表跟踪安装器脚本 |
+| 引用的每个环境变量都存在于 `bash <(curl -fsSL https://agentteams.cloud/install.sh)` | 已验证（静态） | 变量集与[本地部署指南](local.md#常用环境变量)的表格一致，该表跟踪安装器脚本 |
 | `uninstall` 子命令、端口表、验证命令 | 已验证（静态） | 与本地部署指南一致 |
 | 在真实 Docker 主机上从空环境到可用的完整演练 | **待办** | 撰写环境无容器运行时；演练需在真实主机上执行，并把结果（耗时、每次失败及走过的恢复路径）记录在这里 |
 

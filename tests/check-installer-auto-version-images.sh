@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
+INSTALLER="${ROOT_DIR}/.installer-source/public/install.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 for fn in _normalize_version _ver_lt _supports_deepseek_harness resolve_image_tags manager_image_for_runtime _check_install_image _check_version_images _select_available_auto_version; do
     eval "$(sed -n "/^${fn}()/,/^}/p" "$INSTALLER")"
@@ -129,20 +129,19 @@ if ( _select_available_auto_version ); then fail 'wrong pulled platform accepted
 reset_case
 ENGINE_PLATFORM=windows/amd64
 if ( _select_available_auto_version ); then fail 'unsupported platform accepted'; fi
-# Exercise interactive selection: stable is automatic, latest/custom are explicit.
+# The website pins its stable default; explicit environment versions remain explicit.
 eval "$(sed -n '/^step_version()/,/^}/p' "$INSTALLER")"
 _refresh_known_stable_version() { :; }
 msg() { :; }
-for choice in stable latest custom; do
+for version in '' latest v1.2.4; do
     reset_case
-    AGENTTEAMS_VERSION=""
+    AGENTTEAMS_VERSION="$version"
     AGENTTEAMS_AUTO_VERSION=0
-    step_version > /dev/null <<< "$choice
-v1.2.4"
-    if [ "$choice" = stable ]; then
-        [ "$AGENTTEAMS_AUTO_VERSION" = 1 ] || fail 'stable selection not checked'
+    step_version > /dev/null
+    if [ -z "$version" ]; then
+        [ "$AGENTTEAMS_AUTO_VERSION" = 1 ] || fail 'stable default not checked'
     else
         [ "$AGENTTEAMS_AUTO_VERSION" = 0 ] || fail 'explicit selection marked automatic'
     fi
 done
-echo 'PASS: automatic release selection checks required images and platform'
+echo 'PASS: website release selection checks required images and platform'

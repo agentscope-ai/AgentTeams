@@ -38,11 +38,11 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `AGENTTEAMS_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
 | `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `qwenpaw` | Manager Harness：`qwenpaw`（默认）、`openclaw`、`hermes`、`deepseek-harness` 或 `openhuman`。 |
 
-Manager 支持 `qwenpaw`、`openclaw`、`hermes`、`deepseek-harness` 和 `openhuman`。`copaw` 保留为 QwenPaw Manager 的兼容别名。每种运行时的 Manager、Leader、Worker 复用同一 Harness 镜像和入口，由 Controller 注入角色提示词、凭据与权限。Helm 使用 `manager.runtime` 选择，本地安装器提供对应选项；显式指定的 Manager 镜像也必须支持该角色契约。
+Manager 支持 `qwenpaw`、`openclaw`、`hermes`、`deepseek-harness` 和 `openhuman`。`copaw` 保留为 QwenPaw Manager 的兼容别名。每种运行时的 Manager、Leader、Worker 复用同一 Harness 镜像和入口，由 Controller 注入角色提示词、凭据与权限。Helm 使用 `manager.runtime` 选择，本地安装器的交互选项为 QwenPaw 和 OpenClaw；显式指定的 Manager 镜像也必须支持该角色契约。
 
 ### QwenPaw Manager（`AGENTTEAMS_MANAGER_RUNTIME=qwenpaw`）
 
-Controller 在 **`/root/manager-workspace`** 中以 Manager 角色运行共享 QwenPaw Harness；原 `agentteams-manager-qwenpaw` 镜像名作为兼容别名保留。Manager 管理资源并委派 Leader，不因切换 Harness 获得 Leader 的工作流工具。其他 Harness 遵循同一角色边界，可通过 `agt message` 完成跨房间交接。
+Controller 在 **`/root/manager-workspace`** 中以 Manager 角色运行共享 QwenPaw Harness；Core v1.2.7 使用 `agentteams-harness-qwenpaw`，不再发布专用 Manager 镜像。Manager 管理资源并委派 Leader，不因切换 Harness 获得 Leader 的工作流工具。其他 Harness 遵循同一角色边界，可通过 `agt message` 完成跨房间交接。
 
 ### 自定义 Manager Agent
 

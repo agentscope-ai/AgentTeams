@@ -8,9 +8,9 @@ AgentTeams 是一个 **Agent Teams** 平台：**Manager** 负责协调 **Workers
 
 | 层级 | 职责 | 典型镜像 |
 |------|------|----------|
-| **agentteams-controller** | Go operator：协调 **Worker**、**Manager**、**Team** 和 **Human** CRD；提供 REST API；管理 worker/manager 生命周期、gateway consumer 配置，以及云厂商能力开启时的凭证流程。 | `agentteams-controller`（Kubernetes）或 **`agentteams-controller-embedded`**（本地）：Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web**（nginx）+ controller binary |
-| **Manager** | 协调型 Agent：通过 Matrix 和 controller API 管理任务、workers、teams、humans、Higress routes/MCP。 | `agentteams-manager`（OpenClaw / Node）或 `agentteams-manager-qwenpaw`（QwenPaw / Python）：基于 **openclaw-base** 或 slim Python，**不包含**完整基础设施栈 |
-| **Worker** | 任务执行容器：每个 worker 一个容器，按需创建；无状态；配置和产物保存在对象存储中。 | `agentteams-worker`、`agentteams-copaw-worker`、`agentteams-qwenpaw-worker`、`agentteams-hermes-worker` 或实验性的 `agentteams-deepseek-harness-worker` |
+| **agentteams-controller** | Go operator：协调 **Worker**、**Manager**、**Team** 和 **Human** CRD；提供 REST API；管理 worker/manager 生命周期、gateway consumer 配置，以及云厂商能力开启时的凭证流程。 | `agentteams-controller`（Kubernetes）或 **`agentteams-embedded`**（本地）：Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web**（nginx）+ controller binary |
+| **Manager** | 通过 Matrix 和 Controller API 管理资源、委派任务。 | 共享 `agentteams-harness-openclaw`、`agentteams-harness-qwenpaw` 或其他受支持的 Manager Harness，不包含基础设施 |
+| **Worker** | 每个 Worker 使用独立容器执行任务，持久配置与产物保存在对象存储。 | `agentteams-harness-{openclaw,qwenpaw,hermes,deepseek,openhuman,codex}`；旧 CoPaw 保留固定的历史镜像 |
 
 **openclaw-base** 镜像提供 **Ubuntu 24.04**、**Node.js 24**、**OpenClaw** 和 **mcporter**，供 OpenClaw 形态的 Manager/Worker 镜像复用。它不再包含旧的 all-in-one Higress bundle；AI gateway 运行在**嵌入式 controller** 中，或在 Kubernetes 中作为 **Higress Helm subchart** 运行。
 
@@ -111,7 +111,7 @@ flowchart TB
 
 ### 2. Kubernetes - `helm/agentteams`
 
-- **`helm/agentteams/values.yaml`** 定义 **matrix**（托管 Tuwunel 或已有 Synapse）、**gateway**（托管 Higress 或外部阿里云 **ai-gateway**）、**storage**（托管 MinIO 或外部 OSS）、可选 **credentialProvider**、**controller**、**manager**（bootstrap **Manager** CR）、**elementWeb**、**worker** 默认值（按 **openclaw** / **copaw** / **hermes** runtime 区分镜像）。
+- **`helm/agentteams/values.yaml`** 定义 **matrix**（托管 Tuwunel）、**gateway**（托管 Higress 或外部阿里云 **ai-gateway**）、**storage**（托管 MinIO 或外部 OSS）、可选 **credentialProvider**、**controller**、**manager**（bootstrap **Manager** CR）、**elementWeb**、**worker** 默认值（六种现行 Harness 及显式配置的旧版 CoPaw 镜像）。
 - **controller** Pod 会面向集群内 Matrix、Higress 和 MinIO endpoint 协调 CR。**Manager** 以 `AGENTTEAMS_RUNTIME=k8s` 运行，通过 `mc` 从集群 MinIO 同步工作区，并消费 operator 注入的凭证。
 
 ---
@@ -146,24 +146,25 @@ flowchart TB
 
 | Runtime | 技术栈 | 说明 |
 |---------|--------|------|
-| **openclaw**（默认） | Node.js / OpenClaw gateway，基于 **openclaw-base** 派生镜像 | 主 worker 路径；使用 **mcporter** 通过 Higress 调用 MCP 工具 |
+| **openclaw**（Helm 默认） | Node.js / OpenClaw gateway，基于 **openclaw-base** 派生镜像 | 主 worker 路径；使用 **mcporter** 通过 Higress 调用 MCP 工具 |
 | **copaw** | Python / CoPaw 兼容路径 | 保留给已有部署；使用 `agentteams-copaw-worker` 及 `.copaw/` 运行时目录 |
-| **qwenpaw** | Python / **QwenPaw 2.x** | 当前 QwenPaw Worker 路径；使用 `agentteams-qwenpaw-worker` 及 `.qwenpaw/` 运行时目录 |
+| **qwenpaw** | Python / **QwenPaw 2.x** | 当前 QwenPaw Worker 路径；使用 `agentteams-harness-qwenpaw` 及 `.qwenpaw/` 运行时目录 |
 | **hermes** | Python / **`hermes-worker`** | Matrix worker runtime，Hermes policy/config tree 位于 `hermes-worker-agent/` |
 | **deepseek-harness**（实验性） | Node.js / **DeepSeek Harness** | Headless DSH Worker；读取 Controller 投影的 `runtime.yaml`，支持 Matrix 文本和文件，并把房间 session 与投递状态持久化到对象存储；当前固定在通过测试的 DSH release candidate |
+| **openhuman** | Rust / OpenHuman | 原生 Matrix Harness |
+| **codex** | 独立 Codex Harness | 独立维护，纳入 v1.2.7 统一镜像发布 |
 
-当前发布的 Worker CRD enum 接受上表五个值。Controller 和 Helm values 中已经存在 OpenHuman 的后端及默认镜像配置，但当前 CRD 尚不接受显式的 `spec.runtime: openhuman`，因此本文不把它列为可直接声明的 Worker runtime。当前 Chart 也没有 `worker.defaultImage.qwenpaw`，在 CR 中使用 `qwenpaw` 时需要显式设置 `spec.image`。controller 在创建 Pod 或 Docker container 时解析最终 runtime 和镜像。
+当前 Worker CRD 接受上表七个值。Helm 为六种现行 Harness 提供默认镜像，包括 QwenPaw；旧版 CoPaw 必须显式固定旧镜像。Controller 创建 Pod 或容器时解析 runtime 与镜像。本地安装器默认 QwenPaw，Helm 默认 OpenClaw。
 
 ### Manager runtimes
 
-已发布的 **Manager entrypoint**（`start-manager-agent.sh`）会按以下规则选择运行时：
+每种受支持 Harness 的 Manager、Leader、Worker 复用同一镜像和入口。Controller 投影角色指令、凭据、权限与 `runtime.yaml`，Manager 凭据与 Worker 凭据分别管理。
 
-| Mode | `AGENTTEAMS_MANAGER_RUNTIME` | 行为 |
-|------|---------------------------|------|
-| **OpenClaw** | `openclaw` | Node/OpenClaw gateway；Matrix “message tool” 风格集成；当前 Helm Chart 显式使用该默认值 |
-| **QwenPaw** | `qwenpaw` | Python QwenPaw workspace；通过 **`copaw channels send`** 接入 Matrix（`start-qwenpaw-manager.sh`）；Manager 入口与 controller 在未配置时回退到该值 |
+当前 Manager CRD 接受 `openclaw`、`qwenpaw`、`hermes`、`deepseek-harness` 和 `openhuman`。`copaw` 是映射到 QwenPaw 的旧 Manager 别名，不改变独立 CoPaw Worker 的运行时。在此 API 边界上，Codex 仅用于 Worker。
 
-本地安装器仍向用户展示 **CoPaw**，并写入兼容值 `copaw`；Manager 入口会将其路由到 QwenPaw 实现。**Hermes** 和 **DeepSeek Harness** 都是 Worker-only runtime，OpenHuman 的现有实现也仅位于 Worker 侧，但仍受上文 CRD 限制；当前 Manager 镜像只启动 **OpenClaw** 或 **QwenPaw**（见 `start-manager-agent.sh` 中的注释）。
+Helm 默认 OpenClaw；未覆盖 `manager.image` 时，从 `worker.defaultImage` 自动选择 Harness 镜像。本地安装器默认 QwenPaw，并提供 OpenClaw 选项。Core v1.2.7 发布共享 Harness 镜像，不再发布专用 Manager 镜像；`manager/` 仍保留本地兼容构建包装。
+
+QwenPaw Manager 在 `/root/manager-workspace` 运行，使用共享 Manager 提示词与管理技能。详见 [Manager 指南](../usage/manager-guide.md)及 [Kubernetes 运行时配置](../usage/deployment/kubernetes.md#33-manager-runtime)。
 
 ---
 

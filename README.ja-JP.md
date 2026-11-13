@@ -178,16 +178,20 @@ helm install agentteams higress.io/agentteams \
 | `credentials.llmProvider` | 任意 | LLM プロバイダー名、デフォルトは `openai-compat` |
 | `credentials.defaultModel` | 任意 | デフォルトモデル、デフォルトは `gpt-5.4` |
 | `credentials.llmBaseUrl` | 任意 | OpenAI 互換のベース URL（例: `https://api.deepseek.com/v1`）。公式 OpenAI API を使用する場合は空のまま |
-| `manager.runtime` | 任意 | Manager エージェントランタイム: `openclaw`（デフォルト）、`copaw`、または `hermes` |
-| `worker.defaultRuntime` | 任意 | Worker デフォルトランタイム: `openclaw`（デフォルト）、`copaw`、`hermes`、または実験的な `deepseek-harness` |
+| `manager.runtime` | 任意 | 現行ソース Chart: `openclaw`（デフォルト）、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`。`copaw` は QwenPaw の互換エイリアス。Harness イメージは自動選択 |
+| `worker.defaultRuntime` | 任意 | `openclaw`（Chart デフォルト）、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`、`codex`。旧 `copaw` は以前のイメージを明示的に固定 |
 
 <details>
 <summary>代替ランタイムの使用（QwenPaw Manager + Hermes Workers）</summary>
 
+現行ソースのリポジトリルートで実行してください：
+
 ```bash
-helm install agentteams higress.io/agentteams \
-  -n agentteams-system --create-namespace --devel \
-  --set manager.runtime=copaw \
+helm dependency build helm/agentteams
+helm install agentteams ./helm/agentteams \
+  -n agentteams-system --create-namespace \
+  --set global.imageTag=v1.2.7 \
+  --set manager.runtime=qwenpaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -196,7 +200,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-各コンポーネントのイメージはランタイムに基づいて自動的に選択されます（Manager: `agentteams-manager` / `agentteams-manager-qwenpaw`、Worker: `agentteams-worker` / `agentteams-copaw-worker` / `agentteams-harness-hermes`）。
+現行ソース Chart は `worker.defaultImage.<runtime>` から共有 Harness イメージを選択します。カスタムイメージを使う場合のみ `manager.image` を上書きしてください。Core v1.2.7 は専用 Manager イメージを公開しません。[Kubernetes ガイド](docs/usage/deployment/kubernetes.md)で Chart とイメージのバージョンを確認してください。
 
 </details>
 
@@ -377,6 +381,8 @@ Agent チームを観察・制御するための組み込みダッシュボー�
 ---
 
 ## ドキュメント
+
+v1.4.1 のワークスペース、モデル設定、チーム、ファイル、Tracing は [Dashboard Guide](docs/usage/dashboard.md) を参照してください。
 
 [ドキュメントディレクトリ](docs/)を参照するか、概要とクイックスタートから始めてください。
 

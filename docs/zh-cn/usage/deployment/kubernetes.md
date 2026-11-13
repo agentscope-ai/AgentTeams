@@ -81,39 +81,32 @@ helm version
 
 ### 3.3 Manager runtime
 
-Manager 对用户呈现的 runtime 选项只有 **OpenClaw** 和 **CoPaw**：
+当前源码 Chart 和 Manager CRD 支持 `openclaw`、`qwenpaw`、`hermes`、`deepseek-harness` 和 `openhuman`。Chart 默认 OpenClaw；本地安装器推荐 QwenPaw，并提供 OpenClaw 选项。`copaw` 是旧 Manager 配置映射到 QwenPaw 的兼容别名。Codex 用于 Worker，Manager CRD 不接受它。
 
-| 选项 | `manager.runtime` | Manager 镜像 | 说明 |
-|---|---|---|---|
-| OpenClaw | `openclaw` | `agentteams-manager` | 当前 Chart 默认值 |
-| CoPaw | `qwenpaw` | `agentteams-manager-qwenpaw` | 当前 Python Manager 实现；`copaw` 是兼容旧配置的别名 |
-
-Hermes、DeepSeek Harness、OpenHuman 等 runtime 仅用于 Worker，不能作为 Manager runtime。
-
-当前 Chart 不会仅根据 `manager.runtime` 自动改写 `manager.image.repository`。选择 CoPaw 时必须同时设置：
+Manager、Leader 和 Worker 复用所选 Harness 镜像。`manager.image.repository` 留空时，Chart 自动从 `worker.defaultImage` 选择对应镜像；只有自定义镜像时才需要覆盖：
 
 ```yaml
 manager:
   runtime: qwenpaw
-  image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-qwenpaw
 ```
 
-只修改 runtime 而继续使用 OpenClaw Manager 镜像，会导致 Manager Pod 无法启动或运行时行为不匹配。
+例如，QwenPaw 使用 `agentteams-harness-qwenpaw`，OpenClaw 使用 `agentteams-harness-openclaw`。显式覆盖的镜像必须与 runtime 匹配。Core v1.2.7 不再发布专用 Manager 镜像。
 
 ### 3.4 默认 Worker runtime
 
-`worker.defaultRuntime` 决定后续创建 Worker 时使用的默认 runtime；在单个 `Worker` CR 中显式设置 `spec.runtime` 可以覆盖它。
+`worker.defaultRuntime` 决定新 Worker 的默认运行时，单个 `Worker.spec.runtime` 可覆盖它。
 
-| runtime | 默认镜像配置项 | 适用说明 |
+| runtime | 默认镜像配置项 | 说明 |
 |---|---|---|
-| `openclaw` | `worker.defaultImage.openclaw` | 默认通用 Worker runtime |
-| `copaw` | `worker.defaultImage.copaw` | Python / CoPaw Worker |
-| `hermes` | `worker.defaultImage.hermes` | Hermes Worker |
-| `deepseek-harness` | `worker.defaultImage.deepseekHarness` | 实验性的 headless DeepSeek Harness Worker，支持 Matrix 文本/文件和对象存储恢复；当前固定在通过测试的 DSH release candidate；Matrix E2EE 配置会在启动时被明确拒绝 |
-| `openhuman` | `worker.defaultImage.openhuman` | Chart 中已有默认镜像配置，但当前 Worker CRD enum 不接受显式的 `spec.runtime: openhuman` |
+| `openclaw` | `worker.defaultImage.openclaw` | Chart 默认值 |
+| `qwenpaw` | `worker.defaultImage.qwenpaw` | 本地安装器默认值 |
+| `hermes` | `worker.defaultImage.hermes` | Python Harness |
+| `deepseek-harness` | `worker.defaultImage.deepseekHarness` | 实验性 headless Harness；启动时拒绝 Matrix E2EE |
+| `openhuman` | `worker.defaultImage.openhuman` | 原生 Matrix 的 Rust Harness |
+| `codex` | `worker.defaultImage.codex` | 独立维护的 Codex Harness |
+| `copaw` | `worker.defaultImage.copaw` | 仅供旧部署使用，必须同时固定旧镜像仓库和 tag |
 
-Controller 也认识 `qwenpaw` Worker runtime，但当前 Chart 没有为它提供独立的默认镜像配置。使用时应在 `Worker.spec.image` 中显式指定 QwenPaw Worker 镜像。OpenHuman 的后端与 Helm values 已存在，但 CRD 契约尚未对齐；业务代码单独修正前，不应在 Worker YAML 中显式使用 `openhuman`。
+当前 Worker CRD 接受以上七个值。六种现行 Harness 镜像均发布 Core `v1.2.7` 标签。DeepSeek 和 Codex 在 Chart 中有显式 tag，选择其他镜像集时需单独覆盖对应 `tag`。CoPaw 不再发布新镜像，也没有默认镜像仓库。
 
 ## 4. 配置模型服务
 
@@ -224,7 +217,7 @@ manager:
   enabled: true
   runtime: openclaw
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw
   resources:
     requests:
       cpu: 500m
@@ -657,7 +650,7 @@ kubectl get pvc -n agentteams-system
 
 ### Pod 是 `ImagePullBackOff`
 
-确认节点能访问镜像仓库、镜像 tag 存在、CPU 架构匹配，并为私有仓库配置 `imagePullSecrets`。切换 CoPaw Manager 时同时检查 runtime 和 Manager 镜像是否匹配。
+确认节点能访问镜像仓库、镜像 tag 存在、CPU 架构匹配，并为私有仓库配置 `imagePullSecrets`。切换 QwenPaw Manager 时同时检查 runtime 和 Manager 镜像是否匹配。
 
 如果从源码安装时日志显示类似 `agentteams-controller:v<Chart.appVersion>` 不存在，先确认渲染结果，再临时覆盖为确实存在的 tag：
 

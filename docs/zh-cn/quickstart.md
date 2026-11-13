@@ -21,6 +21,8 @@
 
 > 默认直接启动本地服务和 Dashboard。需要逐项配置安装参数时，在命令末尾添加 `--manual`。
 
+Core v1.2.7 的六种 Harness 镜像统一使用 `v1.2.7` 标签，配套 Dashboard 独立编号为 `v1.4.1`。安装器位于官网仓库；Core 仓库不再维护安装脚本实现。
+
 ## 第一步：安装 AgentTeams
 
 在终端中运行：
@@ -135,6 +137,8 @@ docker ps --filter name=agentteams-worker
 完成以上检查后，你已经跑通了 AgentTeams 的最小闭环。
 
 ## 下一步
+
+- 阅读 [Dashboard 使用指南](usage/dashboard.md)，了解会话、团队、人工待办、文件和 Tracing。
 
 - 先阅读 [AgentTeams 概览](overview.md)，了解角色、组件和部署方式。
 - 参考 [AgentTeams 使用案例](usage/use-cases.md)，尝试软件交付、研究分析、内容本地化、故障分析、长期项目协作，以及自定义 Skill 的添加与实际使用。

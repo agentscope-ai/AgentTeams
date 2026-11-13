@@ -38,11 +38,11 @@ The Manager is configured via environment variables set during installation. The
 | `AGENTTEAMS_YOLO` | No | - | Set to `1` to enable YOLO mode (autonomous decisions, no interactive prompts) |
 | `AGENTTEAMS_MANAGER_RUNTIME` | No | `qwenpaw` | Manager Harness: `qwenpaw` (default), `openclaw`, `hermes`, `deepseek-harness`, or `openhuman`. |
 
-Manager runtime choices are `qwenpaw`, `openclaw`, `hermes`, `deepseek-harness`, and `openhuman`. `copaw` remains a compatibility alias for the QwenPaw Manager. Each runtime uses the same Harness image and entrypoint as its Workers and Leaders; role prompts, credentials, and permissions come from the controller. Set `manager.runtime` in Helm or choose the runtime in the local installer. An explicit Manager image override must support this role contract.
+Manager runtime choices are `qwenpaw`, `openclaw`, `hermes`, `deepseek-harness`, and `openhuman`. `copaw` remains a compatibility alias for the QwenPaw Manager. Each runtime uses the same Harness image and entrypoint as its Workers and Leaders; role prompts, credentials, and permissions come from the controller. Set `manager.runtime` in Helm; the local installer's interactive choices are QwenPaw and OpenClaw. An explicit Manager image override must support this role contract.
 
 ### QwenPaw Manager (`AGENTTEAMS_MANAGER_RUNTIME=qwenpaw`)
 
-The controller runs the shared QwenPaw Harness with the Manager role under `/root/manager-workspace`. The legacy `agentteams-manager-qwenpaw` image name remains a compatibility alias. The Manager coordinates resources and delegates work to Leaders; it does not acquire Leader workflow tools merely by changing its Harness. The other Harnesses follow the same role boundary and can use `agt message` for cross-room handoffs.
+The controller runs the shared QwenPaw Harness with the Manager role under `/root/manager-workspace`. Core v1.2.7 uses `agentteams-harness-qwenpaw`; dedicated Manager images are no longer published. The Manager coordinates resources and delegates work to Leaders; it does not acquire Leader workflow tools merely by changing its Harness. The other Harnesses follow the same role boundary and can use `agt message` for cross-room handoffs.
 
 ### Customizing the Manager Agent
 

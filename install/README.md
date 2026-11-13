@@ -244,7 +244,8 @@ $env:AGENTTEAMS_LLM_API_KEY = "your-api-key"
 | `AGENTTEAMS_DATA_DIR` | Data directory | Docker volume |
 | `AGENTTEAMS_WORKSPACE_DIR` | Manager workspace | `~/agentteams-manager` |
 | `AGENTTEAMS_VERSION` | Image tag | `latest` |
-| `AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION` | Experimental DeepSeek Harness runtime image tag; released independently from AgentTeams | `v0.1.0` |
+| `AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION` | DeepSeek Harness image tag override; defaults to the unified Harness release | `v1.2.7` |
+| `AGENTTEAMS_CODEX_WORKER_VERSION` | Codex Harness image tag override; defaults to the unified Harness release | `v1.2.7` |
 | `AGENTTEAMS_REGISTRY` | Image registry | *(auto-detected by timezone)* |
 | `AGENTTEAMS_HIGRESS_WASM_PLUGIN_REGISTRY` | Higress WASM plugin registry (independent of AgentTeams images; saved for upgrades) | `higress-registry.cn-hangzhou.cr.aliyuncs.com` |
 

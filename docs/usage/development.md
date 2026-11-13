@@ -34,8 +34,8 @@ git submodule update --init --recursive
 
 `make build-hermes-worker` initializes a missing checkout automatically. To
 upgrade Hermes, update the harness first, then bump the submodule commit and
-`HERMES_GIT_REF` in `hack/versions.env` together. Existing image names, Helm and
-installer defaults remain controlled by this repository.
+`HERMES_GIT_REF` in `hack/versions.env` together. Helm image defaults remain in
+this repository; installer defaults are maintained in the website repository.
 
 ## Building Images Locally
 
@@ -50,12 +50,14 @@ From Core 1.2.7, Harness image repositories use these names:
 | OpenHuman | `agentteams-harness-openhuman` |
 | Codex | `agentteams-harness-codex` |
 
-Core local builds use the `agentteams/` prefix. Codex remains in its independent
-repository; DeepSeek and Codex keep independent version tags. Manager roles
-can use the same Harness images; the existing Manager image tags remain
-compatibility aliases. Container names, runtime IDs and image override variables
-are unchanged. Installers retain the original repositories for historical Core
-versions and DeepSeek versions before v0.1.2.
+Core local builds use the `agentteams/` prefix. The v1.2.7 release publishes all
+six Harness images with the same `v1.2.7` tag for amd64 and arm64 through
+`.github/workflows/publish-harnesses.yml`. Codex source remains in its independent
+repository. Manager roles reuse Harness images; dedicated Manager images are
+no longer published. Local Manager compatibility build targets remain available.
+Container names, runtime IDs and image override variables are unchanged.
+Installation scripts and their compatibility mappings are maintained in the
+[website repository](https://github.com/agentteams-group/agentteams-group.github.io).
 
 All builds go through the root `Makefile`:
 
@@ -81,9 +83,8 @@ make build-deepseek-harness-worker
 # Build with a specific version tag
 make build VERSION=local-dev
 
-# DeepSeek Harness releases independently from the core VERSION
-make push-deepseek-harness-worker VERSION=sha-$(git rev-parse --short=12 HEAD) \
-    PUSH_LATEST= DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.2
+# Build a local DeepSeek Harness image with an explicit development tag
+make build-deepseek-harness-worker VERSION=local-dev
 
 # Build for a specific platform
 make build DOCKER_PLATFORM=linux/amd64

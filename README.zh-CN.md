@@ -194,8 +194,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | 可选 | 限流、网络错误和服务商 5xx 等临时错误的重试次数；默认 `2` |
 | `preflight.llm.activeDeadlineSeconds` | 可选 | 探测 Job 的最长运行时间；默认 `120` 秒 |
 | `preflight.llm.resources` | 可选 | 探测容器的 Kubernetes requests/limits |
-| `manager.runtime` | 可选 | Manager Agent 运行时：OpenClaw 使用 `openclaw`（默认）；CoPaw 在当前 Chart 中使用 `qwenpaw`，`copaw` 为兼容别名。Manager 不支持 Hermes 或 DeepSeek Harness |
-| `worker.defaultRuntime` | 可选 | Chart 提供 `openclaw`（默认）、`copaw`、`hermes`、实验性的 `deepseek-harness` 和 `openhuman` 默认镜像值；当前 CRD 不接受显式的 `spec.runtime: openhuman`，QwenPaw Worker 需在 `spec.image` 中显式配置镜像 |
+| `manager.runtime` | 可选 | 当前源码 Chart 支持 `openclaw`（默认）、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`；`copaw` 为 QwenPaw 兼容别名。未覆盖镜像时自动选择对应 Harness |
+| `worker.defaultRuntime` | 可选 | `openclaw`（Chart 默认）、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`、`codex`；旧版 `copaw` 必须显式固定旧镜像 |
 
 Helm 默认在安装和升级前执行 LLM 探测，使用 `credentials.llmApiKey`、`credentials.llmBaseUrl` 和 `credentials.defaultModel` 发送一个最小的 OpenAI 兼容请求。无效密钥、无法访问的 Base URL、不支持的模型、额度错误或服务商故障会在 Controller 启动前终止安装。受限或离线集群可以临时关闭：
 
@@ -209,13 +209,16 @@ helm install agentteams higress.io/agentteams \
 ```
 
 <details>
-<summary>使用其他运行时（CoPaw Manager + Hermes Workers）</summary>
+<summary>使用其他运行时（QwenPaw Manager + Hermes Workers）</summary>
+
+在当前源码检出的仓库根目录运行：
 
 ```bash
-helm install agentteams higress.io/agentteams \
-  -n agentteams-system --create-namespace --devel \
+helm dependency build helm/agentteams
+helm install agentteams ./helm/agentteams \
+  -n agentteams-system --create-namespace \
+  --set global.imageTag=v1.2.7 \
   --set manager.runtime=qwenpaw \
-  --set manager.image.repository=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-qwenpaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -224,7 +227,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-选择 CoPaw Manager 时需要同时设置 `manager.runtime=qwenpaw` 和 `agentteams-manager-qwenpaw` 镜像。Worker 的默认镜像分别通过 `worker.defaultImage.<runtime>` 配置。
+当前源码 Chart 自动选择 QwenPaw Harness 镜像。共享 Harness 镜像通过 `worker.defaultImage.<runtime>` 配置，仅自定义镜像时覆盖 `manager.image`。Chart 与镜像版本选择参见 [Kubernetes 部署指南](docs/zh-cn/usage/deployment/kubernetes.md)。
 
 </details>
 
@@ -461,6 +464,8 @@ python scripts/export-debug-log.py --range 1h
 欢迎[提交 Issue](https://github.com/agentscope-ai/AgentTeams/issues)，或在 [Discord](https://discord.gg/n6mV8xEYUF) / 钉钉群里随时提问。
 
 ## 文档
+
+新版工作区、模型配置、团队、文件和 Tracing，参见 [Dashboard 使用指南](docs/zh-cn/usage/dashboard.md)。
 
 浏览 [中文文档目录](docs/zh-cn/)，或从概览和快速入门开始：
 

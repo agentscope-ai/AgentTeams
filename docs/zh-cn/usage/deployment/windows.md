@@ -4,6 +4,18 @@
 
 ---
 
+## 快速开始（推荐）
+
+在 PowerShell 中运行以下命令，无配置提问地启动本地服务与 Dashboard：
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
+```
+
+Dashboard 就绪后自动打开 `http://127.0.0.1:13000/`，预填 `admin` 并复制生成的密码。无法使用桌面集成时，以终端输出为准。安装无需模型 API Key；首次对话前，在 Manager 会话点击「配置模型」即可。后续操作见 [Dashboard 使用指南](../dashboard.md)。
+
+下方编号步骤是 **手动配置**（`-Manual`）流程，终端截图展示交互配置，不代表默认快速开始会逐项提问。
+
 ## 目录
 
 - [前提条件](#前提条件)
@@ -114,7 +126,13 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 
 > **说明**：此命令会临时允许当前 PowerShell 窗口执行脚本（不影响系统安全策略），然后从网络下载并运行 AgentTeams 安装脚本。
 
-安装脚本启动后，你会看到 AgentTeams 的安装引导界面。接下来按照终端提示逐步操作即可。
+如需按下方步骤手动配置，请使用以下命令替代上面的默认安装命令：
+
+```powershell
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing https://agentteams.cloud/install.ps1).Content)) -Manual
+```
+
+手动向导会询问下列配置。已经通过快速开始完成安装时，直接进入 Dashboard 即可，无需重复安装。
 
 ![PowerShell 运行安装脚本 - 显示安装日志和语言选择](../../images/windows-deploy/powershell-install-start.png)
 
@@ -407,17 +425,14 @@ Manager 会自动完成以下工作：
 Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
 ```
 
-安装脚本检测到已有安装时，会提示选择：
+默认升级只需一次确认，保留数据、账号、模型配置与工作空间，备份原环境文件，并在替换服务前准备镜像。常规 embedded 升级保留现有 Worker 容器。使用 `-Manual` 可逐项检查配置；全新重装是单独的破坏性手动选项。
 
-- **就地升级**（推荐）：保留所有数据、配置和工作空间，仅更新容器镜像
-- **全新重装**：删除所有数据，从零开始
-
-> 升级过程中，**`agentteams-controller`**、**`agentteams-manager`** 与 Worker 容器可能被重新创建。Worker 无状态，MinIO / Docker 卷中的数据是否保留取决于你选择的升级选项。
+Dashboard 版本处理和独立数据库备份/回滚流程，参见[升级说明](../../../../install/README.md#upgrade-an-existing-local-installation)。
 
 如需升级到指定版本：
 
 ```powershell
-$env:AGENTTEAMS_VERSION="v1.2.2"; Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
+$env:AGENTTEAMS_VERSION="v1.2.7"; Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
 ```
 
 ---

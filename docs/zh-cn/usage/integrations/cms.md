@@ -2,6 +2,8 @@
 
 本指南介绍如何将 AgentTeams 接入阿里云云监控服务 CMS 2.0,以获得 AI Agent 应用的全方位可观测能力。
 
+Core v1.2.7 + Dashboard v1.4.1 的 Controller 可观测配置、Collector 和 Langfuse/AgentLoop 查询入口见 [Dashboard Tracing](../dashboard.md#可选的-tracing)。下文的 CMS 环境变量属于独立的 CMS 导出集成，不会配置 Dashboard 查询后端。
+
 ## 版本要求
 
 **⚠️ 重要：CMS 2.0 可观测性支持从 AgentTeams v1.0.9 版本开始提供。**
@@ -63,9 +65,9 @@ AgentTeams 通过 OpenTelemetry 协议支持接入 CMS 2.0,使您能够:
 - 使用 VPC 连接时,请确保 AgentTeams 部署环境具有到 VPC 端点的网络访问权限
 - License Key 是敏感信息,请妥善保管
 
-## 步骤二:配置 AgentTeams Manager
+## 步骤二:配置 CMS 导出默认值
 
-向 AgentTeams Manager 容器添加以下环境变量,然后重启容器:
+在 Controller 部署中配置以下环境变量，由它向托管 Agent 容器投影 CMS 默认配置：
 
 ```bash
 # 启用链路追踪采集
@@ -87,18 +89,18 @@ AGENTTEAMS_CMS_LICENSE_KEY=d95vgxi0cn@xxxxx
 AGENTTEAMS_CMS_ENDPOINT=https://proj-xtrace-xxx.cn-hangzhou.log.aliyuncs.com/apm/trace/opentelemetry
 ```
 
-配置完成后重启容器: `docker restart agentteams-manager`
+通过正常部署流程应用配置并重建容器。仅执行 `docker restart` 不会重新读取宿主机文件中修改的环境变量。
 
 ### v1.1.0+ 多容器 / Helm 环境下的变量落点
 
 | 场景 | 配置位置 |
 |------|----------|
-| **嵌入式 Docker** | 将所有 `AGENTTEAMS_CMS_*` 配在 **`agentteams-manager`**（若使用 QwenPaw Manager 则为 **`agentteams-manager-qwenpaw`**）上，由 `agentteams-manager.env` 注入。**`agentteams-controller`** 一般不需要为 Agent 可观测性单独配置 CMS 环境变量。 |
-| **Helm / Kubernetes** | 在 **Manager** Deployment 的环境变量中设置（参见 `helm/agentteams/values.yaml` 中 manager 段）。也可在 Worker 默认值中预置，确保每个 Worker Pod 都带上 CMS 相关变量。 |
+| **嵌入式 Docker** | 将 `AGENTTEAMS_CMS_*` 持久化到安装器环境配置并通过安装器应用。安装器将变量传入 `agentteams-controller`，再由 Controller 向托管 Agent 提供默认值。 |
+| **Helm / Kubernetes** | 设置 Chart 的 `cms.enabled`、`cms.endpoint`、`cms.licenseKey`、`cms.project`、`cms.workspace`、`cms.serviceName` 及可选的 `cms.metricsEnabled`。这些配置注入 Controller Deployment；Manager 是 CR 管理的 Pod，不是单独的 Helm Deployment。 |
 
 ## 步骤三:配置 AgentTeams Workers
 
-Manager 会自动将 CMS 配置传播到新创建的 Worker。确保在配置 Manager 后再创建 Worker。
+Controller 向新建托管 Agent 容器投影 CMS 默认值。已有容器需更新实际环境并在空闲时重建。应确认所选 Harness 支持 CMS 导出；通用 QwenPaw/Hermes Collector 流程通过 Dashboard 单独配置。
 
 ## 步骤四:验证接入
 
@@ -113,12 +115,12 @@ Manager 会自动将 CMS 配置传播到新创建的 Worker。确保在配置 Ma
 
 1. 检查网络连通性: `curl -I <ENDPOINT_URL>`
 2. 验证 `AGENTTEAMS_CMS_LICENSE_KEY` 是否正确（无空格/换行）
-3. 确认容器已重启: `docker restart agentteams-manager`
+3. 确认容器已使用更新后的环境重建；单纯重启旧容器不会新增环境变量
 4. 查看容器日志: `docker logs agentteams-manager`
 5. OTLP 数据批量发送,最多延迟 60 秒
 
 ### Workers 没有遥测数据?
 
-1. 确认 Manager 配置了 CMS 环境变量后再创建 Worker
+1. 确认 Controller 已配置 CMS 默认值，且所选 Harness 支持该集成
 2. 验证 Worker 容器的 `AGENTTEAMS_CMS_*` 环境变量
-3. 在 Manager 配置前创建的 Worker 需删除重建
+3. 更新 Worker 的实际环境，并在空闲时重建托管容器；无需为刷新遥测而删除 Worker 资源

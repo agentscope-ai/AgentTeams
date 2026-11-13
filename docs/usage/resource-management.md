@@ -95,8 +95,8 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Worker name, globally unique |
 | `spec.model` | string | Yes | — | LLM model ID, e.g. `claude-sonnet-4-6`, `qwen3.5-plus` |
-| `spec.runtime` | string | No | `openclaw` | The current Worker CRD accepts `openclaw`, `qwenpaw`, `copaw` (legacy), or `hermes`. |
-| `spec.image` | string | No | — | Custom image. When empty, the controller selects `AGENTTEAMS_WORKER_IMAGE`, `AGENTTEAMS_COPAW_WORKER_IMAGE`, `AGENTTEAMS_QWENPAW_WORKER_IMAGE`, or `AGENTTEAMS_HERMES_WORKER_IMAGE` by runtime. The current chart has no `worker.defaultImage.qwenpaw`, so set this field explicitly for a QwenPaw Worker on Kubernetes. |
+| `spec.runtime` | string | No | install/backend default | `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, `openhuman`, `codex`, or legacy `copaw`; Helm defaults to OpenClaw, the local installer to QwenPaw. |
+| `spec.image` | string | No | — | Custom image; when empty, the Controller selects its configured image for the runtime. The current chart provides `worker.defaultImage` entries for all six current Harnesses. Legacy CoPaw requires an explicit old repository and tag. |
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
@@ -110,7 +110,7 @@ spec:
 
 Changing `spec.resources` updates the Worker spec and recreates the managed container/Pod. Avoid resource changes while a Worker is actively processing a task.
 
-The Controller already contains an OpenHuman backend and image configuration, but the shipped Worker CRD enum does not accept `openhuman`. Until a separate business-code change aligns that contract, do not set `spec.runtime: openhuman` in Worker YAML.
+The current Worker CRD accepts OpenHuman and Codex. See [runtime and image configuration](deployment/kubernetes.md#34-default-worker-runtime) for chart defaults and legacy CoPaw handling.
 
 ### identity / soul / agents vs package
 
@@ -438,7 +438,7 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Manager resource name (often `default` for the primary instance) |
 | `spec.model` | string | Yes | — | LLM model ID |
-| `spec.runtime` | string | No | install/backend default | **OpenClaw** (`openclaw`) or **CoPaw/QwenPaw** (`qwenpaw`; `copaw` is a legacy compatibility alias). Hermes is **not** a supported Manager runtime. |
+| `spec.runtime` | string | No | install/backend default | `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, or `openhuman`; `copaw` is a legacy QwenPaw alias. Codex is not accepted by the Manager CRD. |
 | `spec.image` | string | No | — | Custom Manager image; empty uses deployment default |
 | `spec.soul` | string | No | — | Custom SOUL.md content |
 | `spec.agents` | string | No | — | Custom AGENTS.md content |

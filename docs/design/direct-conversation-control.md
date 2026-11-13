@@ -4,8 +4,8 @@ Refs #1620.
 
 ## Scope and behavior
 
-The QwenPaw Matrix channel supports stopping and redirecting an execution in
-a two-member direct conversation. The Dashboard exposes controls only after
+All six Harnesses support stopping and redirecting an execution in a
+two-member direct conversation. The Dashboard exposes controls only after
 the known Agent advertises support. Group conversations and cancellation of
 delegated Worker tasks are outside this change.
 
@@ -15,8 +15,26 @@ delegated Worker tasks are outside this change.
   the supplementary input in the existing conversation. Original and
   interrupted supplementary inputs are carried forward, including when
   interruption happens before the first native context checkpoint.
-- Tool cancellation follows QwenPaw's native runtime. Completed external
+- A confirmed stop marks the corresponding Agent message **已停止** while
+  preserving its partial content. If no response exists, the acknowledgement
+  appears as its own Agent message. A stop request alone never marks a message.
+- Tool cancellation follows each native runtime. Completed external
   operations are not rolled back. Remote work may require its own cancel API.
+
+## Native execution paths and validation
+
+| Harness | Cancellation and continuation | Focused validation |
+| --- | --- | --- |
+| OpenClaw | Public reply `abortSignal`; wait for dispatch/draft cleanup; reuse native conversation | Native exec cancellation for stop and steer; fresh membership rejection; 61 Matrix handler regressions |
+| QwenPaw | Captured TaskTracker producer cancellation; native stream cleanup; original and supplementary inputs retained | 11 direct-control tests with the native TaskTracker and long shell tool |
+| Hermes | Native `hard_interrupt`, including its tool-worker thread signal; wait for processing owner; retain session | Native local shell cancellation for stop and steer; owner, membership and stale-run checks |
+| DeepSeek Harness | Keep receiving controls while DSH runs; dispose native profile and reap the owned process group; resume room session | Packaged DSH CLI, native bash, durable supplementary input and native session resume for stop and steer |
+| OpenHuman | Run-scoped cancellation around the native agent bus; finish typing/draft cleanup; reap native shell process group | Pinned v0.54.0 compile; Matrix SDK lifecycle/continuation integration and real native tool cancellation |
+| Codex | Native App Server `turn/interrupt`; await terminal receipt and process cleanup; continue the same native thread | Packaged App Server, real native exec, stop and steer, original/supplementary input and thread persistence |
+
+The local model endpoints in the DeepSeek and Codex tests are deterministic
+fixtures. Native tools, subprocess cancellation and session persistence are
+real; these tests do not measure a live model's reasoning quality.
 
 ## Matrix contract
 

@@ -542,7 +542,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._direct_runs = tracker._agentteams_direct_runs
 
     async def _publish_direct_execution(
-        self, room_id: str, run_id: str, status: str,
+        self, room_id: str, run_id: str, status: str, message_id: str | None = None,
     ) -> None:
         text = {
             "running": "正在处理，你可以继续补充信息或停止执行。",
@@ -558,6 +558,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 DIRECT_EXECUTION_KEY: {
                     "run_id": run_id, "status": status,
                     "capabilities": ["stop", "steer"],
+                    **({"message_id": message_id} if message_id else {}),
                 },
             })
         except Exception:
@@ -578,12 +579,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._direct_runs[room_id] = run
         stream = super()._stream_with_tracker(payload)
         status = "completed"
+        message_id = None
         try:
             await self._publish_direct_execution(room_id, run_id, "running")
             async for item in stream:
                 yield item
         except asyncio.CancelledError:
             status = "stopped"
+            message_id = self._active_thread_roots.get(room_id)
             raise
         except Exception:
             status = "failed"
@@ -595,12 +598,15 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 await stream.aclose()
             finally:
                 if status == "stopped":
-                    await self._on_consume_error(
-                        self._payload_to_request(payload), room_id, "Task has been cancelled",
+                    # Preserve partial response text; the confirmed execution
+                    # event supplies the stopped badge instead of replacing it.
+                    self._active_thread_roots.pop(room_id, None)
+                    await self._send_typing(
+                        room_id, False, lifecycle_token=self._typing_lifecycle_from_meta(meta),
                     )
                 if self._direct_runs.get(room_id) is run:
                     self._direct_runs.pop(room_id, None)
-                await self._publish_direct_execution(room_id, run_id, status)
+                await self._publish_direct_execution(room_id, run_id, status, message_id)
 
     async def _handle_direct_control(self, payload: dict, event: Any) -> bool:
         """Return True when consumed; False keeps the supplementary text queued."""

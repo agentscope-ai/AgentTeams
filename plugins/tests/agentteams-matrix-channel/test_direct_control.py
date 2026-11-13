@@ -33,6 +33,7 @@ def channel():
     ch._send_plain_text = AsyncMock()
     ch._access_control_gate = AsyncMock(return_value=False)
     ch._on_consume_error = AsyncMock()
+    ch._send_typing = AsyncMock()
     return ch
 
 
@@ -64,6 +65,7 @@ def test_supplement_waits_for_tool_cleanup_and_keeps_original_input():
 
         original = payload("查全国数据")
         original["meta"]["event_id"] = "$run"
+        ch._active_thread_roots[ROOM] = "$partial-response"
         with patch.object(module.BaseChannel, "_stream_with_tracker", stream):
             async def consume():
                 async for _ in ch._stream_with_tracker(original):
@@ -78,6 +80,8 @@ def test_supplement_waits_for_tool_cleanup_and_keeps_original_input():
             assert [part.text for part in supplementary["meta"]["direct_inputs"]] == ["查全国数据", "补充：只看杭州"]
         states = [call.args[2][EXECUTION]["status"] for call in ch._room_send_with_retry.await_args_list]
         assert states == ["running", "stopping", "stopped"]
+        assert ch._room_send_with_retry.await_args_list[-1].args[2][EXECUTION]["message_id"] == "$partial-response"
+        ch._on_consume_error.assert_not_awaited()
 
     asyncio.run(scenario())
 

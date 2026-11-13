@@ -1,0 +1,42 @@
+name: OpenHuman direct conversation controls
+
+on:
+  pull_request:
+    paths:
+      - 'openhuman/patches/**'
+      - 'openhuman/Dockerfile'
+      - '.github/workflows/test-direct-control-openhuman.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-controls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GGML_NATIVE: 'OFF'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: tinyhumansai/openhuman
+          ref: v0.54.0
+          path: native
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93.0'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+      - name: Apply the packaged patches
+        run: |
+          git -C native apply "$GITHUB_WORKSPACE/openhuman/patches/manager-matrix.patch"
+          git -C native apply "$GITHUB_WORKSPACE/openhuman/patches/direct-control.patch"
+      - name: Verify native Matrix controls and tool cleanup
+        working-directory: native
+        run: cargo test --locked --no-default-features --features channel-matrix --test agentteams_direct_control

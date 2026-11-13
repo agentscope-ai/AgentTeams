@@ -43,7 +43,7 @@ jobs:
       - run: go test -race -count=1 ./...
 
   integration:
-    name: real MySQL 8 (integration tag)
+    name: MySQL 8 dialect conformance (test harness)
     needs: unit
     runs-on: ubuntu-latest
     services:
@@ -72,7 +72,7 @@ jobs:
         run: go test -tags integration -count=1 ./test/integration/...
 
   e2e:
-    name: real binary against fake controller
+    name: MySQL 8 dialect e2e (test harness)
     needs: unit
     runs-on: ubuntu-latest
     services:
@@ -98,6 +98,44 @@ jobs:
         env:
           AGENTTEAMS_TEST_RES_DSN: 'root:at_svc_root@tcp(127.0.0.1:3306)/res?parseTime=true&loc=UTC'
           AGENTTEAMS_TEST_OPS_DSN: 'root:at_svc_root@tcp(127.0.0.1:3306)/ops?parseTime=true&loc=UTC'
+        run: go test -tags e2e -count=1 ./test/e2e/...
+
+  seekdb:
+    name: seekdb product backend (integration + e2e)
+    needs: unit
+    runs-on: ubuntu-latest
+    services:
+      seekdb:
+        image: oceanbase/seekdb:latest
+        env:
+          SEEKDB_DATABASE: res
+        ports:
+          - 2881:2881
+        options: >-
+          --health-cmd="mysqladmin --protocol=tcp -h127.0.0.1 -P2881 -uroot ping"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agentteams-service/go.mod
+          cache-dependency-path: agentteams-service/go.sum
+      - name: install mysql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mariadb-client
+      - name: create schemas
+        run: |
+          mysql --protocol=TCP -h127.0.0.1 -P2881 -uroot -e 'CREATE DATABASE IF NOT EXISTS res; CREATE DATABASE IF NOT EXISTS ops; CREATE DATABASE IF NOT EXISTS work; CREATE DATABASE IF NOT EXISTS mem;'
+      - name: integration tests (seekdb)
+        env:
+          AGENTTEAMS_TEST_RES_DSN: 'root:@tcp(127.0.0.1:2881)/res?parseTime=true&loc=UTC'
+          AGENTTEAMS_TEST_OPS_DSN: 'root:@tcp(127.0.0.1:2881)/ops?parseTime=true&loc=UTC'
+        run: go test -tags integration -count=1 ./test/integration/...
+      - name: e2e (seekdb)
+        env:
+          AGENTTEAMS_TEST_RES_DSN: 'root:@tcp(127.0.0.1:2881)/res?parseTime=true&loc=UTC'
+          AGENTTEAMS_TEST_OPS_DSN: 'root:@tcp(127.0.0.1:2881)/ops?parseTime=true&loc=UTC'
         run: go test -tags e2e -count=1 ./test/e2e/...
 
   image:

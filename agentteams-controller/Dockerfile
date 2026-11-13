@@ -13,6 +13,10 @@ FROM ${HIGRESS_REGISTRY}/higress/golang:1.26-alpine AS builder
 
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=${GOPROXY}
+# The pinned base image may still carry Go 1.26.10; go.mod requires 1.26.11
+# (GO-2026-6859). Let the toolchain fetch the exact patch release from GOPROXY
+# instead of failing with "go.mod requires go >= 1.26.11 (running 1.26.10)".
+ENV GOTOOLCHAIN=auto
 RUN apk add --no-cache gcc musl-dev
 
 WORKDIR /build

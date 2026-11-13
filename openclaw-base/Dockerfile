@@ -130,16 +130,17 @@ RUN set -eux; \
 RUN npm install -g pnpm@12.15.0
 
 # Clone, build, and optimize OpenClaw
-# 1. Fetch only the pinned upstream tag (no AgentTeams native Matrix patches;
-#    the AgentTeams Matrix bundle is a separate plugin/config projection)
+# 1. Fetch the pinned upstream tag and add Dashboard approval receipts.
 # 2. Install dependencies and build
 # 3. Remove unnecessary files (tests, docs) but keep .git for the online-upgrade
 #    work (P7 rebase path)
+COPY openclaw-base/patches/dashboard-approvals.patch /tmp/dashboard-approvals.patch
 RUN git init /opt/openclaw && \
     cd /opt/openclaw && \
     git remote add origin ${OPENCLAW_REPO_URL} && \
     git fetch --depth 1 origin "${OPENCLAW_TAG}" && \
     git checkout --detach FETCH_HEAD && \
+    git apply /tmp/dashboard-approvals.patch && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install --frozen-lockfile && \
     pnpm build && \

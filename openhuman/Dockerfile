@@ -96,6 +96,8 @@ RUN git clone --depth 1 --branch "${OPENHUMAN_GIT_REF}" "${OPENHUMAN_REPO_URL}" 
 
 COPY openhuman/patches/manager-matrix.patch /tmp/manager-matrix.patch
 RUN git -C /build/openhuman-src apply /tmp/manager-matrix.patch
+COPY openhuman/patches/dashboard-approvals.patch /tmp/dashboard-approvals.patch
+RUN git -C /build/openhuman-src apply /tmp/dashboard-approvals.patch
 COPY openhuman/patches/direct-control.patch /tmp/direct-control.patch
 RUN git -C /build/openhuman-src apply /tmp/direct-control.patch
 

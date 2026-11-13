@@ -117,7 +117,7 @@ index 2101542..11d39cc 100644
  mod commands;
  pub(crate) mod context;
 diff --git a/src/openhuman/channels/providers/matrix.rs b/src/openhuman/channels/providers/matrix.rs
-index eb89c1c..327f774 100644
+index 6f48f45..23d93c7 100644
 --- a/src/openhuman/channels/providers/matrix.rs
 +++ b/src/openhuman/channels/providers/matrix.rs
 @@ -3,6 +3,7 @@ use async_trait::async_trait;
@@ -144,7 +144,7 @@ index eb89c1c..327f774 100644
      fn agentteams_manager() -> bool {
          std::env::var("AGENTTEAMS_AGENT_ROLE").as_deref() == Ok("manager")
      }
-@@ -624,13 +634,15 @@ impl Channel for MatrixChannel {
+@@ -718,13 +728,15 @@ impl Channel for MatrixChannel {
          let my_user_id_for_handler = my_user_id.clone();
          let allowed_users_for_handler = self.allowed_users.clone();
          let dedupe_for_handler = Arc::clone(&recent_event_cache);
@@ -161,7 +161,7 @@ index eb89c1c..327f774 100644
  
              async move {
                  let manager = MatrixChannel::agentteams_manager();
-@@ -662,7 +674,7 @@ impl Channel for MatrixChannel {
+@@ -756,7 +768,7 @@ impl Channel for MatrixChannel {
                      return;
                  }
  
@@ -170,7 +170,7 @@ index eb89c1c..327f774 100644
                      MessageType::Text(content) => content.body.clone(),
                      MessageType::Notice(content) => content.body.clone(),
                      _ => return,
-@@ -681,6 +693,36 @@ impl Channel for MatrixChannel {
+@@ -783,6 +795,36 @@ impl Channel for MatrixChannel {
                      }
                  }
  
@@ -208,7 +208,7 @@ index eb89c1c..327f774 100644
                      id: event_id,
                      sender: sender.clone(),
 diff --git a/src/openhuman/channels/runtime/dispatch.rs b/src/openhuman/channels/runtime/dispatch.rs
-index fc0ea26..b6f9147 100644
+index f98815e..596a931 100644
 --- a/src/openhuman/channels/runtime/dispatch.rs
 +++ b/src/openhuman/channels/runtime/dispatch.rs
 @@ -1030,7 +1030,7 @@ pub(crate) async fn process_channel_message(
@@ -217,13 +217,13 @@ index fc0ea26..b6f9147 100644
      );
 -    let llm_result = tokio::time::timeout(Duration::from_secs(ctx.message_timeout_secs), async {
 +    let llm_future = tokio::time::timeout(Duration::from_secs(ctx.message_timeout_secs), async {
-         request_native_global::<AgentTurnRequest, AgentTurnResponse>(
-             AGENT_RUN_TURN_METHOD,
-             turn_request,
-@@ -1052,8 +1052,19 @@ pub(crate) async fn process_channel_message(
-             // startup wiring bugs are immediately obvious in logs.
-             other => anyhow::anyhow!("[agent.run_turn dispatch] {other}"),
-         })
+         let turn = async {
+             request_native_global::<AgentTurnRequest, AgentTurnResponse>(
+                 AGENT_RUN_TURN_METHOD,
+@@ -1072,8 +1072,19 @@ pub(crate) async fn process_channel_message(
+         } else {
+             turn.await
+         }
 -    })
 -    .await;
 +    });
@@ -242,7 +242,7 @@ index fc0ea26..b6f9147 100644
  
      // Wait for draft updater to finish
      if let Some(handle) = draft_updater {
-@@ -1067,6 +1078,15 @@ pub(crate) async fn process_channel_message(
+@@ -1087,6 +1098,15 @@ pub(crate) async fn process_channel_message(
          log_worker_join_result(handle.await);
      }
  
@@ -258,7 +258,7 @@ index fc0ea26..b6f9147 100644
      let (success, response_text) = match llm_result {
          Ok(Ok(response)) => {
              // Save user + assistant turn to per-sender history
-@@ -1310,7 +1330,15 @@ pub(crate) async fn run_message_dispatch_loop(
+@@ -1330,7 +1350,15 @@ pub(crate) async fn run_message_dispatch_loop(
          let worker_ctx = Arc::clone(&ctx);
          workers.spawn(async move {
              let _permit = permit;

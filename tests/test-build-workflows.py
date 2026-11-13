@@ -57,7 +57,7 @@ class BuildWorkflowTests(unittest.TestCase):
         self.assertEqual(values['version'], 'v1.2.3')
         selected = set(json.loads(values['targets']))
         self.assertEqual(selected, {
-            'openclaw-base', 'agentteams-controller', 'embedded',
+            'openclaw-base', 'agentteams-controller', 'agentteams-service', 'embedded',
             'worker',
             'hermes-worker', 'qwenpaw-worker', 'openhuman-worker',
         })
@@ -231,7 +231,7 @@ class BuildWorkflowTests(unittest.TestCase):
                             'qwenpaw-worker': 'agentteams-harness-qwenpaw',
                             'hermes-worker': 'agentteams-harness-hermes',
                             'openhuman-worker': 'agentteams-harness-openhuman',
-                        }.get(target, target if target in ['openclaw-base', 'agentteams-controller'] else 'agentteams-' + target)
+                        }.get(target, target if target in ['openclaw-base', 'agentteams-controller', 'agentteams-service'] else 'agentteams-' + target)
                         self.assertEqual(log.read_text(), f'example.test/agentteams/{image}:v1.2.3')
 
     def test_release_gate_rejects_missing_or_single_arch_images(self):
@@ -253,7 +253,7 @@ class BuildWorkflowTests(unittest.TestCase):
                                                  'MANIFEST': both, 'LAST_MANIFEST': manifest,
                                                  'LAST_STATUS': status, 'IMAGE_LOG': str(log)})
                     self.assertEqual(result.returncode == 0, success, result.stderr)
-                    self.assertEqual(len(set(log.read_text().splitlines())), 9 if success else 7)
+                    self.assertEqual(len(set(log.read_text().splitlines())), 10 if success else 8)
 
 
 if __name__ == '__main__':

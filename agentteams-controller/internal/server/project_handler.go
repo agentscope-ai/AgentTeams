@@ -349,6 +349,8 @@ type interruptConfig struct {
 // project's owning scope and never fall back across team/global boundaries.
 type taskDetail struct {
 	TaskID       string `json:"task_id"`
+	RoomID       string `json:"room_id,omitempty"`
+	SourceRoomID string `json:"source_room_id,omitempty"`
 	ProjectID    string `json:"project_id,omitempty"`
 	Status       string `json:"status,omitempty"`
 	SpecPath     string `json:"spec_path,omitempty"`
@@ -1288,6 +1290,8 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) ([]task
 		}
 		detail := taskDetail{
 			TaskID:       str(taskIDFromRaw(raw, res.taskID)),
+			RoomID:       str(raw["room_id"]),
+			SourceRoomID: str(raw["source_room_id"]),
 			Status:       str(raw["status"]),
 			SpecPath:     str(raw["spec_path"]),
 			AssignedTo:   str(raw["assigned_to"]),

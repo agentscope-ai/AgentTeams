@@ -3,12 +3,10 @@
 The AgentTeams data-plane service kernel plus the R1 `resources` slice
 (workers create / list / get, transparent PUT/DELETE proxy, status
 writeback). Independent Go module, binary and release channel inside the
-AgentTeams repository (58 / D58).
+AgentTeams repository.
 
-Contract source: [58 · R1-1 create/list workers](<../../方案与设计/AgentTeams/1.2.6-1.2.8/01-架构与决策/58-R1-1-create-list-workers契约冻结-20261112.md>)
-(only source; §11 lists the 2026-11-13 implementation corrections).
-Placement: [54](<../../方案与设计/AgentTeams/1.2.6-1.2.8/01-架构与决策/54-R1-0-service-placement-and-contract-20261111.md>).
-Module install/update: [55](<../../方案与设计/AgentTeams/1.2.6-1.2.8/01-架构与决策/55-R1-1-module-install-update-20261111.md>).
+The API surface and boot contract are documented in this directory; the
+runbook is [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Layout
 

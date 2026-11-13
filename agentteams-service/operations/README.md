@@ -1,8 +1,7 @@
 # operations/ — R1 operation manifest
 
-`workers.json` is the machine-readable operation manifest frozen in
-[58 §1/§7](<../../../../方案与设计/AgentTeams/1.2.6-1.2.8/01-架构与决策/58-R1-1-create-list-workers契约冻结-20261112.md>).
-It is the single source for:
+`workers.json` is the machine-readable operation manifest for the R1
+worker API. It is the single source for:
 
 - the `agt` CLI flag bindings (R2 wires the generator; R1 freezes the file),
 - the Skill schema (`worker.create` / `worker.list` / `worker.get`),

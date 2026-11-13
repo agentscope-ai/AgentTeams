@@ -1,7 +1,7 @@
 # agentteams-service R1 operations runbook
 
 Status: R1 (workers only). This is the operator view of the service; the API
-contract is 58-R1-1 and the evidence log is AgentTeamGuide/state/r1-2/REPORT.md.
+contract and verification evidence are in the service README and tests.
 
 ## Configuration
 

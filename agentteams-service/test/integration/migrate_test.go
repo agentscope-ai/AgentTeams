@@ -32,6 +32,13 @@ func TestMigrateReappliesMissingRecord(t *testing.T) {
 		t.Fatalf("delete ops record: %v", err)
 	}
 	// A newer binary may have recorded a version this build does not embed.
+	// Remove a previous run's row first: the test must be rerunnable on a
+	// long-lived integration database, not only on a fresh CI schema.
+	cleanupFuture := func() {
+		_, _ = h.res.ExecContext(ctx, "DELETE FROM schema_migrations WHERE version = '9999'")
+	}
+	cleanupFuture()
+	t.Cleanup(cleanupFuture)
 	if _, err := h.res.ExecContext(ctx, "INSERT INTO schema_migrations (version, filename, applied_at) VALUES ('9999', 'future.sql', NOW(6))"); err != nil {
 		t.Fatalf("insert future version: %v", err)
 	}

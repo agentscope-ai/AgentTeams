@@ -4,6 +4,9 @@
 class AgentTeamsMatrixPlugin:
     def register(self, api):
         from .agentteams_matrix.channel import AgentTeamsMatrixChannel
+        from .agentteams_matrix.session_receipts import session_receipt_middleware
+
+        api.register_middleware(session_receipt_middleware, priority=20)
 
         api.register_channel(
             AgentTeamsMatrixChannel,

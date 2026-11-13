@@ -53,6 +53,13 @@ type Config struct {
 	AuthAudience               string // SA token audience for TokenReview
 	AuthTokenExpirationSeconds int64
 
+	// Internal API (R1-2e): shared bearer for service→controller calls.
+	// Empty disables the /internal/v1 surface entirely.
+	InternalToken string
+	// ServiceURL is the agentteams-service root used for observation
+	// writeback. Empty disables the status pusher.
+	ServiceURL string
+
 	// Provider selection (driven by Helm values)
 	GatewayProvider string // "higress"     | "ai-gateway"
 	StorageProvider string // "minio" | "oss" | "s3"
@@ -297,6 +304,9 @@ func LoadConfig() *Config {
 			envOrDefault("AGENTTEAMS_AUTH_AUDIENCE", "agentteams-controller"),
 		),
 		AuthTokenExpirationSeconds: int64(envOrDefaultInt("AGENTTEAMS_AUTH_TOKEN_EXPIRATION_SECONDS", int(backend.DefaultAuthTokenExpirationSeconds))),
+
+		InternalToken: os.Getenv("AGENTTEAMS_INTERNAL_TOKEN"),
+		ServiceURL:    os.Getenv("AGENTTEAMS_SERVICE_URL"),
 
 		GatewayProvider: envOrDefault("AGENTTEAMS_GATEWAY_PROVIDER", "higress"),
 		StorageProvider: envOrDefault("AGENTTEAMS_STORAGE_PROVIDER", "minio"),

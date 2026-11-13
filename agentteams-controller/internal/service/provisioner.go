@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"strings"
@@ -224,8 +225,32 @@ func (p *Provisioner) MatrixAppServiceEnabled() bool {
 // created manually or by unrelated tooling. Changing this format in place
 // would orphan every existing room — callers must instead introduce a new
 // kind and handle migration explicitly.
+// roomAliasLocalpart builds a Matrix-legal alias localpart. Team display
+// names may contain spaces/uppercase; Matrix rejects those in aliases (the
+// room display name keeps the original). Invalid names are lowercased,
+// mapped to [a-z0-9._=-], and suffixed with a short hash to avoid collisions.
 func roomAliasLocalpart(kind, name string) string {
-	return "agentteams-" + kind + "-" + name
+	local := "agentteams-" + kind + "-" + name
+	valid := true
+	for _, r := range local {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && !strings.ContainsRune("._=-", r) {
+			valid = false
+			break
+		}
+	}
+	if valid {
+		return local
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || strings.ContainsRune("._=-", r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	sum := sha256.Sum256([]byte(name))
+	return fmt.Sprintf("agentteams-%s-%s-%x", kind, strings.Trim(b.String(), "-"), sum[:4])
 }
 
 // roomAliasFull builds the full "#localpart:domain" form used by

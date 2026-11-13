@@ -134,7 +134,7 @@ RUN npm install -g pnpm@12.15.0
 # 2. Install dependencies and build
 # 3. Remove unnecessary files (tests, docs) but keep .git for the online-upgrade
 #    work (P7 rebase path)
-COPY openclaw-base/patches/dashboard-approvals.patch /tmp/dashboard-approvals.patch
+COPY patches/dashboard-approvals.patch /tmp/dashboard-approvals.patch
 RUN git init /opt/openclaw && \
     cd /opt/openclaw && \
     git remote add origin ${OPENCLAW_REPO_URL} && \

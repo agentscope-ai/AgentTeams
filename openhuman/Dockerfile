@@ -96,6 +96,9 @@ RUN git clone --depth 1 --branch "${OPENHUMAN_GIT_REF}" "${OPENHUMAN_REPO_URL}" 
 
 COPY openhuman/patches/manager-matrix.patch /tmp/manager-matrix.patch
 RUN git -C /build/openhuman-src apply /tmp/manager-matrix.patch
+COPY openhuman/patches/session-receipts.patch /tmp/session-receipts.patch
+COPY openhuman/patches/session_receipts.rs /build/openhuman-src/src/openhuman/channels/session_receipts.rs
+RUN git -C /build/openhuman-src apply /tmp/session-receipts.patch
 
 WORKDIR /build/openhuman-src
 
@@ -125,6 +128,7 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    python3 \
     libssl3 \
     libasound2 \
     libxdo3 \

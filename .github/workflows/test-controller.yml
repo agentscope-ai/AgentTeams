@@ -5,6 +5,12 @@ on:
     paths:
       - 'worker'
       - 'worker/**'
+      - 'shared/lib/agentteams_receipts.py'
+      - 'tests/test_harness_session_receipts.py'
+      - 'tests/openhuman-session-receipts/**'
+      - 'openhuman/patches/session*'
+      - 'hermes'
+      - 'deepseek-harness'
       - '.gitmodules'
       - 'agentteams-controller/**'
       - 'qwenpaw'
@@ -25,6 +31,12 @@ on:
     paths:
       - 'worker'
       - 'worker/**'
+      - 'shared/lib/agentteams_receipts.py'
+      - 'tests/test_harness_session_receipts.py'
+      - 'tests/openhuman-session-receipts/**'
+      - 'openhuman/patches/session*'
+      - 'hermes'
+      - 'deepseek-harness'
       - '.gitmodules'
       - 'agentteams-controller/**'
       - 'qwenpaw'
@@ -43,6 +55,22 @@ on:
   workflow_dispatch:
 
 jobs:
+  harness-session-receipts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: python3 -m unittest discover -s tests -p test_harness_session_receipts.py -v
+      - run: cargo test --manifest-path tests/openhuman-session-receipts/Cargo.toml
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10

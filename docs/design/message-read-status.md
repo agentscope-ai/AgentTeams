@@ -35,6 +35,20 @@ The AgentScope `on_reply` middleware observes `REPLY_START`, which follows input
 
 Delivery uses a deterministic Matrix transaction ID derived from room, target event, and status. Failed sends retry in the background. Startup recovers pending reads from saved session files; the delivery loop never rewrites those files. Successful delivery removes the live pending entry so the runtime's normal session save can persist its removal. Crash recovery can resend the same transaction safely.
 
-Other runtimes and older clients remain compatible and have no Agent read status until they implement this contract. Historical messages without an audience have no new member-status entry. Human members use resolved Matrix read-event positions, separated by thread; a receipt's send time is not evidence of reading a later message.
+## Other Harness integrations
+
+OpenClaw, Hermes, DeepSeek, Codex, and OpenHuman start the shared receipt worker from their Harness entrypoint. It advertises `received` using the authenticated Matrix stream and sends `read` only after observing native committed input evidence. A durable SQLite outbox retries failed deliveries using deterministic Matrix transaction IDs. The worker never reads message bodies to infer consumption and never rewrites native session files.
+
+| Harness | Evidence that input entered its session |
+| --- | --- |
+| OpenClaw | Committed user transcript entries in the native SQLite store (including compressed rows), or legacy JSONL, with native `__openclaw.transport.channel` and `messageId` metadata |
+| Hermes | Committed Matrix user rows and `platform_message_id` in the native session database; retained history IDs are explicitly linked to the containing input |
+| DeepSeek | Native `user/message` event followed by a successful `sessions.flush`, before recording its exact source checkpoint |
+| Codex | Exact turn and `userMessage` verified through `thread/read`, followed by a successful native session snapshot and journal checkpoint |
+| OpenHuman | The native user input is appended, then atomically saved with its exact Matrix room/event before model execution |
+
+Queued inputs, incomplete file writes, failed database transactions, failed snapshots, and truncated history do not establish read state. A later inference error does not revoke a successful input checkpoint. New outbound chat messages capture their audience before their native Matrix send; edits do not recapture membership.
+
+Older clients remain compatible and have no Agent read status until they implement this contract. Historical messages without an audience have no new member-status entry. Human members use resolved Matrix read-event positions, separated by thread; a receipt's send time is not evidence of reading a later message.
 
 Related: https://github.com/agentscope-ai/AgentTeams/issues/1619

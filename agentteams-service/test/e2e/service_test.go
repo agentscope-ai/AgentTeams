@@ -113,6 +113,12 @@ func TestServiceBinaryEndToEnd(t *testing.T) {
 	defer db.Close()
 	for _, stmt := range []string{"DELETE FROM workers", "DELETE FROM ops.outbox", "DELETE FROM ops.audit_events", "DELETE FROM ops.idempotency_keys"} {
 		if _, err := db.Exec(stmt); err != nil {
+			// A fresh CI MySQL service has an empty res schema; the service
+			// binary creates these tables during its migration. Only a real
+			// cleanup error should fail the test.
+			if strings.Contains(err.Error(), "doesn't exist") {
+				continue
+			}
 			t.Fatalf("clean %q: %v", stmt, err)
 		}
 	}

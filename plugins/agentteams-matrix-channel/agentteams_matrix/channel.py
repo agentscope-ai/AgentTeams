@@ -4582,6 +4582,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 explicit_user_ids=explicit_ids,
             )
         self._apply_thread_relation(content, meta_dict)
+        if isinstance(meta_dict.get("org.agentteams.approval"), dict):
+            content["org.agentteams.approval"] = meta_dict["org.agentteams.approval"]
         return content
 
     def _write_long_message_file(self, text: str) -> Path:
@@ -4870,6 +4872,54 @@ class AgentTeamsMatrixChannel(BaseChannel):
         renderer = self._renderer.__class__(style)
         parts = renderer.message_to_parts(event)
         return [p for p in parts if getattr(p, "type", None) != ContentType.TEXT]
+
+    async def send_approval_notification(
+        self, *, session_id: str, user_id: str, request_id: str,
+        tool_name: str, severity: str, result_summary: str,
+        channel_meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Publish your exact approval request and its runtime resolution."""
+        from qwenpaw.app.approvals import get_approval_service
+
+        pending = await get_approval_service().get_request(request_id)
+        if pending is None:
+            return
+        to_handle = self.to_handle_from_target(user_id=user_id, session_id=session_id)
+        approval = {
+            "version": 1, "runtime": "qwenpaw", "request_id": request_id,
+            "status": "pending", "tool_name": tool_name, "severity": severity,
+            "risk_details": pending.result_summary,
+            "parameters": json.dumps(
+                pending.extra.get("tool_call", {}).get("input", {}), ensure_ascii=False, indent=2,
+            ),
+            "expires_at": int((pending.created_at + pending.timeout_seconds) * 1000),
+        }
+        meta = {**(channel_meta or {}), "org.agentteams.approval": approval}
+        # Send directly: approvals must not be buffered as a turn's final reply.
+        await self.send(to_handle, f"{result_summary}\n\nRequest ID: `{request_id}`", meta)
+
+        async def publish_resolution():
+            try:
+                decision = pending.future.result()
+                status = {"approved": "approved", "denied": "rejected", "timeout": "expired"}.get(
+                    getattr(decision, "value", decision), "cancelled",
+                )
+            except asyncio.CancelledError:
+                status = "cancelled"
+            await self.send(to_handle, f"Approval {request_id}: {status}.", {
+                **(channel_meta or {}),
+                "org.agentteams.approval": {
+                    "version": 1, "runtime": "qwenpaw", "request_id": request_id, "status": status,
+                },
+            })
+
+        def resolved(_future):
+            task = asyncio.create_task(publish_resolution())
+            task.add_done_callback(lambda done: logger.warning(
+                "Matrix approval receipt failed: %s", done.exception(),
+            ) if not done.cancelled() and done.exception() else None)
+
+        pending.future.add_done_callback(resolved)
 
     async def on_event_content(
         self,

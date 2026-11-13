@@ -320,10 +320,10 @@ index d1cf031..dfe59ff 100644
              Ok(Ok(output)) => {
 diff --git a/tests/agentteams_direct_control.rs b/tests/agentteams_direct_control.rs
 new file mode 100644
-index 0000000..76c4b7c
+index 0000000..f1d3ee2
 --- /dev/null
 +++ b/tests/agentteams_direct_control.rs
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,115 @@
 +#![cfg(unix)]
 +use openhuman_core::openhuman::{
 +    agent::host_runtime::NativeRuntime,
@@ -390,7 +390,7 @@ index 0000000..76c4b7c
 +}
 +
 +#[tokio::test]
-+async fn shell_cancellation_reaps_shell_and_children() {
++async fn shell_cancellation_stops_shell_and_children() {
 +    let directory = tempfile::tempdir().unwrap();
 +    let pidfile = directory.path().join("pid");
 +    let marker = directory.path().join("must-not-run");
@@ -402,7 +402,7 @@ index 0000000..76c4b7c
 +    });
 +    let tool = ShellTool::new(security, Arc::new(NativeRuntime::new()));
 +    let script = directory.path().join("at-dm-long-tool");
-+    std::fs::write(&script, format!("#!/usr/bin/env python3\nimport os,pathlib,subprocess\npathlib.Path({:?}).write_text(str(os.getpid()))\nsubprocess.run(['sleep','30'])\npathlib.Path({:?}).touch()\n", pidfile.to_str().unwrap(), marker.to_str().unwrap())).unwrap();
++    std::fs::write(&script, format!("#!/usr/bin/env python3\nimport os,pathlib,subprocess\nchild=subprocess.Popen(['sleep','30'])\npathlib.Path({:?}).write_text(str(os.getpid())+','+str(child.pid))\nchild.wait()\npathlib.Path({:?}).touch()\n", pidfile.to_str().unwrap(), marker.to_str().unwrap())).unwrap();
 +    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
 +    let command = "./at-dm-long-tool";
 +    let task = tokio::spawn(async move { tool.execute(json!({"command": command, "approved": true})).await });
@@ -414,9 +414,28 @@ index 0000000..76c4b7c
 +        panic!("native shell rejected fixture: {:?}", task.await.unwrap());
 +    }
 +    assert!(pidfile.exists(), "native shell never started");
-+    let pid = nix::unistd::Pid::from_raw(std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap());
++    let pids: Vec<i32> = std::fs::read_to_string(&pidfile).unwrap().trim().split(',')
++        .map(|pid| pid.parse().unwrap()).collect();
 +    task.abort();
 +    let _ = task.await;
-+    assert_eq!(nix::sys::signal::kill(pid, None), Err(nix::errno::Errno::ESRCH));
++    for pid in pids {
++        let stopped = || {
++            if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) == Err(nix::errno::Errno::ESRCH) {
++                return true;
++            }
++            // Linux can retain an exited orphan as a zombie until init reaps
++            // it. kill(pid, 0) alone does not distinguish it from live work.
++            #[cfg(target_os = "linux")]
++            if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
++                return stat.rsplit_once(')').is_some_and(|(_, fields)| fields.trim_start().starts_with('Z'));
++            }
++            false
++        };
++        for _ in 0..100 {
++            if stopped() { break; }
++            tokio::time::sleep(Duration::from_millis(10)).await;
++        }
++        assert!(stopped(), "tool process {pid} remained alive after cancellation");
++    }
 +    assert!(!marker.exists());
 +}

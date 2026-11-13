@@ -1586,16 +1586,18 @@ func TestGetProjectWorkflow_IncludeTasksDetail(t *testing.T) {
 		},
 	})
 	putProject(store, "teams/alpha-team/shared/tasks/t1/meta.json", map[string]any{
-		"task_id":       "t1",
-		"project_id":    "p1",
-		"status":        "completed",
-		"submission_id": "submission-1",
-		"spec_path":     "shared/tasks/t1/spec.md",
-		"assigned_to":   "@w1",
-		"summary":       "Alpha report done",
-		"result_status": "SUCCESS",
-		"deliverables":  []any{map[string]any{"type": "file", "path": "shared/tasks/t1/output.pdf"}},
-		"result_path":   "shared/tasks/t1/result.md",
+		"task_id":        "t1",
+		"project_id":     "p1",
+		"status":         "completed",
+		"submission_id":  "submission-1",
+		"spec_path":      "shared/tasks/t1/spec.md",
+		"assigned_to":    "@w1",
+		"summary":        "Alpha report done",
+		"room_id":        "!execution:matrix",
+		"source_room_id": "!assistant:matrix",
+		"result_status":  "SUCCESS",
+		"deliverables":   []any{map[string]any{"type": "file", "path": "shared/tasks/t1/output.pdf"}},
+		"result_path":    "shared/tasks/t1/result.md",
 	})
 	putProject(store, "teams/alpha-team/shared/tasks/t2/meta.json", map[string]any{
 		"task_id":     "t2",
@@ -1630,6 +1632,9 @@ func TestGetProjectWorkflow_IncludeTasksDetail(t *testing.T) {
 		t.Fatalf("tasks_detail order wrong: %+v", wf.TasksDetail)
 	}
 	d1 := byID["t1"]
+	if d1.RoomID != "!execution:matrix" || d1.SourceRoomID != "!assistant:matrix" {
+		t.Fatalf("task conversation links missing: %+v", d1)
+	}
 	if d1.Summary != "Alpha report done" || d1.ResultStatus != "SUCCESS" || d1.ResultPath != "shared/tasks/t1/result.md" {
 		t.Fatalf("t1 detail wrong: %+v", d1)
 	}

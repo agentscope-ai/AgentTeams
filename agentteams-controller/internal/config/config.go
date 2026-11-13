@@ -60,6 +60,14 @@ type Config struct {
 	// writeback. Empty disables the status pusher.
 	ServiceURL string
 
+	// TaskForge proxy (P0 controller-internal foundation): the
+	// /internal/v1/taskforge/* pass-through forwards to TaskForgeURL with
+	// Bearer TaskForgeToken. TaskForgeEnabled is derived at load time: true
+	// iff TaskForgeURL is non-empty. No public route exists yet.
+	TaskForgeURL     string
+	TaskForgeToken   string
+	TaskForgeEnabled bool
+
 	// Provider selection (driven by Helm values)
 	GatewayProvider string // "higress"     | "ai-gateway"
 	StorageProvider string // "minio" | "oss" | "s3"
@@ -284,6 +292,10 @@ func LoadConfig() *Config {
 		containerPrefix = resourcePrefix + "worker-"
 	}
 
+	// TaskForge proxy (P0): AGENTTEAMS_TASKFORGE_URL selects the upstream;
+	// the trailing slash is trimmed so suffix concatenation stays clean.
+	taskForgeURL := strings.TrimRight(os.Getenv("AGENTTEAMS_TASKFORGE_URL"), "/")
+
 	cfg := &Config{
 		KubeMode:        kubeMode,
 		DataDir:         dataDir,
@@ -307,6 +319,10 @@ func LoadConfig() *Config {
 
 		InternalToken: os.Getenv("AGENTTEAMS_INTERNAL_TOKEN"),
 		ServiceURL:    os.Getenv("AGENTTEAMS_SERVICE_URL"),
+
+		TaskForgeURL:     taskForgeURL,
+		TaskForgeToken:   os.Getenv("AGENTTEAMS_TASKFORGE_INTERNAL_TOKEN"),
+		TaskForgeEnabled: taskForgeURL != "",
 
 		GatewayProvider: envOrDefault("AGENTTEAMS_GATEWAY_PROVIDER", "higress"),
 		StorageProvider: envOrDefault("AGENTTEAMS_STORAGE_PROVIDER", "minio"),

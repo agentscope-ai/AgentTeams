@@ -54,9 +54,15 @@ type ServerDeps struct {
 	// It is the shared service↔controller bearer; empty = routes not
 	// registered at all (no internal surface on deployments without the
 	// service).
-	InternalToken  string
-	WorkerAgentDir string // source of builtin agent templates (skill catalog)
-	PluginDir      string // bundled plugin packages (skill catalog plugin source); empty = no plugin entries
+	InternalToken string
+	// TaskForge proxy (P0 foundation): /internal/v1/taskforge/* forwards to
+	// TaskForgeURL with Bearer TaskForgeToken (30s bound, 503 when disabled
+	// or unreachable). TaskForgeEnabled is derived at config load: URL set.
+	TaskForgeURL     string
+	TaskForgeToken   string
+	TaskForgeEnabled bool
+	WorkerAgentDir   string // source of builtin agent templates (skill catalog)
+	PluginDir        string // bundled plugin packages (skill catalog plugin source); empty = no plugin entries
 }
 
 // HTTPServer serves the unified controller REST API.

@@ -62,6 +62,14 @@ type internalAPI struct {
 	defaultModel   string
 	defaultManaged bool
 	now            func() time.Time
+
+	// TaskForge proxy (P0 foundation): /internal/v1/taskforge/* pass-through.
+	// taskforgeEnabled mirrors the derived config flag (URL non-empty) and is
+	// what decides 503 vs proxy.
+	taskforgeURL     string
+	taskforgeToken   string
+	taskforgeEnabled bool
+	taskforgeClient  *http.Client
 }
 
 func registerInternalRoutes(mux *http.ServeMux, deps ServerDeps) {
@@ -78,11 +86,20 @@ func registerInternalRoutes(mux *http.ServeMux, deps ServerDeps) {
 		defaultModel:   deps.DefaultModel,
 		defaultManaged: true,
 		now:            time.Now,
+
+		taskforgeURL:     strings.TrimRight(deps.TaskForgeURL, "/"),
+		taskforgeToken:   deps.TaskForgeToken,
+		taskforgeEnabled: deps.TaskForgeEnabled && deps.TaskForgeURL != "",
+		taskforgeClient:  &http.Client{Timeout: taskforgeProxyTimeout},
 	}
 	mux.Handle("POST /internal/v1/token-review", api.guard(http.HandlerFunc(api.tokenReview)))
 	mux.Handle("POST /internal/v1/workers/{name}/provision", api.guard(http.HandlerFunc(api.provision)))
 	mux.Handle("POST /internal/v1/workers/{name}/deprovision", api.guard(http.HandlerFunc(api.deprovision)))
 	mux.Handle("GET /internal/v1/workers/{name}/execution", api.guard(http.HandlerFunc(api.execution)))
+	// TaskForge pass-through (P0 foundation): the whole subtree rides the
+	// same internal guard; proxyTaskForge 503s when the upstream is not
+	// configured. No public route yet.
+	mux.Handle("/internal/v1/taskforge/{path...}", api.guard(http.HandlerFunc(api.proxyTaskForge)))
 }
 
 // guard enforces the internal bearer + replay window + request id. The

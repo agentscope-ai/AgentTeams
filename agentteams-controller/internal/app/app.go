@@ -688,6 +688,9 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		Provisioner:     a.provisioner,
 
 		InternalToken:        a.cfg.InternalToken,
+		TaskForgeURL:         a.cfg.TaskForgeURL,
+		TaskForgeToken:       a.cfg.TaskForgeToken,
+		TaskForgeEnabled:     a.cfg.TaskForgeEnabled,
 		WorkerEnvBuilder:     a.envBuilder,
 		GatewayURL:           a.cfg.WorkerEnv.AIGatewayURL,
 		DefaultWorkerRuntime: a.cfg.DefaultWorkerRuntime,

@@ -41,6 +41,7 @@ jobs:
           dependencies = {
               'openclaw-base': [],
               'agentteams-controller': [],
+              'agentteams-service': [],
               'embedded': ['agentteams-controller'],
               'worker': ['openclaw-base', 'agentteams-controller'],
               'hermes-worker': ['agentteams-controller'],
@@ -76,6 +77,15 @@ jobs:
     uses: ./.github/workflows/build-image.yml
     with:
       target: agentteams-controller
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  agentteams-service:
+    needs: [prepare]
+    if: contains(fromJSON(needs.prepare.outputs.targets), 'agentteams-service')
+    uses: ./.github/workflows/build-image.yml
+    with:
+      target: agentteams-service
       version: ${{ needs.prepare.outputs.version }}
     secrets: inherit
 
@@ -125,7 +135,7 @@ jobs:
     secrets: inherit
 
   release:
-    needs: [prepare, openclaw-base, agentteams-controller, embedded, worker, hermes-worker, qwenpaw-worker, openhuman-worker]
+    needs: [prepare, openclaw-base, agentteams-controller, agentteams-service, embedded, worker, hermes-worker, qwenpaw-worker, openhuman-worker]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write

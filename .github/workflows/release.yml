@@ -54,7 +54,7 @@ jobs:
         run: |
           # Keep this list aligned with the release targets in build.yml.
           images=(
-            openclaw-base agentteams-controller agentteams-embedded
+            openclaw-base agentteams-controller agentteams-service agentteams-embedded
             agentteams-harness-openclaw
             agentteams-harness-qwenpaw agentteams-harness-hermes agentteams-harness-openhuman
             agentteams-harness-deepseek agentteams-harness-codex
@@ -168,6 +168,9 @@ jobs:
 
           # Controller (used standalone in k8s; bundled inside agentteams-embedded for docker installs)
           docker pull ${REGISTRY}/${REPO}/agentteams-controller:${VERSION}
+
+          # Data-plane service (optional; enabled with a database)
+          docker pull ${REGISTRY}/${REPO}/agentteams-service:${VERSION}
           \`\`\`
 
           ---

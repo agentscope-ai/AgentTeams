@@ -1,0 +1,260 @@
+{
+  "$comment": "R1 operation manifest (58 §7). Single source for the agt CLI flag bindings and the Skill schema; the CI drift gate re-generates both and fails on a diff. R1 generates workers.create/list/get; the R2 resources domain extends this file. PUT/DELETE are transparent proxy routes (D110) and are listed but not generated as native operations.",
+  "version": 1,
+  "module": "resources",
+  "resource": "worker",
+  "source": "58-R1-1-create-list-workers契约冻结-20261112.md §1",
+  "operations": {
+    "workers.create": {
+      "http": {
+        "method": "POST",
+        "path": "/api/v1/workers"
+      },
+      "cli": {
+        "command": "agt create worker",
+        "binary": "agt"
+      },
+      "skill": "worker.create",
+      "auth": {
+        "allowedRoles": [
+          "admin",
+          "manager"
+        ],
+        "others": 403
+      },
+      "idempotency": {
+        "header": "Idempotency-Key",
+        "ttlHours": 24,
+        "onDuplicateWithoutKey": 409
+      },
+      "response": {
+        "status": 201,
+        "schema": "WorkerResponse"
+      },
+      "request": {
+        "name": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "maxLength": 253,
+          "primaryKey": true
+        },
+        "workerName": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "modelProvider": {
+          "type": "string"
+        },
+        "subagentModel": {
+          "type": "string"
+        },
+        "llmStreamFirstContentTimeout": {
+          "type": "string"
+        },
+        "llmStreamIdleTimeout": {
+          "type": "string"
+        },
+        "llmMaxRetries": {
+          "type": "string"
+        },
+        "llmBackoffBase": {
+          "type": "string"
+        },
+        "llmBackoffCap": {
+          "type": "string"
+        },
+        "llmMaxConcurrent": {
+          "type": "string"
+        },
+        "llmMaxQpm": {
+          "type": "string"
+        },
+        "llmRateLimitPause": {
+          "type": "string"
+        },
+        "llmRateLimitJitter": {
+          "type": "string"
+        },
+        "llmAcquireTimeout": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string",
+          "note": "copaw is rejected with 400 deprecated_runtime; default from service config"
+        },
+        "image": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "string"
+        },
+        "soul": {
+          "type": "string"
+        },
+        "agents": {
+          "type": "string"
+        },
+        "skills": {
+          "type": "array<string>"
+        },
+        "remoteSkills": {
+          "type": "array<RemoteSkillSource>"
+        },
+        "mcpServers": {
+          "type": "array<MCPServer>"
+        },
+        "package": {
+          "type": "string"
+        },
+        "expose": {
+          "type": "array<Expose>"
+        },
+        "channelPolicy": {
+          "type": "object"
+        },
+        "resources": {
+          "type": "object"
+        },
+        "env": {
+          "type": "map<string,string>",
+          "note": "admin/manager only (403 otherwise); reserved keys -> 400 invalid_env"
+        },
+        "containerManaged": {
+          "type": "boolean",
+          "default": true
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "Running",
+            "Sleeping",
+            "Stopped"
+          ]
+        }
+      }
+    },
+    "workers.list": {
+      "http": {
+        "method": "GET",
+        "path": "/api/v1/workers"
+      },
+      "cli": {
+        "command": "agt get workers"
+      },
+      "skill": "worker.list",
+      "auth": {
+        "note": "rows outside the caller scope are filtered out; list never returns 403 except worker role (403 by matrix)"
+      },
+      "query": {
+        "fields": {
+          "enum": [
+            "",
+            "all",
+            "spec",
+            "status",
+            "spec,status"
+          ],
+          "default": "all"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "etag": {
+        "onlyFields": "spec",
+        "strong": "sha256(body)[:16] hex",
+        "notModified": 304,
+        "vary": "Authorization"
+      },
+      "response": {
+        "status": 200,
+        "schema": "WorkerListResponse"
+      },
+      "ordering": "name ascending"
+    },
+    "workers.get": {
+      "http": {
+        "method": "GET",
+        "path": "/api/v1/workers/{name}"
+      },
+      "cli": {
+        "command": "agt get worker"
+      },
+      "skill": "worker.get",
+      "auth": {
+        "note": "out-of-scope or missing -> 404 (no existence leak)"
+      },
+      "etag": false,
+      "response": {
+        "status": 200,
+        "schema": "WorkerResponse"
+      }
+    }
+  },
+  "proxyRoutes": {
+    "workers.update": {
+      "method": "PUT",
+      "path": "/api/v1/workers/{name}",
+      "mode": "transparent-proxy",
+      "authority": "controller",
+      "writeThrough": true,
+      "audit": "proxied_update"
+    },
+    "workers.delete": {
+      "method": "DELETE",
+      "path": "/api/v1/workers/{name}",
+      "mode": "transparent-proxy",
+      "authority": "controller",
+      "statusRule": "204 soft-delete / 404 soft-delete / 409 passthrough",
+      "audit": "proxied_delete"
+    }
+  },
+  "errors": {
+    "unauthenticated": 401,
+    "invalid_request": 400,
+    "invalid_name": 400,
+    "deprecated_runtime": 400,
+    "invalid_env": 400,
+    "forbidden_field": 400,
+    "forbidden": 403,
+    "not_found": 404,
+    "already_exists": 409,
+    "internal": 500,
+    "upstream_unavailable": 502
+  },
+  "schemas": {
+    "WorkerResponse": {
+      "fields": 43,
+      "source": "agentteams-controller/internal/server/types.go:92-146 @71dc233a2",
+      "note": "port/domain are nested under exposedPorts[]; the 58 §1.4 count of 45 is a documentation bug"
+    },
+    "WorkerSpecView": {
+      "fields": 27,
+      "excludes": [
+        "modelProvider",
+        "soul",
+        "agents",
+        "env",
+        "skills",
+        "mcpServers",
+        "channelPolicy"
+      ]
+    },
+    "WorkerStatusView": {
+      "fields": 12
+    },
+    "WorkerSpecStatusView": {
+      "fields": 35
+    },
+    "WorkerListResponse": {
+      "shape": {
+        "workers": "[]WorkerResponse",
+        "total": "int"
+      },
+      "note": "workers is [] (never null); total = visible row count"
+    }
+  }
+}

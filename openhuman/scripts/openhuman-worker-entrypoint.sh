@@ -391,6 +391,10 @@ export OPENHUMAN_CORE_HOST="${OPENHUMAN_CORE_HOST:-0.0.0.0}"
 export OPENHUMAN_CORE_PORT="${OPENHUMAN_CORE_PORT:-7788}"
 export OPENHUMAN_CONFIG="${WORKSPACE}/config.toml"
 
+export AGENTTEAMS_MATRIX_URL="${BRIDGE_HOMESERVER}"
+export AGENTTEAMS_WORKER_HOME="${WORKSPACE}"
+export AGENTTEAMS_WORKER_MATRIX_TOKEN="${BRIDGE_ACCESS_TOKEN}"
+python3 /opt/agentteams/scripts/lib/agentteams_receipts.py serve --runtime openhuman --workspace "${WORKSPACE}" &
 cd "${WORKSPACE}"
 openhuman-core serve &
 CORE_PID=$!

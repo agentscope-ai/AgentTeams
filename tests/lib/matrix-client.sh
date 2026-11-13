@@ -146,7 +146,9 @@ matrix_read_messages() {
     local room_enc
     room_enc="$(_encode_room_id "${room_id}")"
 
-    exec_in_manager curl -sf "${TEST_MATRIX_DIRECT_URL}/_matrix/client/v3/rooms/${room_enc}/messages?dir=b&limit=${limit}" \
+    # Keep receipt metadata outside the message polling window.
+    exec_in_manager curl -sfG "${TEST_MATRIX_DIRECT_URL}/_matrix/client/v3/rooms/${room_enc}/messages?dir=b&limit=${limit}" \
+        --data-urlencode 'filter={"not_types":["com.agentteams.session_receipt"]}' \
         -H "Authorization: Bearer ${token}"
 }
 

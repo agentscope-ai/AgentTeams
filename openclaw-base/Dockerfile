@@ -129,6 +129,8 @@ RUN set -eux; \
 # tarball block above (NODE_MIN_VERSION=24.22.1).
 RUN npm install -g pnpm@12.15.0
 
+COPY session-read-audience.patch /tmp/session-read-audience.patch
+
 # Clone, build, and optimize OpenClaw
 # 1. Fetch the pinned upstream tag and add Dashboard approval receipts.
 # 2. Install dependencies and build
@@ -141,6 +143,7 @@ RUN git init /opt/openclaw && \
     git fetch --depth 1 origin "${OPENCLAW_TAG}" && \
     git checkout --detach FETCH_HEAD && \
     git apply /tmp/dashboard-approvals.patch && \
+    git apply /tmp/session-read-audience.patch && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install --frozen-lockfile && \
     pnpm build && \

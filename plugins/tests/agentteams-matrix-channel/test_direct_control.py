@@ -78,6 +78,7 @@ def test_supplement_waits_for_tool_cleanup_and_keeps_original_input():
             assert cleaned.is_set() and task.done()
             assert original["content_parts"][0].text == "查全国数据"
             assert [part.text for part in supplementary["meta"]["direct_inputs"]] == ["查全国数据", "补充：只看杭州"]
+            assert supplementary["meta"]["session_source_event_ids"] == ["$run", "$next"]
         states = [call.args[2][EXECUTION]["status"] for call in ch._room_send_with_retry.await_args_list]
         assert states == ["running", "stopping", "stopped"]
         assert ch._room_send_with_retry.await_args_list[-1].args[2][EXECUTION]["message_id"] == "$partial-response"
@@ -227,8 +228,10 @@ def test_consecutive_supplements_retain_each_input_once():
             asyncio.create_task(consume(first))
             await entered.get()
             second = payload("排除测试账号")
+            second["meta"]["event_id"] = "$last"
             assert not await ch._handle_direct_control(second, event("steer", "$next"))
             assert [part.text for part in second["meta"]["direct_inputs"]] == ["查全国数据", "只看杭州", "排除测试账号"]
+            assert second["meta"]["session_source_event_ids"] == ["$run", "$next", "$last"]
 
     asyncio.run(scenario())
 

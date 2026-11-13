@@ -40,6 +40,8 @@ jobs:
           git -C native apply "$GITHUB_WORKSPACE/openhuman/patches/manager-matrix.patch"
           git -C native apply "$GITHUB_WORKSPACE/openhuman/patches/dashboard-approvals.patch"
           git -C native apply "$GITHUB_WORKSPACE/openhuman/patches/direct-control.patch"
+          cp openhuman/patches/session_receipts.rs native/src/openhuman/channels/session_receipts.rs
+          git -C native apply "$GITHUB_WORKSPACE/openhuman/patches/session-receipts.patch"
       - name: Verify native Matrix controls and tool cleanup
         working-directory: native
         run: cargo test --locked --no-default-features --features channel-matrix --test agentteams_direct_control

@@ -1194,5 +1194,6 @@ else
         log "AGENTTEAMS_MATRIX_DEBUG=1 detected; OPENCLAW_MATRIX_DEBUG=1 exported for matrix plugin tracing"
     fi
 
+    python3 /opt/agentteams/scripts/lib/agentteams_receipts.py serve --runtime openclaw --workspace "${HOME}" &
     exec openclaw gateway run --verbose --force
 fi

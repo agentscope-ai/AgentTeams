@@ -412,6 +412,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
     channel = CHANNEL_KEY  # type: ignore[assignment]
     uses_manager_queue: bool = True
+    _session_receipts = None
 
     def __init__(
         self,
@@ -487,6 +488,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._client: Optional[AsyncClient] = None
         self._user_id: Optional[str] = None
         self._sync_task: Optional[asyncio.Task] = None
+        self._session_receipts = None
+        self._session_debounced_ids = {}
         self._callback_tasks: set[asyncio.Task[Any]] = set()
         self._room_callback_locks: Dict[str, asyncio.Lock] = {}
         self._active_sync_callback_futures: Optional[list[asyncio.Future[bool]]] = None
@@ -530,7 +533,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
         # Capture the actual producer task, so a delayed control cannot stop
         # a successor that happens to use the same runtime chat id.
-        self._direct_runs: dict[str, tuple[str, str, asyncio.Task, list]] = {}
+        self._direct_runs: dict[str, tuple[str, str, asyncio.Task, list, list[str]]] = {}
 
     def set_workspace(self, workspace, command_registry=None) -> None:
         super().set_workspace(workspace, command_registry)
@@ -575,7 +578,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Retain interrupted input even if cancellation precedes the native
         # runtime's first checkpoint. Carry it only across this continuation.
         inputs = meta.get("direct_inputs", payload.get("content_parts", []))
-        run = (run_id, meta.get("sender_id", ""), asyncio.current_task(), inputs)
+        source_ids = meta.get("session_source_event_ids") or [run_id]
+        run = (run_id, meta.get("sender_id", ""), asyncio.current_task(), inputs, source_ids)
         self._direct_runs[room_id] = run
         stream = super()._stream_with_tracker(payload)
         status = "completed"
@@ -665,6 +669,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if action == "steer":
             inputs = [*run[3], *payload["content_parts"]]
             payload["meta"]["direct_inputs"] = inputs
+            source_ids = run[4] if len(run) > 4 else [run[0]]
+            meta["session_source_event_ids"] = list(dict.fromkeys(
+                [*source_ids, *(meta.get("session_source_event_ids") or [meta["event_id"]])]
+            ))
             payload["content_parts"] = [TextContent(
                 type=ContentType.TEXT,
                 text="你在执行中收到了用户补充。请结合已有对话、已完成的操作和工具结果调整后继续，"
@@ -1520,10 +1528,18 @@ class AgentTeamsMatrixChannel(BaseChannel):
             timeout=60,
         )
 
+        from .session_receipts import SessionReceipts
+
+        self._session_receipts = SessionReceipts(
+            self, (self._workspace_dir or Path(WORKING_DIR)) / "sessions"
+        )
+        await self._session_receipts.start()
         self._sync_task = asyncio.create_task(self._sync_loop())
         logger.info("MatrixChannel: sync loop started component=matrix")
 
     async def stop(self) -> None:
+        if self._session_receipts:
+            await self._session_receipts.stop()
         if self._sync_task:
             self._sync_task.cancel()
             try:
@@ -3059,6 +3075,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if self._is_channel_disabled(sender_id, room_id, is_dm):
             return
 
+        await self._announce_session_receipts(room_id, event.event_id)
+
         if not is_dm:
             if self._require_mention(room_id) and not self._was_mentioned(
                 event,
@@ -3210,6 +3228,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "is_group": not is_dm,
                 "worker_name": worker_name,
                 "event_id": event.event_id,
+                "session_source_event_ids": self._session_source_ids(room_id, event.event_id, not is_dm),
                 "sender_id": sender_id,
                 _MATRIX_TYPING_LIFECYCLE_KEY: typing_lifecycle,
                 "otel_carrier": (event.source.get("content", {}) or {}).get("com.agentteams.trace", {}),
@@ -3228,7 +3247,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
             if not is_dm:
                 self._clear_history(room_id)
 
-        await self._send_read_receipt(room_id, event.event_id)
+        if self._session_receipts is None:
+            await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
             True,
@@ -3519,6 +3539,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if self._is_channel_disabled(sender_id, room_id, is_dm):
             return
 
+        await self._announce_session_receipts(room_id, event.event_id)
+
         if teamharness_self_trigger is None and _is_teamharness_tool_display(text):
             logger.info(
                 "MatrixChannel: skipping TeamHarness tool display event "
@@ -3637,6 +3659,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "is_group": not is_dm,
                 "worker_name": worker_name,
                 "event_id": event.event_id,
+                "session_source_event_ids": self._session_source_ids(room_id, event.event_id, not is_dm and not is_slash_cmd and not is_thread_event),
                 "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
                 _MATRIX_TYPING_LIFECYCLE_KEY: typing_lifecycle,
@@ -3670,7 +3693,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # These are best-effort UX operations.  Enqueue first so a slow
         # homeserver cannot prevent an accepted message from reaching QwenPaw.
-        await self._send_read_receipt(room_id, event.event_id)
+        if self._session_receipts is None:
+            await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
             True,
@@ -3698,6 +3722,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         if self._is_channel_disabled(sender_id, room_id, is_dm):
             return
+
+        await self._announce_session_receipts(room_id, event.event_id)
 
         is_thread_event = self._is_thread_event(event)
 
@@ -3829,6 +3855,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "is_group": not is_dm,
                 "worker_name": worker_name,
                 "event_id": event.event_id,
+                "session_source_event_ids": self._session_source_ids(room_id, event.event_id, not is_dm and not is_thread_event),
                 "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
                 _MATRIX_TYPING_LIFECYCLE_KEY: typing_lifecycle,
@@ -3849,7 +3876,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
 
-        await self._send_read_receipt(room_id, event.event_id)
+        if self._session_receipts is None:
+            await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
             True,
@@ -3863,7 +3891,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # ------------------------------------------------------------------
 
     async def _send_read_receipt(self, room_id: str, event_id: str) -> None:
-        """Mark a message as read (sends both read receipt and read marker)."""
+        """Legacy feedback for callbacks driven without the session service."""
         if not self._client or not event_id:
             return
         try:
@@ -4037,6 +4065,34 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 video_url=p["video_url"],
             )
         return None
+
+    async def _announce_session_receipts(self, room_id: str, event_id: str) -> None:
+        if self._session_receipts:
+            await self._session_receipts.submit(room_id, [event_id], status="received")
+
+    def _session_source_ids(self, room_id, event_id, include_history=False):
+        history = self._room_histories.get(room_id, []) if include_history and self.history_limit > 0 else []
+        return list(dict.fromkeys([entry.message_id for entry in history if entry.message_id] + [event_id]))
+
+    def _debounce_payload(self, payload):
+        key = self.get_debounce_key(payload)
+        meta = payload.setdefault("meta", {}) if isinstance(payload, dict) else getattr(payload, "channel_meta", {})
+        ids = meta.get("session_source_event_ids") or []
+        ready = super()._debounce_payload(payload)
+        if not ready:
+            self._session_debounced_ids.setdefault(key, []).extend(ids)
+        else:
+            meta["session_source_event_ids"] = list(dict.fromkeys(self._session_debounced_ids.pop(key, []) + ids))
+        return ready
+
+    def merge_native_items(self, items):
+        merged = super().merge_native_items(items)
+        if merged:
+            merged["meta"]["session_source_event_ids"] = list(dict.fromkeys(
+                event_id for item in items
+                for event_id in (item.get("meta", {}).get("session_source_event_ids") or [])
+            ))
+        return merged
 
     def build_agent_request_from_native(self, native_payload: Any) -> Any:
         parts = native_payload.get("content_parts", [])
@@ -5446,6 +5502,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
             or meta_dict.get("event_id"),
             "sender_id": sender_id,
             "send_gate_retrigger": True,
+            "session_source_event_ids": [
+                entry.message_id
+                for index, entry in self._room_event_log.get(room_id, [])
+                if index > snap_records and entry.message_id
+            ],
             "otel_carrier": ((meta_dict.get("otel_delivery") or {}).get("otel_reply") or {}).get("carrier") or meta_dict.get("otel_carrier", {}),
             "otel_received_at_ns": time.time_ns(),
         }
@@ -5711,6 +5772,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         Returns the successful ``RoomSendResponse``.
         """
+        if message_type == "m.room.message" and content.get("msgtype") != "m.notice" and (content.get("m.relates_to") or {}).get("rel_type") != "m.replace" and "com.agentteams.read_audience" not in content:
+            try:
+                members = await self._client.joined_members(room_id)
+                if isinstance(members, JoinedMembersResponse):
+                    content = dict(content)
+                    content["com.agentteams.read_audience"] = {
+                        "version": 1,
+                        "members": [{"user_id": member.user_id, "display_name": member.display_name or member.user_id.split(":")[0].lstrip("@"), "kind": "member"} for member in members.members],
+                    }
+            except Exception:
+                logger.debug("Message read audience unavailable", exc_info=True)
         tx_id = str(uuid4())
         last_exc: Optional[Exception] = None
         last_err_resp: Any = None

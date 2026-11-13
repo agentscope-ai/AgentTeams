@@ -239,15 +239,18 @@ type Store interface {
 // IdemRecord is the stored first response for an Idempotency-Key
 // (ops.idempotency_keys, 58 §4.5).
 type IdemRecord struct {
-	WorkerName string
-	Status     int
-	Body       []byte
-	CreatedAt  time.Time
-	ExpiresAt  time.Time
+	WorkerName  string
+	RequestHash string
+	Status      int
+	Body        []byte
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
 }
 
-// IdemStore is the 24h idempotency-key store.
+// IdemStore is the 24h idempotency-key store. Keys are scoped to the caller;
+// a record also binds the normalized request hash so a different body with
+// the same key conflicts instead of replaying the first response.
 type IdemStore interface {
-	Get(ctx context.Context, key string) (*IdemRecord, error)
-	Put(ctx context.Context, key, workerName string, status int, body []byte, ttl time.Duration) error
+	Get(ctx context.Context, principal, key string) (*IdemRecord, error)
+	Put(ctx context.Context, principal, key, requestHash, workerName string, status int, body []byte, ttl time.Duration) error
 }

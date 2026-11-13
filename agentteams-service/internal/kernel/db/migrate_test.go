@@ -63,8 +63,8 @@ func TestMigrationsEmbedded(t *testing.T) {
 	if len(res) != 1 || res[0] != "0001-workers.sql" {
 		t.Errorf("res files = %v, want [0001-workers.sql]", res)
 	}
-	if len(ops) != 4 {
-		t.Errorf("ops files = %v, want 4", ops)
+	if len(ops) != 5 {
+		t.Errorf("ops files = %v, want 5", ops)
 	}
 
 	if _, err := migrations.SQL(migrations.ResSQL, "res", "0001-workers.sql"); err != nil {
@@ -104,6 +104,16 @@ func freshNamespace(mock sqlmock.Sqlmock, tables ...string) {
 	}
 }
 
+func freshOpsNamespace(mock sqlmock.Sqlmock) {
+	freshNamespace(mock, "outbox", "audit_events", "idempotency_keys", "upgrade_leases")
+	mock.ExpectBegin()
+	mock.ExpectExec("(?i)ALTER TABLE idempotency_keys").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(recordSQL)).
+		WillReturnResult(sqlmock.NewResult(5, 1))
+	mock.ExpectCommit()
+}
+
 func newTestRunner(resDB, opsDB *sql.DB) *Runner {
 	return &Runner{Res: resDB, Ops: opsDB, Holder: "test-holder", Now: fixedNowFn, Log: testLogger()}
 }
@@ -122,12 +132,12 @@ func TestMigrateFresh(t *testing.T) {
 	defer opsDB.Close()
 
 	// ops: ensure lease table, acquire via INSERT (free → version 1),
-	// apply the four frozen files, release the lease.
+	// apply the five frozen files, release the lease.
 	opsMock.ExpectExec(`(?i)` + regexp.QuoteMeta(leaseTableSQL)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	opsMock.ExpectExec(regexp.QuoteMeta(insertLeaseSQL)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	freshNamespace(opsMock, "outbox", "audit_events", "idempotency_keys", "upgrade_leases")
+	freshOpsNamespace(opsMock)
 	opsMock.ExpectExec(regexp.QuoteMeta(releaseLeaseSQL)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -166,7 +176,7 @@ func TestMigrateIdempotent(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	opsMock.ExpectQuery(regexp.QuoteMeta(appliedSQL)).
 		WillReturnRows(sqlmock.NewRows([]string{"version"}).
-			AddRow("0001").AddRow("0002").AddRow("0003").AddRow("0004"))
+			AddRow("0001").AddRow("0002").AddRow("0003").AddRow("0004").AddRow("0024"))
 	opsMock.ExpectExec(regexp.QuoteMeta(releaseLeaseSQL)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -248,7 +258,7 @@ func TestMigrateStealExpiredLease(t *testing.T) {
 			AddRow(fixedNow.Add(-time.Second), int64(3)))
 	opsMock.ExpectExec(regexp.QuoteMeta(stealLeaseSQL)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	freshNamespace(opsMock, "outbox", "audit_events", "idempotency_keys", "upgrade_leases")
+	freshOpsNamespace(opsMock)
 	opsMock.ExpectExec(regexp.QuoteMeta(releaseLeaseSQL)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

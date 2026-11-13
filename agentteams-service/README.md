@@ -28,7 +28,7 @@ internal/kernel/
   idem/       ops.idempotency_keys (24h, byte-exact replay)
   httputil/   {code,message} envelope + spec-view ETag
 internal/modules/resources/ R1 slice: types, store, spec_hash, handlers, views, authz, validate, proxy
-migrations/res, migrations/ops   forward-only DDL (0001-0004 frozen)
+migrations/res, migrations/ops   forward-only DDL (0001-0004 frozen; 0024 idempotency scope correction)
 operations/workers.json          operation manifest (CLI/Skill generator input)
 deploy/higress/routes.yaml       five-route split (never public: /internal/v1)
 test/integration                 real-DB tests (build tag integration)
@@ -74,6 +74,10 @@ make image IMAGE=agentteams-service:dev   # multi-stage, non-root, static binary
 Integration tests run against MySQL 8 **and** standalone seekdb
 (5.7.25-OceanBase); both are green as of 2026-11-13. Without the DSNs the
 tests skip, so `go test ./...` stays green on a bare machine.
+
+## Idempotency-Key is scoped to the authenticated principal and bound to the
+canonical create request; reusing a key with a different body returns 409
+`idempotency_conflict` (migration 0024).
 
 ## R1 scope and known gaps
 

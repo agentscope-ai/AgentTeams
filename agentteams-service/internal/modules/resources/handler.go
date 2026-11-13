@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -129,9 +130,15 @@ func (h *Handler) createWorker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Idempotency replay: a retry returns the first accepted outcome
-	// verbatim (status + body) without touching the store. Lookup errors
-	// other than a miss are logged and the create proceeds (R1 fail-open:
-	// the idem store must not take the create path down with it).
+	// verbatim (status + body) without touching the store. The key is scoped
+	// to the authenticated principal and bound to the canonical request hash;
+	// a different body with the same key is a conflict, never a replay.
+	principal := caller.MatrixUserID
+	if principal == "" {
+		principal = caller.Username
+	}
+	canonical, _ := json.Marshal(req)
+	requestHash := fmt.Sprintf("%x", sha256.Sum256(canonical))
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if len(key) > idemKeyMaxLen {
 		h.fail(w, r, caller, "worker.create", http.StatusBadRequest, httputil.CodeInvalidRequest,
@@ -139,9 +146,14 @@ func (h *Handler) createWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if key != "" && h.Idem != nil {
-		rec, err := h.Idem.Get(r.Context(), key)
+		rec, err := h.Idem.Get(r.Context(), principal, key)
 		switch {
 		case err == nil && rec != nil:
+			if rec.RequestHash != "" && rec.RequestHash != requestHash {
+				h.fail(w, r, caller, "worker.create", http.StatusConflict, httputil.CodeIdempotencyConflict,
+					"Idempotency-Key was already used with a different request body")
+				return
+			}
 			writeIdemReplay(w, rec)
 			return
 		case err != nil && !errors.Is(err, ErrIdemMiss):
@@ -259,7 +271,7 @@ func (h *Handler) createWorker(w http.ResponseWriter, r *http.Request) {
 	// moment it sees 201, and a Put failure is logged only (the worker exists
 	// and the client must still see its 201 — 58 §4.5 best-effort write side).
 	if key != "" && h.Idem != nil {
-		if err := h.Idem.Put(r.Context(), key, created.Name, http.StatusCreated, body, config.IdempotencyTTL); err != nil {
+		if err := h.Idem.Put(r.Context(), principal, key, requestHash, created.Name, http.StatusCreated, body, config.IdempotencyTTL); err != nil {
 			h.logger().Warn("idempotency record write failed",
 				"err", err, "key", key, "request_id", httputil.RequestID(r))
 		}

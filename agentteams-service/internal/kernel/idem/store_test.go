@@ -44,11 +44,11 @@ func TestGetHit(t *testing.T) {
 	// would normalise them; the column stores a JSON string instead).
 	body := []byte("{\n  \"b\": 2,\n  \"a\": 1\n}")
 	mock.ExpectQuery(regexp.QuoteMeta(selectSQL)).
-		WithArgs("key-1", idemNow).
-		WillReturnRows(sqlmock.NewRows([]string{"worker_name", "response_status", "response_body", "created_at", "expires_at"}).
-			AddRow("worker-a", 201, encodedBody(t, body), idemNow, expires))
+		WithArgs(scopedKey("alice", "key-1"), idemNow).
+		WillReturnRows(sqlmock.NewRows([]string{"worker_name", "request_hash", "response_status", "response_body", "created_at", "expires_at"}).
+			AddRow("worker-a", "hash-a", 201, encodedBody(t, body), idemNow, expires))
 
-	rec, err := store.Get(context.Background(), "key-1")
+	rec, err := store.Get(context.Background(), "alice", "key-1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -74,10 +74,10 @@ func TestGetMissAndExpired(t *testing.T) {
 		t.Fatalf("Get SQL must filter expiry in SQL: %s", selectSQL)
 	}
 	mock.ExpectQuery(regexp.QuoteMeta(selectSQL)).
-		WithArgs("expired-key", idemNow).
-		WillReturnRows(sqlmock.NewRows([]string{"worker_name", "response_status", "response_body", "created_at", "expires_at"}))
+		WithArgs(scopedKey("alice", "expired-key"), idemNow).
+		WillReturnRows(sqlmock.NewRows([]string{"worker_name", "request_hash", "response_status", "response_body", "created_at", "expires_at"}))
 
-	_, err := store.Get(context.Background(), "expired-key")
+	_, err := store.Get(context.Background(), "alice", "expired-key")
 	if !errors.Is(err, resources.ErrIdemMiss) {
 		t.Fatalf("Get expired error = %v, want ErrIdemMiss", err)
 	}
@@ -86,10 +86,10 @@ func TestGetMissAndExpired(t *testing.T) {
 func TestGetError(t *testing.T) {
 	store, mock := newTestStore(t)
 	mock.ExpectQuery(regexp.QuoteMeta(selectSQL)).
-		WithArgs("key-1", idemNow).
+		WithArgs(scopedKey("alice", "key-1"), idemNow).
 		WillReturnError(errors.New("db down"))
 
-	_, err := store.Get(context.Background(), "key-1")
+	_, err := store.Get(context.Background(), "alice", "key-1")
 	if err == nil || errors.Is(err, resources.ErrIdemMiss) {
 		t.Fatalf("Get driver error = %v, want non-miss error", err)
 	}
@@ -99,10 +99,10 @@ func TestPut(t *testing.T) {
 	store, mock := newTestStore(t)
 	body := []byte("{\n  \"name\": \"worker-a\"\n}")
 	mock.ExpectExec(regexp.QuoteMeta(putSQL)).
-		WithArgs("key-1", "worker-a", 201, encodedBody(t, body), idemNow, idemNow.Add(24*time.Hour)).
+		WithArgs(scopedKey("alice", "key-1"), "alice", "hash-a", "worker-a", 201, encodedBody(t, body), idemNow, idemNow.Add(24*time.Hour)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := store.Put(context.Background(), "key-1", "worker-a", 201, body, 24*time.Hour); err != nil {
+	if err := store.Put(context.Background(), "alice", "key-1", "hash-a", "worker-a", 201, body, 24*time.Hour); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -117,10 +117,10 @@ func TestPutUpsertShapeAndEmptyBody(t *testing.T) {
 	}
 	store, mock := newTestStore(t)
 	mock.ExpectExec(regexp.QuoteMeta(putSQL)).
-		WithArgs("key-2", "worker-b", 409, nil, idemNow, idemNow.Add(time.Hour)).
+		WithArgs(scopedKey("alice", "key-2"), "alice", "", "worker-b", 409, nil, idemNow, idemNow.Add(time.Hour)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	if err := store.Put(context.Background(), "key-2", "worker-b", 409, nil, time.Hour); err != nil {
+	if err := store.Put(context.Background(), "alice", "key-2", "", "worker-b", 409, nil, time.Hour); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -133,7 +133,7 @@ func TestPutError(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(putSQL)).
 		WillReturnError(errors.New("db down"))
 
-	if err := store.Put(context.Background(), "key-1", "worker-a", 201, []byte(`{}`), time.Hour); err == nil {
+	if err := store.Put(context.Background(), "alice", "key-1", "hash-a", "worker-a", 201, []byte(`{}`), time.Hour); err == nil {
 		t.Fatal("Put: want error, got nil")
 	}
 }

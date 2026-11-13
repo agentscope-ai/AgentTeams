@@ -140,14 +140,16 @@ func newFakeIdem() *fakeIdem {
 	return &fakeIdem{recs: map[string]*IdemRecord{}}
 }
 
-func (f *fakeIdem) Get(_ context.Context, key string) (*IdemRecord, error) {
+func fakeIdemKey(principal, key string) string { return principal + "\x00" + key }
+
+func (f *fakeIdem) Get(_ context.Context, principal, key string) (*IdemRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.getCalls++
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	rec, ok := f.recs[key]
+	rec, ok := f.recs[fakeIdemKey(principal, key)]
 	if !ok {
 		return nil, ErrIdemMiss
 	}
@@ -155,14 +157,14 @@ func (f *fakeIdem) Get(_ context.Context, key string) (*IdemRecord, error) {
 	return &cp, nil
 }
 
-func (f *fakeIdem) Put(_ context.Context, key, workerName string, status int, body []byte, _ time.Duration) error {
+func (f *fakeIdem) Put(_ context.Context, principal, key, requestHash, workerName string, status int, body []byte, _ time.Duration) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.putCalls++
 	if f.putErr != nil {
 		return f.putErr
 	}
-	f.recs[key] = &IdemRecord{WorkerName: workerName, Status: status, Body: append([]byte(nil), body...)}
+	f.recs[fakeIdemKey(principal, key)] = &IdemRecord{WorkerName: workerName, RequestHash: requestHash, Status: status, Body: append([]byte(nil), body...)}
 	return nil
 }
 
@@ -575,27 +577,29 @@ func TestHandlerIdempotency(t *testing.T) {
 		t.Fatalf("after first: create=%d put=%d", store.createCalls, idem.putCalls)
 	}
 
-	// Same key, different body: the stored first outcome wins and the store
-	// is untouched.
-	second := hServe(h, http.MethodPost, "/api/v1/workers", `{"name":"w-other"}`, adminID(), headers)
-	if second.Code != http.StatusCreated {
-		t.Fatalf("replay status = %d, body %q", second.Code, second.Body.String())
-	}
-	if second.Body.String() != first.Body.String() {
-		t.Fatalf("replay body drifted:\n first: %s\nsecond: %s", first.Body.String(), second.Body.String())
+	// Same key + same body: replay the first outcome without touching the
+	// store.
+	second := hServe(h, http.MethodPost, "/api/v1/workers", `{"name":"w-idem"}`, adminID(), headers)
+	if second.Code != http.StatusCreated || second.Body.String() != first.Body.String() {
+		t.Fatalf("replay = %d %q, first %q", second.Code, second.Body.String(), first.Body.String())
 	}
 	if store.createCalls != 1 || idem.putCalls != 1 {
 		t.Fatalf("after replay: create=%d put=%d", store.createCalls, idem.putCalls)
 	}
-	if _, ok := store.rows["w-other"]; ok {
-		t.Fatal("replay must not create the second name")
+	// Same key + different body: conflict, never a replay.
+	third := hServe(h, http.MethodPost, "/api/v1/workers", `{"name":"w-other"}`, adminID(), headers)
+	if third.Code != http.StatusConflict {
+		t.Fatalf("mismatched body = %d, want 409: %s", third.Code, third.Body.String())
+	}
+	if store.createCalls != 1 || idem.putCalls != 1 {
+		t.Fatalf("after mismatch: create=%d put=%d", store.createCalls, idem.putCalls)
 	}
 }
 
 func TestHandlerIdempotencyReplaysStoredOutcome(t *testing.T) {
 	h, store, idem, _ := defaultTestHandler()
 	body := []byte(`{"code":"already_exists","message":"stored"}\n`)
-	idem.recs["cached"] = &IdemRecord{WorkerName: "w1", Status: http.StatusConflict, Body: body}
+	idem.recs[fakeIdemKey(adminID().MatrixUserID, "cached")] = &IdemRecord{WorkerName: "w1", Status: http.StatusConflict, Body: body}
 
 	rec := hServe(h, http.MethodPost, "/api/v1/workers", `{"name":"w-x"}`, adminID(),
 		map[string]string{"Idempotency-Key": "cached"})
@@ -1041,4 +1045,20 @@ func TestHandlerGetRefreshesFromController(t *testing.T) {
 			t.Fatalf("unexpected store mutation: updated=%d deleted=%d", st.updated, st.deleted)
 		}
 	})
+}
+
+func TestHandlerIdempotencyScopedToPrincipal(t *testing.T) {
+	h, store, idem, _ := defaultTestHandler()
+	headers := map[string]string{"Idempotency-Key": "shared-key"}
+	first := hServe(h, http.MethodPost, "/api/v1/workers", `{"name":"w-admin"}`, adminID(), headers)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("admin create = %d %s", first.Code, first.Body.String())
+	}
+	second := hServe(h, http.MethodPost, "/api/v1/workers", `{"name":"w-manager"}`, managerID(), headers)
+	if second.Code != http.StatusCreated {
+		t.Fatalf("manager same key must not replay admin: %d %s", second.Code, second.Body.String())
+	}
+	if store.createCalls != 2 || idem.putCalls != 2 {
+		t.Fatalf("create=%d put=%d, want 2/2", store.createCalls, idem.putCalls)
+	}
 }

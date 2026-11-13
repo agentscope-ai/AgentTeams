@@ -26,6 +26,7 @@ const (
 	CodeForbidden           = "forbidden"            // 403
 	CodeNotFound            = "not_found"            // 404
 	CodeAlreadyExists       = "already_exists"       // 409
+	CodeIdempotencyConflict = "idempotency_conflict" // 409
 	CodeInternal            = "internal"             // 500
 	CodeUpstreamUnavailable = "upstream_unavailable" // 502
 )

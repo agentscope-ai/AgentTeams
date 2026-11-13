@@ -6,6 +6,7 @@ package idem
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -29,18 +30,25 @@ func NewSQLStore(db *sql.DB) *SQLStore {
 // Compile-time contract check (resources does not import idem, so no cycle).
 var _ resources.IdemStore = (*SQLStore)(nil)
 
-const selectSQL = "SELECT worker_name, response_status, response_body, created_at, expires_at FROM ops.idempotency_keys WHERE idem_key = ? AND expires_at > ?"
+const selectSQL = "SELECT worker_name, request_hash, response_status, response_body, created_at, expires_at FROM ops.idempotency_keys WHERE idem_key = ? AND expires_at > ?"
+
+// scopedKey binds the client key to the authenticated principal. The stored
+// idem_key is a hash so the 128-char column cannot overflow and two callers
+// can never share a replay row.
+func scopedKey(principal, key string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(principal+"\x00"+key)))
+}
 
 // Get returns the first response for key. A missing or expired row is
 // resources.ErrIdemMiss (expiry is enforced in SQL, so an expired row never
 // leaves the database).
-func (s *SQLStore) Get(ctx context.Context, key string) (*resources.IdemRecord, error) {
+func (s *SQLStore) Get(ctx context.Context, principal, key string) (*resources.IdemRecord, error) {
 	var (
 		rec  resources.IdemRecord
 		body []byte
 	)
-	err := s.DB.QueryRowContext(ctx, selectSQL, key, s.now()).
-		Scan(&rec.WorkerName, &rec.Status, &body, &rec.CreatedAt, &rec.ExpiresAt)
+	err := s.DB.QueryRowContext(ctx, selectSQL, scopedKey(principal, key), s.now()).
+		Scan(&rec.WorkerName, &rec.RequestHash, &rec.Status, &body, &rec.CreatedAt, &rec.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("idem: key %q: %w", key, resources.ErrIdemMiss)
 	}
@@ -67,14 +75,14 @@ func (s *SQLStore) Get(ctx context.Context, key string) (*resources.IdemRecord, 
 // resolved last-writer-wins: MySQL serialises the INSERT ... ON DUPLICATE
 // KEY UPDATE, and the later row overwrites worker/status/body/expires_at.
 // created_at keeps the first write's timestamp.
-const putSQL = "INSERT INTO ops.idempotency_keys (idem_key, worker_name, response_status, response_body, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE worker_name = VALUES(worker_name), response_status = VALUES(response_status), response_body = VALUES(response_body), expires_at = VALUES(expires_at)"
+const putSQL = "INSERT INTO ops.idempotency_keys (idem_key, principal_id, request_hash, worker_name, response_status, response_body, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE principal_id = VALUES(principal_id), request_hash = VALUES(request_hash), worker_name = VALUES(worker_name), response_status = VALUES(response_status), response_body = VALUES(response_body), expires_at = VALUES(expires_at)"
 
 // Put stores body as the first response for key, expiring after ttl. A
 // non-empty body is stored as a JSON string (json.Marshal(string(body))):
 // MySQL/seekdb normalise a JSON object's whitespace/key order, while a JSON
 // string round-trips the exact bytes. An empty body is stored as SQL NULL
 // (response_body is a nullable JSON column).
-func (s *SQLStore) Put(ctx context.Context, key, workerName string, status int, body []byte, ttl time.Duration) error {
+func (s *SQLStore) Put(ctx context.Context, principal, key, requestHash, workerName string, status int, body []byte, ttl time.Duration) error {
 	now := s.now()
 	var bodyArg any
 	if len(body) > 0 {
@@ -84,7 +92,7 @@ func (s *SQLStore) Put(ctx context.Context, key, workerName string, status int, 
 		}
 		bodyArg = raw
 	}
-	if _, err := s.DB.ExecContext(ctx, putSQL, key, workerName, status, bodyArg, now, now.Add(ttl).UTC()); err != nil {
+	if _, err := s.DB.ExecContext(ctx, putSQL, scopedKey(principal, key), principal, requestHash, workerName, status, bodyArg, now, now.Add(ttl).UTC()); err != nil {
 		return fmt.Errorf("idem: put key %q: %w", key, err)
 	}
 	return nil

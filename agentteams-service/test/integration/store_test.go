@@ -325,25 +325,29 @@ func TestSoftDelete(t *testing.T) {
 func TestIdempotencyStore(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	if _, err := h.idem.Get(ctx, "k1"); err == nil ||
+	if _, err := h.idem.Get(ctx, "alice", "k1"); err == nil ||
 		!strings.Contains(err.Error(), resources.ErrIdemMiss.Error()) {
 		t.Fatalf("get missing = %v, want ErrIdemMiss", err)
 	}
-	if err := h.idem.Put(ctx, "k1", "w1", 201, []byte(`{"ok":true}`), 24*time.Hour); err != nil {
+	if err := h.idem.Put(ctx, "alice", "k1", "hash-k1", "w1", 201, []byte(`{"ok":true}`), 24*time.Hour); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	rec, err := h.idem.Get(ctx, "k1")
+	rec, err := h.idem.Get(ctx, "alice", "k1")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if rec.Status != 201 || string(rec.Body) != `{"ok":true}` || rec.WorkerName != "w1" {
+	if rec.Status != 201 || string(rec.Body) != `{"ok":true}` || rec.WorkerName != "w1" || rec.RequestHash != "hash-k1" {
 		t.Fatalf("record = %+v", rec)
 	}
+	// A different principal cannot see alice's row even with the same key.
+	if _, err := h.idem.Get(ctx, "bob", "k1"); err == nil {
+		t.Fatalf("cross-principal key was served")
+	}
 	// Negative TTL stores a row that is already expired.
-	if err := h.idem.Put(ctx, "k2", "w2", 409, []byte("{}"), -time.Hour); err != nil {
+	if err := h.idem.Put(ctx, "alice", "k2", "hash-k2", "w2", 409, []byte("{}"), -time.Hour); err != nil {
 		t.Fatalf("put expired: %v", err)
 	}
-	if _, err := h.idem.Get(ctx, "k2"); err == nil {
+	if _, err := h.idem.Get(ctx, "alice", "k2"); err == nil {
 		t.Fatalf("expired key was served")
 	}
 }

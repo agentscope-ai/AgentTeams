@@ -102,9 +102,11 @@ class HarnessReceiptTests(unittest.TestCase):
         scan_inputs(self.receipts, "codex", {})
         self.assertNotIn(("$input", "read"), self.states())
         record.update(input_checkpointed=True, status="failed")
+        record["event"]["session_source_event_ids"] = ["$input", "$supplement"]
         path.write_text(json.dumps({"events": {"$input": record}}))
         scan_inputs(self.receipts, "codex", {})
         self.assertIn(("$input", "read"), self.states())
+        self.assertIn(("$supplement", "read"), self.states())
 
     def test_failed_delivery_recovers_after_restart_with_same_transaction(self):
         self.receipts.enqueue("!room:hs", "$input")

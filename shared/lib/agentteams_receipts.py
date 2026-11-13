@@ -157,7 +157,8 @@ def scan_inputs(receipts, runtime, offsets):
             for record in json.loads(path.read_text()).get("events", {}).values():
                 if record.get("input_checkpointed"):
                     event = record["event"]
-                    receipts.enqueue(event["room_id"], event["event_id"])
+                    for event_id in event.get("session_source_event_ids", [event["event_id"]]):
+                        receipts.enqueue(event["room_id"], event_id)
 
 
 def credentials(workspace):

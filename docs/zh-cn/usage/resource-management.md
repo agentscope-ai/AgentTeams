@@ -95,8 +95,8 @@ spec:
 |------|------|------|--------|------|
 | `metadata.name` | string | 是 | — | Worker 名称，全局唯一 |
 | `spec.model` | string | 是 | — | LLM 模型 ID，如 `claude-sonnet-4-6`、`qwen3.5-plus` |
-| `spec.runtime` | string | 否 | `openclaw` | 当前 Worker CRD 接受 `openclaw`、`qwenpaw`、`copaw`（旧版兼容）或 `hermes` |
-| `spec.image` | string | 否 | — | 自定义镜像；留空时 controller 按 runtime 使用 `AGENTTEAMS_WORKER_IMAGE`、`AGENTTEAMS_COPAW_WORKER_IMAGE`、`AGENTTEAMS_QWENPAW_WORKER_IMAGE` 或 `AGENTTEAMS_HERMES_WORKER_IMAGE`。当前 Chart 未提供 `worker.defaultImage.qwenpaw`，在 Kubernetes 中使用 `qwenpaw` 时应显式设置本字段。 |
+| `spec.runtime` | string | 否 | 安装/后端默认值 | `openclaw`、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`、`codex` 或旧版 `copaw`；Helm 默认 OpenClaw，本地安装器默认 QwenPaw。 |
+| `spec.image` | string | 否 | — | 自定义镜像；留空时 Controller 使用对应 runtime 的镜像配置。当前 Chart 为六种现行 Harness 提供 `worker.defaultImage` 配置；旧版 CoPaw 必须显式固定旧仓库与 tag。 |
 | `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
 | `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
 | `spec.agents` | string | 否 | — | Agent 行为规则，用于生成 AGENTS.md |
@@ -110,7 +110,7 @@ spec:
 
 修改 `spec.resources` 会更新 Worker 规格并重建受管容器或 Pod。不要在 Worker 正在处理任务时修改资源配置。
 
-Controller 内部已经包含 OpenHuman 后端和镜像配置，但当前发布的 Worker CRD enum 不接受 `openhuman`。在业务代码另行统一该契约前，不要在 Worker YAML 中设置 `spec.runtime: openhuman`。
+当前 Worker CRD 接受 OpenHuman 和 Codex。Chart 默认值及旧版 CoPaw 处理见[运行时与镜像配置](deployment/kubernetes.md#34-默认-worker-runtime)。
 
 ### identity / soul / agents 与 package 的关系
 
@@ -421,7 +421,7 @@ spec:
 |------|------|------|--------|------|
 | `metadata.name` | string | 是 | — | Manager 资源名（主实例常为 `default`） |
 | `spec.model` | string | 是 | — | LLM 模型 ID |
-| `spec.runtime` | string | 否 | 安装或后端默认值 | **OpenClaw**（`openclaw`）或 **CoPaw/QwenPaw**（`qwenpaw`；`copaw` 是旧版兼容别名）。**不支持**将 Hermes 作为 Manager 运行时。 |
+| `spec.runtime` | string | 否 | 安装/后端默认值 | `openclaw`、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`；`copaw` 为 QwenPaw 旧别名。Manager CRD 不接受 Codex。 |
 | `spec.image` | string | 否 | — | 自定义 Manager 镜像；留空则用部署默认值 |
 | `spec.soul` | string | 否 | — | 自定义 SOUL.md |
 | `spec.agents` | string | 否 | — | 自定义 AGENTS.md |

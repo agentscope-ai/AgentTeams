@@ -188,8 +188,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
 | `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
 | `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
-| `manager.runtime` | no | Manager runtime: OpenClaw uses `openclaw` (default); CoPaw uses `qwenpaw` in the current chart, with `copaw` retained as a compatibility alias. Managers do not support Hermes or DeepSeek Harness |
-| `worker.defaultRuntime` | no | The chart provides default image values for `openclaw` (default), `copaw`, `hermes`, experimental `deepseek-harness`, and `openhuman`; the current CRD rejects an explicit `spec.runtime: openhuman`, and QwenPaw Workers require an explicit `spec.image` |
+| `manager.runtime` | no | Current source chart: `openclaw` (default), `qwenpaw`, `hermes`, `deepseek-harness`, or `openhuman`; `copaw` is a QwenPaw compatibility alias. The Harness image is selected automatically unless overridden |
+| `worker.defaultRuntime` | no | `openclaw` (chart default), `qwenpaw`, `hermes`, `deepseek-harness`, `openhuman`, or `codex`; legacy `copaw` requires an explicitly pinned old image |
 
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 
@@ -203,13 +203,16 @@ helm install agentteams higress.io/agentteams \
 ```
 
 <details>
-<summary>Using alternative runtimes (CoPaw Manager + Hermes Workers)</summary>
+<summary>Using alternative runtimes (QwenPaw Manager + Hermes Workers)</summary>
+
+Run from the root of the current source checkout:
 
 ```bash
-helm install agentteams higress.io/agentteams \
-  -n agentteams-system --create-namespace --devel \
+helm dependency build helm/agentteams
+helm install agentteams ./helm/agentteams \
+  -n agentteams-system --create-namespace \
+  --set global.imageTag=v1.2.7 \
   --set manager.runtime=qwenpaw \
-  --set manager.image.repository=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-qwenpaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -218,7 +221,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-When selecting the CoPaw Manager, set both `manager.runtime=qwenpaw` and the `agentteams-manager-qwenpaw` image. Configure Worker default images through `worker.defaultImage.<runtime>`.
+The current source chart selects the QwenPaw Harness image automatically. Configure shared Harness images through `worker.defaultImage.<runtime>` and override `manager.image` only for custom images. See the [Kubernetes guide](docs/usage/deployment/kubernetes.md) for chart/image version selection.
 
 </details>
 
@@ -425,6 +428,8 @@ Worker Alice    Worker Bob              Worker Charlie
 | Monitoring | None | Manager heartbeat, visible in Room |
 
 ## Documentation
+
+Start with the [Dashboard Guide](docs/usage/dashboard.md) for the v1.4.1 workspace, model setup, teams, files, and Tracing.
 
 Browse the [documentation directory](docs/), or start with the overview and quickstart:
 

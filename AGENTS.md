@@ -4,7 +4,7 @@ This file helps AI Agents (and human developers) quickly understand the project 
 
 ## What is AgentTeams
 
-AgentTeams is an open-source Agent Teams system that uses IM (Matrix protocol) for multi-Agent collaboration with human-in-the-loop oversight. It consists of a Manager Agent (coordinator) and Worker Agents (task executors), connected via an AI Gateway (Higress), Matrix Homeserver (Tuwunel), and HTTP file storage (MinIO or cloud OSS). Production-style deployments use the Kubernetes operator and Helm chart; local installs use Docker Compose scripts under `install/`.
+AgentTeams is an open-source Agent Teams system that uses IM (Matrix protocol) for multi-Agent collaboration with human-in-the-loop oversight. It consists of a Manager Agent (coordinator) and Worker Agents (task executors), connected via an AI Gateway (Higress), Matrix Homeserver (Tuwunel), and HTTP file storage (MinIO or cloud OSS). Production-style deployments use the Kubernetes operator and Helm chart; local installs use the website-maintained installer at `https://agentteams.cloud/install.sh` or `install.ps1` to start the embedded container stack.
 
 ## Project Structure
 
@@ -13,17 +13,18 @@ AgentTeams/
 ├── agentteams-controller/   # Kubernetes operator (Go): reconciles Worker, Manager, Team, Human CRDs
 ├── helm/                # Helm chart (K8s): Higress, Tuwunel, MinIO, controller, Manager CR, defaults
 ├── manager/             # Manager images: OpenClaw-based (Dockerfile) and QwenPaw-based (Dockerfile.qwenpaw)
-├── worker/              # OpenClaw Worker image (shared base pattern; runtime also selected at deploy time)
+├── worker/              # Pinned submodule: agentteams-group/agentteams-harness-openclaw
+├── qwenpaw/             # Pinned submodule: agentteams-group/agentteams-harness-qwenpaw
 ├── hermes/              # Pinned submodule: agentteams-group/agentteams-harness-hermes
-├── deepseek-harness/    # Experimental headless DeepSeek Harness Worker image and Matrix bridge
+├── deepseek-harness/    # Pinned submodule: agentteams-group/agentteams-harness-deepseek
 ├── openhuman/           # OpenHuman Worker image: Rust core + native Matrix (channel-matrix feature)
 ├── openclaw-base/       # Base image: Ubuntu + Node.js + bundled agent assets + mcporter
 ├── shared/lib/          # Shared shell libs copied into images (agentteams-env.sh, render-skills.sh, …)
-├── install/             # Local install scripts (Docker Compose / embedded “all-in-one” stack)
+├── install/             # Install documentation, import/upgrade helpers and tests; full installer lives in website repo
 ├── scripts/             # Project-level utilities (e.g. replay-task.sh)
 ├── tests/               # Automated integration tests
 ├── docs/                # User-facing documentation
-├── design/              # Internal design notes and API specs
+│   └── design/          # Design notes and API specs under docs/design/
 ├── changelog/           # Archived release notes from earlier releases
 ├── hack/                # Maintenance helpers (e.g. image mirror scripts)
 ├── migrate/             # Optional migration helpers
@@ -39,22 +40,25 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 
 | Runtime   | Stack | Role |
 |-----------|--------|------|
-| `openclaw` | Node.js / OpenClaw (default) | Primary worker agent runtime |
+| `openclaw` | Node.js / OpenClaw | Helm default Worker runtime |
+| `qwenpaw` | Python / QwenPaw | Local installer default Worker runtime |
+| `openhuman` | Rust / OpenHuman | Native Matrix Worker runtime |
+| `codex` | Independent Codex Harness | Worker runtime; not accepted by the Manager CRD |
 | `copaw` (legacy) | Python / AgentScope via CoPaw | Legacy workers only (EOL; do not use for new workers) |
 | `hermes`   | Python / `hermes-worker` package | Alternative worker runtime (Matrix bridge + policies under `hermes/src/`) |
 | `deepseek-harness` | Node.js / DeepSeek Harness | Experimental headless Worker runtime pinned to a tested DSH release |
 
-**Manager runtimes** (container env `AGENTTEAMS_MANAGER_RUNTIME`, CoPaw Manager CR / Helm `manager.runtime` where applicable):
+**Manager runtimes** (container env `AGENTTEAMS_MANAGER_RUNTIME`, Manager CR / Helm `manager.runtime` where applicable):
 
 | Runtime   | Behavior |
 |-----------|-----------|
 | `openclaw` | Shared OpenClaw Worker image and entrypoint; Manager role assets and credentials are projected by the controller. |
-| `qwenpaw` (default) | Shared QwenPaw Harness image and `qwenpaw-worker-entrypoint.sh`; `runtime.yaml` selects the Manager role, with TeamHarness communication and `agt` management tools. |
+| `qwenpaw` (local installer default) | Shared QwenPaw Harness image and `qwenpaw-worker-entrypoint.sh`; `runtime.yaml` selects the Manager role, with TeamHarness communication and `agt` management tools. |
 | `hermes` | Shared Hermes image; Manager instructions are bound into the native system prompt and Matrix policies remain scoped to DM/group senders. |
 | `deepseek-harness` | Shared DSH image; TeamHarness selects Manager context and skills without requiring Team membership. |
 | `openhuman` | Shared OpenHuman image; native Matrix receives explicitly mentioned Manager messages across joined rooms. |
 
-Each Harness uses its Worker image and entrypoint for Manager, Leader, and Worker. The controller projects role, credentials, prompts, and policy; the Manager remains a Manager API resource. The legacy Manager selector `copaw` resolves to QwenPaw without changing the CoPaw Worker runtime. `agt message` supplies cross-room messaging when a Harness lacks a native tool. OpenClaw keeps the controller compatibility projection separate from its SDK-owned native config so SDK migrations survive controller updates.
+The five supported Manager Harnesses use their Worker image and entrypoint for Manager, Leader, and Worker. Helm defaults to OpenClaw; the local installer offers QwenPaw and OpenClaw. Core v1.2.7 publishes six shared Harness images with tag `v1.2.7`, including the Worker-only Codex image, and does not publish dedicated Manager images. The controller projects role, credentials, prompts, and policy; the Manager remains a Manager API resource. The legacy Manager selector `copaw` resolves to QwenPaw without changing the CoPaw Worker runtime. `agt message` supplies cross-room messaging when a Harness lacks a native tool. OpenClaw keeps the controller compatibility projection separate from its SDK-owned native config so SDK migrations survive controller updates.
 
 **Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack, `aliyun`, or `k8s` selects infrastructure and storage integration. Controller/installer infrastructure bootstrap is separate from the shared Harness entrypoints.
 
@@ -94,8 +98,8 @@ manager/agent/
 ### To understand the architecture
 
 - Read [docs/design/architecture.md](docs/design/architecture.md) for system overview and component diagram
-- Read [design/design.md](design/design.md) for full product design (Chinese)
-- Read [design/poc-design.md](design/poc-design.md) for detailed implementation specs
+- Read [TeamHarness contracts](docs/design/teamharness/boundary-and-contracts.md) for runtime boundaries
+- Read the [Dashboard Guide](docs/usage/dashboard.md) for the user workspace
 
 ### Kubernetes deployment
 
@@ -214,7 +218,7 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 ### To modify Higress routing and initialization
 
 - [manager/scripts/init/setup-higress.sh](manager/scripts/init/setup-higress.sh) — route, consumer, MCP server setup (local / full console mode)
-- [design/higress-console-api.yaml](design/higress-console-api.yaml) — Higress Console API spec (OpenAPI 3.0)
+- [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) — gateway management API guide
 
 ## Technology Stack
 
@@ -225,8 +229,9 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 | Matrix Server | Tuwunel (conduwuit fork) | IM between Agents and Human |
 | Matrix Client | Element Web (optional) | Browser-based IM interface |
 | File System | MinIO or OSS | Centralized object storage for workspaces and agent state |
-| Agent Framework | OpenClaw (fork) | Default Manager/Worker runtime (Node.js gateway + Matrix plugin) |
-| Agent Framework | CoPaw (Python / AgentScope) | Alternative Manager and Worker runtime |
+| Agent Framework | OpenClaw (fork) | Helm default Manager/Worker runtime (Node.js gateway + Matrix plugin) |
+| Agent Framework | QwenPaw | Local installer default Manager/Worker runtime |
+| Agent Framework | CoPaw (Python / AgentScope) | Legacy Workers only; Manager selector maps to QwenPaw |
 | Agent Framework | Hermes (`hermes-worker`) | Alternative Python Worker runtime |
 | Agent Framework | DeepSeek Harness (`@deepseek-ai/dsh`) | Experimental headless Worker runtime with room-scoped session continuation |
 | Agent Framework | OpenHuman (`openhuman-core`) | Alternative Rust Worker runtime with native Matrix |
@@ -361,7 +366,7 @@ See [manager/scripts/init/start-manager-agent.sh](manager/scripts/init/start-man
 
 ## Verified Technical Details
 
-All technical assumptions have been verified in POC. See [design/poc-tech-verification.md](design/poc-tech-verification.md) for detailed verification results. Key findings that affect implementation:
+Check current implementation and the [architecture guide](docs/design/architecture.md) when changing these integrations. Key implementation details:
 
 - Tuwunel uses `CONDUWUIT_` env prefix (not `TUWUNEL_`)
 - Higress Console uses Session Cookie auth (not Basic Auth)

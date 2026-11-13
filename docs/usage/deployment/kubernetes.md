@@ -81,39 +81,32 @@ This value is written into Element Web and Matrix-related configuration. It must
 
 ### 3.3 Manager runtime
 
-The user-facing Manager runtime choices are **OpenClaw** and **CoPaw** only:
+The current source chart and Manager CRD support `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, and `openhuman`. The chart defaults to OpenClaw; the local installer recommends QwenPaw and offers OpenClaw as the alternative. `copaw` is a legacy Manager alias for QwenPaw. Codex is a Worker runtime and is not accepted by the Manager CRD.
 
-| Choice | `manager.runtime` | Manager image | Notes |
-|---|---|---|---|
-| OpenClaw | `openclaw` | `agentteams-manager` | Current chart default |
-| CoPaw | `qwenpaw` | `agentteams-manager-qwenpaw` | Current Python Manager implementation; `copaw` is a legacy compatibility alias |
-
-Hermes, DeepSeek Harness, OpenHuman, and other Worker runtimes are not Manager runtime choices.
-
-The current chart does not rewrite `manager.image.repository` based only on `manager.runtime`. When choosing CoPaw, set both values:
+Manager, Leader, and Worker roles reuse the selected Harness image. Leave `manager.image.repository` empty to select it from `worker.defaultImage`; only set it when using a custom image:
 
 ```yaml
 manager:
   runtime: qwenpaw
-  image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-qwenpaw
 ```
 
-Changing only the runtime while retaining the OpenClaw Manager image can leave the Manager Pod unable to start or running with mismatched behavior.
+For example, QwenPaw resolves to `agentteams-harness-qwenpaw`, and OpenClaw to `agentteams-harness-openclaw`. An explicit image override must match the selected runtime. Core v1.2.7 no longer publishes dedicated Manager images.
 
 ### 3.4 Default Worker runtime
 
-`worker.defaultRuntime` selects the default runtime for subsequently created Workers. An explicit `spec.runtime` on an individual `Worker` CR overrides it.
+`worker.defaultRuntime` selects the default for new Workers; individual `Worker.spec.runtime` values override it.
 
 | Runtime | Default image value | Notes |
 |---|---|---|
-| `openclaw` | `worker.defaultImage.openclaw` | Default general-purpose Worker runtime |
-| `copaw` | `worker.defaultImage.copaw` | Python / CoPaw Worker |
-| `hermes` | `worker.defaultImage.hermes` | Hermes Worker |
-| `deepseek-harness` | `worker.defaultImage.deepseekHarness` | Experimental headless DeepSeek Harness Worker with Matrix text/files and object-storage-backed recovery; pinned to a tested DSH release candidate; Matrix E2EE is rejected at startup |
-| `openhuman` | `worker.defaultImage.openhuman` | The chart has a default image value, but the current Worker CRD enum does not accept an explicit `spec.runtime: openhuman` |
+| `openclaw` | `worker.defaultImage.openclaw` | Chart default |
+| `qwenpaw` | `worker.defaultImage.qwenpaw` | Local installer default |
+| `hermes` | `worker.defaultImage.hermes` | Python Harness |
+| `deepseek-harness` | `worker.defaultImage.deepseekHarness` | Experimental headless Harness; Matrix E2EE is rejected at startup |
+| `openhuman` | `worker.defaultImage.openhuman` | Rust Harness with native Matrix |
+| `codex` | `worker.defaultImage.codex` | Independently maintained Codex Harness |
+| `copaw` | `worker.defaultImage.copaw` | Legacy deployments only; explicitly pin both the old repository and tag |
 
-The Controller recognizes the `qwenpaw` Worker runtime, but the current chart does not provide a separate default image value for it. Set the QwenPaw Worker image explicitly in `Worker.spec.image` when using it. The OpenHuman backend and Helm value exist, but the CRD contract is not aligned yet; do not use `openhuman` explicitly in Worker YAML until a separate business-code change resolves it.
+All seven values are accepted by the current Worker CRD. The six current Harness images are published with the Core `v1.2.7` tag. DeepSeek and Codex have explicit chart tags; override their `tag` values separately when selecting a different image set. CoPaw has no new release image and no default repository.
 
 ## 4. Configure the model service
 
@@ -224,7 +217,7 @@ manager:
   enabled: true
   runtime: openclaw
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw
   resources:
     requests:
       cpu: 500m
@@ -657,7 +650,7 @@ Check node resources, the default StorageClass, PVC binding, taints, and schedul
 
 ### A Pod is in `ImagePullBackOff`
 
-Confirm that nodes can reach the registry, the image tag exists, the CPU architecture matches, and private registries have `imagePullSecrets`. When switching to the CoPaw Manager, verify that both the runtime and Manager image match.
+Confirm that nodes can reach the registry, the image tag exists, the CPU architecture matches, and private registries have `imagePullSecrets`. When switching to the QwenPaw Manager, verify that both the runtime and Manager image match.
 
 If a source installation reports that an image such as `agentteams-controller:v<Chart.appVersion>` does not exist, inspect the rendered images and temporarily override the tag with one that exists:
 

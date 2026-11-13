@@ -2,6 +2,8 @@
 
 This guide explains how to integrate AgentTeams with Alibaba Cloud Monitor Service (CMS) 2.0 for comprehensive observability of your AI Agent applications.
 
+For Core v1.2.7 + Dashboard v1.4.1, see [Dashboard Tracing](../dashboard.md#optional-tracing) for Controller-managed Collector configuration and Langfuse/AgentLoop queries. The CMS environment settings below describe the separate CMS export integration; they do not configure Dashboard's query backend.
+
 ## Version Requirements
 
 **⚠️ Important: CMS 2.0 observability support is available starting from AgentTeams v1.0.9.**
@@ -63,9 +65,9 @@ Note down the following parameters from the generated configuration:
 - For VPC connections, ensure your AgentTeams deployment has network access to the VPC endpoint
 - The license key is sensitive information - store it securely
 
-## Step 2: Configure AgentTeams Manager
+## Step 2: Configure CMS export defaults
 
-Add the following environment variables to your AgentTeams Manager container, then restart it:
+Configure the following environment variables on the Controller deployment so it can project CMS defaults into managed Agent containers:
 
 ```bash
 # Enable trace collection
@@ -87,18 +89,18 @@ AGENTTEAMS_CMS_LICENSE_KEY=d95vgxi0cn@xxxxx
 AGENTTEAMS_CMS_ENDPOINT=https://proj-xtrace-xxx.cn-hangzhou.log.aliyuncs.com/apm/trace/opentelemetry
 ```
 
-After configuration, restart the container: `docker restart agentteams-manager`
+Apply the updated deployment configuration and recreate containers through the normal deployment workflow. `docker restart` alone does not load changed environment variables from a host file.
 
 ### v1.1.0+ multi-container / Helm placement
 
 | Where | What to configure |
 |-------|-------------------|
-| **Embedded Docker** | Put all `AGENTTEAMS_CMS_*` variables on **`agentteams-manager`** (or `agentteams-manager-qwenpaw` if you use QwenPaw Manager). They are loaded from your `agentteams-manager.env` at container start. **`agentteams-controller`** does not need CMS env for normal agent tracing. |
-| **Helm / Kubernetes** | Set the same keys on the **Manager** Deployment (see `helm/agentteams/values.yaml` → manager env). Optionally seed worker defaults there so every Worker Pod receives CMS settings even if Manager was configured late. |
+| **Embedded Docker** | Persist the `AGENTTEAMS_CMS_*` settings in the installer environment configuration and apply through the installer. It passes them to `agentteams-controller`, which supplies managed Agent defaults. |
+| **Helm / Kubernetes** | Set `cms.enabled`, `cms.endpoint`, `cms.licenseKey`, `cms.project`, `cms.workspace`, `cms.serviceName`, and optional `cms.metricsEnabled` in chart values. The Controller Deployment receives these settings; the Manager is a CR-managed Pod, not a separate Helm Deployment. |
 
 ## Step 3: Configure AgentTeams Workers
 
-Manager will automatically propagate CMS configuration to newly created Workers. Ensure you configure Manager before creating Workers.
+The Controller projects configured CMS defaults into new managed Agent containers. Existing containers need their effective environment updated and recreation while idle. Verify the selected Harness supports the CMS exporter; the generic QwenPaw/Hermes Collector flow is configured separately through Dashboard.
 
 ## Step 4: Verify Integration
 
@@ -113,12 +115,12 @@ Manager will automatically propagate CMS configuration to newly created Workers.
 
 1. Check network connectivity: `curl -I <ENDPOINT_URL>`
 2. Verify `AGENTTEAMS_CMS_LICENSE_KEY` is correct (no spaces/newlines)
-3. Confirm container restarted: `docker restart agentteams-manager`
+3. Confirm the container was recreated with the updated environment; restarting an unchanged container does not add variables
 4. Check container logs: `docker logs agentteams-manager`
 5. OTLP data is batched, may have up to 60s delay
 
 ### Workers not sending telemetry?
 
-1. Confirm Manager has CMS environment variables configured before creating Workers
+1. Confirm the Controller has the intended CMS defaults and the selected Harness supports them
 2. Verify Worker container's `AGENTTEAMS_CMS_*` environment variables
-3. Workers created before Manager configuration need to be deleted and recreated
+3. Update the effective Worker environment and recreate the managed container while idle; do not delete the Worker resource merely to refresh telemetry

@@ -56,7 +56,7 @@ Running multiple Workers, using the OpenClaw runtime, or executing build workloa
 
 Prepare:
 
-- A working LLM API key.
+- A working LLM API key before the first conversation; installation can finish without one.
 - The corresponding Base URL and model ID. The installer fills in default endpoints for its built-in Alibaba Cloud options.
 - An optional GitHub Personal Access Token for GitHub MCP scenarios.
 - Network access to pull AgentTeams images and reach the model provider.
@@ -86,10 +86,10 @@ On Linux systems without `lsof`, use `ss -lnt`.
 
 | Method | Best for | Behavior |
 |---|---|---|
-| **Quick Start** | First evaluation | Prompts for version, model, API key, and runtimes; uses recommended defaults for everything else. |
+| **Quick Start** | First evaluation | Starts services and Dashboard without configuration questions; configure the model after signing in. |
 | **Manual Setup** | Custom network, storage, Dashboard, or security settings | Presents the complete sequence of interactive options. |
 | **Non-interactive installation** | Automation, CI, or repeatable deployments | Reads configuration from environment variables and does not wait for terminal input. |
-| **Upgrade an existing instance** | Existing configuration and containers | Keeps all settings or lets you confirm each setting. |
+| **Upgrade an existing instance** | Existing configuration and containers | One confirmation preserves data and settings; use `--manual` to review settings individually. |
 
 ## Quick Start
 
@@ -99,14 +99,11 @@ Run:
 bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
-After choosing Quick Start, the installer still asks you to:
+The default flow selects the recommended stable image set and uses QwenPaw for the Manager and default Workers. Worker images are pulled on demand. An API key and embedding model are optional during installation; existing environment overrides are preserved.
 
-1. Install `latest`, the latest stable release, or a specific version.
-2. Select a model service and model, and enter the LLM API key.
-3. Select the Manager runtime: QwenPaw (recommended), OpenClaw, or legacy CoPaw.
-4. Select the default Worker runtime: QwenPaw (recommended), OpenClaw, Hermes in supported versions, or legacy CoPaw.
+Dashboard opens at `http://127.0.0.1:13000/` with `admin` prefilled and the generated password copied to your clipboard. If desktop integration is unavailable, use the URL and credentials printed in the terminal. Open the Manager conversation and choose **Configure model** before the first conversation if no model is configured.
 
-The remaining settings use these defaults:
+The installation uses these defaults:
 
 | Setting | Quick Start behavior |
 |---|---|
@@ -127,7 +124,7 @@ When installation finishes, the terminal prints the access URLs, administrator c
 
 ## Manual Setup flow
 
-Manual Setup runs the following steps in order. Enter `b` to return to the previous completed step.
+Run `bash <(curl -fsSL https://agentteams.cloud/install.sh) --manual` to configure the following options interactively. Enter `b` to return to the previous completed step.
 
 ### 1. Language and installation mode
 
@@ -212,7 +209,7 @@ The embedding model can use the default, a custom value, or be disabled. If its 
 |---|---|---|
 | QwenPaw | `qwenpaw` | Recommended Python Manager runtime and the local installer's default choice. |
 | OpenClaw | `openclaw` | Node.js Manager runtime. |
-| CoPaw | `copaw` | Legacy Python runtime. Upgrade to QwenPaw is recommended. |
+| `copaw` compatibility alias | `copaw` | Existing Manager configurations resolve to QwenPaw; not a new-install choice. |
 
 The Manager runtime selects the Manager image and execution mode. Changing the runtime of an existing Manager recreates its container and should be done only when no task is in progress.
 
@@ -225,7 +222,7 @@ The local installer currently offers:
 | QwenPaw | `qwenpaw` | Recommended default; current Python runtime. |
 | OpenClaw | `openclaw` | Node.js runtime. |
 | Hermes | `hermes` | Displayed starting with versions that support this runtime. |
-| CoPaw | `copaw` | Legacy Python runtime. Upgrade to QwenPaw is recommended. |
+| DeepSeek Harness | `deepseek-harness` | Experimental runtime, offered for supported Core versions. |
 
 This setting only selects the default for Workers created later. You can still explicitly select another runtime supported by the controller when creating a Worker.
 
@@ -293,9 +290,9 @@ The Bash installer enables the Dashboard by default. Manual Setup can configure:
 - The Dashboard image.
 - The Higress Console URL used for shared authentication.
 
-The Dashboard supports only the current embedded controller architecture. The PowerShell installer does not currently install the Dashboard.
+Both Bash and PowerShell installers include Dashboard in the embedded deployment. Dashboard can also be deployed separately against an existing Controller; see the [Dashboard installation guide](https://github.com/agentteams-group/agentteams-dashboard#-quick-start). Core and Dashboard have separate version numbers; the v1.2.7 release pairs with Dashboard v1.4.1.
 
-When the Dashboard is enabled, open **资源中心 (Resource Center) → 市场 (Marketplace)**. If the Skill is not yet in the marketplace, add it with **上传技能 (Upload Skill)**, then click **分发到 Worker (Distribute to Worker)** in the target Skill's row and select one or more Workers. You can also upload a Skill ZIP directly to one Worker through **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**. Both paths write the complete package to the Worker's persistent Skill directory, update `Worker.spec.skills`, and attempt to reload the Worker. See [Worker Guide: Distribute through the Dashboard](../worker-guide.md#method-2-distribute-through-the-dashboard) for package rules, reload impact, and verification.
+When the Dashboard is enabled, open **资产中心 (Asset Center) → 技能 (Skills)**. If the Skill is not yet in the marketplace, add it with **上传技能 (Upload Skill)**, then click **分发到 Worker (Distribute to Worker)** in the target Skill's row and select one or more Workers. You can also upload a Skill ZIP directly to one Worker through **成员与团队 (Members & Teams) → 团队与Agent (Teams & Agents) → target Worker → 上传技能包 (Upload Skill Package)**. Both paths write the complete package to the Worker's persistent Skill directory, update `Worker.spec.skills`, and attempt to reload the Worker. See [Worker Guide: Distribute through the Dashboard](../worker-guide.md#method-2-distribute-through-the-dashboard) for package rules, reload impact, and verification.
 
 ### 14. Matrix E2EE
 
@@ -443,10 +440,7 @@ Run the installer again to detect the existing configuration and enter the upgra
 bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
-Upgrade mode offers:
-
-- **Keep all settings**: reuse the current environment file.
-- **Confirm each setting**: show the current value at each step and allow changes.
+The default upgrade asks for one confirmation, preserves accounts, models, chat history, workspaces and data, backs up the environment file, and prepares images before replacing services. Use `--manual` to review individual settings. Unmatched existing data stops the upgrade without cleanup.
 
 Pin the target version with:
 
@@ -455,7 +449,7 @@ AGENTTEAMS_VERSION=vX.Y.Z \
 bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
-An upgrade restarts the Manager and may recreate Worker containers. Persistent data is preserved, but finish active tasks and back up important data first.
+Normal embedded-stack upgrades replace the Controller/Manager services and leave existing Worker containers in place. Finish active work and back up important data before upgrading. See [installation and upgrade details](../../../install/README.md#upgrade-an-existing-local-installation) for Dashboard version selection and the separate database backup/rollback workflow.
 
 ## Uninstall
 

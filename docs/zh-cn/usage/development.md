@@ -31,7 +31,7 @@ git submodule update --init --recursive
 
 `make build-hermes-worker` 会自动初始化缺失的子模块。升级 Hermes 时，先更新独立仓库，
 再同时更新子模块提交和 `hack/versions.env` 中的 `HERMES_GIT_REF`。
-现有镜像名称、Helm 与安装器默认值继续由主仓库管理。
+Helm 镜像默认值由主仓库管理；安装器默认值由官网仓库管理。
 
 ## 本地构建镜像
 
@@ -46,10 +46,12 @@ git submodule update --init --recursive
 | OpenHuman | `agentteams-harness-openhuman` |
 | Codex | `agentteams-harness-codex` |
 
-Core 本地构建使用 `agentteams/` 前缀。Codex 仍在独立仓库中构建；DeepSeek 和
-Codex 继续使用独立版本号。Manager 角色可以复用同一 Harness 镜像，原 Manager
-镜像标签保留为兼容别名。容器名、运行时 ID 和镜像覆盖环境变量保持不变。
-安装器为历史 Core 版本和 v0.1.2 之前的 DeepSeek 版本保留原仓库名称。
+Core 本地构建使用 `agentteams/` 前缀。v1.2.7 通过
+`.github/workflows/publish-harnesses.yml` 为六种 Harness 统一发布 `v1.2.7`
+标签及 amd64/arm64 镜像。Codex 源码仍独立维护。Manager 角色复用 Harness
+镜像，不再发布专用 Manager 镜像；本地 Manager 兼容构建目标仍保留。
+容器名、运行时 ID 和镜像覆盖环境变量保持不变。安装脚本及历史版本映射由
+[官网仓库](https://github.com/agentteams-group/agentteams-group.github.io)维护。
 
 所有构建都通过根目录的 `Makefile` 进行：
 
@@ -75,9 +77,8 @@ make build-deepseek-harness-worker
 # 使用指定版本标签构建
 make build VERSION=local-dev
 
-# DeepSeek Harness 使用独立于主版本的 runtime 版本
-make push-deepseek-harness-worker VERSION=sha-$(git rev-parse --short=12 HEAD) \
-    PUSH_LATEST= DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.2
+# 使用明确的开发标签构建本地 DeepSeek Harness 镜像
+make build-deepseek-harness-worker VERSION=local-dev
 
 # 为指定平台构建
 make build DOCKER_PLATFORM=linux/amd64

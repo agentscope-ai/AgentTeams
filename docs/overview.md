@@ -34,7 +34,8 @@ If you only need a one-off conversation with a single agent and do not need role
 |---|---|
 | **agentteams-controller** | Manages Worker, Manager, Team, and Human resources, agent lifecycles, and related infrastructure configuration. |
 | **Matrix / Tuwunel** | Carries visible communication among Humans, Managers, Workers, and Team Leaders. |
-| **Element Web** | The default Matrix web client. Other compatible Matrix clients can also be used. |
+| **Dashboard** | Default local workspace for chat, team/Agent management, tasks, files, and Tracing. See the [Dashboard Guide](usage/dashboard.md). |
+| **Element Web** | Optional Matrix web client; included by the default Helm profile. Other compatible clients can also be used. |
 | **Higress** | Acts as the AI/API gateway for LLM and MCP traffic, identity, and access control. |
 | **MinIO or compatible object storage** | Stores agent workspaces, configuration, shared task context, and artifacts. |
 | **Manager and Worker containers/Pods** | Run the agent runtimes. They are separated from infrastructure and can be created or replaced on demand. |
@@ -67,21 +68,13 @@ For a first evaluation, start with the local path in [Quickstart](quickstart.md)
 
 ## Agent runtimes
 
-Manager currently supports:
+Workers support OpenClaw, QwenPaw, Hermes, experimental DeepSeek Harness, OpenHuman, and Codex. Legacy `copaw` remains accepted for existing deployments, with an explicitly pinned old image.
 
-- **CoPaw**: the current QwenPaw-based Python Manager implementation; the canonical value is `qwenpaw`, while the local installer still uses `copaw` as a compatibility alias.
-- **OpenClaw**: a Node.js runtime.
+The current Manager CRD supports the same runtimes except Codex; its legacy `copaw` selector maps to QwenPaw. The local installer offers QwenPaw (default) and OpenClaw Managers. Helm defaults to OpenClaw and selects the shared Harness image for the chosen runtime.
 
-Worker resources support the following runtimes. Available images depend on the installation method and version:
+Core v1.2.7 publishes all six current Harness images with the `v1.2.7` tag. Dashboard is independently versioned at `v1.4.1` for that release. See [runtime/image configuration](usage/deployment/kubernetes.md#33-manager-runtime) for the current chart and overrides.
 
-- **OpenClaw**
-- **CoPaw**
-- **QwenPaw**
-- **Hermes**
-
-The Controller and Helm values already contain an OpenHuman backend and image configuration, but the shipped Worker CRD enum does not yet accept an explicit `spec.runtime: openhuman`. Until a separate business-code change aligns that contract, do not treat OpenHuman as a directly declarable Worker runtime.
-
-The runtime selects the agent framework and image, while AgentTeams manages the Worker's identity, Matrix rooms, and persistent data. Switching runtimes normally recreates the Worker environment and should not be done while the Worker is executing a task.
+The runtime selects the execution framework and image; AgentTeams manages identity, Matrix rooms, permissions, and persistent data. Switching runtime recreates the Agent environment and should be done while idle.
 
 ## Resources and management interfaces
 

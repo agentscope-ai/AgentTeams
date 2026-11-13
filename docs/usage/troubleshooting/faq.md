@@ -273,7 +273,7 @@ If installation fails, check that the folder name matches the `name` in `SKILL.m
 
 ### Distribute through the Dashboard
 
-Open **资源中心 (Resource Center) → 市场 (Marketplace)**. If the Skill is not yet in the marketplace, click **上传技能 (Upload Skill)** and upload a Skill ZIP no larger than 64 MB. Then click **分发到 Worker (Distribute to Worker)** in the target Skill's row, select one or more Workers, and click **分发到 N 个 Worker (Distribute to N Workers)**. You can also upload a ZIP directly to one Worker through **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**, or select existing marketplace or Nacos Skills in the **技能 (Skills)** field when creating or editing a Worker. The ZIP must contain a `SKILL.md` with `name` and `description` frontmatter.
+Open **资产中心 (Asset Center) → 技能 (Skills)**. If the Skill is not yet in the marketplace, click **上传技能 (Upload Skill)** and upload a Skill ZIP no larger than 64 MB. Then click **分发到 Worker (Distribute to Worker)** in the target Skill's row, select one or more Workers, and click **分发到 N 个 Worker (Distribute to N Workers)**. You can also upload a ZIP directly to one Worker through **成员与团队 (Members & Teams) → 团队与Agent (Teams & Agents) → target Worker → 上传技能包 (Upload Skill Package)**, or select existing marketplace or Nacos Skills in the **技能 (Skills)** field when creating or editing a Worker. The ZIP must contain a `SKILL.md` with `name` and `description` frontmatter.
 
 Do not confuse **上传技能 (Upload Skill)** in the upper-right corner of the marketplace with Worker distribution: that action only manages the Dashboard's centralized marketplace. After uploading, click **分发到 Worker (Distribute to Worker)** in the target Skill's row. After distribution, check **已分发技能 (Distributed Skills)** in Worker details and `Worker.spec.skills`. The Dashboard attempts to restart the Worker to trigger loading. If the restart is not confirmed, the files and `spec.skills` remain in place, the UI reports a partial failure, and a subsequent Controller reconcile can still make the assignment effective.
 
@@ -687,7 +687,7 @@ The current Worker CR supports the following runtime values:
 | QwenPaw | Python | Current QwenPaw 2.x path, Python-native workflows, and data science |
 | Hermes | Python | Autonomous coding, development tasks |
 
-The Controller and CLI contain OpenHuman-related implementation, but the shipped Worker CRD enum does not accept `openhuman`. When creating a Worker through YAML or the Kubernetes API, use the four values in the table above.
+The current Worker CRD also accepts `deepseek-harness`, `openhuman`, and `codex`. See the [complete runtime/image table](../deployment/kubernetes.md#34-default-worker-runtime).
 
 ### At creation time
 
@@ -724,13 +724,13 @@ Manager will use the worker-management skill to trigger a container recreation. 
 
 `QwenPaw` is the current Python runtime implementation. Both `qwenpaw` and the
 legacy compatibility value `copaw` are still accepted. The local installer
-currently writes `copaw`, while the Helm Manager configuration uses `qwenpaw`;
-both Manager values start the QwenPaw-based Python implementation.
+writes `qwenpaw`; old Manager configurations using `copaw` still resolve to
+QwenPaw. Helm defaults to OpenClaw unless `manager.runtime` is overridden.
 
 For Workers, keep the runtime and image paired instead of rewriting the value
 alone: existing deployments may map `copaw` to `agentteams-copaw-worker`, while
 the newer QwenPaw path uses `agentteams-harness-qwenpaw`. The QwenPaw Manager
-image is `agentteams-manager-qwenpaw`.
+uses the same `agentteams-harness-qwenpaw` image as its Workers in Core v1.2.7.
 
 ---
 

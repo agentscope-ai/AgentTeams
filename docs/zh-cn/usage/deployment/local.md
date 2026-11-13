@@ -56,7 +56,7 @@ Manager 和 Worker 不把持久状态只保存在容器内。Agent 配置、Matr
 
 准备以下信息：
 
-- 一个可用的 LLM API Key。
+- 首次对话前准备可用的 LLM API Key；安装本身可以不提供。
 - 对应的 Base URL 和模型 ID；使用安装器内置的阿里云选项时由安装器填写默认地址。
 - 可选的 GitHub Personal Access Token，用于 GitHub MCP 场景。
 - 拉取 AgentTeams 镜像和访问模型服务所需的网络连接。
@@ -86,10 +86,10 @@ Linux 没有 `lsof` 时，可以使用 `ss -lnt`。
 
 | 方式 | 适用场景 | 行为 |
 |---|---|---|
-| **快速开始** | 第一次体验 | 询问版本、模型、API Key 和运行时；其余选项使用推荐默认值。 |
+| **快速开始** | 第一次体验 | 无配置提问地启动服务与 Dashboard，登录后再配置模型。 |
 | **手动配置** | 需要自定义网络、存储、Dashboard 或安全选项 | 按顺序展示完整交互选项。 |
 | **非交互式安装** | 自动化、CI 或重复部署 | 通过环境变量提供配置，不等待终端输入。 |
-| **升级已有实例** | 已存在配置文件和容器 | 保留全部配置，或逐项确认新配置。 |
+| **升级已有实例** | 已存在配置文件和容器 | 一次确认后保留数据与配置；使用 `--manual` 可逐项检查配置。 |
 
 ## 快速开始
 
@@ -99,14 +99,11 @@ Linux 没有 `lsof` 时，可以使用 `ss -lnt`。
 bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
-选择“快速开始”后，安装器仍会让你完成以下选择：
+默认流程选择推荐的稳定版镜像集，Manager 和默认 Worker 使用 QwenPaw；Worker 镜像按需拉取。安装时无需提供 API Key 或 embedding 模型，已有环境变量覆盖值会保留。
 
-1. 安装 `latest`、最新稳定版或指定版本。
-2. 选择模型服务和模型，并输入 LLM API Key。
-3. 选择 Manager runtime：QwenPaw（推荐）、OpenClaw 或旧版 CoPaw。
-4. 选择默认 Worker runtime：QwenPaw（推荐）、OpenClaw、支持版本中的 Hermes 或旧版 CoPaw。
+Dashboard 就绪后会自动打开 `http://127.0.0.1:13000/`，预填用户名 `admin`，并将生成的密码复制到剪贴板。无法使用浏览器或剪贴板时，请使用终端打印的地址和凭证。如果尚未配置模型，在首次对话前打开 Manager 会话，点击「配置模型」完成设置。
 
-其余配置采用以下默认值：
+安装采用以下默认值：
 
 | 配置 | 快速开始默认行为 |
 |---|---|
@@ -127,7 +124,7 @@ bash <(curl -sSL https://agentteams.cloud/install.sh)
 
 ## 手动配置流程
 
-手动配置会按照下面的顺序执行。输入 `b` 可以返回上一个已经执行的步骤。
+运行 `bash <(curl -fsSL https://agentteams.cloud/install.sh) --manual`，即可交互配置以下选项。输入 `b` 可以返回上一个已经执行的步骤。
 
 ### 1. 语言和安装模式
 
@@ -212,7 +209,7 @@ Embedding 模型可以使用默认值、自定义或关闭。连通性检查失�
 |---|---|---|
 | QwenPaw | `qwenpaw` | 推荐的 Python Manager runtime，也是本地安装器的默认选项。 |
 | OpenClaw | `openclaw` | Node.js Manager runtime。 |
-| CoPaw | `copaw` | 旧版 Python runtime，建议升级为 QwenPaw。 |
+| `copaw` 兼容别名 | `copaw` | 旧 Manager 配置映射到 QwenPaw，不是新安装选项。 |
 
 Manager runtime 决定 Manager 镜像和运行方式。修改已有 Manager runtime 会重建 Manager 容器，应在没有进行中任务时操作。
 
@@ -225,7 +222,7 @@ Manager runtime 决定 Manager 镜像和运行方式。修改已有 Manager runt
 | QwenPaw | `qwenpaw` | 推荐默认项，当前 Python runtime。 |
 | OpenClaw | `openclaw` | Node.js runtime。 |
 | Hermes | `hermes` | 从支持该 runtime 的版本开始显示。 |
-| CoPaw | `copaw` | 旧版 Python runtime，建议升级为 QwenPaw。 |
+| DeepSeek Harness | `deepseek-harness` | 实验性运行时，仅在支持它的 Core 版本中提供。 |
 
 该选项只设置后续创建 Worker 时的默认 runtime。创建 Worker 时仍可以显式选择 controller 支持的其他 runtime。
 
@@ -293,9 +290,9 @@ Bash 安装器默认安装 Dashboard。手动模式可以设置：
 - Dashboard 镜像。
 - 用于共享认证的 Higress Console 地址。
 
-Dashboard 仅支持当前 embedded controller 架构。PowerShell 安装器当前不安装 Dashboard。
+Bash 和 PowerShell 安装器都会在 embedded 部署中集成 Dashboard。Dashboard 也可以独立连接已有 Controller，参见 [Dashboard 安装指南](https://github.com/agentteams-group/agentteams-dashboard/blob/main/README.zh-CN.md)。Core 和 Dashboard 独立编号；Core v1.2.7 搭配 Dashboard v1.4.1。
 
-Dashboard 启用后，可以进入**资源中心 → 市场**；如果 Skill 尚未入库，先点击**上传技能**完成上传，再从目标 Skill 所在行点击**分发到 Worker**并选择一个或多个 Worker。也可以从 **Workers → 目标 Worker → 详情 → 上传技能包**直接为单个 Worker 上传 Skill ZIP。两种路径都会把完整包写入 Worker 的持久化 Skill 目录、更新 `Worker.spec.skills` 并尝试重新加载 Worker；详细的包格式、加载影响和验证方式参见 [Worker 指南：通过 Dashboard 分发](../worker-guide.md#方式二通过-dashboard-分发)。
+Dashboard 启用后，可以进入**资产中心 → 技能**；如果 Skill 尚未入库，先点击**上传技能**完成上传，再从目标 Skill 所在行点击**分发到 Worker**并选择一个或多个 Worker。也可以从 **成员与团队 → 团队与Agent → 目标 Worker → 上传技能包**直接为单个 Worker 上传 Skill ZIP。两种路径都会把完整包写入 Worker 的持久化 Skill 目录、更新 `Worker.spec.skills` 并尝试重新加载 Worker；详细的包格式、加载影响和验证方式参见 [Worker 指南：通过 Dashboard 分发](../worker-guide.md#方式二通过-dashboard-分发)。
 
 ### 14. Matrix E2EE
 
@@ -421,7 +418,7 @@ docker exec agentteams-controller curl -fsS http://127.0.0.1:9000/minio/health/l
 | Higress Console | `http://127.0.0.1:18001` |
 | Dashboard | `http://127.0.0.1:13000` |
 
-使用安装完成时打印的管理员凭证登录 Element Web，然后按照[快速入门](../../quickstart.md)创建第一个 Worker。
+使用安装完成时打印的管理员凭证登录 Dashboard，然后按照[快速入门](../../quickstart.md)创建第一个 Worker。
 
 ## 配置和数据位置
 
@@ -443,10 +440,7 @@ docker exec agentteams-controller curl -fsS http://127.0.0.1:9000/minio/health/l
 bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
-升级模式提供：
-
-- **保留全部配置**：沿用现有环境文件中的设置。
-- **逐项确认**：在每一步显示当前值并允许修改。
+默认升级只需一次确认，保留账号、模型、聊天记录、工作空间和数据，备份原环境文件，并在替换服务前准备镜像。使用 `--manual` 可逐项检查配置；发现无法匹配配置的已有数据时，升级会停止，不会清理数据。
 
 固定目标版本：
 
@@ -455,7 +449,7 @@ AGENTTEAMS_VERSION=vX.Y.Z \
 bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
-升级会重启 Manager，并可能重建 Worker 容器。持久数据会保留，但应先结束进行中的任务并备份重要数据。
+常规 embedded 升级替换 Controller/Manager 服务，保留现有 Worker 容器。升级前请先结束进行中的任务并备份重要数据。Dashboard 版本选择及独立的数据库备份/回滚流程，参见[安装与升级说明](../../../../install/README.md#upgrade-an-existing-local-installation)。
 
 ## 卸载
 

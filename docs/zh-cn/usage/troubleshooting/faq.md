@@ -272,7 +272,7 @@ agt get workers amy-ai -o json | jq '.skills'
 
 ### 通过 Dashboard 分发
 
-进入**资源中心 → 市场**。如果 Skill 尚未入库，先点击**上传技能**并上传不超过 64 MB 的 Skill ZIP；然后在目标 Skill 所在行点击**分发到 Worker**，选择一个或多个 Worker，再点击**分发到 N 个 Worker**。也可以通过 **Workers → 目标 Worker → 详情 → 上传技能包**直接为单个 Worker 上传 ZIP，或者在创建、编辑 Worker 时通过表单的**技能**字段选择市场或 Nacos 中已有的 Skill。ZIP 必须包含带 `name`、`description` frontmatter 的 `SKILL.md`。
+进入**资产中心 → 技能**。如果 Skill 尚未入库，先点击**上传技能**并上传不超过 64 MB 的 Skill ZIP；然后在目标 Skill 所在行点击**分发到 Worker**，选择一个或多个 Worker，再点击**分发到 N 个 Worker**。也可以通过 **成员与团队 → 团队与Agent → 目标 Worker → 上传技能包**直接为单个 Worker 上传 ZIP，或者在创建、编辑 Worker 时通过表单的**技能**字段选择市场或 Nacos 中已有的 Skill。ZIP 必须包含带 `name`、`description` frontmatter 的 `SKILL.md`。
 
 不要把市场右上角的**上传技能**当作 Worker 分发入口：该按钮只维护 Dashboard 的集中式市场。上传后还需从目标 Skill 所在行点击**分发到 Worker**。Worker 分发完成后，应在 Worker 详情的“已分发技能”和 `Worker.spec.skills` 中检查结果；Dashboard 会尝试重启 Worker 触发加载。若重启未确认，文件和 `spec.skills` 仍会保留，页面会报告部分失败，后续 Controller reconcile 可以继续使该分配生效。
 
@@ -657,7 +657,7 @@ OpenRouter 示例：
 | QwenPaw | Python | 当前 QwenPaw 2.x 路径、Python 原生工作流和数据科学 |
 | Hermes | Python | 自主编程，开发任务 |
 
-Controller 与 CLI 中已经存在 OpenHuman 相关实现，但当前发布的 Worker CRD enum 不接受 `openhuman`。通过 YAML 或 Kubernetes API 创建 Worker 时，应以上表四个值为准。
+当前 Worker CRD 也接受 `deepseek-harness`、`openhuman` 和 `codex`，参见[完整运行时与镜像表](../deployment/kubernetes.md#34-默认-worker-runtime)。
 
 ### 创建时指定
 
@@ -693,21 +693,20 @@ Manager 会通过 worker-management 技能触发容器重建。Worker 的 Matrix
 ## 为什么 QwenPaw 的部分配置值和镜像名仍使用 `copaw`
 
 `QwenPaw` 是当前的 Python 运行时实现。系统仍同时接受 `qwenpaw` 和旧版兼容值
-`copaw`：本地安装器目前写入 `copaw`，Helm 的 Manager 配置使用 `qwenpaw`；对于
-Manager，这两个值都会启动基于 QwenPaw 的 Python 实现。
+`copaw`：本地安装器写入 `qwenpaw`，旧 Manager 配置中的 `copaw` 仍映射到
+QwenPaw。Helm 默认 OpenClaw，可通过 `manager.runtime` 覆盖。
 
 对于 Worker，不要只改 runtime 值，应保持 runtime 与镜像配套：已有部署可能把
 `copaw` 映射到 `agentteams-copaw-worker`，新的 QwenPaw 路径则使用
-`agentteams-harness-qwenpaw`。QwenPaw Manager 镜像为 `agentteams-manager-qwenpaw`。
+`agentteams-harness-qwenpaw`。Core v1.2.7 的 QwenPaw Manager 与 Worker 使用同一 Harness 镜像。
 
 ---
 
 ## 如何接入自己实现的 agent 作为 Worker
 
 不能直接通过新增任意 `spec.runtime` 值来接入。当前 Worker CRD 接受
-`openclaw`、`qwenpaw`、`copaw`（旧版兼容值）或 `hermes`。虽然 Controller 与
-CLI 中已有 OpenHuman 路径，但 CRD 目前不接受 `openhuman`，不能在 Worker YAML
-中直接使用该值。
+`openclaw`、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`、`codex`
+及旧版兼容值 `copaw`。
 
 大多数自定义 Worker 场景应通过 Worker package 或自定义镜像完成：把角色提示词、
 skills、依赖和可选 Dockerfile 打包，或在保留受支持 runtime 的前提下设置自定义

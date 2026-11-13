@@ -8,9 +8,9 @@ AgentTeams is an **Agent Teams** platform: a **Manager** coordinates **Workers**
 
 | Layer | Role | Typical images |
 |--------|------|------------------|
-| **agentteams-controller** | Go operator: reconciles **Worker**, **Manager**, **Team**, and **Human** CRDs; REST API; worker/manager lifecycle; gateway consumer setup; credential flows when cloud providers are enabled. | `agentteams-controller` (Kubernetes) or **`agentteams-controller-embedded`** (local): Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web** (nginx) + controller binary |
-| **Manager** | Coordinator agent: tasks, workers, teams, humans, Higress routes/MCP—via Matrix and the controller API. | `agentteams-manager` (OpenClaw / Node) or `agentteams-manager-qwenpaw` (QwenPaw / Python)—based on **openclaw-base** or slim Python, **without** full infra stack |
-| **Worker** | Task executor: one container per worker, created on demand; stateless; config and artifacts on object storage. | `agentteams-worker`, `agentteams-copaw-worker`, `agentteams-qwenpaw-worker`, `agentteams-hermes-worker`, or experimental `agentteams-deepseek-harness-worker` |
+| **agentteams-controller** | Go operator: reconciles **Worker**, **Manager**, **Team**, and **Human** CRDs; REST API; worker/manager lifecycle; gateway consumer setup; credential flows when cloud providers are enabled. | `agentteams-controller` (Kubernetes) or **`agentteams-embedded`** (local): Higress all-in-one + **Tuwunel** + **MinIO** + **Element Web** (nginx) + controller binary |
+| **Manager** | Coordinates resources and delegates work through Matrix and the Controller API. | Shared `agentteams-harness-openclaw`, `agentteams-harness-qwenpaw`, or another supported Manager Harness; no embedded infrastructure |
+| **Worker** | Executes tasks in a container per Worker, with persistent configuration and artifacts in object storage. | `agentteams-harness-{openclaw,qwenpaw,hermes,deepseek,openhuman,codex}`; legacy CoPaw keeps its pinned old image |
 
 The **openclaw-base** image supplies **Ubuntu 24.04**, **Node.js 24**, **OpenClaw**, and **mcporter** for OpenClaw-based Manager/Worker images. It intentionally **does not** ship the old all-in-one Higress bundle; the AI gateway runs in the **controller** (embedded) or as the **Higress Helm subchart** (Kubernetes).
 
@@ -111,7 +111,7 @@ flowchart TB
 
 ### 2. Kubernetes — `helm/agentteams`
 
-- **`helm/agentteams/values.yaml`** defines **matrix** (Tuwunel managed or existing Synapse), **gateway** (managed Higress or external Alibaba **ai-gateway**), **storage** (managed MinIO or external OSS), optional **credentialProvider**, **controller**, **manager** (bootstrap **Manager** CR), **elementWeb**, **worker** defaults (images per **openclaw** / **copaw** / **hermes** runtime).
+- **`helm/agentteams/values.yaml`** defines **matrix** (managed Tuwunel), **gateway** (managed Higress or external Alibaba **ai-gateway**), **storage** (managed MinIO or external OSS), optional **credentialProvider**, **controller**, **manager** (bootstrap **Manager** CR), **elementWeb**, **worker** defaults (images for the six current Harnesses and explicitly configured legacy CoPaw).
 - The **controller** Pod reconciles CRs against **in-cluster** Matrix, Higress, and MinIO endpoints; **Manager** runs with `AGENTTEAMS_RUNTIME=k8s`, syncing workspace from cluster MinIO via `mc` and consuming credentials injected by the operator.
 
 ---
@@ -147,37 +147,25 @@ the Console API surface.
 
 | Runtime | Stack | Notes |
 |---------|--------|--------|
-| **openclaw** (default) | Node.js / OpenClaw gateway in **openclaw-base**-derived image | Primary worker path; **mcporter** for MCP tool calls through Higress |
+| **openclaw** (Helm default) | Node.js / OpenClaw gateway in **openclaw-base**-derived image | Primary worker path; **mcporter** for MCP tool calls through Higress |
 | **copaw** | Python / CoPaw compatibility path | Retained for existing deployments; uses `agentteams-copaw-worker` and the `.copaw/` runtime directory |
-| **qwenpaw** | Python / **QwenPaw 2.x** | Current QwenPaw Worker path; uses `agentteams-qwenpaw-worker` and the `.qwenpaw/` runtime directory |
+| **qwenpaw** | Python / **QwenPaw 2.x** | Current QwenPaw Worker path; uses `agentteams-harness-qwenpaw` and the `.qwenpaw/` runtime directory |
 | **hermes** | Python / **`hermes-worker`** | Matrix worker runtime with Hermes policy/config tree under `hermes-worker-agent/` |
 | **deepseek-harness** (experimental) | Node.js / **DeepSeek Harness** | Headless DSH Worker; consumes Controller-projected `runtime.yaml`, supports Matrix text/files, and persists room sessions and delivery state to object storage; pinned to a tested DSH release candidate |
+| **openhuman** | Rust / OpenHuman | Native Matrix Harness |
+| **codex** | Independent Codex Harness | Packaged separately; shared v1.2.7 release image |
 
-The shipped Worker CRD enum accepts the five values above. The Controller and Helm values already contain an OpenHuman backend and default image configuration, but the current CRD does not accept an explicit `spec.runtime: openhuman`, so this document does not list it as a directly declarable Worker runtime. The current chart also has no `worker.defaultImage.qwenpaw`; set `spec.image` explicitly when using `qwenpaw` in a CR. The controller resolves the effective runtime and image when creating Pods or Docker containers.
+The current Worker CRD accepts all seven values above. Helm provides default images for the six current Harnesses, including QwenPaw. Legacy CoPaw requires an explicitly pinned old image. The Controller resolves the runtime and image when creating Pods or containers; the local installer defaults to QwenPaw, while Helm defaults to OpenClaw.
 
 ### Manager runtimes
 
-OpenClaw retains its Manager entrypoint. QwenPaw uses the same Harness image
-and entrypoint for Manager, Leader, and Worker:
+Manager, Leader, and Worker use the same image and entrypoint for each supported Harness. The Controller projects role instructions, credentials, permissions, and `runtime.yaml`; Manager credentials remain distinct from Worker credentials.
 
-| Mode | `AGENTTEAMS_MANAGER_RUNTIME` | Behavior |
-|------|---------------------------|----------|
-| **OpenClaw** | `openclaw` | Node/OpenClaw gateway; Matrix “message tool” style integration; the current Helm chart sets this value explicitly by default |
-| **QwenPaw** | `qwenpaw` | Shared `qwenpaw/Dockerfile` image and `qwenpaw-worker-entrypoint.sh`; Controller-projected `runtime.yaml` selects `manager`, `team_leader`, or `worker`. Manager uses TeamHarness management skills, `agt`, and the shared Matrix tools. |
+The current Manager CRD accepts `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, and `openhuman`. `copaw` is a legacy Manager alias for QwenPaw and does not change the standalone CoPaw Worker runtime. Codex is Worker-only at this API boundary.
 
-`make build-manager-qwenpaw` tags the shared QwenPaw image with the legacy
-Manager name; release publishing also aliases that image rather than building
-a separate Manager runtime. `manager/Dockerfile.qwenpaw` is a compatibility
-wrapper requiring an explicit `QWENPAW_HARNESS_IMAGE`. Manager CR `default`
-retains runtime/Matrix identity `manager` and `/root/manager-workspace`.
-Manager credentials and permissions remain separate from Worker credentials.
-Manager readiness is reported to `/api/v1/managers/default/ready`; the
-Controller waits for runtime readiness before sending onboarding.
+Helm defaults to OpenClaw and selects the Harness image from `worker.defaultImage` unless `manager.image` is overridden. The local installer defaults to QwenPaw and offers OpenClaw as the alternative. Core v1.2.7 publishes shared Harness images, not dedicated Manager images; local compatibility wrappers remain under `manager/`.
 
-The local installer's legacy `copaw` Manager selector resolves to the same
-QwenPaw Harness; this does not change the standalone CoPaw Worker runtime. **Hermes**,
-**DeepSeek Harness**, and **OpenHuman** have not yet been migrated to the Manager
-role. Their Manager compatibility is not implied by the QwenPaw migration.
+The QwenPaw Manager runs under `/root/manager-workspace`, using the shared Manager prompts and management skills. See the [Manager Guide](../usage/manager-guide.md) and [Kubernetes runtime configuration](../usage/deployment/kubernetes.md#33-manager-runtime).
 
 ---
 

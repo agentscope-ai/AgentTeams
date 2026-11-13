@@ -34,7 +34,8 @@ AgentTeams 适合以下场景：
 |---|---|
 | **agentteams-controller** | 管理 Worker、Manager、Team 和 Human 资源，以及 Agent 生命周期和相关基础设施配置。 |
 | **Matrix / Tuwunel** | 承载 Human、Manager、Worker 与 Team Leader 之间的可见通信。 |
-| **Element Web** | 默认提供的 Matrix Web 客户端。也可以使用其他兼容 Matrix 的客户端。 |
+| **Dashboard** | 本地默认工作区，提供对话、团队/Agent 管理、任务、文件与 Tracing，参见 [Dashboard 使用指南](usage/dashboard.md)。 |
+| **Element Web** | 可选 Matrix Web 客户端，默认 Helm 部署中提供；也可以使用其他兼容客户端。 |
 | **Higress** | 作为 AI/API 网关统一代理 LLM 和 MCP 流量，并实施身份认证与权限控制。 |
 | **MinIO 或兼容对象存储** | 保存 Agent 工作空间、配置、共享任务上下文和任务产物。 |
 | **Manager 与 Worker 容器/Pod** | 运行实际的 Agent runtime；它们与基础设施解耦，可以按需创建或替换。 |
@@ -67,21 +68,13 @@ AgentTeams 适合以下场景：
 
 ## Agent 运行时
 
-Manager 当前支持：
+Worker 支持 OpenClaw、QwenPaw、Hermes、实验性 DeepSeek Harness、OpenHuman 和 Codex。旧版 `copaw` 仅保留给已有部署，需显式固定旧镜像。
 
-- **CoPaw**：当前基于 QwenPaw 的 Python Manager 实现；规范配置值为 `qwenpaw`，本地安装器仍使用兼容别名 `copaw`。
-- **OpenClaw**：Node.js 运行时。
+当前 Manager CRD 支持上述运行时中的前五种，不接受 Codex；旧 Manager 值 `copaw` 映射到 QwenPaw。本地安装器提供 QwenPaw（默认）与 OpenClaw Manager 选项。Helm 默认 OpenClaw，并自动选择对应的共享 Harness 镜像。
 
-Worker 资源支持以下运行时，实际可用镜像取决于安装方式和版本：
+Core v1.2.7 为六种现行 Harness 统一发布 `v1.2.7` 标签，配套 Dashboard 独立编号为 `v1.4.1`。当前 Chart 和覆盖方式见[运行时/镜像配置](usage/deployment/kubernetes.md#33-manager-runtime)。
 
-- **OpenClaw**
-- **CoPaw**
-- **QwenPaw**
-- **Hermes**
-
-Controller 和 Helm values 中已经包含 OpenHuman 后端与镜像配置，但当前发布的 Worker CRD enum 尚不接受显式的 `spec.runtime: openhuman`。因此在业务代码另行统一该契约前，不应把 OpenHuman 当作可直接声明的 Worker runtime。
-
-运行时决定 Agent 的执行框架和镜像，但 Worker 的身份、Matrix 房间和持久化数据由 AgentTeams 管理。切换运行时通常会重建 Worker 运行环境，不应在 Worker 执行任务时操作。
+运行时决定执行框架和镜像，身份、Matrix 房间、权限与持久化数据由 AgentTeams 管理。切换运行时会重建 Agent 环境，请在空闲时操作。
 
 ## 资源与管理方式
 

@@ -4,8 +4,6 @@ on:
   pull_request:
     paths:
       - 'helm/**'
-      - 'install/agentteams-install.sh'
-      - 'install/agentteams-install.ps1'
       - 'install/agentteams-dashboard-tests.sh'
       - 'install/test*install*'
       - 'install/agentteams-apply.sh'
@@ -85,6 +83,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Checkout website installer contract fixtures
+        uses: actions/checkout@v4
+        with:
+          repository: agentteams-group/agentteams-group.github.io
+          ref: 4ad3228780e1b0e8b6d53c110e914d90720b34f5
+          path: .installer-source
+          persist-credentials: false
 
       - name: Check AgentTeams rename contracts
         run: bash tests/check-agentteams-rename-defaults.sh

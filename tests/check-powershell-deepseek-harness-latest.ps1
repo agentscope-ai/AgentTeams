@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$Installer = Join-Path $PSScriptRoot '..\install\agentteams-install.ps1'
+$Installer = Join-Path $PSScriptRoot '..\.installer-source\public\install.ps1'
 $Tokens = $null
 $Errors = $null
 $Ast = [System.Management.Automation.Language.Parser]::ParseFile(

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
+INSTALLER="${ROOT_DIR}/.installer-source/public/install.sh"
 eval "$(sed -n '/^resolve_image_tags()/,/^}/p' "${INSTALLER}")"
 _normalize_version() { printf '%s' "$1"; }
 _ver_lt() { return 1; }

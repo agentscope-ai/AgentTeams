@@ -109,7 +109,7 @@ Other OpenAI-compatible model services (such as OpenAI, DeepSeek, etc.) are also
 2. In the PowerShell window, copy and paste the following command, then press Enter:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
 ```
 
 > **Note**: This command temporarily allows the current PowerShell window to execute scripts (without affecting system security policy), then downloads and runs the AgentTeams installation script from the network.
@@ -398,7 +398,7 @@ If you selected "Allow external access" during installation, you can manage your
 When a new version is released, simply re-run the installation command in PowerShell to upgrade in-place:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
 ```
 
 When the installation script detects an existing installation, it will prompt you to choose:
@@ -411,7 +411,7 @@ When the installation script detects an existing installation, it will prompt yo
 To upgrade to a specific version:
 
 ```powershell
-$env:AGENTTEAMS_VERSION="v1.2.2"; Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+$env:AGENTTEAMS_VERSION="v1.2.2"; Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
 ```
 
 ---
@@ -421,10 +421,10 @@ $env:AGENTTEAMS_VERSION="v1.2.2"; Set-ExecutionPolicy Bypass -Scope Process -For
 Run the following command in PowerShell to stop and remove all AgentTeams containers, Docker volumes, and configuration files:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1' -UseBasicParsing).Content } uninstall"
+Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invoke-WebRequest -Uri 'https://agentteams.cloud/install.ps1' -UseBasicParsing).Content } uninstall"
 ```
 
-This mirrors `install/agentteams-install.sh uninstall`: **`agentteams-controller`**, **`agentteams-manager`**, Worker containers, optional **`agentteams-docker-proxy`**, the data volume, env file, network, etc.
+This mirrors `bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall`: **`agentteams-controller`**, **`agentteams-manager`**, Worker containers, optional **`agentteams-docker-proxy`**, the data volume, env file, network, etc.
 
 > **Note**: Uninstallation may preserve the Manager workspace directory (`%USERPROFILE%\agentteams-manager`) depending on script version — delete it manually if you want every host-side file removed.
 

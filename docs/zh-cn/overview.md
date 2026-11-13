@@ -61,7 +61,7 @@ AgentTeams 适合以下场景：
 | 基础设施 | 一个 embedded controller 容器承载 Higress、Tuwunel、MinIO、Element Web 和 controller | 各组件作为 Kubernetes 工作负载或外部服务运行 |
 | Agent 运行环境 | Manager 和 Worker 使用独立容器 | Manager 和 Worker 使用独立 Pod |
 | 生命周期管理 | Controller 通过 Docker 或 Podman 管理 Agent | Controller 通过 Kubernetes CRD 管理 Agent |
-| 安装入口 | `install/agentteams-install.sh` | `helm/agentteams` Helm Chart |
+| 安装入口 | `bash <(curl -fsSL https://agentteams.cloud/install.sh)` | `helm/agentteams` Helm Chart |
 
 第一次体验建议从[快速入门](quickstart.md)的本地部署开始。团队共享或生产环境参见 [Kubernetes 部署指南](usage/deployment/kubernetes.md)。
 

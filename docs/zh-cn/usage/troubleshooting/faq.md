@@ -56,7 +56,7 @@ docker exec agentteams-controller agt version
 安装时指定版本：
 
 ```bash
-AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.2 bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 ---
@@ -289,7 +289,7 @@ GitHub 凭据应作为 MCP Server 凭据配置，不要复制到 Worker 容器�
 `AGENTTEAMS_GITHUB_TOKEN`：
 
 ```bash
-AGENTTEAMS_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_GITHUB_TOKEN=ghp_xxx bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 该变量存在时，AgentTeams 会自动配置 GitHub MCP Server，并生成 Manager 侧
@@ -374,7 +374,7 @@ Controller 会自动启动 Manager 容器。如果 `docker ps` 中看不到 Mana
 建议到原安装目录重新执行安装命令，选择**删除重装**：
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 安装脚本检测到已有安装时会询问处理方式，选择删除后重装即可清除脏数据。

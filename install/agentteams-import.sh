@@ -29,7 +29,7 @@ if [ -z "${CONTAINER_CMD}" ]; then
     echo "ERROR: Neither docker nor podman found." >&2
     echo "" >&2
     echo "Docker is required to run AgentTeams. Install Docker first, then install AgentTeams:" >&2
-    echo "  bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)" >&2
+    echo "  bash <(curl -sSL https://agentteams.cloud/install.sh)" >&2
     exit 1
 fi
 
@@ -43,7 +43,7 @@ if ! ${CONTAINER_CMD} ps --filter name=agentteams-manager --format '{{.Names}}' 
         echo "  ${CONTAINER_CMD} start agentteams-manager" >&2
     else
         echo "AgentTeams does not appear to be installed. Install it first:" >&2
-        echo "  bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)" >&2
+        echo "  bash <(curl -sSL https://agentteams.cloud/install.sh)" >&2
     fi
     exit 1
 fi

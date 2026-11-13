@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $tokens = $null
 $errors = $null
-$source = Join-Path $PSScriptRoot 'agentteams-install.ps1'
+$source = Join-Path $PSScriptRoot '../.installer-source/public/install.ps1'
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($source, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
 $definitions = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)

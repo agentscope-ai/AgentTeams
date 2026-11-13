@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$installer = Join-Path $PSScriptRoot '../install/agentteams-install.ps1'
+$installer = Join-Path $PSScriptRoot '../.installer-source/public/install.ps1'
 $source = Get-Content $installer -Raw
 $tokens = $null
 $errors = $null

@@ -61,7 +61,7 @@ All important communication happens in Matrix rooms, so humans can see how work 
 | Infrastructure | One embedded controller container runs Higress, Tuwunel, MinIO, Element Web, and the controller | Components run as Kubernetes workloads or external services |
 | Agent runtime | Manager and Workers run in separate containers | Manager and Workers run in separate Pods |
 | Lifecycle management | The controller manages agents through Docker or Podman | The controller manages agents through Kubernetes CRDs |
-| Installation entry point | `install/agentteams-install.sh` | The `helm/agentteams` Helm chart |
+| Installation entry point | `bash <(curl -fsSL https://agentteams.cloud/install.sh)` | The `helm/agentteams` Helm chart |
 
 For a first evaluation, start with the local path in [Quickstart](quickstart.md). For a shared or production environment, see the [Kubernetes Deployment Guide](usage/deployment/kubernetes.md).
 

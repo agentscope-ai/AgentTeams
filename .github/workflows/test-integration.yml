@@ -832,7 +832,7 @@ jobs:
           AGENTTEAMS_INSTALL_MANAGER_IMAGE=agentteams/manager:${VERSION} \
           AGENTTEAMS_INSTALL_WORKER_IMAGE=agentteams/agentteams-harness-openclaw:${VERSION} \
           AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=agentteams/agentteams-controller:${VERSION} \
-          bash ./install/agentteams-install.sh manager
+          bash <(curl -fsSL https://agentteams.cloud/install.sh) manager
 
       - name: Wait for Manager to be ready
         run: |

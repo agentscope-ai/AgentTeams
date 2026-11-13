@@ -26,7 +26,7 @@
 在终端中运行：
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 等待 Dashboard 自动打开。安装器会将登录密码复制到剪贴板，登录页预填用户名 `admin`；粘贴密码后即可登录。浏览器或剪贴板不可用时，可以使用终端打印的地址和账号密码。
@@ -149,5 +149,5 @@ docker ps --filter name=agentteams-worker
 以下操作会移除 AgentTeams 容器、网络、数据卷、配置文件和本地工作空间。确认不再需要其中的数据后再执行：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```

@@ -109,7 +109,7 @@ manager/agent/
 
 - [Makefile](Makefile) — unified build/test/push/install/replay interface (`make help` for all targets)
 - [docs/quickstart.md](docs/quickstart.md) — end-to-end guide from zero to working team
-- [install/agentteams-install.sh](install/agentteams-install.sh) — local installation script
+- [bash <(curl -fsSL https://agentteams.cloud/install.sh)](https://agentteams.cloud/install.sh) — local installation script
 - [scripts/replay-task.sh](scripts/replay-task.sh) — send tasks to Manager via Matrix CLI
 
 ### Local full build (from source)

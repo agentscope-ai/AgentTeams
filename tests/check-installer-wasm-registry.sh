@@ -2,7 +2,7 @@
 set -eo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
+INSTALLER="${ROOT_DIR}/.installer-source/public/install.sh"
 PRIMARY="higress-registry.cn-hangzhou.cr.aliyuncs.com"
 workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT

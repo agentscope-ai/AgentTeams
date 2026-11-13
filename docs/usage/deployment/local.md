@@ -96,7 +96,7 @@ On Linux systems without `lsof`, use `ss -lnt`.
 Run:
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 After choosing Quick Start, the installer still asks you to:
@@ -329,7 +329,7 @@ AGENTTEAMS_OPENAI_BASE_URL=https://provider.example.com/v1 \
 AGENTTEAMS_LLM_API_KEY=sk-example \
 AGENTTEAMS_DEFAULT_MODEL=example-model \
 AGENTTEAMS_ADMIN_PASSWORD=replace-with-a-strong-password \
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 Non-interactive mode fails immediately when a required value is missing or an explicitly provided administrator password has fewer than 8 characters. The credentials in the example are placeholders and must not be used as written.
@@ -362,7 +362,7 @@ Non-interactive mode fails immediately when a required value is missing or an ex
 | `AGENTTEAMS_DASHBOARD` | `1` |
 | `AGENTTEAMS_PORT_DASHBOARD` | `13000` |
 
-The file header and installation steps in [`install/agentteams-install.sh`](../../../install/agentteams-install.sh) remain the source of truth for the full set of variables.
+The file header and installation steps in [`bash <(curl -fsSL https://agentteams.cloud/install.sh)`](https://agentteams.cloud/install.sh) remain the source of truth for the full set of variables.
 
 ### Image overrides
 
@@ -440,7 +440,7 @@ The installation configuration contains sensitive values. Restrict its file perm
 Run the installer again to detect the existing configuration and enter the upgrade flow:
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 Upgrade mode offers:
@@ -452,7 +452,7 @@ Pin the target version with:
 
 ```bash
 AGENTTEAMS_VERSION=vX.Y.Z \
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 An upgrade restarts the Manager and may recreate Worker containers. Persistent data is preserved, but finish active tasks and back up important data first.
@@ -462,7 +462,7 @@ An upgrade restarts the Manager and may recreate Worker containers. Persistent d
 > Warning: uninstalling removes AgentTeams containers, Workers, networks, data volumes, Dashboard data, the environment file, the installation log, and the Manager workspace.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```
 
 If you only want to stop services while preserving data, stop the relevant containers with the container runtime instead of running the uninstall command.

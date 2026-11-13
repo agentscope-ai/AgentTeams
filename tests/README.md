@@ -122,3 +122,14 @@ make test SKIP_INSTALL=1
 - `lib/matrix-client.sh`: Matrix API wrapper (register, login, send/read messages)
 - `lib/higress-client.sh`: Higress Console API wrapper (consumers, routes, MCP)
 - `lib/minio-client.sh`: MinIO verification (file existence, content, listing)
+
+### Website installer contract fixtures
+
+The Bash and PowerShell installers are maintained only in the website repository. Before running the installer contract tests locally, check out the same revision used by `.github/workflows/helm-lint.yml` into `.installer-source/`:
+
+```bash
+git clone https://github.com/agentteams-group/agentteams-group.github.io.git .installer-source
+git -C .installer-source checkout 4ad3228780e1b0e8b6d53c110e914d90720b34f5
+```
+
+This checkout is test input only, ignored by Git, and is never used as an installation wrapper. Runtime integration installation uses the website endpoint directly.

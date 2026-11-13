@@ -15,7 +15,7 @@ set -u
 PASS=0
 FAIL=0
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
-INSTALL_SCRIPT="${TESTS_DIR}/agentteams-install.sh"
+INSTALL_SCRIPT="${TESTS_DIR}/../.installer-source/public/install.sh"
 
 if [ ! -f "${INSTALL_SCRIPT}" ]; then
     echo "ERROR: install script not found at ${INSTALL_SCRIPT}"
@@ -216,8 +216,8 @@ fi
 
 section "Test 8: PowerShell Dashboard support"
 
-if grep -q '^function Start-AgentTeamsDashboard' "${TESTS_DIR}/agentteams-install.ps1" && \
-   grep -q '^    Start-AgentTeamsDashboard' "${TESTS_DIR}/agentteams-install.ps1"; then
+if grep -q '^function Start-AgentTeamsDashboard' "${TESTS_DIR}/../.installer-source/public/install.ps1" && \
+   grep -q '^    Start-AgentTeamsDashboard' "${TESTS_DIR}/../.installer-source/public/install.ps1"; then
     pass "PowerShell installer starts Dashboard"
 else
     fail "PowerShell installer does not start Dashboard"
@@ -368,35 +368,9 @@ section "Test 15: Executable non-interactive step_dashboard"
 
 # Extract a function from the install script by tracking brace depth.
 extract_function() {
-    local func_name="$1"
-    local file="$2"
-    local start_line
-    start_line=$(grep -n "^${func_name}() {" "${file}" | head -1 | cut -d: -f1)
-    if [ -z "${start_line}" ]; then
-        return 1
-    fi
-    local depth=0
-    local line_num=0
-    local end_line=0
-    while IFS= read -r line; do
-        line_num=$((line_num + 1))
-        if [ "${line_num}" -lt "${start_line}" ]; then
-            continue
-        fi
-        # Count opening and closing braces
-        local opens closes
-        opens=$(echo "${line}" | tr -cd '{' | wc -c)
-        closes=$(echo "${line}" | tr -cd '}' | wc -c)
-        depth=$((depth + opens - closes))
-        if [ "${depth}" -eq 0 ] && [ "${line_num}" -gt "${start_line}" ]; then
-            end_line="${line_num}"
-            break
-        fi
-    done < "${file}"
-    if [ "${end_line}" -eq 0 ]; then
-        return 1
-    fi
-    sed -n "${start_line},${end_line}p" "${file}"
+    local func_name="$1" file="$2"
+    grep -q "^${func_name}() {" "$file" || return 1
+    sed -n "/^${func_name}() {/,/^}/p" "$file"
 }
 
 # Test 15a: Execute step_dashboard in non-interactive mode

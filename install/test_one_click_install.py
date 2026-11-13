@@ -6,7 +6,7 @@ import subprocess
 import unittest
 
 
-SOURCE = Path(__file__).with_name("agentteams-install.sh").read_text()
+SOURCE = (Path(__file__).resolve().parents[1] / ".installer-source/public/install.sh").read_text()
 
 
 def functions(*names):

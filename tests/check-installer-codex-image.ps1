@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $tokens = $null
 $parseErrors = $null
-$installer = Join-Path $PSScriptRoot '../install/agentteams-install.ps1'
+$installer = Join-Path $PSScriptRoot '../.installer-source/public/install.ps1'
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
     $installer, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }

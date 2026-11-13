@@ -305,7 +305,7 @@ facilitating file transfer and processing workflows with path consistency.
 
 ```bash
 # Example 1: Install with home directory sharing (recommended)
-AGENTTEAMS_LLM_API_KEY=your-key-here ./install/agentteams-install.sh manager
+AGENTTEAMS_LLM_API_KEY=your-key-here bash <(curl -fsSL https://agentteams.cloud/install.sh) manager
 
 # Example 2: Place files in home directory for agent access
 mkdir -p ~/project-inputs/

@@ -410,6 +410,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
     channel = CHANNEL_KEY  # type: ignore[assignment]
     uses_manager_queue: bool = True
+    _session_receipts = None
 
     def __init__(
         self,
@@ -3094,6 +3095,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
             if not is_dm:
                 self._clear_history(room_id)
 
+        if self._session_receipts is None:
+            await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
             True,
@@ -3535,6 +3538,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # These are best-effort UX operations.  Enqueue first so a slow
         # homeserver cannot prevent an accepted message from reaching QwenPaw.
+        if self._session_receipts is None:
+            await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
             True,
@@ -3716,6 +3721,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
 
+        if self._session_receipts is None:
+            await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
             True,
@@ -3729,7 +3736,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # ------------------------------------------------------------------
 
     async def _send_read_receipt(self, room_id: str, event_id: str) -> None:
-        """Mark a message as read (sends both read receipt and read marker)."""
+        """Legacy feedback for callbacks driven without the session service."""
         if not self._client or not event_id:
             return
         try:

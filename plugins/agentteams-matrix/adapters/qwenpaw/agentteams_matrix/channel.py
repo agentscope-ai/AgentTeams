@@ -433,6 +433,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
     channel = CHANNEL_KEY  # type: ignore[assignment]
     uses_manager_queue: bool = True
+    _session_receipts = None
 
     def __init__(
         self,
@@ -2138,6 +2139,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 )
                 return
 
+        if self._session_receipts is None:
+            await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(room_id, True)
 
         body = event.body or ""
@@ -2623,6 +2626,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 return
 
         # Mark as read + start typing immediately so the sender sees feedback
+        if self._session_receipts is None:
+            await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(room_id, True)
 
         # Strip leading @mention so slash commands and NO_REPLY are detected
@@ -2777,6 +2782,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 )
                 return
 
+        if self._session_receipts is None:
+            await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(room_id, True)
 
         mxc_url: str = getattr(event, "url", "") or ""
@@ -2907,7 +2914,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # ------------------------------------------------------------------
 
     async def _send_read_receipt(self, room_id: str, event_id: str) -> None:
-        """Mark a message as read (sends both read receipt and read marker)."""
+        """Legacy feedback for callbacks driven without the session service."""
         if not self._client or not event_id:
             return
         try:

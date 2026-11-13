@@ -139,3 +139,25 @@ def test_history_gaps_threads_and_debounce_preserve_only_included_ids(relative):
     assert channel._debounce_payload(second)
     assert second['meta']['session_source_event_ids'] == ['$image', '$text']
     assert channel.merge_native_items([first, second])['meta']['session_source_event_ids'] == ['$image', '$text']
+
+
+@pytest.mark.parametrize('relative', ['plugins/agentteams-matrix-channel/agentteams_matrix/channel.py', 'plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py'])
+def test_started_receipt_service_never_sends_legacy_read_at_enqueue(relative):
+    from nio import RoomMessageText
+    spec = importlib.util.spec_from_file_location('receipt_active_channel', ROOT / relative)
+    channel_module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = channel_module
+    spec.loader.exec_module(channel_module)
+    channel = channel_module.AgentTeamsMatrixChannel(process=lambda *a, **kw: None)
+    channel._user_id = '@bot:hs'
+    channel._session_receipts = SimpleNamespace(submit=AsyncMock())
+    channel._is_dm_room = AsyncMock(return_value=True)
+    channel._send_typing = AsyncMock()
+    channel._send_read_receipt = AsyncMock()
+    queued = []
+    channel._enqueue = queued.append
+    event = RoomMessageText.from_dict({'type': 'm.room.message', 'event_id': '$modern', 'sender': '@human:hs', 'origin_server_ts': 100, 'content': {'msgtype': 'm.text', 'body': 'hello'}})
+    asyncio.run(channel._on_room_event(SimpleNamespace(room_id='!r', users={}), event))
+    assert len(queued) == 1
+    channel._session_receipts.submit.assert_awaited_once_with('!r', ['$modern'], status='received')
+    channel._send_read_receipt.assert_not_awaited()

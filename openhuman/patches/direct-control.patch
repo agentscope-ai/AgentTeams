@@ -1,0 +1,441 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 7f65fd9..49245b0 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4982,6 +4982,7 @@ dependencies = [
+  "log",
+  "mail-parser",
+  "matrix-sdk",
++ "nix",
+  "nu-ansi-term 0.46.0",
+  "objc2 0.6.4",
+  "objc2-contacts",
+diff --git a/Cargo.toml b/Cargo.toml
+index f066bf9..7988ec6 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -72,6 +72,7 @@ async-trait = "0.1"
+ chacha20poly1305 = "0.10"
+ hex = "0.4"
+ tokio-util = { version = "0.7", features = ["rt", "io"] }
++nix = { version = "0.30", features = ["signal", "process"] }
+ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+ futures = "0.3"
+ rusqlite = { version = "0.37", features = ["bundled"] }
+diff --git a/src/openhuman/channels/matrix_direct.rs b/src/openhuman/channels/matrix_direct.rs
+new file mode 100644
+index 0000000..f97ed87
+--- /dev/null
++++ b/src/openhuman/channels/matrix_direct.rs
+@@ -0,0 +1,75 @@
++//! Run-scoped controls for verified human/agent Matrix direct conversations.
++use matrix_sdk::Room;
++use once_cell::sync::Lazy;
++use serde_json::json;
++use std::collections::HashMap;
++use std::sync::{Arc, Mutex};
++use tokio_util::sync::CancellationToken;
++
++pub(crate) struct DirectRun {
++    pub id: String,
++    pub sender: String,
++    pub inputs: Vec<String>,
++    pub room: Room,
++    pub cancel: CancellationToken,
++    pub done: CancellationToken,
++}
++
++static RUNS: Lazy<Mutex<HashMap<String, Arc<DirectRun>>>> =
++    Lazy::new(|| Mutex::new(HashMap::new()));
++static ACTIVE: Lazy<Mutex<HashMap<String, Arc<DirectRun>>>> =
++    Lazy::new(|| Mutex::new(HashMap::new()));
++
++pub(crate) fn register(room: Room, id: String, sender: String, inputs: Vec<String>) {
++    let run = Arc::new(DirectRun { id: id.clone(), sender, inputs, room,
++        cancel: CancellationToken::new(), done: CancellationToken::new() });
++    RUNS.lock().unwrap().insert(id, run);
++}
++
++pub(crate) fn get(id: &str) -> Option<Arc<DirectRun>> {
++    RUNS.lock().unwrap().get(id).cloned()
++}
++
++pub(crate) fn active(room: &str) -> Option<Arc<DirectRun>> {
++    ACTIVE.lock().unwrap().get(room).cloned()
++}
++
++impl DirectRun {
++    pub async fn status(&self, status: &str) {
++        let body = match status {
++            "running" => "正在执行", "stopping" => "正在停止", "stopped" => "已停止",
++            "completed" => "本轮已结束", _ => "执行失败",
++        };
++        let content = json!({"msgtype": "m.notice", "body": body,
++            "com.agentteams.execution": {"run_id": self.id, "status": status,
++                "capabilities": ["stop", "steer"]}});
++        if let Err(error) = self.room.send_raw("m.room.message", content).await {
++            tracing::warn!("Matrix execution status delivery failed: {error}");
++        }
++    }
++
++    pub async fn start(self: &Arc<Self>) {
++        // Preserve the native room history order for ordinary follow-up input.
++        loop {
++            let previous = {
++                let mut active = ACTIVE.lock().unwrap();
++                if let Some(previous) = active.get(self.room.room_id().as_str()) {
++                    Some(previous.clone())
++                } else {
++                    active.insert(self.room.room_id().to_string(), self.clone());
++                    None
++                }
++            };
++            let Some(previous) = previous else { break };
++            previous.done.cancelled().await;
++        }
++        self.status("running").await;
++    }
++
++    pub async fn finish(&self) {
++        self.status(if self.cancel.is_cancelled() { "stopped" } else { "completed" }).await;
++        RUNS.lock().unwrap().remove(&self.id);
++        ACTIVE.lock().unwrap().remove(self.room.room_id().as_str());
++        self.done.cancel();
++    }
++}
+diff --git a/src/openhuman/channels/mod.rs b/src/openhuman/channels/mod.rs
+index 2101542..11d39cc 100644
+--- a/src/openhuman/channels/mod.rs
++++ b/src/openhuman/channels/mod.rs
+@@ -6,6 +6,8 @@ pub mod controllers;
+ pub mod proactive;
+ pub mod providers;
+ pub mod traits;
++#[cfg(feature = "channel-matrix")]
++pub(crate) mod matrix_direct;
+ 
+ mod commands;
+ pub(crate) mod context;
+diff --git a/src/openhuman/channels/providers/matrix.rs b/src/openhuman/channels/providers/matrix.rs
+index 6f48f45..23d93c7 100644
+--- a/src/openhuman/channels/providers/matrix.rs
++++ b/src/openhuman/channels/providers/matrix.rs
+@@ -3,6 +3,7 @@ use async_trait::async_trait;
+ use matrix_sdk::{
+     authentication::matrix::MatrixSession,
+     config::SyncSettings,
++    event_handler::RawEvent,
+     ruma::{
+         events::room::member::{MembershipState, StrippedRoomMemberEvent},
+         events::room::message::{
+@@ -89,6 +90,15 @@ struct RoomAliasResponse {
+ }
+ 
+ impl MatrixChannel {
++    async fn direct_members(&self, room: &str, own: &str, sender: &str) -> bool {
++        let url = format!("{}/_matrix/client/v3/rooms/{}/joined_members", self.homeserver.trim_end_matches('/'), urlencoding::encode(room));
++        let Ok(response) = self.http_client.get(url).bearer_auth(&self.access_token).send().await else { return false };
++        let Ok(response) = response.error_for_status() else { return false };
++        let Ok(payload) = response.json::<serde_json::Value>().await else { return false };
++        payload.get("joined").and_then(|v| v.as_object())
++            .is_some_and(|members| members.len() == 2 && members.contains_key(own) && members.contains_key(sender))
++    }
++
+     fn agentteams_manager() -> bool {
+         std::env::var("AGENTTEAMS_AGENT_ROLE").as_deref() == Ok("manager")
+     }
+@@ -718,13 +728,15 @@ impl Channel for MatrixChannel {
+         let my_user_id_for_handler = my_user_id.clone();
+         let allowed_users_for_handler = self.allowed_users.clone();
+         let dedupe_for_handler = Arc::clone(&recent_event_cache);
++        let channel_for_handler = self.clone();
+ 
+-        client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
++        client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room, raw: RawEvent| {
+             let tx = tx_handler.clone();
+             let target_room = target_room_for_handler.clone();
+             let my_user_id = my_user_id_for_handler.clone();
+             let allowed_users = allowed_users_for_handler.clone();
+             let dedupe = Arc::clone(&dedupe_for_handler);
++            let channel = channel_for_handler.clone();
+ 
+             async move {
+                 let manager = MatrixChannel::agentteams_manager();
+@@ -756,7 +768,7 @@ impl Channel for MatrixChannel {
+                     return;
+                 }
+ 
+-                let body = match &event.content.msgtype {
++                let mut body = match &event.content.msgtype {
+                     MessageType::Text(content) => content.body.clone(),
+                     MessageType::Notice(content) => content.body.clone(),
+                     _ => return,
+@@ -783,6 +795,36 @@ impl Channel for MatrixChannel {
+                     }
+                 }
+ 
++                let raw: serde_json::Value = match serde_json::from_str(raw.0.get()) {
++                    Ok(value) => value,
++                    Err(_) => return,
++                };
++                let mut inputs = vec![body.clone()];
++                let direct = channel.direct_members(room.room_id().as_str(), my_user_id.as_str(), &sender).await;
++                if let Some(control) = raw.pointer("/content/com.agentteams.control") {
++                    let action = control.get("action").and_then(|v| v.as_str()).unwrap_or("");
++                    if !matches!(action, "stop" | "steer")
++                        || control.get("agent_id").and_then(|v| v.as_str()) != Some(my_user_id.as_str())
++                    { return; }
++                    if let Some(run) = crate::openhuman::channels::matrix_direct::active(room.room_id().as_str()) {
++                        if control.get("run_id").and_then(|v| v.as_str()) == Some(run.id.as_str()) {
++                            if !direct || run.sender != sender { return; }
++                            run.status("stopping").await;
++                            run.cancel.cancel();
++                            run.done.cancelled().await;
++                            if action == "steer" {
++                                inputs = run.inputs.clone();
++                                inputs.push(body);
++                                body = format!("Continue the original request using all supplementary information. Preserve conversation context and earlier results.\n\n{}", inputs.join("\n\n"));
++                            }
++                        }
++                    }
++                    if action == "stop" { return; }
++                }
++                if direct {
++                    crate::openhuman::channels::matrix_direct::register(room.clone(), event_id.clone(), sender.clone(), inputs);
++                }
++
+                 let msg = ChannelMessage {
+                     id: event_id,
+                     sender: sender.clone(),
+diff --git a/src/openhuman/channels/runtime/dispatch.rs b/src/openhuman/channels/runtime/dispatch.rs
+index f98815e..596a931 100644
+--- a/src/openhuman/channels/runtime/dispatch.rs
++++ b/src/openhuman/channels/runtime/dispatch.rs
+@@ -1030,7 +1030,7 @@ pub(crate) async fn process_channel_message(
+         model = %route.model,
+         "[channels::dispatch] dispatching {AGENT_RUN_TURN_METHOD} via native bus"
+     );
+-    let llm_result = tokio::time::timeout(Duration::from_secs(ctx.message_timeout_secs), async {
++    let llm_future = tokio::time::timeout(Duration::from_secs(ctx.message_timeout_secs), async {
+         let turn = async {
+             request_native_global::<AgentTurnRequest, AgentTurnResponse>(
+                 AGENT_RUN_TURN_METHOD,
+@@ -1072,8 +1072,19 @@ pub(crate) async fn process_channel_message(
+         } else {
+             turn.await
+         }
+-    })
+-    .await;
++    });
++    #[cfg(feature = "channel-matrix")]
++    let direct = crate::openhuman::channels::matrix_direct::get(&msg.id);
++    #[cfg(feature = "channel-matrix")]
++    let llm_result = if let Some(run) = direct.as_ref() {
++        tokio::select! {
++            biased;
++            _ = run.cancel.cancelled() => Ok(Err(anyhow::anyhow!("Direct conversation stopped"))),
++            result = llm_future => result,
++        }
++    } else { llm_future.await };
++    #[cfg(not(feature = "channel-matrix"))]
++    let llm_result = llm_future.await;
+ 
+     // Wait for draft updater to finish
+     if let Some(handle) = draft_updater {
+@@ -1087,6 +1098,15 @@ pub(crate) async fn process_channel_message(
+         log_worker_join_result(handle.await);
+     }
+ 
++    #[cfg(feature = "channel-matrix")]
++    if direct.as_ref().is_some_and(|run| run.cancel.is_cancelled()) {
++        // Keep the interrupted request in the same native conversation. The
++        // Matrix channel retains all supplements for the replacement turn.
++        ctx.conversation_histories.lock().unwrap_or_else(|e| e.into_inner())
++            .entry(history_key).or_default().push(ChatMessage::user(&enriched_message));
++        return;
++    }
++
+     let (success, response_text) = match llm_result {
+         Ok(Ok(response)) => {
+             // Save user + assistant turn to per-sender history
+@@ -1330,7 +1350,15 @@ pub(crate) async fn run_message_dispatch_loop(
+         let worker_ctx = Arc::clone(&ctx);
+         workers.spawn(async move {
+             let _permit = permit;
++            #[cfg(feature = "channel-matrix")]
++            let direct = if msg.channel == "matrix" {
++                crate::openhuman::channels::matrix_direct::get(&msg.id)
++            } else { None };
++            #[cfg(feature = "channel-matrix")]
++            if let Some(run) = direct.as_ref() { run.start().await; }
+             process_channel_message(worker_ctx, msg).await;
++            #[cfg(feature = "channel-matrix")]
++            if let Some(run) = direct { run.finish().await; }
+         });
+ 
+         while let Some(result) = workers.try_join_next() {
+diff --git a/src/openhuman/tools/impl/system/shell.rs b/src/openhuman/tools/impl/system/shell.rs
+index d1cf031..dfe59ff 100644
+--- a/src/openhuman/tools/impl/system/shell.rs
++++ b/src/openhuman/tools/impl/system/shell.rs
+@@ -11,6 +11,18 @@ use std::time::Duration;
+ const SHELL_TIMEOUT_SECS: u64 = 60;
+ /// Maximum output size in bytes (1MB).
+ const MAX_OUTPUT_BYTES: usize = 1_048_576;
++
++#[cfg(unix)]
++struct OwnedShellGroup(nix::unistd::Pid);
++
++#[cfg(unix)]
++impl Drop for OwnedShellGroup {
++    fn drop(&mut self) {
++        // A dropped tool future must not leave a shell or its children running.
++        let _ = nix::sys::signal::killpg(self.0, nix::sys::signal::Signal::SIGKILL);
++        let _ = nix::sys::wait::waitpid(self.0, None);
++    }
++}
+ /// Environment variables safe to pass to shell commands.
+ /// Only functional variables are included — never API keys or secrets.
+ const SAFE_ENV_VARS: &[&str] = &[
+@@ -165,8 +177,18 @@ impl Tool for ShellTool {
+             }
+         }
+ 
+-        let result =
+-            tokio::time::timeout(Duration::from_secs(SHELL_TIMEOUT_SECS), cmd.output()).await;
++        cmd.kill_on_drop(true);
++        #[cfg(unix)]
++        cmd.process_group(0);
++        cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
++        let result = match cmd.spawn() {
++            Ok(child) => {
++                #[cfg(unix)]
++                let _group = OwnedShellGroup(nix::unistd::Pid::from_raw(child.id().unwrap() as i32));
++                tokio::time::timeout(Duration::from_secs(SHELL_TIMEOUT_SECS), child.wait_with_output()).await
++            }
++            Err(error) => Ok(Err(error)),
++        };
+ 
+         match result {
+             Ok(Ok(output)) => {
+diff --git a/tests/agentteams_direct_control.rs b/tests/agentteams_direct_control.rs
+new file mode 100644
+index 0000000..f1d3ee2
+--- /dev/null
++++ b/tests/agentteams_direct_control.rs
+@@ -0,0 +1,115 @@
++#![cfg(unix)]
++use openhuman_core::openhuman::{
++    agent::host_runtime::NativeRuntime,
++    security::{AutonomyLevel, SecurityPolicy},
++    tools::{ShellTool, Tool},
++};
++use serde_json::json;
++use std::sync::Arc;
++use std::time::Duration;
++use std::os::unix::fs::PermissionsExt;
++
++#[path = "../src/openhuman/channels/matrix_direct.rs"]
++mod matrix_direct;
++
++#[tokio::test]
++async fn matrix_run_acknowledges_only_after_cleanup_and_retains_supplements() {
++    use matrix_sdk::{Client, SessionMeta, SessionTokens, config::SyncSettings, authentication::matrix::MatrixSession};
++    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::{method, path, path_regex}};
++    let server = MockServer::start().await;
++    Mock::given(method("GET")).and(path("/_matrix/client/versions"))
++        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"versions": ["v1.13"]}))).mount(&server).await;
++    Mock::given(method("GET")).and(path("/_matrix/client/v3/sync"))
++        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
++            "next_batch": "cursor", "rooms": {"join": {"!dm:test": {
++                "timeline": {"events": [], "limited": false},
++                "state": {"events": [
++                    {"type": "m.room.create", "state_key": "", "sender": "@agent:test", "event_id": "$create", "origin_server_ts": 1, "content": {"creator": "@agent:test", "room_version": "10"}},
++                    {"type": "m.room.member", "state_key": "@agent:test", "sender": "@agent:test", "event_id": "$member", "origin_server_ts": 2, "content": {"membership": "join"}}
++                ]}
++            }}}
++        }))).mount(&server).await;
++    Mock::given(method("PUT")).and(path_regex("/_matrix/client/v3/rooms/.*/send/m.room.message/.*"))
++        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"event_id": "$status"}))).mount(&server).await;
++    Mock::given(method("GET")).and(path_regex("/_matrix/client/v3/rooms/.*/state/m.room.encryption/"))
++        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"errcode": "M_NOT_FOUND", "error": "Not encrypted"}))).mount(&server).await;
++    let client = Client::builder().homeserver_url(server.uri()).build().await.unwrap();
++    client.restore_session(MatrixSession {
++        meta: SessionMeta { user_id: "@agent:test".try_into().unwrap(), device_id: "TEST".into() },
++        tokens: SessionTokens { access_token: "local-test-only".into(), refresh_token: None },
++    }).await.unwrap();
++    client.sync_once(SyncSettings::default()).await.unwrap();
++    let room_id: matrix_sdk::ruma::OwnedRoomId = "!dm:test".try_into().unwrap();
++    let room = client.get_room(&room_id).unwrap();
++    matrix_direct::register(room.clone(), "$original".into(), "@human:test".into(), vec!["原任务".into()]);
++    let original = matrix_direct::get("$original").unwrap();
++    original.start().await;
++    assert_eq!(matrix_direct::active("!dm:test").unwrap().sender, "@human:test");
++    original.cancel.cancel();
++    assert!(!original.done.is_cancelled(), "request must not acknowledge cleanup");
++    original.finish().await;
++    assert!(original.done.is_cancelled());
++    assert!(matrix_direct::active("!dm:test").is_none());
++    let mut inputs = original.inputs.clone();
++    inputs.push("补充杭州".into());
++    matrix_direct::register(room, "$supplement".into(), "@human:test".into(), inputs);
++    let replacement = matrix_direct::get("$supplement").unwrap();
++    replacement.start().await;
++    assert_eq!(replacement.inputs, ["原任务", "补充杭州"]);
++    replacement.finish().await;
++    let statuses: Vec<_> = server.received_requests().await.unwrap().into_iter()
++        .filter_map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).ok())
++        .filter_map(|body| body.pointer("/com.agentteams.execution/status").and_then(|v| v.as_str()).map(str::to_owned)).collect();
++    assert_eq!(statuses, ["running", "stopped", "running", "completed"]);
++}
++
++#[tokio::test]
++async fn shell_cancellation_stops_shell_and_children() {
++    let directory = tempfile::tempdir().unwrap();
++    let pidfile = directory.path().join("pid");
++    let marker = directory.path().join("must-not-run");
++    let security = Arc::new(SecurityPolicy {
++        autonomy: AutonomyLevel::Full,
++        workspace_dir: directory.path().to_path_buf(),
++        allowed_commands: vec!["at-dm-long-tool".into()],
++        ..SecurityPolicy::default()
++    });
++    let tool = ShellTool::new(security, Arc::new(NativeRuntime::new()));
++    let script = directory.path().join("at-dm-long-tool");
++    std::fs::write(&script, format!("#!/usr/bin/env python3\nimport os,pathlib,subprocess\nchild=subprocess.Popen(['sleep','30'])\npathlib.Path({:?}).write_text(str(os.getpid())+','+str(child.pid))\nchild.wait()\npathlib.Path({:?}).touch()\n", pidfile.to_str().unwrap(), marker.to_str().unwrap())).unwrap();
++    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
++    let command = "./at-dm-long-tool";
++    let task = tokio::spawn(async move { tool.execute(json!({"command": command, "approved": true})).await });
++    for _ in 0..200 {
++        if pidfile.exists() { break; }
++        tokio::time::sleep(Duration::from_millis(25)).await;
++    }
++    if !pidfile.exists() && task.is_finished() {
++        panic!("native shell rejected fixture: {:?}", task.await.unwrap());
++    }
++    assert!(pidfile.exists(), "native shell never started");
++    let pids: Vec<i32> = std::fs::read_to_string(&pidfile).unwrap().trim().split(',')
++        .map(|pid| pid.parse().unwrap()).collect();
++    task.abort();
++    let _ = task.await;
++    for pid in pids {
++        let stopped = || {
++            if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) == Err(nix::errno::Errno::ESRCH) {
++                return true;
++            }
++            // Linux can retain an exited orphan as a zombie until init reaps
++            // it. kill(pid, 0) alone does not distinguish it from live work.
++            #[cfg(target_os = "linux")]
++            if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
++                return stat.rsplit_once(')').is_some_and(|(_, fields)| fields.trim_start().starts_with('Z'));
++            }
++            false
++        };
++        for _ in 0..100 {
++            if stopped() { break; }
++            tokio::time::sleep(Duration::from_millis(10)).await;
++        }
++        assert!(stopped(), "tool process {pid} remained alive after cancellation");
++    }
++    assert!(!marker.exists());
++}

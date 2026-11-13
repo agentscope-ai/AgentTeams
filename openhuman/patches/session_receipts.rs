@@ -9,6 +9,7 @@ pub(crate) fn checkpoint(
     event_id: &str,
     session: &str,
     input: &impl Serialize,
+    source_event_ids: &[String],
 ) -> std::io::Result<()> {
     let directory = workspace.join(".agentteams/matrix-sessions");
     std::fs::create_dir_all(&directory)?;
@@ -18,7 +19,9 @@ pub(crate) fn checkpoint(
     let snapshot = serde_json::json!({
         "session": session,
         "input": input,
-        "receipts": [{"room_id": room_id, "event_id": event_id}],
+        "receipts": source_event_ids.iter().map(|id| serde_json::json!({
+            "room_id": room_id, "event_id": id,
+        })).collect::<Vec<_>>(),
     });
     std::fs::write(&temporary, serde_json::to_vec(&snapshot)?)?;
     std::fs::rename(temporary, path)
@@ -32,7 +35,15 @@ mod tests {
     fn saves_native_input_and_exact_source_without_waiting_for_a_reply() {
         let root = std::env::temp_dir().join(format!("receipt-test-{}", std::process::id()));
         let input = serde_json::json!({"role": "user", "content": "hello"});
-        checkpoint(&root, "!room:hs", "$input", "native-session", &input).unwrap();
+        checkpoint(
+            &root,
+            "!room:hs",
+            "$supplement",
+            "native-session",
+            &input,
+            &["$input".into(), "$supplement".into()],
+        )
+        .unwrap();
         let path = std::fs::read_dir(root.join(".agentteams/matrix-sessions"))
             .unwrap()
             .next()
@@ -44,6 +55,7 @@ mod tests {
         assert_eq!(saved["input"], input);
         assert_eq!(saved["session"], "native-session");
         assert_eq!(saved["receipts"][0]["event_id"], "$input");
+        assert_eq!(saved["receipts"][1]["event_id"], "$supplement");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

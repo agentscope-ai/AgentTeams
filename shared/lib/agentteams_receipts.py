@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import os
@@ -31,8 +32,10 @@ class Receipts:
                     anchor TEXT NOT NULL, event TEXT NOT NULL, PRIMARY KEY(anchor,event));
             """)
 
+    @contextmanager
     def connect(self):
-        return sqlite3.connect(self.path, timeout=10)
+        with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+            yield db
 
     def enqueue(self, room, event, status="read"):
         if not room.startswith("!") or not event.startswith("$") or status not in {"read", "received"}:
@@ -140,7 +143,7 @@ def scan_inputs(receipts, runtime, offsets):
     elif runtime == "hermes":
         path = workspace / ".hermes/state.db"
         if path.exists():
-            with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+            with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
                 rows = db.execute("""SELECT platform_message_id FROM messages m JOIN sessions s
                     ON m.session_id=s.id WHERE s.source='matrix' AND m.role='user'
                     AND platform_message_id IS NOT NULL""").fetchall()

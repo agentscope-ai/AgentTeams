@@ -236,7 +236,7 @@ jobs:
       matrix:
         include:
           - suite: delivery
-            cases: consume_error mention_localpart retry_classifier sync_timeout_clamp session_receipts
+            cases: consume_error mention_localpart retry_classifier sync_timeout_clamp session_receipts direct_control
           - suite: gates
             cases: show_thinking_gate send_gate_retrigger_placeholder send_gate_retrigger_relevance no_reply_final_line
     name: Matrix channel regressions (${{ matrix.suite }})

@@ -24,6 +24,12 @@ class HarnessReceiptTests(unittest.TestCase):
         with self.receipts.connect() as db:
             return set(db.execute("SELECT event,status FROM receipts").fetchall())
 
+    def test_outbox_connections_close_after_each_transaction(self):
+        with self.receipts.connect() as db:
+            db.execute("SELECT 1")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            db.execute("SELECT 1")
+
     def test_queue_and_body_claims_are_not_read_evidence(self):
         path = self.root / ".openclaw/agents/main/sessions/one.jsonl"
         path.parent.mkdir(parents=True)

@@ -1,23 +1,46 @@
+diff --git a/src/openhuman/channels/matrix_direct.rs b/src/openhuman/channels/matrix_direct.rs
+index f97ed87..25fe10e 100644
+--- a/src/openhuman/channels/matrix_direct.rs
++++ b/src/openhuman/channels/matrix_direct.rs
+@@ -10,6 +10,7 @@ pub(crate) struct DirectRun {
+     pub id: String,
+     pub sender: String,
+     pub inputs: Vec<String>,
++    pub source_event_ids: Vec<String>,
+     pub room: Room,
+     pub cancel: CancellationToken,
+     pub done: CancellationToken,
+@@ -20,8 +21,8 @@ static RUNS: Lazy<Mutex<HashMap<String, Arc<DirectRun>>>> =
+ static ACTIVE: Lazy<Mutex<HashMap<String, Arc<DirectRun>>>> =
+     Lazy::new(|| Mutex::new(HashMap::new()));
+
+-pub(crate) fn register(room: Room, id: String, sender: String, inputs: Vec<String>) {
+-    let run = Arc::new(DirectRun { id: id.clone(), sender, inputs, room,
++pub(crate) fn register(room: Room, id: String, sender: String, inputs: Vec<String>, source_event_ids: Vec<String>) {
++    let run = Arc::new(DirectRun { id: id.clone(), sender, inputs, source_event_ids, room,
+         cancel: CancellationToken::new(), done: CancellationToken::new() });
+     RUNS.lock().unwrap().insert(id, run);
+ }
 diff --git a/src/openhuman/channels/mod.rs b/src/openhuman/channels/mod.rs
-index 2101542..8574a1f 100644
+index 11d39cc..bdb3e04 100644
 --- a/src/openhuman/channels/mod.rs
 +++ b/src/openhuman/channels/mod.rs
-@@ -11,6 +11,7 @@ mod commands;
+@@ -13,6 +13,7 @@ mod commands;
  pub(crate) mod context;
  mod routes;
  mod runtime;
 +mod session_receipts;
- 
+
  #[cfg(test)]
  mod tests;
 diff --git a/src/openhuman/channels/providers/matrix.rs b/src/openhuman/channels/providers/matrix.rs
-index eb89c1c..5a0288b 100644
+index 23d93c7..321f904 100644
 --- a/src/openhuman/channels/providers/matrix.rs
 +++ b/src/openhuman/channels/providers/matrix.rs
-@@ -539,8 +539,31 @@ impl Channel for MatrixChannel {
+@@ -643,8 +643,31 @@ impl Channel for MatrixChannel {
              anyhow::bail!("Matrix room '{}' is not in joined state", target_room_id);
          }
- 
+
 -        room.send(RoomMessageEventContent::text_markdown(&message.content))
 -            .await?;
 +        let mut content =
@@ -45,10 +68,34 @@ index eb89c1c..5a0288b 100644
 +            }
 +        }
 +        room.send_raw("m.room.message", content).await?;
- 
+
          Ok(())
      }
-@@ -684,11 +707,7 @@ impl Channel for MatrixChannel {
+@@ -800,6 +823,7 @@ impl Channel for MatrixChannel {
+                     Err(_) => return,
+                 };
+                 let mut inputs = vec![body.clone()];
++                let mut source_event_ids = vec![event_id.clone()];
+                 let direct = channel.direct_members(room.room_id().as_str(), my_user_id.as_str(), &sender).await;
+                 if let Some(control) = raw.pointer("/content/com.agentteams.control") {
+                     let action = control.get("action").and_then(|v| v.as_str()).unwrap_or("");
+@@ -815,6 +839,8 @@ impl Channel for MatrixChannel {
+                             if action == "steer" {
+                                 inputs = run.inputs.clone();
+                                 inputs.push(body);
++                                source_event_ids = run.source_event_ids.clone();
++                                source_event_ids.push(event_id.clone());
+                                 body = format!("Continue the original request using all supplementary information. Preserve conversation context and earlier results.\n\n{}", inputs.join("\n\n"));
+                             }
+                         }
+@@ -822,17 +848,13 @@ impl Channel for MatrixChannel {
+                     if action == "stop" { return; }
+                 }
+                 if direct {
+-                    crate::openhuman::channels::matrix_direct::register(room.clone(), event_id.clone(), sender.clone(), inputs);
++                    crate::openhuman::channels::matrix_direct::register(room.clone(), event_id.clone(), sender.clone(), inputs, source_event_ids);
+                 }
+
                  let msg = ChannelMessage {
                      id: event_id,
                      sender: sender.clone(),
@@ -62,14 +109,18 @@ index eb89c1c..5a0288b 100644
                      channel: "matrix".to_string(),
                      timestamp: std::time::SystemTime::now()
 diff --git a/src/openhuman/channels/runtime/dispatch.rs b/src/openhuman/channels/runtime/dispatch.rs
-index fc0ea26..518305a 100644
+index 596a931..cbced5e 100644
 --- a/src/openhuman/channels/runtime/dispatch.rs
 +++ b/src/openhuman/channels/runtime/dispatch.rs
-@@ -856,6 +856,20 @@ pub(crate) async fn process_channel_message(
+@@ -856,6 +856,25 @@ pub(crate) async fn process_channel_message(
      let mut history = vec![ChatMessage::system(ctx.system_prompt.as_str())];
      history.append(&mut prior_turns);
      history.push(ChatMessage::user(&enriched_message));
++    #[cfg(feature = "channel-matrix")]
 +    if msg.channel == "matrix" && msg.reply_target.starts_with('!') {
++        let source_event_ids = crate::openhuman::channels::matrix_direct::get(&msg.id)
++            .map(|run| run.source_event_ids.clone())
++            .unwrap_or_else(|| vec![msg.id.clone()]);
 +        let receipt_workspace = std::env::var_os("AGENTTEAMS_WORKER_HOME")
 +            .map(std::path::PathBuf::from)
 +            .unwrap_or_else(|| ctx.workspace_dir.as_ref().clone());
@@ -79,11 +130,39 @@ index fc0ea26..518305a 100644
 +            &msg.id,
 +            &history_key,
 +            history.last().expect("native input was appended"),
++            &source_event_ids,
 +        ) {
 +            tracing::warn!("Matrix session input checkpoint failed: {error}");
 +        }
 +    }
- 
+
      // Determine if this channel supports streaming draft updates
      let use_streaming = target_channel
-
+diff --git a/tests/agentteams_direct_control.rs b/tests/agentteams_direct_control.rs
+index f1d3ee2..a918d55 100644
+--- a/tests/agentteams_direct_control.rs
++++ b/tests/agentteams_direct_control.rs
+@@ -41,7 +41,7 @@ async fn matrix_run_acknowledges_only_after_cleanup_and_retains_supplements() {
+     client.sync_once(SyncSettings::default()).await.unwrap();
+     let room_id: matrix_sdk::ruma::OwnedRoomId = "!dm:test".try_into().unwrap();
+     let room = client.get_room(&room_id).unwrap();
+-    matrix_direct::register(room.clone(), "$original".into(), "@human:test".into(), vec!["原任务".into()]);
++    matrix_direct::register(room.clone(), "$original".into(), "@human:test".into(), vec!["原任务".into()], vec!["$original".into()]);
+     let original = matrix_direct::get("$original").unwrap();
+     original.start().await;
+     assert_eq!(matrix_direct::active("!dm:test").unwrap().sender, "@human:test");
+@@ -52,10 +52,13 @@ async fn matrix_run_acknowledges_only_after_cleanup_and_retains_supplements() {
+     assert!(matrix_direct::active("!dm:test").is_none());
+     let mut inputs = original.inputs.clone();
+     inputs.push("补充杭州".into());
+-    matrix_direct::register(room, "$supplement".into(), "@human:test".into(), inputs);
++    let mut source_event_ids = original.source_event_ids.clone();
++    source_event_ids.push("$supplement".into());
++    matrix_direct::register(room, "$supplement".into(), "@human:test".into(), inputs, source_event_ids);
+     let replacement = matrix_direct::get("$supplement").unwrap();
+     replacement.start().await;
+     assert_eq!(replacement.inputs, ["原任务", "补充杭州"]);
++    assert_eq!(replacement.source_event_ids, ["$original", "$supplement"]);
+     replacement.finish().await;
+     let statuses: Vec<_> = server.received_requests().await.unwrap().into_iter()
+         .filter_map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).ok())

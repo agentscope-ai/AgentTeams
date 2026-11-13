@@ -48,6 +48,9 @@ Statuses are `running`, `stopping`, `stopped`, `completed`, `failed`, and
 `unavailable` (the requested producer no longer exists).
 `stopped` is sent after the native stream's cleanup. `completed` means the
 execution ended; the conversation still contains its business result/errors.
+An optional `message_id` on `stopped` identifies the affected Agent response.
+Without a matching loaded response, the Dashboard renders a standalone
+acknowledgement rather than marking an unrelated message.
 
 Dashboard messages carry `com.agentteams.control` alongside the normal body:
 
@@ -63,7 +66,7 @@ run; stale supplementary text remains an ordinary queued input.
 Unmarked messages retain their existing queue/command behavior, including
 approval replies and messages from other Matrix clients.
 
-The channel captures the actual native TaskTracker producer task rather than
+In QwenPaw, the channel captures the actual native TaskTracker producer task rather than
 cancelling by a reusable chat id. Overlapping SDK channel generations share
 this registry through their existing agent-scoped TaskTracker. Continuations
 use the existing delivery locks and native queue; they do not create parallel

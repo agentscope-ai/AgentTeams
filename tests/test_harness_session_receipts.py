@@ -1,12 +1,16 @@
 """Exercise durable input evidence and receipt delivery without a model response."""
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock
+from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shared/lib"))
 from agentteams_receipts import Receipts, capture_audience, scan_inputs
@@ -30,6 +34,40 @@ class HarnessReceiptTests(unittest.TestCase):
         with self.assertRaises(sqlite3.ProgrammingError):
             db.execute("SELECT 1")
 
+    def test_receipts_do_not_evict_messages_from_the_polling_window(self):
+        events = [{"type": "com.agentteams.session_receipt", "event_id": f"$receipt-{i}"} for i in range(25)]
+        events.append({"type": "m.room.message", "event_id": "$completed", "content": {"body": "TASK_COMPLETED"}})
+
+        class Matrix(BaseHTTPRequestHandler):
+            def do_GET(self):
+                query = parse_qs(urlsplit(self.path).query)
+                event_filter = json.loads(query.get("filter", ["{}"])[0])
+                visible = [event for event in events if event["type"] not in event_filter.get("not_types", [])]
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({"chunk": visible[:int(query["limit"][0])]}).encode())
+
+            def log_message(self, *_args):
+                pass
+
+        with ThreadingHTTPServer(("127.0.0.1", 0), Matrix) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                helper = Path(__file__).resolve().parent / "lib/matrix-client.sh"
+                result = subprocess.run(["bash", "-c", '''
+                    source "$1"
+                    exec_in_manager() { "$@"; }
+                    TEST_MATRIX_DIRECT_URL="$MATRIX_FIXTURE_URL"
+                    matrix_read_messages test-only '!room:hs' 20
+                ''', "fixture", str(helper)], env={**os.environ,
+                    "TEST_CONTROLLER_CONTAINER": "fixture", "TEST_AGENT_CONTAINER": "fixture",
+                    "MATRIX_FIXTURE_URL": f"http://127.0.0.1:{server.server_port}"},
+                    capture_output=True, text=True, check=True)
+                self.assertEqual([event["event_id"] for event in json.loads(result.stdout)["chunk"]], ["$completed"])
+            finally:
+                server.shutdown()
+                thread.join()
     def test_queue_and_body_claims_are_not_read_evidence(self):
         path = self.root / ".openclaw/agents/main/sessions/one.jsonl"
         path.parent.mkdir(parents=True)

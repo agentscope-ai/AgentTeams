@@ -658,7 +658,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         if run[2].done():
             return action == "stop"
-        run[2].cancel("user")
+        if not run[2].cancelling():
+            run[2].cancel("user")
         await self._publish_direct_execution(room_id, run[0], "stopping")
         await asyncio.gather(run[2], return_exceptions=True)
         if action == "steer":

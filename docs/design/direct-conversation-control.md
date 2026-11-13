@@ -26,7 +26,7 @@ delegated Worker tasks are outside this change.
 | Harness | Cancellation and continuation | Focused validation |
 | --- | --- | --- |
 | OpenClaw | Public reply `abortSignal`; wait for dispatch/draft cleanup; reuse native conversation | Native exec cancellation for stop and steer; fresh membership rejection; 61 Matrix handler regressions |
-| QwenPaw | Captured TaskTracker producer cancellation; native stream cleanup; original and supplementary inputs retained | 11 direct-control tests with the native TaskTracker and long shell tool |
+| QwenPaw | Captured TaskTracker producer cancellation; native stream cleanup; original and supplementary inputs retained | 12 direct-control tests with the native TaskTracker and long shell tool, including overlapping controls during cleanup |
 | Hermes | Native `hard_interrupt`, including its tool-worker thread signal; wait for processing owner; retain session | Native local shell cancellation for stop and steer; owner, membership and stale-run checks |
 | DeepSeek Harness | Keep receiving controls while DSH runs; dispose native profile and reap the owned process group; resume room session | Packaged DSH CLI, native bash, durable supplementary input and native session resume for stop and steer |
 | OpenHuman | Run-scoped cancellation around the native agent bus; finish typing/draft cleanup; reap native shell process group | Pinned v0.54.0 compile; Matrix SDK lifecycle/continuation integration and real native tool cancellation |

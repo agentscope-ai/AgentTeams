@@ -86,6 +86,49 @@ def test_supplement_waits_for_tool_cleanup_and_keeps_original_input():
     asyncio.run(scenario())
 
 
+def test_overlapping_controls_do_not_cancel_native_cleanup_twice():
+    async def scenario():
+        ch = channel()
+        started, cleaning, release, cleaned, both_requested = [asyncio.Event() for _ in range(5)]
+        requests = 0
+
+        async def send(_room, _type, content):
+            nonlocal requests
+            if content[EXECUTION]["status"] == "stopping":
+                requests += 1
+                if requests == 2:
+                    both_requested.set()
+        ch._room_send_with_retry.side_effect = send
+
+        async def stream(_self, _item):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaning.set()
+                await release.wait()
+                cleaned.set()
+            yield "unused"
+
+        original = payload("原任务")
+        original["meta"]["event_id"] = "$run"
+        with patch.object(module.BaseChannel, "_stream_with_tracker", stream):
+            async def consume():
+                async for _ in ch._stream_with_tracker(original):
+                    pass
+            producer = asyncio.create_task(consume())
+            await started.wait()
+            first = asyncio.create_task(ch._handle_direct_control(payload("补充一"), event("steer")))
+            await cleaning.wait()
+            second = asyncio.create_task(ch._handle_direct_control(payload("补充二"), event("steer")))
+            await asyncio.wait_for(both_requested.wait(), 1)
+            assert producer.cancelling() == 1 and not producer.done()
+            release.set()
+            assert await asyncio.gather(first, second) == [False, False]
+            assert cleaned.is_set() and producer.done()
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("action", ["stop", "steer"])
 def test_stale_control_does_not_cancel_new_run(action):
     async def scenario():

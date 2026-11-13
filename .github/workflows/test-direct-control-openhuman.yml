@@ -33,6 +33,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native
+      - name: Install native runtime build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libdbus-1-dev libssl-dev cmake clang pkg-config
       - name: Apply the packaged patches
         run: |
           git -C native apply "$GITHUB_WORKSPACE/openhuman/patches/manager-matrix.patch"

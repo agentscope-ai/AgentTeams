@@ -106,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       seekdb:
-        image: oceanbase/seekdb:latest
+        image: oceanbase/seekdb:1.4.0-100000172026082615
         env:
           SEEKDB_DATABASE: res
         ports:

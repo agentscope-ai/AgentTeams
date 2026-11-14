@@ -310,3 +310,54 @@ func TestMigrateLostLeaseRace(t *testing.T) {
 		t.Fatalf("res must be untouched: %v", err)
 	}
 }
+
+// TestMigrateCrashWindowDupField simulates the crash window in the package
+// doc: 0024's ALTER auto-committed, then the process died before the
+// version row was recorded. The re-applied ALTER fails with
+// ER_DUP_FIELDNAME; the runner must record the version and boot.
+func TestMigrateCrashWindowDupField(t *testing.T) {
+	resDB, resMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resDB.Close()
+	opsDB, opsMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opsDB.Close()
+
+	// ops: lease table, free-lease acquire, bookkeeping DDL.
+	opsMock.ExpectExec(`(?i)` + regexp.QuoteMeta(leaseTableSQL)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	opsMock.ExpectExec(regexp.QuoteMeta(insertLeaseSQL)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	opsMock.ExpectExec(`(?i)CREATE TABLE IF NOT EXISTS schema_migrations`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	// 0001-0004 are already recorded; only 0024 is missing.
+	opsMock.ExpectQuery(regexp.QuoteMeta(appliedSQL)).
+		WillReturnRows(sqlmock.NewRows([]string{"version"}).
+			AddRow("0001").AddRow("0002").AddRow("0003").AddRow("0004"))
+	// 0024 re-applies and hits the duplicate-column error.
+	opsMock.ExpectBegin()
+	opsMock.ExpectExec(`(?i)ALTER TABLE idempotency_keys`).
+		WillReturnError(&mysql.MySQLError{Number: mysqlErrDupField, Message: "Duplicate column name"})
+	opsMock.ExpectExec(regexp.QuoteMeta(recordSQL)).
+		WillReturnResult(sqlmock.NewResult(5, 1))
+	opsMock.ExpectCommit()
+	opsMock.ExpectExec(regexp.QuoteMeta(releaseLeaseSQL)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// res: untouched, applies its single frozen file.
+	freshNamespace(resMock, "workers")
+
+	if err := newTestRunner(resDB, opsDB).Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if err := resMock.ExpectationsWereMet(); err != nil {
+		t.Errorf("res expectations: %v", err)
+	}
+	if err := opsMock.ExpectationsWereMet(); err != nil {
+		t.Errorf("ops expectations: %v", err)
+	}
+}

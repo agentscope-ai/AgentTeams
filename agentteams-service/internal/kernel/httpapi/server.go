@@ -64,6 +64,17 @@ func (s *Server) Handler() http.Handler {
 	return s.requestID(s.recoverPanic(s.accessLog(s.limitBody(s.mux))))
 }
 
+// HealthHandler returns the middleware-wrapped face with only /healthz
+// and /readyz mounted (same checks as Handler). The UDS socket must stay
+// health-only (uds package doc) even though the TCP face carries the full
+// route tree, so the socket mounts this entry, not Handler.
+func (s *Server) HealthHandler() http.Handler {
+	m := http.NewServeMux()
+	m.HandleFunc("/healthz", s.handleHealthz)
+	m.HandleFunc("/readyz", s.handleReadyz)
+	return s.requestID(s.recoverPanic(s.accessLog(s.limitBody(m))))
+}
+
 // limitBody wraps the body in http.MaxBytesReader. Handlers surface the
 // read error as their normal 400 invalid_request; the connection is closed
 // by the server after the response (MaxBytesReader's contract).

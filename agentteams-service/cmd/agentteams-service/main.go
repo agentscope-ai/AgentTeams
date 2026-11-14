@@ -152,7 +152,9 @@ func run(args []string) int {
 	api := httpapi.New(lg.With("component", "http"))
 	api.AddReadyCheck("db", func(ctx context.Context) module.Health {
 		if err := pools.Health(ctx); err != nil {
-			return module.Health{Status: module.StatusDown, Detail: err.Error()}
+			// Detail must stay DSN-free: /readyz is unauthenticated and a
+			// raw driver error can carry host/port/user (58 §2.6).
+			return module.Health{Status: module.StatusDown, Detail: "database unreachable"}
 		}
 		return module.Health{Status: module.StatusOK}
 	})
@@ -188,7 +190,7 @@ func run(args []string) int {
 	}
 	var udsSrv *uds.Server
 	if cfg.UDS != "" {
-		udsSrv = uds.New(cfg.UDS, api.Handler(), lg.With("component", "uds"))
+		udsSrv = uds.New(cfg.UDS, api.HealthHandler(), lg.With("component", "uds"))
 		if err := udsSrv.Listen(); err != nil {
 			lg.Error("uds listen", "err", err)
 			return 1

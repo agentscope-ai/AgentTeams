@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Build stage: the module pins go 1.26.10.
+# Build stage: the module pins go 1.26.11.
 FROM golang:1.26 AS build
 WORKDIR /src
 COPY go.mod go.sum ./

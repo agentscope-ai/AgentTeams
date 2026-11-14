@@ -1,5 +1,5 @@
 {
-  "$comment": "R1 operation manifest (58 §7). Single source for the agt CLI flag bindings and the Skill schema; the CI drift gate re-generates both and fails on a diff. R1 generates workers.create/list/get; the R2 resources domain extends this file. PUT/DELETE are transparent proxy routes (D110) and are listed but not generated as native operations.",
+  "$comment": "R1 operation manifest (58 §7). Single source for the agt CLI flag bindings and the Skill schema; regenerated from this file when operations change. R1 generates workers.create/list/get; the R2 resources domain extends this file. PUT/DELETE are transparent proxy routes (D110) and are listed but not generated as native operations.",
   "version": 1,
   "module": "resources",
   "resource": "worker",

@@ -12,10 +12,10 @@ env wins over defaults).
 |---|---|---|---|
 | AGENTTEAMS_SERVICE_RES_DSN | yes | - | res schema DSN. The pool opens every transaction here; ops tables are referenced schema-qualified, so this user must also have ops privileges. |
 | AGENTTEAMS_SERVICE_OPS_DSN | yes | - | ops schema DSN (migrations/health use it). |
-| AGENTTEAMS_SERVICE_LISTEN_ADDR | no | 127.0.0.1:8080 | TCP listen address. |
+| AGENTTEAMS_SERVICE_LISTEN_ADDR | no | :8080 | TCP listen address (binds all interfaces; put the service behind a gateway in real deployments). |
 | AGENTTEAMS_SERVICE_UDS | no | empty | Optional Unix-socket health face (0600). |
-| AGENTTEAMS_SERVICE_CONTROLLER_URL | no | empty | Controller base URL. Empty disables the outbox dispatcher and internal client. |
-| AGENTTEAMS_SERVICE_INTERNAL_TOKEN | no | empty | Shared bearer for /internal/v1 (token review, provision, deprovision, execution). |
+| AGENTTEAMS_SERVICE_CONTROLLER_URL | required when enabled | - | Controller internal API base URL (Validate rejects enabled-without-URL). |
+| AGENTTEAMS_SERVICE_INTERNAL_TOKEN | required when enabled | - | Shared bearer for /internal/v1 (token review, provision, deprovision, execution). |
 | AGENTTEAMS_SERVICE_OUTBOX_INTERVAL | no | 5s | Dispatcher poll interval. |
 | AGENTTEAMS_SERVICE_DEFAULT_WORKER_RUNTIME | no | openclaw | Runtime applied when create omits it. |
 | AGENTTEAMS_SERVICE_DEFAULT_MODEL | no | empty | Model applied when create omits it. |

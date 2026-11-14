@@ -15,6 +15,10 @@
 //     one atomic step. That is safe because every R1 statement is
 //     idempotent (IF NOT EXISTS): a crash between the two re-applies the
 //     statement as a no-op and records it.
+//     MySQL has no ADD COLUMN IF NOT EXISTS, so the 0024 ALTER relies on
+//     the runner's crash-window safety net instead: a re-applied ALTER
+//     failing with ER_DUP_FIELDNAME/ER_DUP_KEYNAME is treated as already
+//     applied and its version is recorded.
 package db
 
 import (
@@ -225,7 +229,16 @@ func (r *Runner) applyOne(ctx context.Context, pool *sql.DB, fsys embed.FS, sche
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, string(stmt)); err != nil {
-		return fmt.Errorf("apply %s: %w", file, err)
+		var myerr *mysql.MySQLError
+		if errors.As(err, &myerr) && (myerr.Number == mysqlErrDupField || myerr.Number == mysqlErrDupKey) {
+			// Crash window documented in the package doc: the DDL
+			// auto-committed before the bookkeeping INSERT. The object
+			// already exists, so record the version and keep booting.
+			r.Log.Warn("migration statement already applied; recording version",
+				"file", file, "version", version, "code", myerr.Number)
+		} else {
+			return fmt.Errorf("apply %s: %w", file, err)
+		}
 	}
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO schema_migrations (version, filename, applied_at) VALUES (?, ?, ?)",
@@ -235,4 +248,8 @@ func (r *Runner) applyOne(ctx context.Context, pool *sql.DB, fsys embed.FS, sche
 	return tx.Commit()
 }
 
-const mysqlErrDuplicateEntry = 1062
+const (
+	mysqlErrDuplicateEntry = 1062 // ER_DUP_ENTRY
+	mysqlErrDupField       = 1060 // ER_DUP_FIELDNAME
+	mysqlErrDupKey         = 1061 // ER_DUP_KEYNAME
+)

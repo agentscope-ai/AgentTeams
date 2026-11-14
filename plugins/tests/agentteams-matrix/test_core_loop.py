@@ -1,9 +1,10 @@
 """MatrixCore loop tests with a fake transport (P9, PR1 M1).
 
 Covers: events injected by the transport reach the bridge; bridge output
-goes through ``transport.send``; the single-writer lock is fail-closed
-for a second core and released after ``stop``; errors are recorded
-without blocking the loop.
+goes through the outbox worker into ``transport.send`` (MX-1: submit
+enqueues, delivery is asynchronous); the single-writer lock is
+fail-closed for a second core and released after ``stop``; errors are
+recorded without blocking the loop.
 """
 
 from __future__ import annotations
@@ -119,12 +120,16 @@ def test_events_reach_bridge_and_output_reaches_transport(tmp_path):
         try:
             await _wait_until(lambda: transport.started and len(bridge.received) == 2)
             assert bridge.received == [E1, E2]
-            # E2 ("reply: pong") made the bridge submit -> transport.send.
-            assert [m.text for m in transport.sent] == ["pong"]
-            assert transport.sent[0].kind == "final"
-            assert transport.sent[0].room_id == "!room"
+            # E2 ("reply: pong") made the bridge submit; the outbox
+            # worker (MX-1) delivers asynchronously.
+            await _wait_until(lambda: len(transport.sent) == 1)
+            sent = transport.sent[0]
+            assert sent.text.split(" <!-- ")[0] == "pong"
+            assert sent.kind == "final"
+            assert sent.room_id == "!room"
             # Core callback: the bridge saw its own output after the send.
-            assert bridge.outputs == [transport.sent[0]]
+            await _wait_until(lambda: len(bridge.outputs) == 1)
+            assert bridge.outputs[0].text == "pong"
             # State directory tree was created under the config.
             assert (config.state_dir / "e2ee").is_dir()
             assert (config.state_dir / "media_cache").is_dir()
@@ -242,18 +247,36 @@ def test_bridge_error_recorded_and_loop_continues(tmp_path):
     _run_scenario(scenario())
 
 
-def test_submit_failure_recorded_and_raised(tmp_path):
+def test_submit_failure_recorded_and_dead_lettered(tmp_path):
     async def scenario():
         transport = FakeTransport(events=[E1])
         transport.send_error = OSError("send refused")
         bridge = FakeBridge()
-        core, _config = _build(tmp_path, transport, bridge)
+        errors: list[tuple[str, BaseException]] = []
+        # Fast backoff so the three failing attempts land quickly.
+        config = CoreConfig(
+            state_dir=tmp_path / "state",
+            agent_id="worker-a",
+            outbox_backoff_initial=0.01,
+            outbox_backoff_max=0.02,
+        )
+        core, _config = _build(tmp_path, transport, bridge, config)
+        core._on_error = lambda context, exc: errors.append((context, exc))
         task = asyncio.ensure_future(core.run())
         try:
             await _wait_until(lambda: transport.started)
-            with pytest.raises(OSError, match="send refused"):
-                await core.submit(OutboundMessage(room_id="!room", text="x"))
-            assert core.last_error is not None and "submit" in core.last_error
+            # MX-1: submit enqueues (returns the queue id); delivery is
+            # asynchronous, so the failure is no longer raised here.
+            qid = await core.submit(OutboundMessage(room_id="!room", text="x"))
+            assert isinstance(qid, str) and qid.startswith("final:")
+            # The worker's 3 failed attempts -> dead letter + health error.
+            await _wait_until(
+                lambda: any(c == "outbox_dead_letter" for c, _ in errors),
+                timeout=10.0,
+            )
+            assert any(c == "submit" for c, _ in errors)
+            assert core.last_error is not None
+            assert "outbox_dead_letter" in core.last_error
             assert bridge.outputs == []  # no output callback on failed send
             await core.stop()
         finally:

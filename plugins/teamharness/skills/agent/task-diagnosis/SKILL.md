@@ -70,6 +70,67 @@ use Docker directly, or bypass a 403 response.
    task content. Reading diagnostics does not authorize restarts, task retries,
    configuration changes or collection setup.
 
+## Present Evidence in Conversation
+
+Start with a one- or two-sentence answer, then immediately show the relevant
+evidence in ordinary Markdown blockquotes. End with at most three short points
+for uncertainty or next checks. Do not repeat the same values in a table and
+prose. Combine metrics and logs for the same resource into one block when both
+were queried, with a link for each source. Use the user's language for titles
+and labels (Chinese examples below), plus resource name, observation
+time/window and a few key values. Round CPU to two decimal
+places and show memory in readable units; keep exact values in the source.
+Do not declare a service healthy from low CPU/memory or a Running state alone.
+Do not paste raw API JSON, a full log dump, or an empty block for an unqueried
+source. Keep a routine reply to about 300 Chinese characters plus evidence;
+expand only when the user asks for a detailed analysis.
+
+Use these shapes, replacing every placeholder with evidence you actually read:
+
+```markdown
+The current sample shows ...; it does not establish what happened earlier.
+
+> **运行监控 · <resource-name>**
+>
+> Sample: <sampledAt> · CPU <cpuPercent>% · memory <usage with unit>
+> State: <state> · restarts: <restartCount> · OOM: <oomKilled>
+>
+> [监控详情](#console/governance/monitoring?kind=<kind>&name=<name>)
+
+> **日志 · <resource-name>**
+>
+> From <since> · sampled at <sampledAt> · up to <tail> lines
+>
+> ```text
+> <3–5 relevant verbatim redacted lines, including original timestamps>
+> ```
+>
+> [日志详情](#console/governance/monitoring?kind=<kind>&name=<name>&view=logs&since=<URL-encoded-since>&tail=<tail>)
+
+> **Tracing · <worker-name>**
+>
+> <observed error or slowest step> · <duration> · <reported token usage>
+> Trace: <trace-id> · span: <span-id>
+>
+> [链路详情](#console/governance/tracing?worker=<worker-name>&trace=<trace-id>&span=<span-id>)
+```
+
+Use exact discovered resource kind/name and Trace/span IDs. Percent-encode each
+query value, never the whole URL. Links are relative to the current Dashboard;
+do not invent its hostname or use private backend URLs. Include `span` only
+when you inspected that observation. You can link a session query using
+`#console/governance/tracing?session=<URL-encoded-session-id>` when no single
+trace is selected. Omit unavailable values instead of inventing zeroes.
+
+For logs, resolve a relative window (such as 15 minutes) to an explicit RFC3339
+timestamp **before** querying and pass that same value to `agt logs --since` and
+the link. Keep the queried tail (1–1000) in the link. State truncation, empty
+results or errors explicitly. The detail view reads current data from that
+start time; it is not an immutable copy of your earlier reply. Monitoring also
+refreshes current samples. If access is denied, collection is disabled, or a
+backend is unavailable, say what could not be checked; do not present a
+successful evidence block. Detail links retain the viewer's own permissions.
+
 ## Choose Your Query Scope
 
 You do not need a formal Project/Task to inspect a conversation trace. For

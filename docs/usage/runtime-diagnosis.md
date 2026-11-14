@@ -10,6 +10,18 @@ read-only CLI below. It correlates metrics, container logs and authorized traces
 reports observation times and evidence gaps, and distinguishes observations from
 a likely explanation. A diagnosis does not restart a container or retry a task.
 
+Replies lead with the answer and show short Markdown evidence blocks for the
+sources actually queried: resource and sample time, relevant CPU/memory values,
+a few verbatim redacted log lines, or a Trace's error/slowest step. Detail links
+open the corresponding Dashboard resource, log window, or exact Trace/span.
+Log links preserve the query start time and tail; refreshing reads newer data,
+so details are not an immutable snapshot of the reply. The viewer's permissions
+still apply. Unavailable sources and evidence gaps are stated explicitly.
+
+The evidence styling and targeted navigation require the Dashboard version
+containing observability conversation links. Other Markdown clients retain the
+readable summary; relative Dashboard links work when opened in the Dashboard.
+
 ## CLI
 
 Run these commands in a Manager/Controller environment with `agt` and an

@@ -5,7 +5,7 @@
 // R1-2e; the fake implements the 58 §5 contract). It covers what package
 // tests cannot: process boot/shutdown, the wired five-route table, the
 // identity middleware, the outbox dispatcher, the status writeback route,
-// and the store+handler path over HTTP.
+// the store+handler path over HTTP, and the health-only UDS face.
 //
 // Run:
 //
@@ -133,6 +133,7 @@ func TestServiceBinaryEndToEnd(t *testing.T) {
 
 	port := freePort(t)
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	udsPath := t.TempDir() + "/svc.sock"
 	cmd := exec.Command(bin)
 	cmd.Env = append(os.Environ(),
 		"AGENTTEAMS_SERVICE_ENABLED=true",
@@ -144,6 +145,7 @@ func TestServiceBinaryEndToEnd(t *testing.T) {
 		"AGENTTEAMS_SERVICE_LOG_LEVEL=error",
 		"AGENTTEAMS_SERVICE_OUTBOX_INTERVAL=100ms",
 		"AGENTTEAMS_SERVICE_SHUTDOWN_TIMEOUT=3s",
+		"AGENTTEAMS_SERVICE_UDS="+udsPath,
 	)
 	var out strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -163,6 +165,48 @@ func TestServiceBinaryEndToEnd(t *testing.T) {
 		t.Fatalf("readyz = %v %v", resp, err)
 	}
 	resp.Body.Close()
+
+	// --- UDS face is health-only --------------------------------------
+	// The unix socket must serve /healthz and /readyz only. An API route
+	// must answer 404 (route absent), not 401 (full mux with identity
+	// middleware) - that distinguishes the health-only handler.
+	udsClient := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			Dial: func(_, _ string) (net.Conn, error) { return net.Dial("unix", udsPath) },
+		},
+	}
+	udsUp := false
+	udsDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(udsDeadline) {
+		uResp, err := udsClient.Get("http://svc/healthz")
+		if err == nil {
+			uResp.Body.Close()
+			udsUp = uResp.StatusCode == http.StatusOK
+			if udsUp {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !udsUp {
+		t.Fatalf("uds /healthz not ok via %s\n%s", udsPath, out.String())
+	}
+	udsGet := func(path string) int {
+		t.Helper()
+		uResp, err := udsClient.Get("http://svc" + path)
+		if err != nil {
+			t.Fatalf("uds GET %s: %v", path, err)
+		}
+		defer uResp.Body.Close()
+		return uResp.StatusCode
+	}
+	if code := udsGet("/readyz"); code != http.StatusOK {
+		t.Fatalf("uds /readyz = %d, want 200", code)
+	}
+	if code := udsGet("/api/v1/workers"); code != http.StatusNotFound {
+		t.Fatalf("uds /api/v1/workers = %d, want 404 (health-only socket)", code)
+	}
 
 	// --- 401 without a bearer token ---------------------------------
 	req, _ := http.NewRequest(http.MethodPost, base+"/api/v1/workers", strings.NewReader(`{"name":"e2e-w1"}`))

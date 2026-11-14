@@ -85,6 +85,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	mw := deps.AuthMw
 
+	// Container-level telemetry is restricted to administrator/Manager
+	// identities; scoped Humans, Leaders and Workers cannot read host logs.
+	monitoring := newMonitoringHandler(deps)
+	mux.Handle("GET /api/v1/monitoring", mw.RequireAuthz(authpkg.ActionGet, "monitoring", nil)(http.HandlerFunc(monitoring.snapshot)))
+	mux.Handle("GET /api/v1/monitoring/{kind}/{name}/logs", mw.RequireAuthz(authpkg.ActionGet, "monitoring", nil)(http.HandlerFunc(monitoring.logs)))
+
 	// --- Status / health (no auth) ---
 	sh := NewStatusHandler(deps.Client, deps.Namespace, deps.KubeMode)
 	mux.HandleFunc("GET /healthz", sh.Healthz)

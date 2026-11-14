@@ -116,7 +116,7 @@ func TestReadyzDown(t *testing.T) {
 		t.Fatalf("body: %v (%s)", err, rec.Body.String())
 	}
 	if body.Status != "degraded" {
-		t.Fatalf("status = %q, want degraded (任务书 §2.6)", body.Status)
+		t.Fatalf("status = %q, want degraded (readyz db check down)", body.Status)
 	}
 	if body.Checks["db"].Status != "down" || body.Checks["db"].Detail != "res: ping failed" {
 		t.Fatalf("checks = %v", body.Checks)

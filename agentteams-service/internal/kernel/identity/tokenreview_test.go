@@ -81,7 +81,7 @@ func adminIdentity() *Identity {
 // TestNewCacheDefaults pins the frozen 60s TTL and the wired reviewer.
 func TestNewCacheDefaults(t *testing.T) {
 	if DefaultCacheTTL != 60*time.Second {
-		t.Fatalf("DefaultCacheTTL = %v, want the frozen 60s (58 §5)", DefaultCacheTTL)
+		t.Fatalf("DefaultCacheTTL = %v, want the frozen 60s", DefaultCacheTTL)
 	}
 	c := NewCache(&fakeReviewer{})
 	if c.TTL != DefaultCacheTTL {

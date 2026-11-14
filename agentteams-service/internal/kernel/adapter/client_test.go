@@ -156,7 +156,7 @@ func TestHeadersCarryReplayWindowTimestamp(t *testing.T) {
 		t.Fatalf("%s = %q is not RFC3339: %v", headerTimestamp, raw, err)
 	}
 	if skew := ts.Sub(before); skew < -5*time.Minute || skew > 5*time.Minute {
-		t.Fatalf("%s skew = %v, want within ±5min (replay window, 58 §5)", headerTimestamp, skew)
+		t.Fatalf("%s skew = %v, want within ±5min (replay window)", headerTimestamp, skew)
 	}
 	rid := got.header.Get(headerRequestID)
 	if len(rid) != 32 {

@@ -24,6 +24,7 @@ package resources
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -210,7 +211,8 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) (*upstreamRespon
 	if len(body) > proxyMaxResponseBytes {
 		p.logger().Error("proxy: controller response exceeds the proxy limit",
 			"worker", name, "method", r.Method, "limit", proxyMaxResponseBytes, "request_id", requestID(r))
-		writeUpstreamUnavailable(w, "controller response exceeds 4 MiB")
+		writeUpstreamUnavailable(w,
+			fmt.Sprintf("controller response exceeds %d MiB", proxyMaxResponseBytes>>20))
 		return nil, false
 	}
 	return &upstreamResponse{status: resp.StatusCode, header: resp.Header, body: body}, true

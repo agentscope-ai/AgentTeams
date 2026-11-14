@@ -1,4 +1,9 @@
 #!/bin/bash
+if [ "${AGENTTEAMS_LOG_CAPTURED:-}" != "1" ]; then
+    exec python3 "${AGENTTEAMS_LOG_LIB_DIR:-/opt/agentteams/scripts/lib}/runtime_supervisor.py" --runtime openhuman -- bash "$0" "$@"
+fi
+python3 "${AGENTTEAMS_LOG_LIB_DIR:-/opt/agentteams/scripts/lib}/runtime_observability.py" bootstrap
+
 # openhuman-worker-entrypoint.sh - OpenHuman Worker Agent container startup
 # Bridges openclaw.json config into OpenHuman's TOML config,
 # sets up MinIO file sync, launches openhuman-core with native Matrix support.

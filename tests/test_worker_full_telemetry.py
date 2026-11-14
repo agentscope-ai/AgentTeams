@@ -15,6 +15,45 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 import at_telemetry as telemetry
 
 
+def test_local_runtime_events_keep_model_tool_failures_without_content(tmp_path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'shared/lib'))
+    monkeypatch.setenv('AGENTTEAMS_LOG_DIR', str(tmp_path))
+    monkeypatch.setenv('MODEL_API_KEY', 'secret-model-key')
+    provider = TracerProvider()
+    provider.add_span_processor(telemetry.RuntimeLogProcessor())
+    tracer = provider.get_tracer('test')
+    for kind, attrs, reason in [
+        ('model', {'gen_ai.operation.name': 'chat', 'gen_ai.request.model': 'test-model'}, 'HTTP 401 api_key=secret-model-key'),
+        ('tool', {'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 'shell'}, 'command exited 127'),
+    ]:
+        with tracer.start_as_current_span(kind, attributes={**attrs, 'gen_ai.input.messages': 'PRIVATE PROMPT',
+                                                           'gen_ai.tool.call.arguments': 'PRIVATE ARGUMENTS'}) as span:
+            span.set_status(trace.Status(trace.StatusCode.ERROR, reason))
+    records = [json.loads(line) for line in (tmp_path / 'events.jsonl').read_text().splitlines()]
+    ends = [record for record in records if record['event'].endswith('.end')]
+    assert [record['status'] for record in ends] == ['failed', 'failed']
+    assert 'HTTP 401' in ends[0]['error']
+    assert '127' in ends[1]['error']
+    raw = json.dumps(records)
+    for private in ['secret-model-key', 'PRIVATE PROMPT', 'PRIVATE ARGUMENTS']:
+        assert private not in raw
+    provider.shutdown()
+
+
+def test_local_only_bootstrap_does_not_create_a_remote_exporter(tmp_path):
+    environment = {**os.environ, 'AGENTTEAMS_OTEL_ENABLED': 'false', 'AGENTTEAMS_LOG_CAPTURED': '1',
+                   'AGENTTEAMS_LOG_NATIVE_EVENTS': '1', 'AGENTTEAMS_OTEL_RUNTIME': 'hermes',
+                   'AGENTTEAMS_LOG_DIR': str(tmp_path),
+                   'PYTHONPATH': os.pathsep.join(str(Path(__file__).resolve().parents[1] / path)
+                                               for path in ['shared/lib', 'shared/lib/telemetry'])}
+    result = subprocess.run([sys.executable, '-c',
+        'import at_telemetry as t; import os; '
+        'assert os.environ["AGENTTEAMS_OTEL_CAPTURE_CONTENT"] == "false"; '
+        'assert all(not isinstance(p, t.BatchSpanProcessor) for p in t._provider._active_span_processor._span_processors)'],
+        env=environment, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
 def test_team_identity_follows_projected_runtime_across_reassignment(tmp_path, monkeypatch):
     import at_runtime_adapters as adapters
     runtime = tmp_path / 'runtime.yaml'
@@ -129,6 +168,7 @@ def test_async_generator_context_is_detached_before_yield_and_close():
 
 
 def test_returned_tool_errors_are_detected():
+    assert telemetry.tool_error({'state': 'error', 'content': [{'type': 'text', 'text': 'File not found: /tmp/missing'}]}) == 'File not found: /tmp/missing'
     assert telemetry.tool_error('{"error":"file missing"}')
     assert telemetry.tool_error({"exit_code": 2, "stdout": ""})
     assert not telemetry.tool_error({"exit_code": 0, "stdout": "error count: 0"})

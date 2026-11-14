@@ -129,6 +129,15 @@ func modelGrantProviderOr(provider string) string {
 }
 
 func (h *ResourceHandler) appendModelGrant(ctx context.Context, worker *v1beta1.Worker, provider, model string) {
+	appendImplicitModelGrant(ctx, worker, provider, model)
+}
+
+// appendImplicitModelGrant is the handler-independent form used by the
+// internal provision route, which has no public claims context but
+// must preserve the create-grant behaviour: an admin/manager create carries
+// the chosen model into the worker's implicit grant list before the object
+// exists in the controller.
+func appendImplicitModelGrant(ctx context.Context, worker *v1beta1.Worker, provider, model string) {
 	if model == "" {
 		return
 	}

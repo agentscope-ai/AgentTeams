@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -145,20 +146,33 @@ func (m *Middleware) authenticateAndEnrich(r *http.Request) (*CallerIdentity, bo
 	if token == "" {
 		return nil, false
 	}
-
-	identity, err := m.authenticator.Authenticate(r.Context(), token)
+	identity, err := m.ReviewToken(r.Context(), token)
 	if err != nil {
-		log.Printf("[AUTH] authentication failed: %v", err)
 		return nil, false
 	}
+	return identity, true
+}
 
+// ReviewToken resolves a bearer token through the same authenticator +
+// enricher chain as the public middleware, without reading request headers.
+// The service token-review route is the caller: it receives the
+// public bearer in a JSON body and needs the exact CallerIdentity (teams,
+// accessible workers, capabilities) the public routes would see.
+func (m *Middleware) ReviewToken(ctx context.Context, token string) (*CallerIdentity, error) {
+	if m == nil || m.authenticator == nil {
+		return nil, errors.New("auth: no authenticator configured")
+	}
+	identity, err := m.authenticator.Authenticate(ctx, token)
+	if err != nil {
+		log.Printf("[AUTH] authentication failed: %v", err)
+		return nil, err
+	}
 	if m.enricher != nil {
-		if err := m.enricher.EnrichIdentity(r.Context(), identity); err != nil {
+		if err := m.enricher.EnrichIdentity(ctx, identity); err != nil {
 			log.Printf("[AUTH] identity enrichment failed for %s: %v", identity.Username, err)
 		}
 	}
-
-	return identity, true
+	return identity, nil
 }
 
 func extractBearerToken(r *http.Request) string {

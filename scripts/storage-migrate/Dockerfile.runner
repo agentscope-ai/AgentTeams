@@ -1,0 +1,54 @@
+# agentteams-storage-runner - the standard execution vehicle for migration/cleanup scripts (0.2.1)
+#
+# Why it exists: production nodes have no mc/jq/curl on the host (everything runs in containers),
+# so running the migration on a host would test a shape that does not exist in production.
+#   The host provides three mounts (scripts / target data / state); the toolchain lives in the image.
+#
+# Dependency baseline (aligned with production):
+#   mc    = RELEASE.2025-08-13T08-35-41Z（commit 7394ce0d）
+          = the same mc the controller image (higress/mc:20260216) bundles (byte-identical)
+   curl  = Debian bookworm 7.88.1 (supports --aws-sigv4, required by the odm admin plane)
+   note: the minio/mc Docker Hub repository was archived with the MinIO community edition (2026-04-25),
+          so mc comes from the minio/mc GitHub releases (arm64 asset: mc.linux-arm64.*).
+#
+# Build (on any host; multi-arch is automatic):
+#   docker build -t agentteams-storage-runner:0.2.1 -f Dockerfile.runner .
+#
+# Standard run (migration):
+#   docker run --rm -it \
+#     -v $PWD/agentteams-storage:/scripts:ro \
+#     -v /path/to/dst-data:/data \
+#     -v /path/to/migrate-state:/state \
+#     --network host \
+#     agentteams-storage-runner:0.2.1 \
+#     bash /scripts/storage-migrate.sh --mode odm \
+#       --src-endpoint http://<minio-host>:9000 --src-ak <ak> --src-sk <sk> \
+#       --dst-endpoint http://127.0.0.1:9000 --dst-ak <ak> --dst-sk <sk> \
+#       --buckets agents,shared,teams,agentteams-config \
+#       --dst-data-dir /data --state-dir /state
+
+FROM debian:bookworm-slim
+
+ARG MC_VERSION=RELEASE.2025-08-13T08-35-41Z
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bash ca-certificates curl jq \
+    && rm -rf /var/lib/apt/lists/* \
+    && ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         arm64)  MC_URL="https://github.com/minio/mc/releases/download/${MC_VERSION}/mc.linux-arm64.RELEASE.2025-08-13T08-35-41Z" ;; \
+         amd64)  MC_URL="https://github.com/minio/mc/releases/download/${MC_VERSION}/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z" ;; \
+         *) echo "unsupported arch: $ARCH" && exit 1 ;; \
+       esac \
+    && curl -fsSL "$MC_URL" -o /usr/local/bin/mc \
+    && chmod +x /usr/local/bin/mc \
+    && head -c4 /usr/local/bin/mc | od -An -tx1 | grep -q '7f 45 4c 46' \
+    && mc --version | head -1
+
+# Dependency self-check (build-time assertion; guards against an HTML 404 page saved as a binary)
+RUN test -n "$(command -v bash)" && test -n "$(command -v jq)" \
+    && curl --help all | grep -q aws-sigv4 \
+    && test "$(mc --version | head -1 | grep -o 'RELEASE\.[^ ]*')" = "RELEASE.2025-08-13T08-35-41Z"
+
+ENTRYPOINT ["bash"]
+CMD ["-c", "mc --version | head -1"]

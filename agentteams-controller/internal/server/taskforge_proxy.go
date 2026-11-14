@@ -62,17 +62,11 @@ func (a *internalAPI) proxyTaskForge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	for k, vs := range resp.Header {
-		if taskforgeHopByHopHeaders[http.CanonicalHeaderKey(k)] {
-			continue
-		}
-		for _, v := range vs {
-			w.Header().Add(k, v)
-		}
-	}
 	// Cap the upstream response: a misbehaving TaskForge gateway must not
 	// make the controller buffer unbounded data. The limit mirrors the
-	// service-side proxy response cap (4 MiB).
+	// service-side proxy response cap (4 MiB). The body is buffered before
+	// any upstream header is copied so the 502 paths below return a clean
+	// error envelope instead of stale upstream headers (Content-Length).
 	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, internalMaxBodyBytes+1))
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadGateway, "taskforge upstream read failed")
@@ -81,6 +75,14 @@ func (a *internalAPI) proxyTaskForge(w http.ResponseWriter, r *http.Request) {
 	if len(respBytes) > internalMaxBodyBytes {
 		httputil.WriteError(w, http.StatusBadGateway, "taskforge response too large")
 		return
+	}
+	for k, vs := range resp.Header {
+		if taskforgeHopByHopHeaders[http.CanonicalHeaderKey(k)] {
+			continue
+		}
+		for _, v := range vs {
+			w.Header().Add(k, v)
+		}
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(respBytes)

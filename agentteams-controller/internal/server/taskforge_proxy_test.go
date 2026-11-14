@@ -99,3 +99,56 @@ func TestTaskForgeProxyResponseCap(t *testing.T) {
 		t.Fatalf("oversized response body = %q", rec.Body.String())
 	}
 }
+
+// TestTaskForgeProxyResponseCapBoundary pins the exact-cap edge: an upstream
+// response of exactly internalMaxBodyBytes passes (the check is >, not >=).
+// If the limit check ever flips to >=, this test goes red.
+func TestTaskForgeProxyResponseCapBoundary(t *testing.T) {
+	exact := strings.Repeat("y", internalMaxBodyBytes)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(exact))
+	}))
+	defer upstream.Close()
+
+	api := &internalAPI{taskforgeURL: upstream.URL, taskforgeEnabled: true, taskforgeClient: upstream.Client()}
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/taskforge/v1/exact", nil)
+	req.SetPathValue("path", "v1/exact")
+	rec := httptest.NewRecorder()
+	api.proxyTaskForge(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exact-cap response status = %d, want 200", rec.Code)
+	}
+	if rec.Body.Len() != internalMaxBodyBytes {
+		t.Fatalf("exact-cap response body len = %d, want %d", rec.Body.Len(), internalMaxBodyBytes)
+	}
+}
+
+// TestTaskForgeProxyUpstreamReadError pins that a broken upstream body
+// (declared Content-Length, truncated data) yields the 502 envelope with no
+// stale upstream headers: the response must not carry the upstream
+// Content-Length, or strict clients fail reading the error body (EOF).
+func TestTaskForgeProxyUpstreamReadError(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("x"))
+	}))
+	defer upstream.Close()
+
+	api := &internalAPI{taskforgeURL: upstream.URL, taskforgeEnabled: true, taskforgeClient: upstream.Client()}
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/taskforge/v1/truncated", nil)
+	req.SetPathValue("path", "v1/truncated")
+	rec := httptest.NewRecorder()
+	api.proxyTaskForge(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("truncated upstream status = %d, want 502", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "upstream read failed") {
+		t.Fatalf("truncated upstream body = %q", rec.Body.String())
+	}
+	if cl := rec.Header().Get("Content-Length"); cl != "" {
+		t.Fatalf("truncated upstream response carries stale Content-Length %q", cl)
+	}
+}

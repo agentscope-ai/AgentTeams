@@ -707,6 +707,11 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		if err := a.mgr.Add(pusher); err != nil {
 			return fmt.Errorf("setup status pusher: %w", err)
 		}
+	} else if a.cfg.ServiceURL != "" || a.cfg.InternalToken != "" {
+		// One-sided service configuration silently does nothing; say so at
+		// startup so a half-typed env pair is found immediately.
+		ctrl.Log.WithName("app").Info("service writeback disabled: AGENTTEAMS_SERVICE_URL and AGENTTEAMS_INTERNAL_TOKEN must both be set",
+			"service_url_set", a.cfg.ServiceURL != "", "internal_token_set", a.cfg.InternalToken != "")
 	}
 	return nil
 }

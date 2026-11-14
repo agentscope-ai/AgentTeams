@@ -75,3 +75,27 @@ func TestTaskForgeProxyErrorAndDisabled(t *testing.T) {
 		t.Fatalf("disabled status = %d, want 503", rec.Code)
 	}
 }
+
+// TestTaskForgeProxyResponseCap pins that an upstream response larger than
+// the proxy cap is rejected with 502 instead of streamed without bound.
+func TestTaskForgeProxyResponseCap(t *testing.T) {
+	big := strings.Repeat("x", internalMaxBodyBytes+1024)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(big))
+	}))
+	defer upstream.Close()
+
+	api := &internalAPI{taskforgeURL: upstream.URL, taskforgeEnabled: true, taskforgeClient: upstream.Client()}
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/taskforge/v1/big", nil)
+	req.SetPathValue("path", "v1/big")
+	rec := httptest.NewRecorder()
+	api.proxyTaskForge(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("oversized response status = %d, want 502", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "too large") {
+		t.Fatalf("oversized response body = %q", rec.Body.String())
+	}
+}

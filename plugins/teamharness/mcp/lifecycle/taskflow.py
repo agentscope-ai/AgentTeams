@@ -330,6 +330,56 @@ def _task_result_from_meta(task: dict[str, Any]) -> tuple[dict[str, Any], list[s
     return result, errors
 
 
+# Process start, computed once at import time. delegate_task runs with the
+# leader role, so this is the (re)start of the MCP process issuing the
+# dispatch — NOT of the receiving Worker's host: a task whose assignment
+# predates this moment was assigned by an earlier session of this process,
+# which is gone now. Canonical ISO-8601 UTC "Z" strings compare
+# chronologically.
+_SESSION_STARTED_AT = _utc_timestamp()
+
+# Verbatim recovery note appended to a delegate notification for a task
+# assigned by an earlier session of this dispatch process (do not reword or
+# rewrap).
+_RECOVERY_NOTE = (
+    "The MCP process issuing this dispatch (re)started after this task was\n"
+    "assigned, so the session that assigned it is gone. Inspect the current\n"
+    "worktree, git history and external state (task record, PRs, sent messages)\n"
+    "before continuing. Do not repeat an already completed external operation.\n"
+    "Finish the original assignment and report its status."
+)
+
+
+def _recovery_note_for_delegate(existing_task: dict[str, Any]) -> str:
+    """Return _RECOVERY_NOTE when this delegation re-wakes a task assigned
+    by an earlier session of this dispatch process, else "".
+
+    Judged against the EXISTING task meta (read before this delegation
+    rewrites it); all three conditions must hold:
+      1. the meta carries an assignment time (assigned_at, falling back to
+         createdAt; both absent -> no note);
+      2. that time predates this session (assigned_at <
+         _SESSION_STARTED_AT: the task was assigned before this process
+         started, so the assigning session is gone);
+      3. no note was DELIVERED in this session yet (recoveryNoteAt is
+         stamped only when a send succeeds; absent or < _SESSION_STARTED_AT
+         — a previous session's stamp may be re-injected after the next
+         restart of this process).
+    """
+    assigned_at = _first_text(
+        existing_task.get("assigned_at"),
+        existing_task.get("assignedAt"),
+        existing_task.get("created_at"),
+        existing_task.get("createdAt"),
+    )
+    if not assigned_at or not assigned_at < _SESSION_STARTED_AT:
+        return ""
+    note_at = _first_text(existing_task.get("recoveryNoteAt"))
+    if note_at and not note_at < _SESSION_STARTED_AT:
+        return ""
+    return _RECOVERY_NOTE
+
+
 def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
     payload = _payload(arguments)
@@ -520,6 +570,11 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             spec = str(payload.get("spec") or "")
             (task_dir / "spec.md").write_text(spec + ("\n" if spec else ""), encoding="utf-8")
             source_room_id = _source_room_id_from_payload(payload) or str(project.get("source_room_id") or "").strip()
+            # Recovery note: the assignment was made by an earlier session
+            # of this dispatch process (which is gone) and no note has been
+            # delivered in this session yet -> the notification must tell
+            # the Worker to inspect current state before continuing.
+            recovery_note = _recovery_note_for_delegate(existing_task)
             # Transaction id for this logical delegation attempt:
             # a re-delegation (different assignee) is a NEW attempt and
             # rotates the nonce; a retry of the SAME attempt (previous send
@@ -546,6 +601,23 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 task["assigned_to"] = assigned_to
             if source_room_id:
                 task["source_room_id"] = source_room_id
+            # Preserve the original assignment time (the cross-session
+            # evidence the recovery note is judged on): the prepared write
+            # would otherwise re-stamp assigned_at to now, and a same-
+            # session retry after a failed send could no longer prove the
+            # task predates the session.
+            prior_assigned_at = _first_text(
+                existing_task.get("assigned_at"),
+                existing_task.get("assignedAt"),
+                existing_task.get("created_at"),
+                existing_task.get("createdAt"),
+            )
+            if prior_assigned_at:
+                task["assigned_at"] = prior_assigned_at
+            # recoveryNoteAt is deliberately NOT written into the prepared
+            # meta: a failed send must not count as "already injected", so
+            # a same-session retry re-sends the note. The commit path below
+            # stamps it atomically with the delivered event_id.
             if not _delegate_from:
                 # Creation is recorded with from="planned" (the project-node
                 # view at this moment); prepared -> prepared retries are
@@ -657,6 +729,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         assignee=assignment_mxid,
                         spec=spec,
                         txn=notify_txn,
+                        recovery_note=recovery_note,
                     )
                 except Exception as exc:
                     notification = {
@@ -686,13 +759,24 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # Send succeeded - commit the assignment atomically with the
             # recorded event_id, then re-push the assigned state.
             # (prepared -> assigned goes through the transition table.)
+            commit_extra: dict[str, Any] = {"eventId": notification["eventId"]}
+            if recovery_note:
+                # Stamped ONLY now, atomically with the delivered event_id:
+                # a same-session retry of a failed send (task still
+                # prepared, no stamp) re-sends the note, while the
+                # assigned+eventId retry path reuses the recorded event
+                # without re-sending, so a delivered note is never
+                # re-injected within the session. A later restart moves
+                # _SESSION_STARTED_AT past the stamp so the next session
+                # injects again.
+                commit_extra["recoveryNoteAt"] = _utc_timestamp()
             _transition_task(
                 arguments,
                 task,
                 task_id,
                 "assigned",
                 "delegate_task",
-                eventId=notification["eventId"],
+                **commit_extra,
             )
             project_task_updates: dict[str, Any] = {"status": "assigned"}
             if assigned_to:
@@ -730,6 +814,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "task": task,
                 "synced": True,
                 "notification": notification,
+                # True only when the notification sent in this call carried
+                # the restart-recovery note (absent from every other return).
+                "recoveryNote": bool(notification.get("recoveryNote")),
                 "notificationNeeded": _notification_needed(
                     "delegate_task",
                     project or {"project_id": project_id},

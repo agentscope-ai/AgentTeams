@@ -76,6 +76,28 @@ func (a *Authorizer) Authorize(caller *CallerIdentity, req AuthzRequest) error {
 		if caller.Role == RoleManager && req.ResourceKind == "skills" && req.Action == ActionSkillPublish {
 			return deny(caller, req)
 		}
+		// TaskForge runner surface (1.2.7, task 26 §5.4). Admin keeps the
+		// full task/checkpoint matrix. Manager is READ-ONLY on
+		// task/checkpoint (the manager agent observes the task system, it
+		// does not drive it) and has NO runner-module access (design 24:
+		// the update trigger is human/admin only). Even for admin the
+		// runner module is get/update — delete/recreate is an operator
+		// operation outside the API.
+		switch req.ResourceKind {
+		case "runner-module":
+			if caller.Role == RoleManager {
+				return deny(caller, req)
+			}
+			if req.Action == ActionGet || req.Action == ActionUpdate {
+				return nil
+			}
+			return deny(caller, req)
+		case "task", "checkpoint":
+			if caller.Role == RoleManager && (req.Action != ActionGet && req.Action != ActionList) {
+				return deny(caller, req)
+			}
+			return nil // team scope is filtered by the handler
+		}
 		return nil // full access
 
 	case RoleTeamLeader:
@@ -259,6 +281,30 @@ func (a *Authorizer) authorizeHuman(caller *CallerIdentity, req AuthzRequest) er
 		}
 		return deny(caller, req)
 
+	case "task":
+		// TaskForge task actions (1.2.7, task 26 §5.4): L2 humans read
+		// and create/update tasks within their accessibleTeams scope.
+		// Delete/restore is denied here (approval flow later). The
+		// middleware cannot resolve task -> team, so requireSameTeam
+		// short-circuits on an empty ResourceTeam; TaskForge re-checks
+		// scope from the signed claims.
+		switch req.Action {
+		case ActionGet, ActionList:
+			return nil // handler filters by accessibleTeams
+		case ActionCreate, ActionUpdate:
+			return a.requireSameTeam(caller, req)
+		default:
+			return deny(caller, req)
+		}
+
+	case "checkpoint":
+		// TaskForge checkpoints (1.2.7): L2 humans read their team's
+		// checkpoints only.
+		if req.Action == ActionGet || req.Action == ActionList {
+			return nil
+		}
+		return deny(caller, req)
+
 	default:
 		return deny(caller, req)
 	}
@@ -351,6 +397,27 @@ func (a *Authorizer) authorizeTeamLeader(caller *CallerIdentity, req AuthzReques
 		}
 		return deny(caller, req)
 
+	case "task":
+		// TaskForge task actions (1.2.7, task 26 §5.4): team leaders
+		// read/update/create their own team's tasks; delete/restore
+		// denied (approval flow later). Mirrors the "project" case.
+		switch req.Action {
+		case ActionList:
+			return nil // handler filters by team
+		case ActionGet, ActionUpdate, ActionCreate:
+			return a.requireSameTeam(caller, req)
+		default:
+			return deny(caller, req)
+		}
+
+	case "checkpoint":
+		// TaskForge checkpoints (1.2.7): team leaders read their own
+		// team's checkpoints.
+		if req.Action == ActionGet || req.Action == ActionList {
+			return nil
+		}
+		return deny(caller, req)
+
 	default:
 		return deny(caller, req)
 	}
@@ -408,11 +475,43 @@ func (a *Authorizer) authorizeWorker(caller *CallerIdentity, req AuthzRequest) e
 		// middleware cannot resolve record -> team, so ResourceTeam is empty
 		// and the check would otherwise short-circuit.
 		//
-		// INVARIANT: "project"/"task" must never gain a case in this switch —
-		// that would open pause/resume/replan/complete/cancel (registered as
-		// ActionUpdate + "project" / "task") to every worker. Pinned by
-		// TestAuthorizer_ProjectMetaCommit.
+		// INVARIANT: "project" must never gain a case in this switch —
+		// that would open pause/resume/replan/complete/cancel (registered
+		// as ActionUpdate + "project") to every worker. Pinned by
+		// TestAuthorizer_ProjectMetaCommit. "task" intentionally gains a
+		// case below (1.2.7 TaskForge gateway, task 26 §5.4) for the NEW
+		// /api/v1/tasks/{id}/{action} routes only; the legacy project and
+		// task-meta endpoints keep their "project"/"task-meta" kinds and
+		// are unaffected.
 		if req.Action == ActionUpdate {
+			return a.requireSameTeam(caller, req)
+		}
+		return deny(caller, req)
+
+	case "task":
+		// TaskForge task actions (1.2.7, task 26 §5.4): workers may
+		// GET and UPDATE (claim/submit ride on update). Self-ownership
+		// ("仅自己任务") is enforced where the data lives — TaskForge
+		// checks the signed claims (ActorID = worker name) against the
+		// task's assignee — because the controller has no task -> worker
+		// resolution without the DB. requireSameTeam gates team-less
+		// workers and (once resolvable) cross-team access. "task"
+		// intentionally gains a case here (unlike "project"): it covers
+		// the NEW /api/v1/tasks/{id}/{action} routes only; the legacy
+		// project endpoints stay on "project"/"task-meta" untouched.
+		if req.Action == ActionGet || req.Action == ActionUpdate {
+			return a.requireSameTeam(caller, req)
+		}
+		return deny(caller, req)
+
+	case "checkpoint":
+		// TaskForge checkpoints (1.2.7, task 26 §5.4): workers only READ
+		// checkpoints (ActionGet through requireSameTeam). Checkpoint
+		// records are written by the task system itself, not by workers:
+		// a worker must never create/update/delete checkpoint state even
+		// for its own task, so everything besides ActionGet — including
+		// List and Update — is denied.
+		if req.Action == ActionGet {
 			return a.requireSameTeam(caller, req)
 		}
 		return deny(caller, req)

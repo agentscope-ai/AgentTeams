@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -414,4 +415,79 @@ func TestLoadConfigAutoPrefixDisabledKeepsExplicitContainerPrefix(t *testing.T) 
 	if cfg.ContainerPrefix != "custom-worker-" {
 		t.Fatalf("ContainerPrefix = %q, want %q", cfg.ContainerPrefix, "custom-worker-")
 	}
+}
+
+// loadConfigExpectPanic runs LoadConfig and fails unless it panics (the
+// same convention as TestLoadConfigPanicsOnInvalidManagerSpec).
+func loadConfigExpectPanic(t *testing.T) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("LoadConfig() did not panic")
+		}
+	}()
+	_ = LoadConfig()
+}
+
+func TestLoadConfigTaskForgeDisabledByDefault(t *testing.T) {
+	cfg := LoadConfig()
+	if cfg.TaskForgeURL != "" {
+		t.Fatalf("TaskForgeURL = %q, want empty (gateway off)", cfg.TaskForgeURL)
+	}
+	if cfg.TaskForgeClaimsSecret != "" {
+		t.Fatalf("TaskForgeClaimsSecret = %q, want empty", cfg.TaskForgeClaimsSecret)
+	}
+	if cfg.TaskForgeTimeout != 10*time.Second {
+		t.Fatalf("TaskForgeTimeout = %v, want 10s default", cfg.TaskForgeTimeout)
+	}
+}
+
+func TestLoadConfigTaskForgeValidCombo(t *testing.T) {
+	t.Setenv("AGENTTEAMS_TASKFORGE_URL", "http://taskforge:8092")
+	t.Setenv("AGENTTEAMS_TASKFORGE_CLAIMS_SECRET", "0123456789abcdef")
+	t.Setenv("AGENTTEAMS_TASKFORGE_TIMEOUT", "5s")
+
+	cfg := LoadConfig()
+	if cfg.TaskForgeURL != "http://taskforge:8092" {
+		t.Fatalf("TaskForgeURL = %q", cfg.TaskForgeURL)
+	}
+	if cfg.TaskForgeClaimsSecret != "0123456789abcdef" {
+		t.Fatalf("TaskForgeClaimsSecret = %q", cfg.TaskForgeClaimsSecret)
+	}
+	if cfg.TaskForgeTimeout != 5*time.Second {
+		t.Fatalf("TaskForgeTimeout = %v, want 5s", cfg.TaskForgeTimeout)
+	}
+}
+
+func TestLoadConfigTaskForgeRejectsBadScheme(t *testing.T) {
+	t.Setenv("AGENTTEAMS_TASKFORGE_URL", "ftp://taskforge:8092")
+	t.Setenv("AGENTTEAMS_TASKFORGE_CLAIMS_SECRET", "0123456789abcdef")
+	loadConfigExpectPanic(t)
+}
+
+func TestLoadConfigTaskForgeRejectsUnparsableURL(t *testing.T) {
+	t.Setenv("AGENTTEAMS_TASKFORGE_URL", "http://[::1")
+	t.Setenv("AGENTTEAMS_TASKFORGE_CLAIMS_SECRET", "0123456789abcdef")
+	loadConfigExpectPanic(t)
+}
+
+func TestLoadConfigTaskForgeRejectsMissingSecret(t *testing.T) {
+	t.Setenv("AGENTTEAMS_TASKFORGE_URL", "http://taskforge:8092")
+	loadConfigExpectPanic(t)
+}
+
+func TestLoadConfigTaskForgeRejectsShortSecret(t *testing.T) {
+	t.Setenv("AGENTTEAMS_TASKFORGE_URL", "http://taskforge:8092")
+	t.Setenv("AGENTTEAMS_TASKFORGE_CLAIMS_SECRET", "0123456789abcde") // 15 chars
+	loadConfigExpectPanic(t)
+}
+
+func TestLoadConfigTaskForgeRejectsInvalidTimeout(t *testing.T) {
+	t.Setenv("AGENTTEAMS_TASKFORGE_TIMEOUT", "abc")
+	loadConfigExpectPanic(t)
+}
+
+func TestLoadConfigTaskForgeRejectsNonPositiveTimeout(t *testing.T) {
+	t.Setenv("AGENTTEAMS_TASKFORGE_TIMEOUT", "-1s")
+	loadConfigExpectPanic(t)
 }

@@ -148,6 +148,7 @@ build-agentteams-controller: ## Build agentteams-controller image (prerequisite 
 	@mkdir -p ./agentteams-controller/agent/manager-agent
 	@cp ./plugins/teamharness/prompts/manager/*.md ./agentteams-controller/agent/manager-agent/
 	@cp -r ./plugins/teamharness/skills/manager ./agentteams-controller/agent/manager-agent/skills
+	@cp -r ./plugins/teamharness/skills/agent/task-diagnosis ./agentteams-controller/agent/manager-agent/skills/
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
 		./agentteams-controller/
@@ -299,6 +300,7 @@ push-agentteams-controller: buildx-setup ## Build + push multi-arch agentteams-c
 	@mkdir -p ./agentteams-controller/agent/manager-agent
 	@cp ./plugins/teamharness/prompts/manager/*.md ./agentteams-controller/agent/manager-agent/
 	@cp -r ./plugins/teamharness/skills/manager ./agentteams-controller/agent/manager-agent/skills
+	@cp -r ./plugins/teamharness/skills/agent/task-diagnosis ./agentteams-controller/agent/manager-agent/skills/
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(CONTROLLER_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \

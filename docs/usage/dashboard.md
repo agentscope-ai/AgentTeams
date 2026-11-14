@@ -41,6 +41,10 @@ Personal Human files and Agent workspaces are distinct. Use personal-file sharin
 
 ## Optional Tracing
 
+For component CPU/memory, recent container output and Manager conversation-based
+inspection, see [runtime diagnosis](runtime-diagnosis.md). These read-only CLI
+queries use the Controller's monitoring API and your current identity.
+
 Open **工作台 → Tracing**. Collection is off by default; an unconfigured deployment displays setup guidance. An administrator can open **可观测配置**, configure a query backend and an existing OTLP/HTTP Collector, test, save, and explicitly apply settings to existing supported Workers.
 
 Core v1.2.7 stores these settings in the Controller namespace's `agentteams-observability` Secret (`config.json`). Langfuse queries and query secrets belong to the Controller. Dashboard no longer uses its old local `observability.json`; after upgrading an installation that used that file, save the settings again through the UI. Empty secret fields retain saved values.

@@ -33,7 +33,9 @@ env wins over defaults).
 4. Serve TCP (and optional UDS) health and API.
 
 A crash between DDL and the migration record is safe: every file is
-CREATE ... IF NOT EXISTS (or CREATE OR REPLACE VIEW).
+CREATE ... IF NOT EXISTS (or CREATE OR REPLACE VIEW), except the 0024
+ALTER, which is covered by the runner's duplicate-name tolerance
+(see migrate.go).
 
 ## Health
 

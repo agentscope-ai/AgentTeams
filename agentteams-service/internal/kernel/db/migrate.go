@@ -18,7 +18,10 @@
 //     MySQL has no ADD COLUMN IF NOT EXISTS, so the 0024 ALTER relies on
 //     the runner's crash-window safety net instead: a re-applied ALTER
 //     failing with ER_DUP_FIELDNAME/ER_DUP_KEYNAME is treated as already
-//     applied and its version is recorded.
+//     applied and its version is recorded. The tolerance applies to every
+//     statement in every file, not just 0024: a future migration that
+//     collides with an existing object name is recorded as applied with a
+//     warning log, so keep column/index names unique per schema.
 package db
 
 import (

@@ -153,7 +153,9 @@ func run(args []string) int {
 	api.AddReadyCheck("db", func(ctx context.Context) module.Health {
 		if err := pools.Health(ctx); err != nil {
 			// Detail must stay DSN-free: /readyz is unauthenticated and a
-			// raw driver error can carry host/port/user (58 §2.6).
+			// raw driver error can carry host/port/user (58 §2.6). The full
+			// error stays in the server log for diagnosis.
+			lg.Warn("readyz db check failed", "err", err)
 			return module.Health{Status: module.StatusDown, Detail: "database unreachable"}
 		}
 		return module.Health{Status: module.StatusOK}

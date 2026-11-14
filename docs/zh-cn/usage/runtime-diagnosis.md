@@ -1,5 +1,7 @@
 # 查看运行指标与日志
 
+更新后的共享 Harness 镜像还提供[本地运行时日志](runtime-logging.md)，包含 boot ID、生命周期状态及已支持的消息、模型、工具错误元数据。
+
 你可以直接对 Manager 说：
 
 > 看一下 Controller 和开发 Worker 的 CPU、内存，再查最近 15 分钟的日志，

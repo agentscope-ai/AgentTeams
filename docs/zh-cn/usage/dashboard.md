@@ -41,6 +41,10 @@ Human 个人文件与 Agent 工作空间分别管理。向 Agent 提供个人文
 
 ## 可选的 Tracing
 
+如需查看组件 CPU、内存、最近容器输出，或通过 Manager 对话查询，请参阅
+[运行诊断](runtime-diagnosis.md)。这些只读 CLI 查询使用 Controller 监控接口
+和当前调用身份。
+
 打开「工作台 → Tracing」。采集默认关闭，未配置时会显示引导。管理员可打开「可观测配置」，填写查询后端与已有的 OTLP/HTTP Collector，测试、保存，并显式应用到已有的受支持 Worker。
 
 Core v1.2.7 将配置保存在 Controller 命名空间的 `agentteams-observability` Secret（`config.json`）。Langfuse 查询和查询密钥由 Controller 管理。Dashboard 不再使用旧本地 `observability.json`；从这种旧配置升级后，需要通过界面重新保存配置。密钥字段留空表示保留已保存值。

@@ -1,6 +1,6 @@
 package server
 
-// Status pusher (R1-2e, 58 §5): the controller → service observation
+// Status pusher: the controller → service observation
 // writeback. When AGENTTEAMS_SERVICE_URL is set, the leader replica lists
 // Worker CRs on an interval and POSTs their observed state to the service's
 // /internal/v1/workers/status. It is strictly one-way and best-effort: a

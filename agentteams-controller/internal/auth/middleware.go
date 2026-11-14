@@ -155,7 +155,7 @@ func (m *Middleware) authenticateAndEnrich(r *http.Request) (*CallerIdentity, bo
 
 // ReviewToken resolves a bearer token through the same authenticator +
 // enricher chain as the public middleware, without reading request headers.
-// The service token-review route (58 §5) is the caller: it receives the
+// The service token-review route is the caller: it receives the
 // public bearer in a JSON body and needs the exact CallerIdentity (teams,
 // accessible workers, capabilities) the public routes would see.
 func (m *Middleware) ReviewToken(ctx context.Context, token string) (*CallerIdentity, error) {

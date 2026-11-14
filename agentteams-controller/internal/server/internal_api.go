@@ -1,6 +1,6 @@
 package server
 
-// Internal service API (R1-2e, 58 §5). These routes are the receiving half
+// Internal service API. These routes are the receiving half
 // of the agentteams-service adapter contract:
 //
 //	POST /internal/v1/workers/{name}/provision    service → controller
@@ -105,7 +105,7 @@ func registerInternalRoutes(mux *http.ServeMux, deps ServerDeps) {
 // guard enforces the internal bearer + replay window + request id. The
 // timestamp is a coarse clock-skew/replay guard, not a nonce store: the
 // routes are idempotent on (name, generation) and status writes are
-// naturally idempotent, matching the service-side guard (58 §5).
+// naturally idempotent, matching the service-side guard.
 func (a *internalAPI) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+a.token)) != 1 {
@@ -175,7 +175,7 @@ func wireIdentity(c *authpkg.CallerIdentity) internalIdentity {
 }
 
 // tokenReview exchanges a public bearer token for the enriched caller
-// identity (58 §5). An invalid/expired token is 401; the service surfaces it
+// identity. An invalid/expired token is 401; the service surfaces it
 // verbatim as unauthenticated.
 func (a *internalAPI) tokenReview(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -361,7 +361,7 @@ func (a *internalAPI) deprovision(w http.ResponseWriter, r *http.Request) {
 }
 
 // executionResponse is the observed execution state the service reads for
-// retry decisions and get-by-name refresh (58 §5). SpecHash is intentionally
+// retry decisions and get-by-name refresh. SpecHash is intentionally
 // empty: the controller's applied hash uses a different canonicalization
 // (runtime+resources aware) than the service's spec_hash, and returning it
 // would create false "spec changed" signals. R2 aligns the algorithms.

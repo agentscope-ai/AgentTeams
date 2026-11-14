@@ -2,7 +2,7 @@
 
 package server
 
-// Cross-process acceptance for the R1 service slice (R1-2e): a REAL
+// Cross-process acceptance for the R1 service slice: a REAL
 // agentteams-service binary against the REAL controller HTTP surface backed
 // by a fake Kubernetes client. No cluster is needed, but the full contract
 // is exercised end to end:

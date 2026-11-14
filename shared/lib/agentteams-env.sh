@@ -221,7 +221,7 @@ export AGENTTEAMS_CMS_LICENSE_KEY AGENTTEAMS_CMS_PROJECT AGENTTEAMS_CMS_WORKSPAC
 unset _AGENTTEAMS_STORAGE_ALIAS_ENV _AGENTTEAMS_STORAGE_PREFIX_ENV
 
 # Generic OTel adapter for Python Workers; credentials belong on the Collector.
-if _agentteams_truthy "${AGENTTEAMS_OTEL_ENABLED:-false}"; then
+if _agentteams_truthy "${AGENTTEAMS_OTEL_ENABLED:-false}" || [ "${AGENTTEAMS_LOG_NATIVE_EVENTS:-}" = "1" ]; then
     export LOONGSUITE_PYTHON_SITE_BOOTSTRAP=false
     export OTEL_EXPORTER_OTLP_PROTOCOL="${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}"
     export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-agentteams-worker-${AGENTTEAMS_WORKER_NAME:-unknown}}"

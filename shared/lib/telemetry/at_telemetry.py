@@ -341,7 +341,49 @@ class IdentityProcessor(SpanProcessor):
             span.set_attribute("langfuse.session.id", session)
 
 
-def configure():
+class RuntimeLogProcessor(SpanProcessor):
+    """Record operation metadata locally, without prompts or tool arguments."""
+
+    @staticmethod
+    def phase(span):
+        attrs = span.attributes or {}
+        if span.name == "worker.turn":
+            return "turn"
+        if attrs.get("gen_ai.operation.name") == "execute_tool" or attrs.get("langfuse.observation.type") == "tool":
+            return "tool"
+        if attrs.get("gen_ai.operation.name") == "chat" or attrs.get("langfuse.observation.type") == "generation" or span.name == "openai.chat":
+            return "model"
+        if span.name == "http.request":
+            return "http"
+
+    def record(self, span, suffix):
+        from runtime_observability import event
+        phase = self.phase(span)
+        if not phase:
+            return
+        attrs = span.attributes or {}
+        fields = {key: attrs[source] for key, source in {
+            "room_id": "agentteams.room.id", "event_id": "agentteams.event.id",
+            "turn_id": "agentteams.turn.id", "tool_name": "gen_ai.tool.name",
+            "item_id": "gen_ai.tool.call.id", "model": "gen_ai.request.model",
+            "http_status": "http.response.status_code", "server": "server.address",
+        }.items() if source in attrs}
+        fields["span_id"] = f"{span.context.span_id:016x}"
+        if suffix == "end":
+            fields["duration_ms"] = round((span.end_time - span.start_time) / 1_000_000)
+            fields["status"] = "failed" if span.status.status_code == trace.StatusCode.ERROR else "completed"
+            if span.status.description:
+                fields["error"] = span.status.description[:4096]
+        event(f"{phase}.{suffix}", **fields)
+
+    def on_start(self, span, parent_context=None):
+        self.record(span, "begin")
+
+    def on_end(self, span):
+        self.record(span, "end")
+
+
+def configure(*, local_only=False):
     """Initialize once; keep an already configured SDK provider."""
     global _provider
     if _provider is not None:
@@ -355,9 +397,12 @@ def configure():
             "agentteams.telemetry.config_revision": os.getenv("AGENTTEAMS_OTEL_CONFIG_REVISION", ""),
         })
         provider = TracerProvider(resource=resource, span_limits=SpanLimits(max_attributes=4096))
-        provider.add_span_processor(BatchSpanProcessor(SanitizingExporter(OTLPSpanExporter())))
+        if not local_only:
+            provider.add_span_processor(BatchSpanProcessor(SanitizingExporter(OTLPSpanExporter())))
         trace.set_tracer_provider(provider)
     provider.add_span_processor(IdentityProcessor())
+    if os.getenv("AGENTTEAMS_LOG_CAPTURED") == "1":
+        provider.add_span_processor(RuntimeLogProcessor())
     os.environ["TRACELOOP_TRACE_CONTENT"] = os.getenv("AGENTTEAMS_OTEL_CAPTURE_CONTENT", "true")
     if os.getenv("AGENTTEAMS_OTEL_RUNTIME") != "qwenpaw":
         OpenAIInstrumentor().instrument()

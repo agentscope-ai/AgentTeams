@@ -1,5 +1,8 @@
 # Inspect runtime metrics and logs
 
+Updated shared Harness images also provide [local runtime logs](runtime-logging.md)
+with boot IDs, lifecycle state and supported message/model/tool error metadata.
+
 You can ask your Manager, for example:
 
 > Check the Controller and development Worker CPU/memory, then inspect the last

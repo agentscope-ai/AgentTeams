@@ -168,6 +168,7 @@ def test_async_generator_context_is_detached_before_yield_and_close():
 
 
 def test_returned_tool_errors_are_detected():
+    assert telemetry.tool_error({'state': 'error', 'content': [{'type': 'text', 'text': 'File not found: /tmp/missing'}]}) == 'File not found: /tmp/missing'
     assert telemetry.tool_error('{"error":"file missing"}')
     assert telemetry.tool_error({"exit_code": 2, "stdout": ""})
     assert not telemetry.tool_error({"exit_code": 0, "stdout": "error count: 0"})

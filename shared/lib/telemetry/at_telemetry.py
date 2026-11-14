@@ -245,7 +245,9 @@ def tool_error(result):
         if result.get("exit_code", 0) not in (0, None):
             return f"exit_code={result['exit_code']}"
         if str(result.get("state", "")).lower() in ("error", "failed"):
-            return "tool returned error state"
+            detail = "\n".join(block.get("text", "") for block in result.get("content", [])
+                               if isinstance(block, dict) and block.get("type") == "text")
+            return detail[:2000] or "tool returned error state"
     return ""
 
 

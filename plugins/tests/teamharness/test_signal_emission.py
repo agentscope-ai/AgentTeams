@@ -681,3 +681,285 @@ print(json.dumps(module._projectflow(args)))
     assert bundle_result.get("ok") is True, bundle_result
     # Both entries resume from the same Go cursor with the same page.
     assert json.dumps(bundle_result, sort_keys=True) == json.dumps(live_result, sort_keys=True)
+
+
+# --- SIG-ATTENTION (attention_raised) emission ------------------------------
+#
+# The raised event follows the write: it is emitted only after the raised
+# record is committed (new-record sync, or the pending record's re-sync),
+# and a same-payload retry re-lands on the same deterministic id.
+
+
+def _prepare_attention_env(
+    server: Any, monkeypatch: Any, sync_ok: bool = True
+) -> None:
+    monkeypatch.setattr(server, "_filesync", FakeFilesync())
+    monkeypatch.setattr(server, "_pull_project", lambda *a, **k: True)
+    monkeypatch.setattr(server, "_pull_task", lambda *a, **k: True)
+    monkeypatch.setattr(server, "_publish_task_artifacts", lambda *a, **k: [])
+    monkeypatch.setattr(server, "_publish_project_artifacts", lambda *a, **k: [])
+    if sync_ok:
+        monkeypatch.setattr(server, "_sync_task", lambda *a, **k: True)
+    monkeypatch.setattr(server, "_sync_project", lambda *a, **k: True)
+    monkeypatch.setattr(
+        server, "_validate_assignee_membership", lambda *a, **k: {"ok": True}
+    )
+    monkeypatch.setattr(
+        server.taskflow,
+        "_send_attention_notification",
+        lambda *a, **k: {"sent": True, "eventId": f"$att-{k.get('attempt')}"},
+    )
+    monkeypatch.setattr(server.taskflow, "_team_leader_matrix_id", lambda: "@leader:example.test")
+    monkeypatch.setattr(server.taskflow, "_team_human_matrix_ids", lambda: [])
+
+
+def _attention_args(workspace: Path, **payload: Any) -> dict[str, Any]:
+    payload = {"taskId": "t1", "kind": "decision", "question": "Which API?", **payload}
+    return {
+        "role": "worker",
+        "workspaceDir": str(workspace),
+        "action": "request_attention",
+        "payload": payload,
+    }
+
+
+def _spy_emit(
+    server: Any, monkeypatch: Any, meta_path: Path | None = None
+) -> list[dict[str, Any]]:
+    """Record the emit arguments (emitter + kwargs) and delegate to the
+    real writer, so a test can inspect the exact identity inputs. When
+    ``meta_path`` is given, each emit also snapshots the on-disk meta
+    bytes at the emit moment (the S4a outcome write lands later, so the
+    final file must not be compared against the fingerprint input)."""
+    calls: list[dict[str, Any]] = []
+    real = server.taskflow._emit_signal_event
+
+    def spy(arguments: Any, emitter: Any, **kwargs: Any) -> bool:
+        entry: dict[str, Any] = {"emitter": emitter, **kwargs}
+        if meta_path is not None:
+            entry["meta_now"] = meta_path.read_bytes()
+        calls.append(entry)
+        return real(arguments, emitter, **kwargs)
+
+    monkeypatch.setattr(server.taskflow, "_emit_signal_event", spy)
+    return calls
+
+
+def _attention_identity_bytes(
+    *,
+    kind: str,
+    attempt: int,
+    question: str,
+    options: list[dict[str, Any]] | None = None,
+    suggested: str = "",
+    timeout_at: str = "",
+    expires_at: str = "",
+) -> bytes:
+    """The stable-identity bytes py:attention_raised fingerprints into the
+    event id (id_rule v1.2): the canonical JSON of the raised record's
+    creation-time identity fields. These fields are fixed at record
+    creation and never rewritten — the S4a notification-outcome write
+    (notification_log + eventId) rewrites the meta file around the record
+    but never the identity — so a same-payload retry of the pending
+    record re-hashes the same id while a fresh raise (attempt + 1) does
+    not. Must mirror the emit site in taskflow.py exactly."""
+    return json.dumps(
+        {
+            "kind": kind,
+            "attempt": attempt,
+            "question": question,
+            "options": options or [],
+            "suggested": suggested,
+            "timeoutAt": timeout_at,
+            "expiresAt": expires_at,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def test_attention_raise_emits_sig_attention(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    workspace = tmp_path / "agent"
+    _prepare_attention_env(server, monkeypatch)
+    _write_project_and_task(workspace, server)
+    meta_path = workspace / "shared" / "tasks" / "t1" / "meta.json"
+    emit_calls = _spy_emit(server, monkeypatch, meta_path)
+
+    result = server._taskflow(_attention_args(workspace))
+    assert result["ok"] is True
+
+    evs = _read_events(server, workspace)
+    assert len(evs) == 1
+    ev = evs[0]
+    assert ev["event_type"] == "SIG-ATTENTION"
+    assert ev["is_signal"] is True
+    assert ev["source_event"] == {"origin": "attention_raised", "request_id": None}
+    assert ev["task_id"] == "t1"
+    assert ev["ref"] == "shared/tasks/t1/meta.json"
+    assert ev["payload"] == {
+        "kind": "decision",
+        "attempt": 1,
+        "timeoutAt": "",
+        "status": "in_progress",
+    }
+    # The fingerprint hashes the record's stable identity (id_rule v1.2,
+    # #1506) — the canonical JSON of the creation-time fields, NOT the
+    # on-disk meta bytes: the S4a outcome write (notification_log +
+    # eventId) rewrites the meta after this emit, so a retry of the
+    # pending record must still re-land on the same event id.
+    assert len(emit_calls) == 1
+    assert emit_calls[0]["emitter"] == "attention_raised"
+    assert emit_calls[0]["attempt"] == 1
+    assert emit_calls[0]["ref"] == "shared/tasks/t1/meta.json"
+    assert emit_calls[0]["ref_bytes"] == _attention_identity_bytes(
+        kind="decision", attempt=1, question="Which API?"
+    )
+    assert emit_calls[0]["ref_bytes"] != emit_calls[0]["meta_now"]
+    assert ev["fingerprint"] == hashlib.sha256(emit_calls[0]["ref_bytes"]).hexdigest()
+
+
+def test_attention_same_payload_retry_is_one_event(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    workspace = tmp_path / "agent"
+    _prepare_attention_env(server, monkeypatch)
+    _write_project_and_task(workspace, server)
+
+    first = server._taskflow(_attention_args(workspace))
+    assert first["ok"] is True
+    events_after_first = sorted(
+        p.name for p in _events_dir(server, workspace).glob("*.json")
+    )
+    assert events_after_first == [events_after_first[0]]
+
+    # Same payload again: the recorded loop is reused (idempotent), so no
+    # second event object appears and the first keeps its deterministic id.
+    second = server._taskflow(_attention_args(workspace))
+    assert second["ok"] is True
+    assert second["attention"]["reused"] is True
+    events_after_retry = sorted(
+        p.name for p in _events_dir(server, workspace).glob("*.json")
+    )
+    assert events_after_retry == events_after_first
+    ev = _read_events(server, workspace)[0]
+    assert ev["event_id"] == events_after_first[0][:-len(".json")]
+    assert ev["payload"]["attempt"] == 1
+
+
+def test_attention_sync_failure_emits_no_raised_event(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    workspace = tmp_path / "agent"
+    _prepare_attention_env(server, monkeypatch)
+    _write_project_and_task(workspace, server)
+    # The record write's sync fails once, then recovers: the retry re-syncs
+    # the pending record and is where the raised event finally lands.
+    state = {"calls": 0}
+
+    def flaky_sync(*a: Any, **k: Any) -> bool:
+        state["calls"] += 1
+        return state["calls"] > 1
+
+    monkeypatch.setattr(server, "_sync_task", flaky_sync)
+
+    failed = server._taskflow(_attention_args(workspace))
+    assert failed["ok"] is False
+    assert failed["retryable"] is True
+    assert _read_events(server, workspace) == [], "no raised event before a successful sync"
+
+    recovered = server._taskflow(_attention_args(workspace))
+    assert recovered["ok"] is True
+    evs = _read_events(server, workspace)
+    assert len(evs) == 1
+    assert evs[0]["event_type"] == "SIG-ATTENTION"
+    assert evs[0]["source_event"]["origin"] == "attention_raised"
+    assert evs[0]["payload"]["attempt"] == 1
+
+    # A further retry (reuse path) must not grow the event count.
+    again = server._taskflow(_attention_args(workspace))
+    assert again["ok"] is True
+    assert len(_read_events(server, workspace)) == 1
+
+
+def test_attention_failed_notification_retry_is_one_event(
+    server: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Regression (maintainer repro, #1506): raise -> first notification
+    sent:false -> the same request retried and the notification succeeds.
+    The outcome write (notification_log + eventId) rewrites the meta file
+    between the two emits, so an event id fingerprinting the post-write
+    meta bytes would hash a different value on the retry and drop a
+    second SIG-ATTENTION object for the same logical raise (both with
+    payload.attempt == 1). The raised event must bind the record's stable
+    identity instead: exactly one object across the retry, and a fresh
+    raise (attempt + 1) a distinct object."""
+    workspace = tmp_path / "agent"
+    _prepare_attention_env(server, monkeypatch)
+    _write_project_and_task(workspace, server)
+    meta_path = workspace / "shared" / "tasks" / "t1" / "meta.json"
+    emit_calls = _spy_emit(server, monkeypatch, meta_path)
+
+    send_state = {"calls": 0}
+
+    def flaky_send(*a: Any, **k: Any) -> dict[str, Any]:
+        send_state["calls"] += 1
+        if send_state["calls"] == 1:
+            return {
+                "sent": False,
+                "error": "Matrix room send failed",
+                "recipients": [],
+                "gaps": [{"reason": "room_send_failed"}],
+            }
+        return {"sent": True, "eventId": f"$att-{k.get('attempt')}"}
+
+    monkeypatch.setattr(server.taskflow, "_send_attention_notification", flaky_send)
+
+    first = server._taskflow(_attention_args(workspace))
+    assert first["ok"] is True
+    assert first["attention"]["notification"]["sent"] is False
+    events_after_first = _read_events(server, workspace)
+    assert len(events_after_first) == 1
+    assert events_after_first[0]["event_type"] == "SIG-ATTENTION"
+    first_id = events_after_first[0]["event_id"]
+
+    # Same request retried: the pending record (no eventId after the
+    # failed send) is re-synced and the notification succeeds. The S4a
+    # outcome write rewrote the meta after the first emit, so the retry's
+    # meta bytes differ from the first emit's — but the event id must not.
+    retry = server._taskflow(_attention_args(workspace))
+    assert retry["ok"] is True
+    assert retry["attention"]["notification"]["sent"] is True
+
+    events_after_retry = _read_events(server, workspace)
+    assert len(events_after_retry) == 1, [e["event_id"] for e in events_after_retry]
+    assert events_after_retry[0]["event_id"] == first_id
+    assert events_after_retry[0]["payload"]["attempt"] == 1
+
+    # Both emits hashed the same stable-identity bytes, while the on-disk
+    # meta at the two emit moments differed (the outcome write landed in
+    # between): identity, not post-write state, is the fingerprint input.
+    assert len(emit_calls) == 2
+    assert emit_calls[0]["ref_bytes"] == emit_calls[1]["ref_bytes"]
+    assert emit_calls[0]["meta_now"] != emit_calls[1]["meta_now"]
+    assert emit_calls[0]["ref_bytes"] == _attention_identity_bytes(
+        kind="decision", attempt=1, question="Which API?"
+    )
+    assert events_after_retry[0]["fingerprint"] == (
+        hashlib.sha256(emit_calls[0]["ref_bytes"]).hexdigest()
+    )
+
+    # Closing the loop and raising fresh (attempt 2) must be a new object
+    # with a distinct id — the identity still separates distinct raises.
+    close = server._taskflow(_attention_args(workspace, resolved=True))
+    assert close["ok"] is True
+    fresh = server._taskflow(_attention_args(workspace))
+    assert fresh["ok"] is True
+    events_after_fresh = _read_events(server, workspace)
+    assert len(events_after_fresh) == 2, [e["event_id"] for e in events_after_fresh]
+    by_attempt = {e["payload"]["attempt"]: e for e in events_after_fresh}
+    assert set(by_attempt) == {1, 2}
+    assert by_attempt[1]["event_id"] == first_id
+    assert by_attempt[2]["event_id"] != first_id

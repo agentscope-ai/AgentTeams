@@ -112,6 +112,7 @@ def test_lifecycle_script_inventory_is_complete():
     rels = {p.relative_to(BUNDLE).as_posix() for p in lifecycle_scripts()}
     expected = {
         "scripts/install.sh",
+        "scripts/status.sh",
         "scripts/uninstall.sh",
         "scripts/status.sh",
     }

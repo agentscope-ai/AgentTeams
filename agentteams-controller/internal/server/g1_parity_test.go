@@ -2,7 +2,7 @@
 
 package server
 
-// G1 dual-mode parity (35 号 R1 门): the same five routes must answer the
+// G1 dual-mode parity (R1 gate): the same five routes must answer the
 // same bytes in
 //
 //	closed mode  = controller public API alone

@@ -1,4 +1,4 @@
-// Package httpapi serves the kernel health face (任务书 §2.6):
+// Package httpapi serves the kernel health face:
 //
 //   - GET /healthz → 200 {"status":"ok"} while the process is alive
 //   - GET /readyz  → aggregates the ready checks (DB + modules); any
@@ -103,7 +103,7 @@ type checkOut struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// readyOut is the non-ok /readyz body (任务书 §2.6: status "degraded",
+// readyOut is the non-ok /readyz body (status "degraded",
 // per-check detail, 503 only when some check is down).
 type readyOut struct {
 	Status string              `json:"status"`

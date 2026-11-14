@@ -6,7 +6,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-service/internal/kernel/config"
 )
 
-// G1 disabled mode (default) boots nothing and exits 0 (58 §6, WIP config).
+// G1 disabled mode (default) boots nothing and exits 0.
 func TestRunDisabledExitsZero(t *testing.T) {
 	t.Setenv(config.EnvEnabled, "false")
 	t.Setenv(config.EnvResDSN, "")
@@ -17,7 +17,7 @@ func TestRunDisabledExitsZero(t *testing.T) {
 }
 
 // Enabled without DSNs: config error → exit 2 with the frozen message
-// (任务书 §2.8 / config.Validate).
+// (config.Validate).
 func TestRunEnabledMissingDSN(t *testing.T) {
 	t.Setenv(config.EnvEnabled, "")
 	t.Setenv(config.EnvResDSN, "")

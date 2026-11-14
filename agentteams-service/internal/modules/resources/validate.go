@@ -10,14 +10,14 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-service/internal/kernel/httputil"
 )
 
-// Runtime names used by the frozen R1 contract (58 §1.1/§2, aligned with
+// Runtime names used by the frozen R1 contract (aligned with
 // agentteams-controller internal/backend/interface.go:35-39).
 const (
 	runtimeOpenClaw = "openclaw"
 	runtimeCopaw    = "copaw"
 )
 
-// workerNameRE is the create-name constraint frozen in 58 §1.1
+// workerNameRE is the create-name constraint
 // (cmd/agt/create.go:433-439): lowercase letter/digit first, then
 // lowercase letters, digits and hyphens. Length is capped at 253 (the
 // res.workers.name VARCHAR(253) / K8s DNS-1035 label limit) by ValidateName.
@@ -27,7 +27,7 @@ var workerNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // internal/server/worker_env.go:14.
 var workerEnvNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// reservedEnvKeys is the frozen reserved-key set of 58 §2 / worker_env.go:34-36:
+// reservedEnvKeys is the frozen reserved-key set of worker_env.go:34-36:
 // the five explicit AGENTTEAMS_* system keys plus every key that
 // WorkerEnvBuilder.Build("", &WorkerProvisionResult{}) installs with the
 // production defaults (controller internal/service/worker_env.go:32-48).
@@ -58,7 +58,7 @@ var reservedEnvKeys = map[string]struct{}{
 	"HOME":                           {},
 }
 
-// HTTPError is a classified handler error carrying the frozen 58 §2 envelope
+// HTTPError is a classified handler error carrying the frozen envelope
 // fields, so handlers never scatter status/code/message decisions.
 type HTTPError struct {
 	Status  int
@@ -72,13 +72,13 @@ func (e *HTTPError) Error() string { return e.Message }
 // Frozen validation/authz errors shared by the handlers and their tests.
 var (
 	// ErrEnvForbidden is returned when a non-admin/manager caller supplies
-	// env (worker_env.go:26-28; 58 §2 forbidden/403).
+	// env (worker_env.go:26-28; forbidden/403).
 	ErrEnvForbidden = &HTTPError{
 		Status:  http.StatusForbidden,
 		Code:    httputil.CodeForbidden,
 		Message: "environment variables require admin or manager access",
 	}
-	// ErrNameRequired is the empty-name create error (58 §2 invalid_name).
+	// ErrNameRequired is the empty-name create error (invalid_name).
 	ErrNameRequired = &HTTPError{
 		Status:  http.StatusBadRequest,
 		Code:    httputil.CodeInvalidName,
@@ -95,7 +95,7 @@ var (
 
 // ValidateName validates a create name against the frozen constraint.
 //
-// Messages follow 58 §2 invalid_name: "worker name is required" for an
+// Messages follow the invalid_name contract: "worker name is required" for an
 // empty name and "invalid worker name: ..." for a name that violates the
 // regexp or the 253-byte limit.
 func ValidateName(name string) error {
@@ -113,7 +113,7 @@ func ValidateName(name string) error {
 }
 
 // ValidateRuntime rejects the deprecated CoPaw runtime for new workers
-// (58 §2 deprecated_runtime; controller resource_handler.go:160-166).
+// (deprecated_runtime; controller resource_handler.go:160-166).
 // The comparison is case-insensitive, matching strings.EqualFold in the
 // controller.
 func ValidateRuntime(runtime string) error {
@@ -127,7 +127,7 @@ func ValidateRuntime(runtime string) error {
 	return nil
 }
 
-// ValidateEnv validates the create/update env map (58 §1.1/§2).
+// ValidateEnv validates the create/update env map.
 //
 //   - nil env is always allowed (nothing to validate, nothing written);
 //   - a non-admin/manager caller gets 403 forbidden before key inspection;

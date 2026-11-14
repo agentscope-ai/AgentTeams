@@ -1,4 +1,4 @@
--- 58 §4.5，ops.idempotency_keys（审计轮补 —— Idempotency-Key 的存储落点）冻结 DDL。
+-- ops.idempotency_keys（审计轮补 —— Idempotency-Key 的存储落点）冻结 DDL。
 CREATE TABLE IF NOT EXISTS idempotency_keys (
   idem_key VARCHAR(128) NOT NULL PRIMARY KEY,        -- 请求头 Idempotency-Key（客户端 UUID）
   worker_name VARCHAR(253) NOT NULL,

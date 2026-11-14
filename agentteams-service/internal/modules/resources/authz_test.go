@@ -72,7 +72,7 @@ func TestCanRead(t *testing.T) {
 		{"human L3 assigned", &identity.Identity{Role: identity.RoleHuman, AccessibleWorkers: []string{"w2"}}, w2, true},
 		{"human L3 not assigned", &identity.Identity{Role: identity.RoleHuman, AccessibleWorkers: []string{"w2"}}, w1, false},
 		// L3 assignment scope wins over a matching team: an assignment-scoped
-		// human must not inherit a whole team (58 §3 L3 row).
+		// human must not inherit a whole team (human L3 row).
 		{"human L3 team fallback suppressed", &identity.Identity{Role: identity.RoleHuman, Teams: []string{"team-a"}, AccessibleWorkers: []string{"w2"}}, w1, false},
 		{"worker self", &identity.Identity{Role: identity.RoleWorker, WorkerName: "w1"}, w1, true},
 		{"worker other", &identity.Identity{Role: identity.RoleWorker, WorkerName: "w1"}, w2, false},

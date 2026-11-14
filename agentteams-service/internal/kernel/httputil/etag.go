@@ -11,9 +11,9 @@ import (
 )
 
 // ETagCacheControl mirrors the controller's live value byte for byte
-// (agentteams-controller internal/httputil/etag.go:18). 58 previously
-// quoted a no-space variant; the implementation is the source of truth
-// (58 §11 I15) — a header-level G1 difference otherwise.
+// (agentteams-controller internal/httputil/etag.go:18). The design doc
+// previously quoted a no-space variant; the implementation is the source
+// of truth — a header-level G1 difference otherwise.
 const ETagCacheControl = "private, max-age=0, must-revalidate"
 
 // StrongETag is the spec-only ETag: first 16 bytes of SHA-256 of the exact

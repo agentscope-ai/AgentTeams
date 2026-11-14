@@ -1,6 +1,6 @@
 package resources
 
-// The transparent PUT/DELETE proxy (58 §1.5, D110 = A1).
+// The transparent PUT/DELETE proxy.
 //
 // R1 keeps the controller as the write authority for update/delete: the
 // service forwards the request byte-for-byte to the controller's public API
@@ -9,17 +9,16 @@ package resources
 // service still owns res.workers, so it mirrors the outcome:
 //
 //	PUT    → on 2xx, refresh the row's spec from the response body
-//	         (write-through sync, 58 §1.5 ①) — zero extra controller calls.
+//	         (write-through sync) — zero extra controller calls.
 //	DELETE → on 204 (deleted) and 404 (already gone) soft-delete the row; a
 //	         409 (team member — the caller must use the teams API) leaves the
-//	         row untouched (58 §1.5 ②).
+//	         row untouched.
 //
 // Mirroring is best-effort on purpose: the controller write already
 // happened and the client must see the controller's bytes, so a DB failure
-// is logged and never turned into another upstream status (58 §1.5
-// 透明代理约束). The audit rows (proxied_update / proxied_delete) are
-// written by the Store in the same transaction as the row change (58
-// §1.5 ④).
+// is logged and never turned into another upstream status (transparent
+// proxy constraint). The audit rows (proxied_update / proxied_delete)
+// are written by the Store in the same transaction as the row change.
 
 import (
 	"encoding/json"
@@ -39,33 +38,33 @@ import (
 
 const (
 	// proxyDefaultTimeout bounds one forwarded call when HTTP is nil. It is
-	// a bound, not a retry: retries belong to the caller (58 §4).
+	// a bound, not a retry: retries belong to the caller.
 	proxyDefaultTimeout = 30 * time.Second
 	// proxyMaxResponseBytes caps the upstream body copied back to the
 	// client. A larger body answers 502 instead of being truncated, so a
-	// client never observes a partial controller response (58 §1.5).
+	// client never observes a partial controller response.
 	proxyMaxResponseBytes = 4 << 20 // 4 MiB
 	// proxySyncAttempts is one write-through attempt plus one retry after an
-	// optimistic-lock conflict (58 §1.5 ①).
+	// optimistic-lock conflict.
 	proxySyncAttempts = 2
 	// proxyRequestIDHeader carries the service-side request id to the
 	// controller. The kernel middleware generates the id when the client
 	// sent none, so httpapi.RequestIDFromContext is the primary source.
 	proxyRequestIDHeader = "X-Request-Id"
 
-	// Audit actions for the two proxied writes (58 §1.5 ④).
+	// Audit actions for the two proxied writes.
 	actionProxiedUpdate = "worker.proxied_update"
 	actionProxiedDelete = "worker.proxied_delete"
 )
 
 // proxyRequestHeaders are the inbound headers forwarded verbatim to the
-// controller (58 §1.5): the caller's bearer token keeps authorizing the
+// controller: the caller's bearer token keeps authorizing the
 // controller call, and the conditional/idempotency headers keep their
 // semantics end to end.
 var proxyRequestHeaders = []string{"Authorization", "Content-Type", "Accept", "If-Match", "Idempotency-Key"}
 
 // proxyResponseHeaders are the upstream headers copied back to the client
-// (58 §1.5). Everything else (including hop-by-hop headers) is dropped.
+// Everything else (including hop-by-hop headers) is dropped.
 var proxyResponseHeaders = []string{"Content-Type", "ETag", "Cache-Control", "Vary"}
 
 // Proxy serves PUT /api/v1/workers/{name} and DELETE
@@ -121,7 +120,7 @@ func (p *Proxy) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// 58 §1.5 ①: any 2xx PUT response is a complete WorkerResponse, which
+	// Any 2xx PUT response is a complete WorkerResponse, which
 	// is the sync source. Errors are passed through untouched (the
 	// controller's old envelope stays byte-identical).
 	if up.status >= 200 && up.status <= 299 {
@@ -131,7 +130,7 @@ func (p *Proxy) handleUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDelete forwards a DELETE and mirrors the status decision into
-// res.workers (58 §1.5 ②).
+// res.workers.
 func (p *Proxy) handleDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
@@ -218,7 +217,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request) (*upstreamRespon
 	return &upstreamResponse{status: resp.StatusCode, header: resp.Header, body: body}, true
 }
 
-// syncSpec applies the write-through sync (58 §1.5 ①): the 2xx PUT body is
+// syncSpec applies the write-through sync: the 2xx PUT body is
 // decoded once, the current row is read, and its spec is refreshed under
 // the version optimistic lock. A conflict re-reads and recomputes once;
 // after that the row is left stale and the client still sees the upstream
@@ -264,7 +263,7 @@ func (p *Proxy) syncSpec(r *http.Request, name string, body []byte) {
 }
 
 // specWithResponse overlays the spec fields the controller echoes in its
-// PUT response (58 §1.5 ①) on top of the stored spec.
+// PUT response on top of the stored spec.
 //
 // Everything the response does not carry keeps its row value: team_slug,
 // expose and resources are DB-owned (the team API / the request-side fields
@@ -313,7 +312,7 @@ func specWithResponse(cur Spec, resp WorkerResponse) Spec {
 }
 
 // softDelete mirrors a DELETE outcome: 204 and 404 both mean "the controller
-// has no live worker with this name" (58 §1.5 ②). A conflict re-reads and
+// has no live worker with this name". A conflict re-reads and
 // retries once; any other failure is logged and swallowed because the
 // upstream response is already determined.
 func (p *Proxy) softDelete(r *http.Request, name string) {
@@ -401,7 +400,7 @@ func writeUpstreamUnavailable(w http.ResponseWriter, message string) {
 // proxyAuditMeta builds the ops.audit_events context for a proxied write.
 // The actor is the token-review identity on the request context; when the
 // middleware did not run (or no caller was resolved) the action is
-// attributed to "anonymous" (58 §1.5 ④). token_jti is the token digest, the
+// attributed to "anonymous". token_jti is the token digest, the
 // R1 stand-in for the jti the controller does not expose (see
 // internal/kernel/identity).
 func proxyAuditMeta(r *http.Request, action string) *AuditMeta {

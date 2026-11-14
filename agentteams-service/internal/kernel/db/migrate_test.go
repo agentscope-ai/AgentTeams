@@ -78,7 +78,7 @@ func TestMigrationsEmbedded(t *testing.T) {
 	}
 
 	// The deprecated 0001_bootstrap.sql (goose era) stays on disk for
-	// reference but is embedded nowhere: O4 never issues CREATE DATABASE.
+	// reference but is embedded nowhere: the runner never issues CREATE DATABASE.
 	if _, err := migrations.ResSQL.Open("0001_bootstrap.sql"); err == nil {
 		t.Error("0001_bootstrap.sql must not be embedded in res")
 	}

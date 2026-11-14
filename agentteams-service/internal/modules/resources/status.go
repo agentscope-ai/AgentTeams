@@ -1,6 +1,6 @@
 package resources
 
-// The controller -> service observed-state writeback (58 §5).
+// The controller -> service observed-state writeback.
 //
 // POST /internal/v1/workers/status is the batch route the controller uses
 // to report execution state (phase, container state, Matrix identity, room,
@@ -8,11 +8,11 @@ package resources
 // Store.UpdateStatus call, which writes observed_* columns only: generation,
 // spec_hash, version and the outbox are untouched, and a callback whose
 // generation is older than the stored one is discarded by the store's
-// generation predicate (58 §4.1 / §5 out-of-order protection).
+// generation predicate (out-of-order protection).
 //
 // The route carries no authentication of its own: it is served by the
 // internal face, where httpapi.InternalAuth guards the whole /internal/v1
-// prefix (58 §5: never exposed publicly).
+// prefix (never exposed publicly).
 
 import (
 	"encoding/json"
@@ -40,7 +40,7 @@ func (h *StatusHandler) Register(m *http.ServeMux) {
 	m.HandleFunc("POST /internal/v1/workers/status", h.receive)
 }
 
-// statusReport is the batch request body (58 §5):
+// statusReport is the batch request body:
 //
 //	{"workers":[{"name":"w1","generation":3,"phase":"Running"}]}
 type statusReport struct {

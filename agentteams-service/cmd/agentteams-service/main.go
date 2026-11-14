@@ -1,6 +1,6 @@
 // Command agentteams-service is the service entrypoint.
 //
-// Boot order (任务书 §2.8): config → log → db → migrate → module registry
+// Boot order: config → log → db → migrate → module registry
 // (kernel noop proves the lifecycle chain) → business wiring (resources
 // store/handlers + identity review cache) → httpapi + uds health faces →
 // wait for signal → graceful shutdown (HTTP faces first, then modules in
@@ -82,7 +82,7 @@ func run(args []string) int {
 	//
 	// The store's transactions run on the res pool and address the ops
 	// tables with schema-qualified names, so the ResDSN account must hold
-	// INSERT/SELECT on ops (deployment prerequisite, 58 §4).
+	// INSERT/SELECT on ops (deployment prerequisite).
 	store := resources.NewSQLStore(pools.Res)
 	reviewClient := adapter.New(cfg.ControllerURL, cfg.InternalToken)
 	reviews := identity.NewCache(reviewClient)
@@ -110,7 +110,7 @@ func run(args []string) int {
 		Log:      lg.With("component", "outbox"),
 	}
 
-	// get-by-name cache-aside (58 §1.3/§5): the controller is authoritative
+	// get-by-name cache-aside: the controller is authoritative
 	// for execution state and existence; an unreachable controller degrades
 	// to the stored row.
 	handler.ResolveExecution = func(ctx context.Context, name string) (resources.Observed, int64, bool, error) {
@@ -153,7 +153,7 @@ func run(args []string) int {
 	api.AddReadyCheck("db", func(ctx context.Context) module.Health {
 		if err := pools.Health(ctx); err != nil {
 			// Detail must stay DSN-free: /readyz is unauthenticated and a
-			// raw driver error can carry host/port/user (58 §2.6). The full
+			// raw driver error can carry host/port/user. The full
 			// error stays in the server log for diagnosis.
 			lg.Warn("readyz db check failed", "err", err)
 			return module.Health{Status: module.StatusDown, Detail: "database unreachable"}
@@ -163,18 +163,18 @@ func run(args []string) int {
 	api.AddReadyCheck("modules", reg.HealthAll)
 
 	// Public face: every native route resolves the caller through the
-	// controller token-review cache (58 §5), so handlers only see an
+	// controller token-review cache, so handlers only see an
 	// authenticated identity.
 	authed := identity.Middleware(reviews)
 	api.Mount("POST /api/v1/workers", authed(handler.CreateHTTP()))
 	api.Mount("GET /api/v1/workers", authed(handler.ListHTTP()))
 	api.Mount("GET /api/v1/workers/{name}", authed(handler.GetHTTP()))
-	// D110 = A1: PUT/DELETE keep the controller as write authority and are
+	// PUT/DELETE keep the controller as write authority and are
 	// forwarded byte-for-byte; the service mirrors the outcome into
 	// res.workers (write-through / status-code rule).
 	api.Mount("PUT /api/v1/workers/{name}", authed(proxy.UpdateHTTP()))
 	api.Mount("DELETE /api/v1/workers/{name}", authed(proxy.DeleteHTTP()))
-	// Controller → service observation writeback (58 §5): shared bearer +
+	// Controller → service observation writeback: shared bearer +
 	// RFC3339 timestamp inside the ±5min replay window + request id.
 	api.Mount("POST /internal/v1/workers/status",
 		httpapi.InternalAuth(cfg.InternalToken, config.ReplayWindow, nil, status.ReceiveHTTP()))
@@ -203,7 +203,7 @@ func run(args []string) int {
 	// The outbox dispatcher is the only writer of provision/deprovision
 	// deliveries. Run it on a child context so shutdown can stop it even on
 	// the listen-error path.
-	// Expired idempotency rows ride the dispatcher cadence (58 §4.5): same
+	// Expired idempotency rows ride the dispatcher cadence: same
 	// process, same interval, no separate scheduler.
 	go func() {
 		ticker := time.NewTicker(time.Hour)
@@ -281,7 +281,7 @@ func run(args []string) int {
 }
 
 // denyAuditor persists handler rejections (4xx/5xx decisions) to
-// ops.audit_events (58 §2: every decision is auditable). It is best-effort:
+// ops.audit_events (every decision is auditable). It is best-effort:
 // an audit failure is logged but never changes the client-visible response.
 type denyAuditor struct {
 	db  *sql.DB
@@ -340,8 +340,8 @@ func truncate(s string, max int) string {
 	return s[:max]
 }
 
-// noopModule proves the module lifecycle chain end-to-end (任务书 §2.8:
-// "R1-2a 先注册一个 noop 模块证明链路").
+// noopModule proves the module lifecycle chain end-to-end: R1 registers
+// only a noop module.
 type noopModule struct{ id string }
 
 func (m *noopModule) ID() string                      { return m.id }

@@ -56,7 +56,7 @@ ALTER, which is covered by the runner's duplicate-name tolerance
 | Retry exhaustion | after 5 failed attempts status=dead, attempts=5, last_error kept; no further attempts. |
 
 Retry policy: base 5s, doubling per attempt, cap 5m, dead at 5 attempts
-(kernel constants, 54 §4.4).
+(kernel constants).
 
 ## Outbox statuses
 
@@ -93,9 +93,9 @@ next_attempt_at to NULL, do not edit the payload.
 
 ## R1 known gaps
 
-- team/role and exposedPorts are empty/omitted (no DB columns yet; 58 §11).
+- team/role and exposedPorts are empty/omitted (no DB columns yet).
 - The PUT/DELETE write-through is a transparent proxy; native write authority
-  is R2 (D110).
+  is R2.
 - The dispatcher assumes one instance (no SKIP LOCKED lease); R2 may add it.
 - Spec hashes from the controller and service are not comparable; execution
   refresh uses generation only.

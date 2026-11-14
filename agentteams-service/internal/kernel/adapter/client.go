@@ -1,4 +1,4 @@
-// Package adapter is the service → controller internal HTTP client (58 §5).
+// Package adapter is the service → controller internal HTTP client.
 //
 // It drives controller-side execution and resolves public bearer tokens over
 // the four frozen /internal/v1 routes:
@@ -10,8 +10,8 @@
 //
 // Every request carries the shared bearer token, X-AT-Request-Id and an
 // RFC3339 UTC X-AT-Timestamp (the controller enforces a ±5min replay window);
-// HMAC dual keys are an R2 enhancement (58 §5). The client never retries:
-// retry / backoff / dead-letter live in the ops.outbox dispatcher (54 §4.4),
+// HMAC dual keys are an R2 enhancement. The client never retries:
+// retry / backoff / dead-letter live in the ops.outbox dispatcher,
 // and the controller treats a repeated (name, generation) provision as
 // success, which is what makes that retry safe.
 //
@@ -39,7 +39,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-service/internal/kernel/identity"
 )
 
-// Sentinel errors. Callers map them to the frozen 58 §2 public codes:
+// Sentinel errors. Callers map them to the frozen public error codes:
 // ErrNotFound → 404, ErrConflict → 409, ErrUnauthenticated → 401,
 // ErrUpstream → 502 (upstream_unavailable).
 var (
@@ -62,7 +62,7 @@ func (e *UpstreamError) Unavailable() bool { return true }
 func upstream(err error) error { return &UpstreamError{Err: err} }
 
 const (
-	// defaultTimeout bounds every internal call (58 §4: 每个长操作都有界).
+	// defaultTimeout bounds every internal call (every long operation has a bound).
 	// It is a timeout, not a retry: the outbox dispatcher owns retries.
 	defaultTimeout = 10 * time.Second
 
@@ -86,7 +86,7 @@ type Client struct {
 	// BaseURL is the controller internal API root, e.g.
 	// http://agentteams-controller:8090. A trailing slash is tolerated.
 	BaseURL string
-	// Token is the shared service↔controller bearer (58 §5).
+	// Token is the shared service↔controller bearer.
 	Token string
 	// HTTP is the transport; nil → a default client with a 10s timeout.
 	HTTP *http.Client
@@ -108,7 +108,7 @@ func New(baseURL, token string) *Client {
 }
 
 // Execution is the observed execution state of one worker as returned by
-// GET /internal/v1/workers/{name}/execution (58 §5). The controller is the
+// GET /internal/v1/workers/{name}/execution. The controller is the
 // only writer of these fields; the service uses them for create retry
 // decisions and get-by-name refresh.
 type Execution struct {
@@ -132,8 +132,8 @@ type Execution struct {
 
 // provisionRequest is the provision payload: the desired spec for
 // (name, generation), byte-identical in meaning to the res.workers row the
-// service owns (58 §4.1). The controller is idempotent on (name, generation),
-// so redelivery from ops.outbox is safe (58 §5).
+// service owns. The controller is idempotent on (name, generation),
+// so redelivery from ops.outbox is safe.
 type provisionRequest struct {
 	Name        string          `json:"name"`
 	Generation  int64           `json:"generation"`
@@ -172,7 +172,7 @@ func (c *Client) Deprovision(ctx context.Context, name string, generation int64,
 }
 
 // Execution reads the controller's observed execution state for one worker.
-// It is the retry-decision and get-by-name refresh source (58 §5); a 404
+// It is the retry-decision and get-by-name refresh source; a 404
 // means the controller has no execution for that name (soft-delete signal).
 func (c *Client) Execution(ctx context.Context, name string) (*Execution, error) {
 	out := &Execution{}
@@ -183,7 +183,7 @@ func (c *Client) Execution(ctx context.Context, name string) (*Execution, error)
 	return out, nil
 }
 
-// TokenReview exchanges a public bearer token for the caller identity (58 §5).
+// TokenReview exchanges a public bearer token for the caller identity.
 // It implements identity.Reviewer; identity.Cache memoizes the result per
 // token digest for the frozen 60s TTL. An invalid or expired token is a 401
 // and surfaces as ErrUnauthenticated.
@@ -216,7 +216,7 @@ func (c *Client) do(ctx context.Context, op, method, path string, body, out any)
 	if err != nil {
 		return fmt.Errorf("adapter: %s: build request: %w", op, err)
 	}
-	// Frozen internal-contract headers (58 §5): shared bearer, request id,
+	// Frozen internal-contract headers: shared bearer, request id,
 	// RFC3339 UTC timestamp inside the controller's ±5min replay window.
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set(headerRequestID, c.requestID())
@@ -259,7 +259,7 @@ func statusError(op string, status int, body io.Reader) error {
 	switch status {
 	case http.StatusUnauthorized:
 		// For token-review this is the caller's public token (invalid or
-		// expired, 58 §5); for the worker routes it is the shared bearer.
+		// expired); for the worker routes it is the shared bearer.
 		return fmt.Errorf("%w: %s: controller status 401", ErrUnauthenticated, op)
 	case http.StatusNotFound:
 		return fmt.Errorf("%w: %s: controller status 404", ErrNotFound, op)

@@ -21,7 +21,7 @@ const idemKeyMaxLen = 128
 
 // DenyAuditor records a deny decision in ops.audit_events. The service
 // owns deny audit rows (the Store writes the allow row inside the create
-// transaction — 58 §2/§4.3). Implementations must be safe for concurrent
+// transaction). Implementations must be safe for concurrent
 // use; a nil Auditor disables deny auditing.
 type DenyAuditor interface {
 	Deny(ctx context.Context, a *AuditMeta, code, reason string) error
@@ -33,7 +33,7 @@ type DenyAuditor interface {
 // get-by-name cache-aside refresh, so a bare handler still serves the row.
 type ExecutionResolver func(ctx context.Context, name string) (obs Observed, generation int64, found bool, err error)
 
-// Handler serves the three native worker routes (58 §1.1-§1.3):
+// Handler serves the three native worker routes:
 //
 //	POST /api/v1/workers
 //	GET  /api/v1/workers
@@ -51,7 +51,7 @@ type Handler struct {
 	DefaultRuntime string      // create-time runtime when the request omits it; "" → "openclaw"
 	DefaultModel   string      // create-time model when the request omits it; "" → no default
 	Auditor        DenyAuditor // optional deny-audit sink
-	// ResolveExecution enables the get-by-name cache-aside refresh (58 §1.3:
+	// ResolveExecution enables the get-by-name cache-aside refresh:
 	// a controller-side write or delete is reconciled on the next single
 	// read; list never refreshes per row).
 	ResolveExecution ExecutionResolver
@@ -68,7 +68,7 @@ func (h *Handler) Register(m *http.ServeMux) {
 // CreateRequest mirrors agentteams-controller internal/server/types.go:10-46
 // (CreateWorkerRequest) field for field; controller-typed slices/objects are
 // carried as raw JSON because the service is a separate Go module. Note: the
-// R1-2b2 brief says "26 fields"; the controller struct actually has 30
+// earlier count of 26 fields was wrong; the controller struct actually has 30
 // (including containerManaged/state), and all 30 are accepted here.
 type CreateRequest struct {
 	Env                          map[string]string `json:"env,omitempty"`
@@ -162,7 +162,7 @@ func (h *Handler) createWorker(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Frozen validation order: name → runtime → env → assemble (58 §1.1).
+	// Frozen validation order: name → runtime → env → assemble.
 	if err := ValidateName(req.Name); err != nil {
 		h.writeValidationError(w, r, caller, "worker.create", err)
 		return
@@ -205,7 +205,7 @@ func (h *Handler) createWorker(w http.ResponseWriter, r *http.Request) {
 	worker := &Worker{
 		Name:                         req.Name,
 		WorkerName:                   req.WorkerName,
-		TeamSlug:                     "", // 58 C1: CreateWorkerRequest has no team field
+		TeamSlug:                     "", // CreateWorkerRequest has no team field
 		Model:                        model,
 		ModelProvider:                req.ModelProvider,
 		SubagentModel:                req.SubagentModel,
@@ -243,7 +243,7 @@ func (h *Handler) createWorker(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, ErrAlreadyExists):
 			// No Idempotency-Key (or an expired one) and the name exists:
-			// 58 §2 already_exists. Matches writeK8sError's message shape.
+			// already_exists. Matches writeK8sError's message shape.
 			h.fail(w, r, caller, "worker.create", http.StatusConflict, httputil.CodeAlreadyExists, "create worker: already exists")
 		case errors.Is(err, ErrFieldTooLong):
 			// A field exceeded its column width; retrying cannot help.
@@ -269,7 +269,7 @@ func (h *Handler) createWorker(w http.ResponseWriter, r *http.Request) {
 
 	// Record the replay before writing the response: the client may retry the
 	// moment it sees 201, and a Put failure is logged only (the worker exists
-	// and the client must still see its 201 — 58 §4.5 best-effort write side).
+	// and the client must still see its 201 — best-effort write side).
 	if key != "" && h.Idem != nil {
 		if err := h.Idem.Put(r.Context(), principal, key, requestHash, created.Name, http.StatusCreated, body, config.IdempotencyTTL); err != nil {
 			h.logger().Warn("idempotency record write failed",
@@ -402,8 +402,8 @@ func (h *Handler) listWorkersCore(w http.ResponseWriter, r *http.Request, caller
 			}
 			out = append(out, resp)
 		}
-		// len(out) is the post-filter total (58 §1.2: total follows the
-		// visible rows, never the unfiltered store size).
+		// len(out) is the post-filter total: total follows the visible
+		// rows, never the unfiltered store size.
 		httputil.WriteJSON(w, http.StatusOK, WorkerListResponse{Workers: out, Total: len(out)})
 		return
 	}
@@ -459,16 +459,16 @@ func (h *Handler) getWorker(w http.ResponseWriter, r *http.Request) {
 	if caller.IsWorkerScoped() {
 		SanitizeMCPForL3(&resp)
 	}
-	// get-by-name carries no ETag (58 §1.3: controller http.go:127 does not
+	// get-by-name carries no ETag (controller http.go:127 does not
 	// wrap this route).
 	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 // refreshFromController is the cache-aside read path of workers.get
-// (58 §1.3/§5). The controller is authoritative for execution state and for
+// The controller is authoritative for execution state and for
 // existence: 404 soft-deletes the service row and returns 404; a newer
 // generation refreshes the observed columns; an unavailable controller
-// degrades to the stored row (bounded staleness, D110).
+// degrades to the stored row (bounded staleness).
 func (h *Handler) refreshFromController(w http.ResponseWriter, r *http.Request, caller *identity.Identity, worker *Worker) *Worker {
 	ctx := r.Context()
 	obs, generation, found, err := h.ResolveExecution(ctx, worker.Name)

@@ -1,9 +1,9 @@
-# R1 Higress route split for the workers API (58 §1.5 / §6, D110).
+# R1 Higress route split for the workers API.
 #
-# THIS FILE IS THE FROZEN ROUTE LOCATION (58 §6 O3: agentteams-service/deploy/higress/).
+# THIS FILE IS THE FROZEN ROUTE LOCATION: agentteams-service/deploy/higress/.
 # The installer/helm consumes it in R2; R1 ships the file so the route ownership
 # is reviewable and no wildcard ("/api/v1/workers*") can leave PUT/DELETE/
-# GET-by-name unassigned (the defect 58's audit round fixed).
+# GET-by-name unassigned.
 #
 # Ownership rule:
 #   - 3 native routes -> agentteams-service (new envelope {code,message})
@@ -15,7 +15,7 @@ kind: ServiceRouteFile
 metadata:
   name: agentteams-service-workers-r1
   annotations:
-    contract: "58-R1-1 §1.5/§6"
+    contract: "R1 workers route split (3 native, 2 proxy)"
 spec:
   upstream:
     service: agentteams-service
@@ -30,7 +30,7 @@ spec:
     - name: workers-get
       match: { method: GET, path: "/api/v1/workers/{name}" }
       backend: { kind: service }
-    # D110 = A1: the service forwards to the controller unchanged, so the
+    # The service forwards to the controller unchanged, so the
     # write authority stays in the CR during R1. R2 turns these native.
     - name: workers-update
       match: { method: PUT, path: "/api/v1/workers/{name}" }

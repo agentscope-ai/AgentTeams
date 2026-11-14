@@ -1,6 +1,6 @@
 // Package outbox writes ops.outbox rows inside the caller's business
-// transaction (58 §4.2; 54 §4.4) and, in dispatcher.go, delivers them to the
-// controller with retry/backoff/dead-lettering (R1-2c).
+// transaction and, in dispatcher.go, delivers them to the
+// controller with retry/backoff/dead-lettering.
 package outbox
 
 import (
@@ -32,12 +32,13 @@ type Event struct {
 }
 
 // IdemKey returns the ops.outbox.idem_key for (worker, generation, event
-// type) plus the worker incarnation (58 §4.2 amended 2026-11-13).
+// type) plus the worker incarnation.
 //
-// Deviation from 58 §4.2: the contract describes the key as
-// name+generation+event_type. A 253-character worker name plus generation
-// and event type reaches 284 characters, overflowing the frozen
-// idem_key VARCHAR(191). We therefore hash the name to 32 hex characters:
+// Deviation from the documented key shape: the contract describes the key
+// as name+generation+event_type. A 253-character worker name plus
+// generation and event type reaches 284 characters, overflowing the
+// frozen idem_key VARCHAR(191). We therefore hash the name to 32 hex
+// characters:
 //
 //	"w:" + sha256hex(name)[:32] + ":" + generation + ":" + event_type
 //	    (+ ":" + sha256hex(incarnation)[:16] when incarnation != "")
@@ -63,7 +64,7 @@ const insertSQL = "INSERT INTO ops.outbox (event_id, idem_key, worker_name, gene
 
 // Enqueue inserts one outbox row through tx. The caller owns the
 // transaction: a business row and its outbox event commit or roll back
-// together (58 §4.2).
+// together.
 func Enqueue(ctx context.Context, tx *sql.Tx, ev Event, now time.Time) error {
 	if tx == nil {
 		return errors.New("outbox: nil transaction")

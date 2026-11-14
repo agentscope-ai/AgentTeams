@@ -12,8 +12,8 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-service/internal/kernel/db"
 )
 
-// TestMigrateReappliesMissingRecord pins the crash window documented in
-// 58 O4: if a DDL committed but its schema_migrations row did not, the next
+// TestMigrateReappliesMissingRecord pins the crash window: if a DDL committed
+// but its schema_migrations row did not, the next
 // boot re-runs the same file and must succeed because every statement is
 // idempotent. A future version written by a newer binary must be ignored,
 // not treated as an error (rolling upgrades).

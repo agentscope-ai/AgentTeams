@@ -1,7 +1,7 @@
-// Package module defines the kernel module lifecycle (任务书 §2.5):
+// Package module defines the kernel module lifecycle:
 // Init → Start in registration order, Stop in reverse order, aggregated
-// health reporting. R1-2a registers only a noop module to prove the
-// chain; 2b/2c business modules are a separate layer.
+// health reporting. R1 registers only a noop module to prove the chain;
+// business modules are a separate layer.
 package module
 
 import (

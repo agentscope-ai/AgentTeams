@@ -10,8 +10,8 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-service/internal/kernel/identity"
 )
 
-// TestStructFieldCounts pins the frozen counts (58 §1.4 / types.go): 43
-// top-level WorkerResponse fields (58's "45" wrongly counted the nested
+// TestStructFieldCounts pins the frozen counts (types.go): 43
+// top-level WorkerResponse fields (the documented "45" wrongly counted the nested
 // port/domain), a 27-field spec view, a 12-field status view and their
 // 35-field union.
 func TestStructFieldCounts(t *testing.T) {
@@ -179,7 +179,7 @@ func TestResponseProjectionRules(t *testing.T) {
 		t.Fatalf("modelProvider = %q", human.ModelProvider)
 	}
 	// R1 has no observed-ports column: exposedPorts is always omitted, as the
-	// controller does before reconcile populates status.exposedPorts (58 §11 I14).
+	// controller does before reconcile populates status.exposedPorts.
 	if human.ExposedPorts != nil {
 		t.Fatalf("exposedPorts = %+v, want nil", human.ExposedPorts)
 	}

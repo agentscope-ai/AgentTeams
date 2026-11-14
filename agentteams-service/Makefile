@@ -20,8 +20,8 @@ test-integration:
 	$(GO) test -tags integration -count=1 ./test/integration/...
 
 # Same DSN prerequisites as test-integration; builds and runs the real
-# binary against a fake controller (the controller /internal/v1 routes are
-# R1-2e).
+# binary against a fake controller that implements the controller's
+# /internal/v1 routes.
 test-e2e:
 	$(GO) test -tags e2e -count=1 ./test/e2e/...
 
@@ -35,6 +35,6 @@ run:
 	$(GO) run ./cmd/agentteams-service $(ARGS)
 
 # Multi-stage build (golang:1.26 -> alpine, non-root). Verified with a real
-# container against MySQL 8 and the fake controller (58 §11).
+# container against MySQL 8 and the fake controller.
 image:
 	docker build -t $(IMAGE) .

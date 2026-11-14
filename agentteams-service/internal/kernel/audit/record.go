@@ -1,5 +1,5 @@
 // Package audit writes ops.audit_events rows inside the caller's business
-// transaction (58 §2/§4.3; 15 号审计模型). Only the service-originated
+// transaction. Only the service-originated
 // decision stream lives here; controller/agent events are not recorded.
 package audit
 
@@ -33,11 +33,11 @@ type Event struct {
 	ResourceVersion *int64
 }
 
-// sourceService is frozen by 58 §4.3 (the only source this service writes).
+// sourceService is the only source this service writes.
 const sourceService = "service"
 
 // insertSQL names every column. trace_id is inserted as NULL: the service
-// audit model does not carry a trace id yet (58 §4.3 keeps it nullable).
+// audit model does not carry a trace id yet (the column stays nullable).
 const insertSQL = "INSERT INTO ops.audit_events (request_id, trace_id, actor_type, actor_id, on_behalf_of_type, on_behalf_of_id, team_uid, project_uid, task_id, action, resource_version, decision, deny_reason, before_digest, after_digest, source, token_jti, client, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
 // Record inserts one audit row through tx so it commits or rolls back with

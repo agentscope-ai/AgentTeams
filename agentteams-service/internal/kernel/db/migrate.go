@@ -1,11 +1,11 @@
-// Forward-only migration runner for the res / ops schemas (58 §4, 55 §6).
+// Forward-only migration runner for the res / ops schemas.
 //
-// Design (O4, R1-2):
+// Design:
 //   - No external migration tool. Each frozen .sql is a single DDL
 //     statement (CREATE TABLE IF NOT EXISTS), applied in lexical NNN order.
 //   - Cross-instance serialization via the kernel:upgrade row in
-//     ops.upgrade_leases (58 §4.6; the kernel is the only lease owner,
-//     55 号): INSERT to acquire, steal-if-expired with an optimistic
+//     ops.upgrade_leases (the kernel is the only lease owner): INSERT to
+//     acquire, steal-if-expired with an optimistic
 //     version check, DELETE only while still the holder.
 //   - Per-schema bookkeeping in schema_migrations (runner-internal, not
 //     part of the frozen DDL).

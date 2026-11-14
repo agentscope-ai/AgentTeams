@@ -1,6 +1,6 @@
 // Package log builds the service logger: standard-library log/slog with a
-// JSON handler (machine-collectable, 54 号 §3 独立进程). No third-party
-// logging library (任务书 §2.2).
+// JSON handler (machine-collectable; the service runs as an independent
+// process). No third-party logging library.
 package log
 
 import (

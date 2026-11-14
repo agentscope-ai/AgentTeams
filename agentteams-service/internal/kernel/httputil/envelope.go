@@ -1,4 +1,4 @@
-// Package httputil implements the service HTTP layer: the 58 §2 error
+// Package httputil implements the service HTTP layer: the error
 // envelope, the 11 frozen error codes, JSON writing, and the spec-view
 // ETag (semantics byte-aligned with agentteams-controller
 // internal/httputil/etag.go, re-implemented — the two are separate modules).
@@ -9,13 +9,13 @@ import (
 	"net/http"
 )
 
-// ErrorEnvelope is the unified error body (58 §2).
+// ErrorEnvelope is the unified error body.
 type ErrorEnvelope struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-// The 11 frozen error codes (58 §2). No 422.
+// The 11 frozen error codes. No 422.
 const (
 	CodeUnauthenticated     = "unauthenticated"      // 401
 	CodeInvalidRequest      = "invalid_request"      // 400

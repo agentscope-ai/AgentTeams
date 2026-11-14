@@ -1,5 +1,5 @@
--- 与 T1 工作库 ops.audit_events（§6.2）逐字同构，唯一差异：source 默认值 'service'。
--- 15 号审计模型：service 只审计自己产生的判定（4xx/5xx → deny），不代记 controller/agent 侧。
+-- 与 controller 侧 ops.audit_events 逐字同构，唯一差异：source 默认值 'service'。
+-- 审计模型：service 只审计自己产生的判定（4xx/5xx → deny），不代记 controller/agent 侧。
 CREATE TABLE IF NOT EXISTS audit_events (
   id BIGINT AUTO_INCREMENT NOT NULL PRIMARY KEY,
   request_id VARCHAR(128) NOT NULL,

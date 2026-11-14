@@ -1,9 +1,9 @@
--- R1 minimal resource schema: the workers table (58 §4.1, frozen DDL).
--- Forward-only. MySQL 8 / seekdb 5.7 compatible. No cross-schema FK (D52).
+-- R1 minimal resource schema: the workers table (frozen DDL).
+-- Forward-only. MySQL 8 / seekdb 5.7 compatible. No cross-schema FK.
 CREATE TABLE IF NOT EXISTS workers (
-  name VARCHAR(253) NOT NULL PRIMARY KEY,           -- CRD name，公网主键（R1 无 worker_uid，R2 随 D35 引入）
+  name VARCHAR(253) NOT NULL PRIMARY KEY,           -- CRD name，公网主键（R1 无 worker_uid，R2 引入）
   worker_name VARCHAR(255) NULL,
-  team_slug VARCHAR(64) NULL,                        -- 首个命中 team 的缓存（C3）；R2 换 team_uid
+  team_slug VARCHAR(64) NULL,                        -- 首个命中 team 的缓存；R2 换 team_uid
   model VARCHAR(255) NULL,
   model_provider VARCHAR(255) NULL,
   subagent_model VARCHAR(255) NULL,
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS workers (
   runtime VARCHAR(64) NULL,
   image VARCHAR(512) NULL,
   identity MEDIUMTEXT NULL,
-  soul MEDIUMTEXT NULL,                              -- 配置文本，非文件 blob（D88 不冲突）
+  soul MEDIUMTEXT NULL,                              -- 配置文本，非文件 blob
   agents MEDIUMTEXT NULL,
   skills_json JSON NULL,
   remote_skills_json JSON NULL,

@@ -1,7 +1,7 @@
 // Package idem stores first responses for the Idempotency-Key header in
-// ops.idempotency_keys (58 §4.5). Get replays only unexpired records; Put
+// ops.idempotency_keys. Get replays only unexpired records; Put
 // writes/overwrites with a caller-supplied TTL (24h in R1). Expired rows
-// are deleted by the outbox scanner (58 §4.5), not here.
+// are deleted by the outbox scanner, not here.
 package idem
 
 import (
@@ -98,7 +98,7 @@ func (s *SQLStore) Put(ctx context.Context, principal, key, requestHash, workerN
 	return nil
 }
 
-// deleteExpiredSQL drops rows past their TTL. 58 §4.5: the cleanup rides
+// deleteExpiredSQL drops rows past their TTL. The cleanup rides
 // the outbox scanner cadence (no separate background job); callers invoke it
 // on the same interval.
 const deleteExpiredSQL = "DELETE FROM ops.idempotency_keys WHERE expires_at <= ?"

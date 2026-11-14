@@ -8,12 +8,12 @@ import (
 )
 
 // This file is the table-driven authorization face of the three native
-// routes (58 §3). The controller enforces the same facts in middleware
+// routes. The controller enforces the same facts in middleware
 // (agentteams-controller internal/auth/authorizer.go:65-119) and in the
 // list/get handlers (resource_handler.go:456-524 / :232-281); the service
 // keeps them in one file so a handler never grows an inline role check.
 //
-// Frozen matrix (58 §3, production path):
+// Frozen matrix (production path):
 //
 //	role            create  list              get
 //	admin/manager   ✅      ✅ all rows       ✅
@@ -59,7 +59,7 @@ func CanList(c *identity.Identity) bool {
 //   - human L2: WorkerReadable (accessibleTeams / explicit assignment);
 //   - human L3 (worker-scoped): only the explicitly assigned workers — the
 //     team fallback is deliberately NOT used, so an assignment-scoped
-//     identity cannot inherit a whole team (58 §3 L3 row).
+//     identity cannot inherit a whole team (human L3 row).
 func CanRead(c *identity.Identity, w *Worker) bool {
 	if c == nil || w == nil {
 		return false

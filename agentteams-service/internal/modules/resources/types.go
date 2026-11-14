@@ -1,11 +1,11 @@
-// Package resources implements the R1 resources slice (58 §1): the
+// Package resources implements the R1 resources slice: the
 // res.workers store, the three native worker handlers (create / list /
-// get-by-name), the transparent PUT/DELETE proxy (D110) and the controller
+// get-by-name), the transparent PUT/DELETE proxy and the controller
 // status writeback route.
 //
-// R1 is the minimal slice: res.workers (58 §4.1) plus the kernel ops
-// tables (outbox / audit_events / idempotency_keys, 58 §4.2-§4.5).
-// Update / delete stay controller-authoritative until R2 (D110).
+// R1 is the minimal slice: res.workers plus the kernel ops
+// tables (outbox / audit_events / idempotency_keys).
+// Update / delete stay controller-authoritative until R2.
 package resources
 
 import (
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// Store-level sentinel errors. Handlers map them to the frozen 58 §2 codes.
+// Store-level sentinel errors. Handlers map them to the frozen codes.
 var (
 	// ErrNotFound: no live row for the name (deleted_at IS NULL filter).
 	ErrNotFound = errors.New("resources: worker not found")
@@ -31,7 +31,7 @@ var (
 	ErrFieldTooLong = errors.New("resources: field value too long")
 )
 
-// Worker is one res.workers row (58 §4.1). Nullable columns map to the
+// Worker is one res.workers row. Nullable columns map to the
 // zero value; timestamps are UTC.
 type Worker struct {
 	Name          string
@@ -92,7 +92,7 @@ type Worker struct {
 }
 
 // Spec is the configuration subset that participates in spec_hash and in
-// the generation counter (58 §4.1: spec 变更 ⇔ generation+1). It excludes
+// the generation counter (spec 变更 ⇔ generation+1). It excludes
 // every observed_* column, the timestamps, deleted_at, version and
 // generation itself.
 type Spec struct {
@@ -175,7 +175,7 @@ func (w *Worker) Spec() Spec {
 
 // Observed is the controller-reported execution state written by
 // POST /internal/v1/workers/status. It never touches generation, spec_hash
-// or version (58 §4.1 / §5).
+// or version.
 type Observed struct {
 	Phase            string
 	ContainerState   string
@@ -189,15 +189,15 @@ type Observed struct {
 	LastFinishAt     *time.Time
 }
 
-// ListFilter narrows List (both filters optional; no pagination in R1,
-// 58 §10 O5). Rows are returned in name ascending order.
+// ListFilter narrows List (both filters optional; no pagination in R1).
+// Rows are returned in name ascending order.
 type ListFilter struct {
 	TeamSlug      string
 	ObservedPhase string
 }
 
 // AuditMeta is the request context carried into the ops.audit_events row
-// written in the same transaction as the business row (58 §2: every
+// written in the same transaction as the business row (every
 // mutation records an allow decision; denials are recorded by the handler).
 type AuditMeta struct {
 	RequestID       string
@@ -227,7 +227,7 @@ type Store interface {
 	// an "update" carrying the spec. The transparent proxy uses it after a
 	// controller PUT: the controller already applied the change, and
 	// re-sending the service's possibly-partial view of the spec would revert
-	// fields it cannot read back (58 §11 I16).
+	// fields it cannot read back.
 	SyncSpec(ctx context.Context, name string, spec Spec, expectedVersion int64, a *AuditMeta) (*Worker, error)
 	// UpdateStatus applies observed fields only when the row generation is
 	// <= generation (out-of-order callbacks are discarded). It reports
@@ -237,7 +237,7 @@ type Store interface {
 }
 
 // IdemRecord is the stored first response for an Idempotency-Key
-// (ops.idempotency_keys, 58 §4.5).
+// (ops.idempotency_keys).
 type IdemRecord struct {
 	WorkerName  string
 	RequestHash string

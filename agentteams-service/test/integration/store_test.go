@@ -133,7 +133,7 @@ func TestCreateGetListAndCrossSchemaTx(t *testing.T) {
 		t.Fatalf("outbox=%d audit=%d, want 1/1 (same transaction)", h.count(t, "ops.outbox"), h.count(t, "ops.audit_events"))
 	}
 	// The adapter payload speaks the controller API (camelCase), never the
-	// storage schema (58 §11 I12).
+	// storage schema.
 	var payload []byte
 	if err := h.res.QueryRow("SELECT payload_json FROM ops.outbox WHERE worker_name = 'w1'").Scan(&payload); err != nil {
 		t.Fatalf("outbox payload: %v", err)
@@ -352,7 +352,7 @@ func TestIdempotencyStore(t *testing.T) {
 	}
 }
 
-// TestRecreateAfterSoftDelete pins 58 §1.1's delete→create behaviour on a
+// TestRecreateAfterSoftDelete pins the delete→create behaviour on a
 // real engine: a soft-deleted row still owns the name primary key, so the
 // create reclaims it and installs a fresh generation-1 incarnation.
 func TestRecreateAfterSoftDelete(t *testing.T) {

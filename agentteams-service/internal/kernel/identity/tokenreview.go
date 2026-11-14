@@ -1,4 +1,4 @@
-// Token review: the service's per-request identity resolver (58 §5).
+// Token review: the service's per-request identity resolver.
 //
 // The public bearer token is unchanged from the live deployment (same issuer,
 // same credential chain). The service cannot validate it itself in R1, so it
@@ -17,7 +17,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-service/internal/kernel/config"
 )
 
-// DefaultCacheTTL is the frozen 60s review cache TTL (58 §5), taken from the
+// DefaultCacheTTL is the frozen 60s review cache TTL, taken from the
 // single source of frozen values (kernel/config).
 const DefaultCacheTTL = config.ReviewCacheTTL
 

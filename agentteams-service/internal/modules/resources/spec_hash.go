@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-// SpecHash returns the canonical spec digest (58 §4.1): sha256 over
+// SpecHash returns the canonical spec digest: sha256 over
 // CanonicalSpecJSON, hex encoded.
 //
 // The digest tracks the canonical spec only: observed_*, generation,
@@ -25,7 +25,7 @@ func SpecHash(s Spec) (string, error) {
 // CanonicalSpecJSON returns the normalised JSON that SpecHash hashes
 // (exposed for tests and debugging).
 //
-// Key names are the res.workers column names from 58 §4.1 (snake_case).
+// Key names are the res.workers column names (snake_case).
 // generation / spec_hash / version / created_at / updated_at / deleted_at
 // and every observed_* column are excluded: the Spec type does not carry
 // them, so status writes can never move the digest.

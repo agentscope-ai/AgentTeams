@@ -3,7 +3,7 @@
 //
 // Precedence (highest first): command-line flag > environment variable
 // (AGENTTEAMS_SERVICE_*) > default. R1 intentionally does not support YAML
-// file configuration (54 号 §3：独立 go.mod、独立进程).
+// file configuration (独立 go.mod、独立进程).
 package config
 
 import (
@@ -17,14 +17,14 @@ import (
 // EnvPrefix is the environment variable prefix for all service settings.
 const EnvPrefix = "AGENTTEAMS_SERVICE"
 
-// Frozen values (58 号) — not operator-tunable. Consumed by auth (token
+// Frozen values — not operator-tunable. Consumed by auth (token
 // review cache) and later slices; kept here as the single source.
 const (
 	ReviewCacheTTL    = 60 * time.Second // token-review 按 jti 缓存 60s
 	IdempotencyTTL    = 24 * time.Hour   // idempotency_keys 保留 24h
 	ReplayWindow      = 5 * time.Minute  // X-AT-Timestamp ±5min 重放窗
 	LeaseTTL          = 30 * time.Second // kernel:upgrade 租约时长
-	MaxOutboxAttempts = 5                // 5 次死信（54 号 §4.4）
+	MaxOutboxAttempts = 5                // 5 次死信
 	OutboxBackoffBase = 5 * time.Second  // 指数退避 5s*2^(n-1)
 	OutboxBackoffCap  = 5 * time.Minute
 )
@@ -68,7 +68,7 @@ type Config struct {
 	// UDS is the Unix domain socket path for the internal health face.
 	// Empty means the UDS face is disabled.
 	UDS string
-	// Enabled switches the service API on (G1 dual mode, 58 §6):
+	// Enabled switches the service API on (G1 dual mode):
 	// disabled (default) = the controller's current state, the service
 	// boots nothing and exits 0; enabled = the 5 public worker routes are
 	// served.
@@ -76,14 +76,14 @@ type Config struct {
 	// ServiceID identifies this instance (upgrade lease holder, audit
 	// correlation). Default: DefaultServiceID.
 	ServiceID string
-	// ResDSN is the MySQL/OceanBase DSN for the res schema (58 §4).
+	// ResDSN is the MySQL/OceanBase DSN for the res schema.
 	// Required when Enabled. No default: credentials from the environment.
 	ResDSN string
-	// OpsDSN is the MySQL/OceanBase DSN for the ops schema (58 §4).
+	// OpsDSN is the MySQL/OceanBase DSN for the ops schema.
 	// Required when Enabled. No default.
 	OpsDSN string
 	// ControllerURL is the base URL of agentteams-controller's internal
-	// API (token-review / provision / deprovision / execution, 58 §5).
+	// API (token-review / provision / deprovision / execution).
 	// Required when Enabled.
 	ControllerURL string
 	// InternalToken is the shared secret for service<->controller internal
@@ -214,7 +214,7 @@ func envIfNotSet(explicit map[string]bool, flagName, envName string) (string, bo
 // Disabled mode (G1 mode 1) needs no database or controller: the process
 // exits 0 before touching either, so only the log level and shutdown
 // timeout are validated. Enabled mode requires DSNs plus the controller
-// connection (58 §6 双模式).
+// connection (dual mode).
 func (c *Config) Validate() error {
 	if c.Enabled {
 		var missing []string

@@ -1,13 +1,13 @@
 package outbox
 
-// The ops.outbox dispatcher (58 §4.2, 54 §4.4).
+// The ops.outbox dispatcher.
 //
 // It polls ops.outbox for pending/failed events, hands each one to the
 // controller adapter and records the outcome, so a business transaction and
 // its controller instruction never diverge: the row was enqueued in the
 // business transaction (enqueue.go), delivery is retried here with
 // exponential backoff, and an exhausted retry ends in the dead state instead
-// of being silently dropped (54 §4.4).
+// of being silently dropped.
 //
 // Single-instance design: R1 runs exactly one dispatcher, so events are
 // claimed implicitly by the SELECT and a duplicated delivery can only come
@@ -32,14 +32,14 @@ import (
 
 const (
 	// eventProvision, eventUpdate and eventDeprovision are the frozen
-	// ops.outbox.event_type values (58 §4.2).
+	// ops.outbox.event_type values.
 	eventProvision   = "provision"
 	eventUpdate      = "update"
 	eventSync        = "sync"
 	eventDeprovision = "deprovision"
 
 	// statusPending, statusPublished, statusFailed and statusDead are the
-	// frozen ops.outbox.status values (58 §4.2).
+	// frozen ops.outbox.status values.
 	statusPending   = "pending"
 	statusPublished = "published"
 	statusFailed    = "failed"
@@ -289,7 +289,7 @@ func (d *Dispatcher) markDead(ctx context.Context, ev pendingEvent, now time.Tim
 }
 
 // backoff returns the delay after the n-th failed attempt:
-// OutboxBackoffBase * 2^(n-1), capped at OutboxBackoffCap (54 §4.4). The
+// OutboxBackoffBase * 2^(n-1), capped at OutboxBackoffCap. The
 // base and the cap come from the kernel config so there is one numeric
 // source for the retry policy.
 func backoff(attempt int64) time.Duration {

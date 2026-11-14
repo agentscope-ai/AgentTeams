@@ -1,5 +1,5 @@
 // Package identity carries the caller identity the service resolves per
-// request through the controller token-review route (58 §3 / §5), plus the
+// request through the controller token-review route, plus the
 // 60s jti cache keyed on the token digest.
 //
 // R1 fact (source-verified against agentteams-controller @ 71dc233a2):
@@ -74,7 +74,7 @@ func (i *Identity) IsWorkerScoped() bool {
 }
 
 // CanManageEnv reports admin/manager, the only roles that may write env or
-// see it on read (58 §3).
+// see it on read.
 func (i *Identity) CanManageEnv() bool {
 	return i.Role == RoleAdmin || i.Role == RoleManager
 }

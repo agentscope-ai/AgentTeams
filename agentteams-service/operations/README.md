@@ -14,15 +14,14 @@ Scope rules:
 | `POST /api/v1/workers` | service native | operation |
 | `GET /api/v1/workers` | service native | operation |
 | `GET /api/v1/workers/{name}` | service native | operation |
-| `PUT /api/v1/workers/{name}` | service → controller proxy (D110) | proxy route only |
-| `DELETE /api/v1/workers/{name}` | service → controller proxy (D110) | proxy route only |
+| `PUT /api/v1/workers/{name}` | service → controller proxy | proxy route only |
+| `DELETE /api/v1/workers/{name}` | service → controller proxy | proxy route only |
 
 R1 does **not** change the controller-side CLI. `agt` lives in
 `agentteams-controller/cmd/agt`; wiring the generator to it is an R2 task,
 because "controller zero change" is the hardest G1 precondition.
 
 Field-count note: `WorkerResponse` has **43** top-level fields in the
-source (`types.go:92-146`); 58 §1.4's "45" mistakenly counts
+source (`types.go:92-146`); the documented "45" mistakenly counts
 `ExposedPortInfo.port/domain` as top-level. The three projection views are
-27 / 12 / 35 fields. This is tracked as contract debt and corrected in the
-58 amendment.
+27 / 12 / 35 fields. This is tracked as contract debt.

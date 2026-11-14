@@ -9,13 +9,13 @@ import (
 )
 
 // InternalAuth guards the controller→service internal routes
-// (/internal/v1/workers/status, 58 §5): shared bearer token plus an
+// (/internal/v1/workers/status): shared bearer token plus an
 // X-AT-Timestamp inside the ±window replay window and an X-AT-Request-Id.
 //
 // The shared token is compared in constant time. The replay window is a
 // coarse clock-skew guard, not a nonce store: R1 accepts the same timestamp
 // being replayed within the window (an idempotent status write makes that
-// harmless); HMAC dual keys are the R2 enhancement (58 §5).
+// harmless); HMAC dual keys are the R2 enhancement.
 func InternalAuth(token string, window time.Duration, now func() time.Time, next http.Handler) http.Handler {
 	if now == nil {
 		now = time.Now

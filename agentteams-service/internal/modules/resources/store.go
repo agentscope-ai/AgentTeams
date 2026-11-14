@@ -16,9 +16,9 @@ import (
 )
 
 // workerColumns lists the res.workers columns in DDL order
-// (migrations/res/0001-workers.sql). The frozen DDL has 47 columns: the
-// brief says 49, but the migration is authoritative and 58 §4.1 lists the
-// same 47.
+// (migrations/res/0001-workers.sql). The frozen DDL has 47 columns: an
+// earlier count said 49, but the migration is authoritative and lists
+// the same 47.
 const workerColumns = "name, worker_name, team_slug, model, model_provider, subagent_model, " +
 	"llm_stream_first_content_timeout, llm_stream_idle_timeout, " +
 	"llm_max_retries, llm_backoff_base, llm_backoff_cap, llm_max_concurrent, " +
@@ -31,7 +31,7 @@ const workerColumns = "name, worker_name, team_slug, model, model_provider, suba
 	"last_finish_at, message, generation, spec_hash, version, created_at, " +
 	"updated_at, deleted_at"
 
-// workerSpecColumns are the columns that carry Spec (58 §4.1): everything
+// workerSpecColumns are the columns that carry Spec: everything
 // between name and observed_phase, i.e. spec_hash/generation/version and
 // the timestamps are excluded.
 const workerSpecColumns = "worker_name, team_slug, model, model_provider, subagent_model, " +
@@ -114,18 +114,18 @@ var updateWorkerSQLBumpGeneration = "UPDATE workers SET " + workerSpecAssignment
 var updateWorkerSQLKeepGeneration = "UPDATE workers SET " + workerSpecAssignments + ", spec_hash = ?, version = version + 1, updated_at = ? WHERE name = ? AND version = ?"
 
 // updateWorkerStatusSQL writes observed_* only. It never touches
-// generation/spec_hash/version and emits no outbox event (58 §4.1);
+// generation/spec_hash/version and emits no outbox event;
 // generation <= ? discards out-of-order controller callbacks.
 // COALESCE keeps the stored value when the callback does not report a field
 // (nil): a partial status push must never silently clear matrix/room ids or
-// task counters (58 §11 I17). A genuine clear is not a R1 use case.
+// task counters. A genuine clear is not a R1 use case.
 const updateWorkerStatusSQL = "UPDATE workers SET observed_phase = COALESCE(?, observed_phase), observed_container_state = COALESCE(?, observed_container_state), matrix_user_id = COALESCE(?, matrix_user_id), room_id = COALESCE(?, room_id), message = COALESCE(?, message), last_active_at = COALESCE(?, last_active_at), agent_status = COALESCE(?, agent_status), running_task_count = COALESCE(?, running_task_count), last_run_at = COALESCE(?, last_run_at), last_finish_at = COALESCE(?, last_finish_at), updated_at = ? WHERE name = ? AND generation <= ? AND deleted_at IS NULL"
 
 const softDeleteWorkerSQL = "UPDATE workers SET deleted_at = ?, version = version + 1, updated_at = ? WHERE name = ? AND version = ?"
 
 // SQLStore is the MySQL implementation of Store.
 //
-// Transaction model (58 §4): res and ops are two schemas of the same MySQL
+// Transaction model: res and ops are two schemas of the same MySQL
 // instance. A *sql.Tx is bound to one connection, so every transaction is
 // opened on the res pool (DB) and the ops tables are referenced by their
 // qualified names ops.outbox / ops.audit_events. That is what lets the
@@ -148,7 +148,7 @@ func NewSQLStore(db *sql.DB) *SQLStore {
 var _ Store = (*SQLStore)(nil)
 
 // Create inserts the worker row plus its provision outbox event and allow
-// audit event in one transaction (58 §4.2). Defaults: generation 1,
+// audit event in one transaction. Defaults: generation 1,
 // version 1, observed_phase "Pending", timestamps = now.
 func (s *SQLStore) Create(ctx context.Context, w *Worker, a *AuditMeta) (*Worker, error) {
 	if w == nil {
@@ -244,7 +244,7 @@ func (s *SQLStore) Get(ctx context.Context, name string) (*Worker, error) {
 	return w, nil
 }
 
-// List returns live workers in name ascending order (58 §1.2: no
+// List returns live workers in name ascending order (no
 // pagination). The result is never nil.
 func (s *SQLStore) List(ctx context.Context, f ListFilter) ([]*Worker, error) {
 	q := listWorkersSQL
@@ -443,7 +443,7 @@ func (s *SQLStore) UpdateStatus(ctx context.Context, name string, o Observed, ge
 
 // SoftDelete stamps deleted_at and bumps version under the optimistic
 // lock, then writes the deprovision outbox event and the allow audit
-// event in the same transaction. The generation is unchanged (58 §4.2).
+// event in the same transaction. The generation is unchanged.
 func (s *SQLStore) SoftDelete(ctx context.Context, name string, expectedVersion int64, a *AuditMeta) error {
 	now := s.now()
 	meta := auditMeta(a)

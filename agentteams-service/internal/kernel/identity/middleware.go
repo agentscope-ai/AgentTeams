@@ -20,7 +20,7 @@ type Unavailable interface {
 // Middleware authenticates the public bearer token through the review cache
 // and stores the resolved identity on the request context.
 //
-// Contract (58 §2/§5):
+// Contract:
 //   - missing/invalid/expired token → 401 unauthenticated
 //   - controller unreachable during the review → 502 upstream_unavailable
 //     (the request was never authorized, and retrying may succeed)

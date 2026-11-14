@@ -20,7 +20,7 @@ internal/kernel/
   httpapi/    /healthz, /readyz, kernel middleware, route mount, internal-token auth
   uds/        unix-socket health face (0600, stale-socket cleanup)
   identity/   CallerIdentity + token-review cache (60s) + auth middleware
-  adapter/    service → controller internal client (58 §5)
+  adapter/    service → controller internal client
   outbox/     ops.outbox enqueue + dispatcher (retry/backoff/dead-letter)
   audit/      ops.audit_events writer (same tx as the business row)
   idem/       ops.idempotency_keys (24h, byte-exact replay)
@@ -36,11 +36,11 @@ test/e2e                         real binary + fake controller (build tag e2e)
 ## Configuration
 
 Precedence: command-line flag > environment variable > default. There is no
-YAML file (54 §3). No DSN default and no sample credential exists in code.
+YAML file. No DSN default and no sample credential exists in code.
 
 | Env (`AGENTTEAMS_SERVICE_` prefix) | Default | Notes |
 |---|---|---|
-| `ENABLED` | `false` | G1 dual mode: false = boot nothing, exit 0 (58 §6) |
+| `ENABLED` | `false` | G1 dual mode: false = boot nothing, exit 0 |
 | `LISTEN_ADDR` | `:8080` | public HTTP face |
 | `UDS` | empty | unix-socket health face, 0600 |
 | `RES_DSN` / `OPS_DSN` | required when enabled | MySQL 8 / OceanBase / seekdb 5.7 |
@@ -56,7 +56,7 @@ YAML file (54 §3). No DSN default and no sample credential exists in code.
 > **Deployment prerequisite**: the store runs `workers` + `ops.outbox` +
 > `ops.audit_events` in **one** transaction on the res pool (a `*sql.Tx` is
 > bound to one connection). The ResDSN account therefore needs
-> INSERT/SELECT on the `ops` schema as well (58 §11 I3).
+> INSERT/SELECT on the `ops` schema as well.
 
 ## Build / run / test
 
@@ -80,25 +80,24 @@ canonical create request; reusing a key with a different body returns 409
 ## R1 scope and known gaps
 
 - Native: `POST /api/v1/workers`, `GET /api/v1/workers`,
-  `GET /api/v1/workers/{name}`. Proxy (D110): `PUT`/`DELETE` forward to
+  `GET /api/v1/workers/{name}`. Proxy: `PUT`/`DELETE` forward to
   the controller byte-for-byte; the service refreshes its row from the PUT
   response (write-through) and soft-deletes on 204/404.
 - Status writeback: `POST /internal/v1/workers/status`
   (shared bearer + `X-AT-Timestamp` ±5 min + `X-AT-Request-Id`).
 - `team`/`role`/`exposedPorts`: R1 returns `team=team_slug` (no writer yet),
   `role=""` and omits `exposedPorts` — the DB has no role or observed-port
-  column (58 §11 I7/I14).
-- get-by-name refreshes observed state and soft-deletes on controller 404
-  (58 §1.3); spec freshness beyond that still depends on the controller
+  column.
+- get-by-name refreshes observed state and soft-deletes on controller 404;
+  spec freshness beyond that still depends on the controller
   writeback because the two spec-hash algorithms differ.
 - The transparent PUT write-through emits a generation-only sync event, not
   a full-spec update, so fields the service cannot read back are never
-  reverted (58 §11 I16).
-- R1-2e adds the controller `/internal/v1` receiver + status pusher (a
-  separate PR, branch `feat/agentteams-controller-internal-r1`). With both
+  reverted.
+- The controller's `/internal/v1` receiver + status pusher lands in a
+  separate PR (branch `feat/agentteams-controller-internal-r1`). With both
   branches the cross-process e2e (controller test tag `service_e2e`) and
-  the G1 dual-mode parity test run green on MySQL 8 and seekdb (58 §11
-  I8/I13).
+  the G1 dual-mode parity test run green on MySQL 8 and seekdb.
 - The outbox dispatcher assumes a single service instance (no
   `SKIP LOCKED`, which seekdb 5.7 lacks); multi-instance claiming lands in
   R2.

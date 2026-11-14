@@ -13,8 +13,8 @@ import (
 // Field names, JSON tags and DECLARATION ORDER are copied verbatim from
 // agentteams-controller internal/server/types.go:92-146 (71dc233a2): the
 // JSON encoding order is the struct declaration order, so any reordering
-// here is a byte-level G1 regression. It has 43 top-level fields — 58 §1.4
-// calls it "45 fields" because it also counted port/domain, which are in
+// here is a byte-level G1 regression. It has 43 top-level fields — the
+// documented count of "45" also counted port/domain, which are in
 // fact the nested fields of ExposedPortInfo, not top-level fields.
 //
 // Controller-typed fields (mcpServers / channelPolicy) are carried as
@@ -195,7 +195,7 @@ type WorkerSpecStatusView struct {
 //   - containerManaged comes from the row (the NOT NULL DEFAULT 1 column);
 //   - exposedPorts is parsed from the stored expose JSON (see
 //     parseExposedPorts for the R1 shape assumption);
-//   - team is the cached first-hit team slug (58 C3); role is always "",
+//   - team is the cached first-hit team slug; role is always "",
 //     because R1 has no membership-role column — the controller derives it
 //     from teams.spec.workerMembers (resource_handler.go:2277-2288). R2
 //     restores it with team_uid.
@@ -264,7 +264,7 @@ func (w *Worker) Response(caller *identity.Identity) WorkerResponse {
 		// ExposedPorts has no R1 column: the controller reports it only in
 		// status (populated by reconcile), never from the request. Deriving it
 		// from spec.expose made create responses diverge from the controller
-		// and poisoned the spec ETag (58 §11 I14). R2 adds the observed column.
+		// and poisoned the spec ETag. R2 adds the observed column.
 		ExposedPorts: nil,
 		Team:         w.TeamSlug,
 		// Role: see the doc comment — no R1 column.

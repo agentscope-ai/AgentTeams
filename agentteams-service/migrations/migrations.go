@@ -1,5 +1,5 @@
 // Package migrations carries the forward-only DDL shipped by
-// agentteams-service (R1 minimal set, frozen in doc 58 §4).
+// agentteams-service (R1 minimal set, frozen DDL).
 //
 // Layout:
 //

@@ -1,4 +1,4 @@
--- 58 §4.2，ops.outbox（R1 provision 通道，与 T1 §6.1 同构、独立 schema）冻结 DDL。
+-- ops.outbox（R1 provision 通道，与 controller 侧同构、独立 schema）冻结 DDL。
 CREATE TABLE IF NOT EXISTS outbox (
   id BIGINT AUTO_INCREMENT NOT NULL PRIMARY KEY,
   event_id VARCHAR(64) NOT NULL UNIQUE,

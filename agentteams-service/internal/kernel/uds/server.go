@@ -1,5 +1,5 @@
 // Package uds serves the internal health face on a Unix domain socket
-// (任务书 §2.7): only the /healthz /readyz routes are ever mounted here
+// and only the /healthz /readyz routes are ever mounted here
 // (the caller passes httpapi.HealthHandler), the socket is 0600, a stale
 // socket from a crashed instance is removed before listening, and the
 // socket file is removed on shutdown.

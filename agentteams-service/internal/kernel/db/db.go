@@ -1,4 +1,4 @@
-// Package db opens the res / ops MySQL pools (58 §4：MySQL 8 / seekdb 5.7).
+// Package db opens the res / ops MySQL pools (MySQL 8 / seekdb 5.7).
 //
 // res and ops are separate schemas with separate DSNs: migration SQL uses
 // unqualified table names against the connection's default database, so each
@@ -24,7 +24,7 @@ const (
 	PingTimeout     = 5 * time.Second
 )
 
-// Pools holds one *sql.DB per schema (58 §4；R1 opens res and ops).
+// Pools holds one *sql.DB per schema (R1 opens res and ops).
 type Pools struct {
 	Res *sql.DB
 	Ops *sql.DB

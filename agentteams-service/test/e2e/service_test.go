@@ -1,8 +1,8 @@
 //go:build e2e
 
 // Package e2e runs the real agentteams-service binary against a real MySQL
-// schema and a fake controller (the controller's /internal/v1 routes are
-// R1-2e; the fake implements the 58 §5 contract). It covers what package
+// schema and a fake controller (the fake implements the controller's
+// /internal/v1 contract). It covers what package
 // tests cannot: process boot/shutdown, the wired five-route table, the
 // identity middleware, the outbox dispatcher, the status writeback route,
 // the store+handler path over HTTP, and the health-only UDS face.
@@ -80,7 +80,7 @@ func TestServiceBinaryEndToEnd(t *testing.T) {
 		t.Skip("e2e: AGENTTEAMS_TEST_RES_DSN / AGENTTEAMS_TEST_OPS_DSN not set")
 	}
 
-	// Fake controller: token-review + provision (58 §5) + the public
+	// Fake controller: token-review + provision + the public
 	// PUT/DELETE the transparent proxy forwards to.
 	controller := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

@@ -336,7 +336,7 @@ func TestHandlerUnauthenticated(t *testing.T) {
 
 func TestHandlerAuthorizationMatrix(t *testing.T) {
 	// 5 roles × create/list/get, asserted cell by cell against the frozen
-	// 58 §3 matrix (production path).
+	// matrix (production path).
 	tests := []struct {
 		name       string
 		caller     *identity.Identity
@@ -975,7 +975,7 @@ func TestHandlerMethodRouting(t *testing.T) {
 	}
 }
 
-// --- tests: get-by-name cache-aside refresh (58 §1.3) ---
+// --- tests: get-by-name cache-aside refresh ---
 
 type refreshStore struct {
 	*fakeStore

@@ -116,7 +116,7 @@ func TestAPIValidationAndAuth(t *testing.T) {
 		}
 	}
 
-	// A human cannot create (58 §3 matrix): 403 forbidden.
+	// A human cannot create (frozen matrix): 403 forbidden.
 	human := newAPI(t, h, &identity.Identity{Role: identity.RoleHuman, Username: "h1", Teams: []string{"t1"}})
 	rec := do(t, human, http.MethodPost, "/api/v1/workers", `{"name":"api-w4"}`, nil)
 	if rec.Code != http.StatusForbidden {

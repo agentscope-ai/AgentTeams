@@ -8,10 +8,10 @@ import (
 // wireSpec is the adapter-facing (controller API) shape of a worker spec.
 // It uses the camelCase JSON tags of agentteams-controller
 // api/v1beta1.WorkerSpec, so the controller can unmarshal it directly on
-// POST /internal/v1/workers/{name}/provision (58 §5).
+// POST /internal/v1/workers/{name}/provision.
 //
 // Why this is not CanonicalSpecJSON: the hash input uses the frozen DDL
-// column names (snake_case, 58 §4.1) so the digest is stable across API
+// column names (snake_case) so the digest is stable across API
 // renames. The wire payload is the opposite — it must speak the controller
 // API, not the service's storage schema.
 type wireSpec struct {
@@ -53,7 +53,7 @@ type wireSpec struct {
 }
 
 // WireSpec renders the spec as the controller-API JSON carried in the
-// outbox provision/update payload (58 §5). It validates the raw JSON
+// outbox provision/update payload. It validates the raw JSON
 // columns so a broken value fails at enqueue, not inside the controller.
 func WireSpec(s Spec) (json.RawMessage, error) {
 	ws := wireSpec{

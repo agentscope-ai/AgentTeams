@@ -223,7 +223,7 @@ func TestExecutionWithoutSpecHash(t *testing.T) {
 }
 
 // TestTokenReviewShape pins POST /internal/v1/token-review and the identity
-// body mapping (CallerIdentity, 58 §5).
+// body mapping (CallerIdentity).
 func TestTokenReviewShape(t *testing.T) {
 	const body = `{"matrixUserID":"@admin:agentteams.local","humanPermissionLevel":1,"role":"admin",` +
 		`"username":"admin","team":"t1","teams":["t1","t2"],"capabilities":["workers.read"],` +
@@ -411,7 +411,7 @@ func TestClientTimeoutIsUpstream(t *testing.T) {
 	}
 }
 
-// TestNewInstallsDefaultTimeout pins the 10s default (58 §4 bounded calls).
+// TestNewInstallsDefaultTimeout pins the 10s default (bounded calls).
 func TestNewInstallsDefaultTimeout(t *testing.T) {
 	c := New("http://agentteams-controller:8090", "tok")
 	if c.HTTP == nil {

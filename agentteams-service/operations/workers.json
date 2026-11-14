@@ -1,9 +1,9 @@
 {
-  "$comment": "R1 operation manifest (58 §7). Single source for the agt CLI flag bindings and the Skill schema; regenerated from this file when operations change. R1 generates workers.create/list/get; the R2 resources domain extends this file. PUT/DELETE are transparent proxy routes (D110) and are listed but not generated as native operations.",
+  "$comment": "R1 operation manifest. Single source for the agt CLI flag bindings and the Skill schema; regenerated from this file when operations change. R1 generates workers.create/list/get; the R2 resources domain extends this file. PUT/DELETE are transparent proxy routes and are listed but not generated as native operations.",
   "version": 1,
   "module": "resources",
   "resource": "worker",
-  "source": "58-R1-1-create-list-workers契约冻结-20261112.md §1",
+  "source": "R1 create/list/get contract (frozen 2026-11-12)",
   "operations": {
     "workers.create": {
       "http": {
@@ -229,7 +229,7 @@
     "WorkerResponse": {
       "fields": 43,
       "source": "agentteams-controller/internal/server/types.go:92-146 @71dc233a2",
-      "note": "port/domain are nested under exposedPorts[]; the 58 §1.4 count of 45 is a documentation bug"
+      "note": "port/domain are nested under exposedPorts[]; the count of 45 is a documentation bug"
     },
     "WorkerSpecView": {
       "fields": 27,

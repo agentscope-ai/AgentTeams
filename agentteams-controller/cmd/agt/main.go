@@ -37,6 +37,8 @@ Environment variables:
 	rootCmd.AddCommand(deleteCmd())
 	rootCmd.AddCommand(projectCmd())
 	rootCmd.AddCommand(tracingCmd())
+	rootCmd.AddCommand(monitoringCmd())
+	rootCmd.AddCommand(logsCmd())
 	rootCmd.AddCommand(workerCmd())
 	rootCmd.AddCommand(messageCmd())
 	rootCmd.AddCommand(statusCmd())

@@ -158,7 +158,7 @@ func TestG1DualModeParity(t *testing.T) {
 	name := fmt.Sprintf("g1-%d", time.Now().UnixNano())
 	// env + expose are the fields whose response shape used to diverge
 	// (non-admin env, spec-derived exposedPorts). Include them so the parity
-	// test covers the 58 §11 I14/I16 fixes.
+	// test covers those response-shape fixes.
 	createBody := fmt.Sprintf(`{"name":%q,"workerName":"G1 Worker","model":"m1","runtime":"qwenpaw","skills":["s1"],"env":{"FOO":"bar"},"expose":[{"port":8080,"protocol":"http"}]}`, name)
 
 	// 1) POST /api/v1/workers

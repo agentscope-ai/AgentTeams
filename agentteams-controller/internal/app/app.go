@@ -700,7 +700,7 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		SkillScanner:         a.skillScanner,
 	})
 
-	// R1-2e: optional controller → service observation writeback. Opt-in via
+	// Optional controller → service observation writeback. Opt-in via
 	// AGENTTEAMS_SERVICE_URL; without it this changes nothing.
 	if a.cfg.ServiceURL != "" && a.cfg.InternalToken != "" {
 		pusher := server.NewStatusPusher(a.mgr.GetClient(), a.namespace, a.cfg.ServiceURL, a.cfg.InternalToken)

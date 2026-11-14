@@ -50,7 +50,7 @@ type ServerDeps struct {
 	GatewayURL           string
 	DefaultWorkerRuntime string // install-time default for Worker create requests
 	DefaultModel         string // install-time model for Worker create requests without a model
-	// InternalToken enables the /internal/v1 surface (R1-2e) when non-empty.
+	// InternalToken enables the /internal/v1 surface when non-empty.
 	// It is the shared service↔controller bearer; empty = routes not
 	// registered at all (no internal surface on deployments without the
 	// service).
@@ -540,10 +540,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		mux.Handle("/docker/", mw.RequireAuthz(authpkg.ActionGateway, "gateway", nil)(http.StripPrefix("/docker", proxyHandler)))
 	}
 
-	// --- Internal service API (R1-2e; opt-in via AGENTTEAMS_INTERNAL_TOKEN) ---
+	// --- Internal service API (opt-in via AGENTTEAMS_INTERNAL_TOKEN) ---
 	// Registered after the public surface; never routed by Higress. The
 	// guard is the shared bearer + replay window, not the public claims
-	// chain (58 §5).
+	// chain.
 	registerInternalRoutes(mux, deps)
 
 	return s

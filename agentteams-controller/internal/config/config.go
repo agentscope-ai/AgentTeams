@@ -53,7 +53,7 @@ type Config struct {
 	AuthAudience               string // SA token audience for TokenReview
 	AuthTokenExpirationSeconds int64
 
-	// Internal API (R1-2e): shared bearer for service→controller calls.
+	// Internal API: shared bearer for service→controller calls.
 	// Empty disables the /internal/v1 surface entirely.
 	InternalToken string
 	// ServiceURL is the agentteams-service root used for observation

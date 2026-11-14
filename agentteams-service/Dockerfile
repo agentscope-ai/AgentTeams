@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# Build stage: the module pins go 1.26.11.
-FROM golang:1.26 AS build
+# Build stage: the module pins go 1.26.11; the base is pinned to the same
+# patch level so the build never relies on GOTOOLCHAIN auto-fetch.
+FROM golang:1.26.11 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

@@ -27,6 +27,8 @@ def redact(text):
             return redact(value) if isinstance(value, str) else value
         return json.dumps(scrub(parsed), ensure_ascii=False)
     for name, value in os.environ.items():
+        if name == 'AGENTTEAMS_FS_ACCESS_KEY' and value == os.getenv('AGENTTEAMS_WORKER_NAME'):
+            continue  # Controller-issued storage usernames are the public agent identity.
         if len(value) >= 8 and re.search(r'KEY|TOKEN|PASSWORD|SECRET|AUTH', name, re.I):
             text = text.replace(value, '[REDACTED]')
     text = re.sub(r'(?i)(Bearer\s+)[^\s"\',]+', r'\1[REDACTED]', text)

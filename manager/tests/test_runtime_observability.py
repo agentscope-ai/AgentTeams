@@ -58,6 +58,15 @@ class RuntimeLogTests(unittest.TestCase):
         self.assertEqual(record['gateway_key'], '[REDACTED]')
         self.assertNotIn('secret-12345', raw)
 
+    def test_storage_username_does_not_hide_the_public_agent_identity(self):
+        with patch.dict(os.environ, {'AGENTTEAMS_WORKER_NAME': 'runtime-qwen',
+                                     'AGENTTEAMS_FS_ACCESS_KEY': 'runtime-qwen',
+                                     'AGENTTEAMS_FS_SECRET_KEY': 'private-password'}):
+            raw = redact(json.dumps({'agent_name': 'runtime-qwen', 'error': 'private-password'}))
+        record = json.loads(raw)
+        self.assertEqual(record['agent_name'], 'runtime-qwen')
+        self.assertNotIn('private-password', raw)
+
     def test_ready_is_not_downgraded_by_late_or_stale_events(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'AGENTTEAMS_LOG_DIR': tmp, 'AGENTTEAMS_BOOT_ID': 'new'}):
             event('startup.begin')

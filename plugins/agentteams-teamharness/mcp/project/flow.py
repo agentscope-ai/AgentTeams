@@ -640,6 +640,8 @@ def _project_id_for_pull(arguments: dict[str, Any], payload: dict[str, Any]) -> 
 # with a retryable error instead. Read-only actions tolerate a failed pull
 # and serve local state.
 _PROJECTFLOW_MUTATING_ACTIONS = frozenset({
+    "plan_dag",
+    "plan_loop",
     "accept_task_result",
     "record_loop_iteration",
     "pause_project",
@@ -800,7 +802,12 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
-            _sync_project(arguments, project_id)
+            if not _sync_project(arguments, project_id):
+                return _sync_failure_result({
+                    "tool": "projectflow",
+                    "action": action,
+                    "project": project,
+                }, action)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -883,7 +890,12 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
-            _sync_project(arguments, project_id)
+            if not _sync_project(arguments, project_id):
+                return _sync_failure_result({
+                    "tool": "projectflow",
+                    "action": action,
+                    "project": project,
+                }, action)
             return {
                 "ok": True,
                 "tool": "projectflow",

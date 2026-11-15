@@ -416,7 +416,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "tasks": {
                     "type": "array",
-                    "description": "DAG or Loop task nodes. Each node needs taskId (or task_id), not id; use assignedTo and dependsOn for assignment and dependencies.",
+                    "description": "DAG or Loop task nodes. Each node needs taskId (or task_id), not id; use parentTaskId for a subtask's parent, assignedTo for its Worker and dependsOn for execution prerequisites. A coordinating parent is not delegated to a Worker.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -424,6 +424,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                             "title": {"type": "string"},
                             "assignedTo": {"type": "string"},
                             "dependsOn": {"type": "array", "items": {"type": "string"}},
+                            "parentTaskId": {"type": "string"},
                         },
                         "additionalProperties": True,
                     },

@@ -151,6 +151,7 @@ jobs:
           python -m pytest plugins/tests/teamharness/mcp/test_sensitive_scan_placeholder.py -q
           python -m pytest plugins/tests/teamharness/test_loop_budget.py -q
           python -m pytest plugins/tests/teamharness/test_pull_project.py -q
+          python -m pytest plugins/tests/teamharness/test_task_hierarchy.py -q
           python -m pytest plugins/tests/teamharness/test_signal_emission.py -q
           python -m pytest plugins/tests/teamharness/test_transition_validation.py -q
           python -m pytest plugins/tests/teamharness/test_attention_schema.py -q

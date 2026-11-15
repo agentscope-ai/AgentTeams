@@ -106,3 +106,10 @@ def test_wildcard_cleanup_keeps_symlink_and_assignment_fences(cleanup):
     (root / "workspace").unlink(); (root / "workspace").mkdir()
     state["notifyTxn"] = "different"
     assert decision("rm -rf "+str(root / "workspace/run-*")) != "allow"
+
+
+def test_compound_verification_cleanup_returns_rewrite_guidance(cleanup):
+    _, root, _, decision = cleanup
+    command=f'cd "{root}/workspace" && mkdir -p check && cp input.py check/ && cd check && python3 test.py && cd .. && rm -rf check'
+    assert decision(command) == "deny"
+    assert decision(f'rm -rf "{root}/workspace/check"') == "allow"

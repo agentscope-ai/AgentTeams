@@ -142,7 +142,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         async def on_check_permission(self, agent: Any, input_kwargs: dict[str, Any], next_handler: Callable[..., Any]) -> Any:
             call = input_kwargs.get("tool_call")
             command = str((input_kwargs.get("tool_input") or {}).get("command") or "")
-            if getattr(call, "name", "") == "execute_shell_command" and (_compound_private_cleanup(command) or self._task_scope and _compound_task_move(command)):
+            if getattr(call, "name", "") == "execute_shell_command" and (_compound_private_cleanup(command) or self._task_scope and _compound_output_change(command)):
                 from agentscope.permission import PermissionBehavior, PermissionDecision
                 return PermissionDecision(behavior=PermissionBehavior.DENY, message=_CLEANUP_GUIDANCE)
             if getattr(call, "name", "") == "execute_shell_command" and await self._allow_task_output_change(command, (input_kwargs.get("tool_input") or {}).get("cwd")):
@@ -199,7 +199,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             command = str(args.get("command") or "") if isinstance(args, dict) else ""
             if (
                 getattr(call, "name", "") == "execute_shell_command"
-                and (_compound_private_cleanup(command) or self._task_scope and _compound_task_move(command))
+                and (_compound_private_cleanup(command) or self._task_scope and _compound_output_change(command))
             ):
                 from agentscope.tool import ToolResponse
 
@@ -262,9 +262,9 @@ def _compound_private_cleanup(command: str) -> bool:
                 and re.search(r"(?:^|[;&\n])\s*(?:/bin/|/usr/bin/)?rm\b", command))
 
 
-def _compound_task_move(command: str) -> bool:
+def _compound_output_change(command: str) -> bool:
     command = re.sub(r"^export QWENPAW_SESSION_ID='[^'\r\n]*' && ", "", command, count=1)
-    return bool(re.search(r"[;&|\n]", command) and re.search(r"(?:^|[;&\n])\s*(?:/bin/|/usr/bin/)?mv\b", command))
+    return bool(re.search(r"[;&|\n]", command) and re.search(r"(?:^|[;&\n])\s*(?:/bin/|/usr/bin/)?(?:mv|rm)\b", command))
 
 
 def _load_trace_module() -> Any | None:

@@ -93,6 +93,9 @@ deliverables; do not pre-push the same task directory.
 Use the ACK's existing `scratchDirectory` for test copies and temporary work,
 for example `mktemp -d <scratchDirectory>/run-XXXXXX`. Do not invent global
 `/tmp` paths for ordinary task scratch work.
+Temporary-file cleanup is not an acceptance requirement. If cleanup is needed,
+run it separately with an explicit absolute path in your own task outputs; do
+not append deletion to setup or test commands.
 
 ## Execute
 

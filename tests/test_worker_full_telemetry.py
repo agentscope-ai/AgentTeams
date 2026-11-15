@@ -90,7 +90,7 @@ def test_agentscope_middleware_import_order_does_not_break_worker_startup(tmp_pa
     (package / 'agent/_agent.py').write_text('class Agent:\n    def __init__(self, middlewares=None): self.middlewares = middlewares\n    async def reply(self): pass\n')
     environment = {**os.environ, 'AGENTTEAMS_OTEL_ENABLED': 'true', 'AGENTTEAMS_OTEL_RUNTIME': 'qwenpaw',
                    'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'shared/lib/telemetry') + os.pathsep + str(tmp_path)}
-    result = subprocess.run([sys.executable, '-c', 'from agentscope.agent import Agent; from agentscope.middleware import TracingMiddleware; assert isinstance(Agent().middlewares[0], TracingMiddleware)'],
+    result = subprocess.run([sys.executable, '-c', 'from agentscope.agent import Agent; from agentscope.middleware import TracingMiddleware; assert isinstance(Agent().middlewares[0], TracingMiddleware); agent = Agent(middlewares=[TracingMiddleware()]); assert len(agent.middlewares) == 1; assert type(agent.middlewares[0]) is not TracingMiddleware'],
                             env=environment, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 

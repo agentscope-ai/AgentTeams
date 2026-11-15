@@ -176,6 +176,7 @@ type WorkerCoordinationRequest struct {
 // InjectHeartbeatRequest describes heartbeat config injection into a leader's openclaw.json.
 type InjectHeartbeatRequest struct {
 	WorkerName string
+	Runtime    string
 	Enabled    bool
 	Every      string // e.g. "30m"
 }
@@ -362,18 +363,19 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	}
 
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
-		WorkerName:        req.Name,
-		PersonalRoomID:    req.PersonalRoomID,
-		MatrixToken:       req.MatrixToken,
-		GatewayKey:        req.GatewayKey,
-		ModelName:         req.Spec.Model,
-		ModelProvider:     req.Spec.ModelProvider,
-		SubagentModelName: resolvedSubagentModel(req),
-		AIGatewayURL:      req.AIGatewayURL,
-		TeamLeaderName:    req.TeamLeaderName,
-		ChannelPolicy:     channelPolicy,
-		Heartbeat:         req.Heartbeat,
-		Runtime:           req.Spec.Runtime,
+		WorkerName:          req.Name,
+		PersonalRoomID:      req.PersonalRoomID,
+		MatrixToken:         req.MatrixToken,
+		GatewayKey:          req.GatewayKey,
+		ModelName:           req.Spec.Model,
+		ModelProvider:       req.Spec.ModelProvider,
+		SubagentModelName:   resolvedSubagentModel(req),
+		AIGatewayURL:        req.AIGatewayURL,
+		TeamLeaderName:      req.TeamLeaderName,
+		ChannelPolicy:       channelPolicy,
+		Heartbeat:           req.Heartbeat,
+		LlmHeartbeatEnabled: req.Spec.LlmHeartbeatEnabled,
+		Runtime:             req.Spec.Runtime,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)
@@ -782,7 +784,7 @@ func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoord
 func (d *Deployer) InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error {
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
 	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
-	updated := agentconfig.InjectHeartbeat(existing, req.Enabled, req.Every)
+	updated := agentconfig.InjectHeartbeat(existing, req.Enabled, req.Every, req.Runtime)
 	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
 }
 
@@ -1596,8 +1598,16 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 	// Matrix client filters all DMs to that wrong localpart, and the agent
 	// silently never sees admin messages. See commit 3f8f84b which fixed this
 	// originally before the controller refactor accidentally reverted it.
+	var managerHeartbeat *agentconfig.HeartbeatConfig
+	if req.Spec.Runtime == "openclaw" || req.Spec.Runtime == "" {
+		managerHeartbeat = &agentconfig.HeartbeatConfig{
+			Enabled: req.Spec.Config.HeartbeatInterval != "0m",
+			Every:   req.Spec.Config.HeartbeatInterval,
+		}
+	}
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
 		WorkerName:    "manager",
+		Heartbeat:     managerHeartbeat,
 		MatrixToken:   req.MatrixToken,
 		GatewayKey:    req.GatewayKey,
 		ModelName:     req.Spec.Model,

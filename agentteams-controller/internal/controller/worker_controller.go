@@ -10,6 +10,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
@@ -262,6 +263,12 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	}
 	if inTeam && teamRole == RoleTeamLeader {
 		configContext.Role = RoleTeamLeader
+		if effectiveRuntime == backend.RuntimeOpenClaw {
+			configContext.TeamHeartbeat, err = r.owningTeamHeartbeat(ctx, w)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+		}
 	}
 	// Team-wide subagent model default (read-time merge). Only workers
 	// without an explicit value consult the team, and only when they are
@@ -662,6 +669,21 @@ func (r *WorkerReconciler) reconcileManagerAccess(ctx context.Context, w *v1beta
 
 }
 
+func (r *WorkerReconciler) owningTeamHeartbeat(ctx context.Context, w *v1beta1.Worker) (*agentconfig.HeartbeatConfig, error) {
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams, client.InNamespace(w.Namespace)); err != nil {
+		return nil, fmt.Errorf("list teams for heartbeat: %w", err)
+	}
+	for _, team := range teams.Items {
+		for _, member := range team.Spec.WorkerMembers {
+			if member.Name == w.Name && member.Role == RoleTeamLeader.String() {
+				return &agentconfig.HeartbeatConfig{Enabled: team.Spec.HeartbeatEvery != "" && team.Spec.HeartbeatEvery != "0m", Every: team.Spec.HeartbeatEvery}, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
 func (r *WorkerReconciler) teamRoleForWorker(ctx context.Context, namespace, workerName string) (MemberRole, bool, error) {
 	if r.Client == nil || workerName == "" {
 		return "", false, nil
@@ -991,10 +1013,11 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 // which owning reconcilers write to status.specHash after a successful
 // reconcile. Sandbox resources no longer store this hash.
 func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
-	spec.Model = ""          // config-only: written to openclaw.json/runtime.yaml
-	spec.McpServers = nil    // config-only: written to mcporter/runtime config
-	spec.AccessEntries = nil // permission-only: resolved when credentials are issued
-	spec.AgentIdentity = nil // config-only: written to runtime.yaml
+	spec.LlmHeartbeatEnabled = nil // config-only: written to openclaw.json
+	spec.Model = ""                // config-only: written to openclaw.json/runtime.yaml
+	spec.McpServers = nil          // config-only: written to mcporter/runtime config
+	spec.AccessEntries = nil       // permission-only: resolved when credentials are issued
+	spec.AgentIdentity = nil       // config-only: written to runtime.yaml
 	spec.CredentialBindings = nil
 	spec.State = nil          // exclude lifecycle state from hash
 	spec.IdleTimeout = ""     // exclude controller-side autosleep policy from hash

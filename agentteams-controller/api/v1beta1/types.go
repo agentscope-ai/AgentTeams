@@ -188,6 +188,10 @@ type Worker struct {
 type WorkerSpec struct {
 	Model         string `json:"model"`
 	ModelProvider string `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
+	// LlmHeartbeatEnabled controls OpenClaw's model-driven autonomous checks.
+	// Nil defaults off for ordinary Workers and inherits the Team cadence for Leaders.
+	// Health reporting and independent scheduled jobs are unaffected.
+	LlmHeartbeatEnabled *bool `json:"llmHeartbeatEnabled,omitempty"`
 	// SubagentModel optionally names a (cheaper/faster) model used by
 	// spawned subagents instead of the worker's primary model. It must be
 	// a model id served by the team's AI gateway (free string; the

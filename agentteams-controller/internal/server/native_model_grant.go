@@ -18,6 +18,15 @@ import (
 // CheckNativeWrite checks the actual merged/restored document, before snapshots
 // or file writes. Unchanged native values do not need a fresh model grant.
 func (h *MemberConfigHandler) CheckNativeWrite(ctx context.Context, caller *authpkg.CallerIdentity, name, runtime string, next map[string]any, read func(context.Context) (map[string]any, error)) error {
+	if runtime == "openclaw" {
+		current, err := read(ctx)
+		if err != nil {
+			return &NativeConfigPolicyError{Code: "native_config_unavailable", Message: "current native configuration cannot be parsed"}
+		}
+		if !reflect.DeepEqual(nativeGrantPath(current, "agents.defaults.heartbeat.every"), nativeGrantPath(next, "agents.defaults.heartbeat.every")) {
+			return &NativeConfigPolicyError{Code: "heartbeat_controller_owned", Message: "change autonomous checks through Worker llmHeartbeatEnabled", Status: http.StatusConflict}
+		}
+	}
 	if caller == nil || caller.Role != authpkg.RoleHuman {
 		return nil
 	}

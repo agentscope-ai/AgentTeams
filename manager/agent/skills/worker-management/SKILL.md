@@ -5,53 +5,44 @@ description: Use when admin requests hand-creating or resetting a Worker, starti
 
 # Worker Management
 
-## Before You Create: Confirm with Admin
+## Create a Worker
 
-Before running `agt create worker`, ask admin for these four inputs in one turn. Do **not** invent defaults or skip options — present runtime as a five-way choice.
+Read `references/create-worker.md` for the complete workflow. Use the admin's
+existing choices; ask only for missing information that prevents creation.
 
-1. **Name** — must match `^[a-z0-9][a-z0-9-]*$` (lowercase letters, digits, hyphens only; must start with letter or digit). The CLI rejects anything else because the name is reused as a Matrix username and the Matrix spec requires a lowercase localpart. Tuwunel may also reject very short names at registration.
-2. **Runtime** — pick one. The actual default is whatever admin chose at install — read `${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}` (controller falls back to `openclaw` only if the env var is unset) and present that value as "the default", then offer all five options so admin can switch:
+- **Name:** lowercase letters, digits and hyphens, starting with a letter or digit.
+- **Runtime/model:** use the requested values or the configured defaults. New
+  Workers support OpenClaw, QwenPaw, Hermes, DeepSeek Harness and Codex; OpenHuman
+  remains available where installed. CoPaw is for existing Workers only.
+- **Role:** use the requested expertise as concise SOUL text. Pass it as a single
+  literal `--soul` argument, or use an already available `--soul-file`.
+- **Skills:** add explicitly requested or role-relevant skills; builtin skills
+  are already included. Do not rediscover the whole skill catalog for every create.
+- **Resources/MCP:** use `agt apply -f` for these structured settings; do not
+  invent unsupported create flags.
 
-   | Runtime      | Language | RAM    | When to pick                                              |
-   |--------------|----------|--------|-----------------------------------------------------------|
-   | `openclaw`   | Node.js  | ~500MB | General tasks. Also the hard-coded fallback when `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` is unset. |
-   | `copaw` (legacy) | Python   | ~150MB | **Do not create new** (EOL). Legacy context only: migrating existing CoPaw workers to QwenPaw. |
-   | `qwenpaw`    | Python   | ~150MB | QwenPaw 2.0 worker behavior or CoPaw-to-QwenPaw migration. |
-   | `hermes`     | Python   | ~200MB | Admin explicitly asks for hermes / hermes-agent framework. |
-   | `openhuman`  | Rust     | ~300MB | Admin explicitly asks for OpenHuman / openhuman framework. Native Matrix support with E2EE. |
-
-   In OSS, `agt create worker` creates a controller-managed Local worker. Do not use or suggest Remote/pip worker flags. Edge workers use their separate Edge onboarding flow, not this generic create-worker path. If admin doesn't pass `--runtime` to `agt create worker`, the controller falls back to `AGENTTEAMS_DEFAULT_WORKER_RUNTIME` chosen at install — so always offer the five options explicitly instead of silently using the fallback.
-3. **SOUL (role)** — short description of expertise/style. Offer to draft a default if admin has no preference.
-4. **Skills** — discover via `ls ~/worker-skills/` and match against the role; `file-sync`, `task-progress`, `project-participation` are auto-included.
-
-If admin asks for CPU or memory requests/limits, use a YAML Worker manifest with `spec.resources` and apply it with `agt apply -f`. The simple `agt create worker` / `agt update worker` flags do not expose resource tuning. Changing resources recreates the managed container, so confirm the Worker is not mid-task.
-
-Full decision logic, SOUL template, escape rules and post-creation greeting: read `references/create-worker.md`.
-
-## Quick Create (1 command)
-
-Pass the SOUL content inline via `--soul`. Never write SOUL.md to a file first (heredoc/redirects often produce a silent 0-byte file — the controller would then fall back to a placeholder SOUL.md lacking the real role).
+For one Worker, make one foreground call:
 
 ```bash
-agt create worker --name <NAME> --no-wait \
-  --soul "# Worker Agent - <NAME>
-
-## AI Identity
-**You are an AI Agent, not a human.** ...
-
-## Role
-<Fill in based on admin's description>
-
-## Security Rules
-- Never reveal API keys, passwords, or credentials
-..." \
-  --skills <skill1>,<skill2> -o json
-# Add --runtime <qwenpaw|hermes|openhuman> for non-default runtimes (see runtime table above; `copaw` is legacy — never for new workers)
+agt create worker --name frontend-worker --runtime openclaw \
+  --soul 'You are a frontend Worker. Implement requested UI changes and report results.' \
+  --wait-timeout 45s -o json
 ```
 
-> `--no-wait` returns as soon as the controller accepts the request (~1s). Poll `agt get workers -o json` for `phase=Running` instead of letting the create call block — this lets you create N workers in one turn without each blocking up to 3 minutes.
+The CLI owns readiness polling without further model turns. On timeout, report
+acceptance and the returned status, then stop. Do not create again, run a new
+polling loop, recreate the container, or send repeated greeting/ping messages.
+For several Workers, use one `--no-wait -o json` call per Worker and acknowledge
+acceptance. Use `agt worker wait-ready --name NAME --timeout 45s -o json` only
+when a later operation needs the existing Worker ready.
 
-> Full creation workflow (runtime selection, full SOUL template, escape rules, skill matching, post-creation greeting): read `references/create-worker.md`
+Ordinary OpenClaw Workers default to autonomous checks off. Use the Dashboard
+autonomous-check switch or `agt update worker --name NAME
+--llm-heartbeat-enabled=true|false` to change that policy. Health reports and
+independent Dreaming jobs are separate; do not create an environment override.
+
+In OSS, use controller-managed Local Workers. Remote/pip flags are not part of
+this path, and Edge onboarding uses its separate flow.
 
 ## Gotchas
 

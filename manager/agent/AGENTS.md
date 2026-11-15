@@ -50,7 +50,7 @@ When `YOLO_ON`: the admin has delegated full authority to you and is **unreachab
 
 ## Gotchas
 
-- **Create multiple Workers concurrently** — when you need 2+ Workers, call `agt create worker --no-wait` once per Worker as **separate foreground `exec` calls in the same turn** (your runtime fans them out in parallel). Never use `&` / background mode — background output is dropped and you will lose the create response. After issuing all calls, poll `agt get workers -o json` until each target Worker shows `phase=Running` (typical 15-45s). Do not invent a different creation path if a single call seems slow — the CLI is the only supported path (see "Controller API Rules" below).
+- **Create Workers through the worker-management skill** — for one Worker, run `agt create worker ... --wait-timeout 45s -o json` once; the CLI owns readiness polling. For 2+ Workers, use separate foreground `agt create worker ... --no-wait -o json` calls and report acceptance. Use `agt worker wait-ready --name NAME --timeout 45s -o json` only when a later operation needs readiness. On timeout, report the last status and stop; do not loop, recreate, or probe the model unless requested.
 - **@mention must use full Matrix ID** (with domain, e.g. `@alice:matrix-local.agentteams.io:18080`) — writing "alice" or "@alice" without domain will NOT wake the Worker
 - **History context: only act on the Current message section** — do not @mention anyone based on the history section's senders
 - **Phase handoff requires immediate @mention** — just describing "bob will handle phase 2" without actually sending `@bob:...` stalls the workflow permanently
@@ -80,7 +80,7 @@ When `YOLO_ON`: the admin has delegated full authority to you and is **unreachab
 - ✅ **ALWAYS USE**: the `agt` CLI (`agt create worker`, `agt get workers`, `agt delete worker`, `agt create team`, etc.) and the helper scripts under `~/skills/*/scripts/`
 - ❌ **NEVER USE**: direct `curl` to `${AGENTTEAMS_CONTROLLER_URL}/api/v1/...` (you will see this URL in env vars and inside `/opt/agentteams/scripts/lib/container-api.sh` — those are for internal supervisord / startup use only, **NOT** for your turn)
 
-**Why**: The CLI handles SOUL multi-line escaping, retry logic, request validation, and follow-up provisioning. Hand-built curl requests routinely break on shell escaping of multi-line `--soul` content; failed escaping returns 401/400 which look like "token expired" or "bad endpoint" but are actually your own command being parsed wrong. If `agt create worker` appears slow or stuck, run `agt get workers -o json` to confirm the actual worker phase — do **NOT** bypass the CLI.
+**Why**: The CLI handles SOUL multi-line escaping, retry logic, request validation, and follow-up provisioning. Hand-built curl requests routinely break on shell escaping of multi-line `--soul` content; failed escaping returns 401/400 which look like "token expired" or "bad endpoint" but are actually your own command being parsed wrong. If the bounded create wait times out, report its last status and stop; do **NOT** bypass the CLI or start a polling loop.
 
 **Token note**: `AGENTTEAMS_AUTH_TOKEN` / `AGENTTEAMS_AUTH_TOKEN_FILE` are 10-year SA tokens auto-rotated by the platform. A 401 from the controller is almost never a token problem — it is almost always your shell escaping breaking the request. Do not "try a fresh token" as a fix; re-check your command quoting first.
 

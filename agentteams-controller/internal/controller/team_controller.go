@@ -8,6 +8,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/controller/humanidentity"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
@@ -400,13 +401,19 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		}
 
 		// Leader coordination context
+		hb := agentconfig.ResolveLLMHeartbeat(leaderMember.worker.Spec.LlmHeartbeatEnabled,
+			&agentconfig.HeartbeatConfig{Enabled: t.Spec.HeartbeatEvery != "" && t.Spec.HeartbeatEvery != "0m", Every: t.Spec.HeartbeatEvery})
+		heartbeatEvery := ""
+		if hb.Enabled {
+			heartbeatEvery = hb.Every
+		}
 		if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
 			LeaderName:         leaderRuntimeName,
 			Role:               RoleTeamLeader.String(),
 			TeamName:           teamRuntimeName,
 			TeamRoomID:         rooms.TeamRoomID,
 			LeaderDMRoomID:     rooms.LeaderDMRoomID,
-			HeartbeatEvery:     t.Spec.HeartbeatEvery,
+			HeartbeatEvery:     heartbeatEvery,
 			WorkerIdleTimeout:  "",
 			TeamWorkers:        teamWorkerEntries,
 			TeamAdminID:        teamAdminMatrixID(derivedTeam),
@@ -417,14 +424,13 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		}
 
 		// Leader heartbeat injection
-		if t.Spec.HeartbeatEvery != "" {
-			if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
-				WorkerName: leaderRuntimeName,
-				Enabled:    true,
-				Every:      t.Spec.HeartbeatEvery,
-			}); err != nil {
-				logger.Error(err, "leader heartbeat config injection failed (non-fatal)")
-			}
+		if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
+			WorkerName: leaderRuntimeName,
+			Runtime:    leaderRuntime,
+			Enabled:    hb.Enabled,
+			Every:      hb.Every,
+		}); err != nil {
+			logger.Error(err, "leader heartbeat config injection failed (non-fatal)")
 		}
 	}
 
@@ -1057,8 +1063,9 @@ func (r *TeamReconciler) handleDeleteTeam(ctx context.Context, t *v1beta1.Team) 
 			if !backend.UsesMemberRuntimeConfig(runtime) {
 				if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
 					WorkerName: leaderRN,
-					Enabled:    false,
-					Every:      "",
+					Runtime:    runtime,
+					Enabled:    leaderW.Spec.LlmHeartbeatEnabled != nil && *leaderW.Spec.LlmHeartbeatEnabled,
+					Every:      "30m",
 				}); err != nil {
 					logger.Error(err, "failed to remove leader heartbeat config (non-fatal)")
 				}

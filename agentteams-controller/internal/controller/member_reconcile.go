@@ -16,6 +16,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
@@ -94,6 +95,8 @@ type MemberContext struct {
 	// member, resolved by the owning reconciler (read-time merge input).
 	// An explicit Spec.SubagentModel always takes precedence.
 	TeamSubagentModel string
+	// TeamHeartbeat retains the Leader's inherited cadence during Worker config regeneration.
+	TeamHeartbeat *agentconfig.HeartbeatConfig
 
 	// TeamLlmStreamFirstContentTimeout / TeamLlmStreamIdleTimeout are the
 	// Team.spec defaults for the worker LLM stream timeouts, resolved by the
@@ -473,6 +476,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		Spec:                   m.Spec,
 		SubagentModel:          resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
 		Role:                   m.Role.String(),
+		Heartbeat:              m.TeamHeartbeat,
 		MatrixToken:            state.ProvResult.MatrixToken,
 		GatewayKey:             state.ProvResult.GatewayKey,
 		MatrixPassword:         state.ProvResult.MatrixPassword,

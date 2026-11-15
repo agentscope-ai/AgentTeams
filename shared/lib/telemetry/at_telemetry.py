@@ -328,6 +328,11 @@ class IdentityProcessor(SpanProcessor):
             "agentteams.runtime": os.getenv("AGENTTEAMS_OTEL_RUNTIME", "python"),
             "agentteams.telemetry.schema": "1",
         }
+        root = _active_turn.get()
+        if root is not None and root.context.trace_id == span.context.trace_id:
+            for key in ("agentteams.task.id", "agentteams.project.id", "agentteams.task.correlation"):
+                if key in root.attributes:
+                    fields.setdefault(key, root.attributes[key])
         for key, value in fields.items():
             span.set_attribute(key, value)
             span.set_attribute(f"langfuse.observation.metadata.{key}", value)

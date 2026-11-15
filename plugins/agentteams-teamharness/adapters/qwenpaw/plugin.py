@@ -401,6 +401,7 @@ async def _manager_report_context(ctx: Any) -> bool:
         ctx.extras["coordinator_route_token"] = _coordinator_route.set(coordinator)
         ctx.inject_context("Send the verified final result to this coordinator replyRoute; the coordinator relays it to the original requester: " + json.dumps(coordinator), source="teamharness_coordinator_route")
     api_event = meta.get("teamharness_coordination") or {}
+    automatic_plan = api_event.get("dispatch_mode") == "automatic" and api_event.get("plan_type") != "loop"
     if api_event.get("kind") == "project_ready":
         project = await asyncio.to_thread(_controller_json, "projects/" + urllib.parse.quote(api_event["project_id"], safe="") + "/meta")
         nodes = project.get("tasks", [])
@@ -422,7 +423,7 @@ async def _manager_report_context(ctx: Any) -> bool:
             ctx.extras["execution_task_token"] = _execution_task.set(api_event["task_id"])
         elif task.get("status") != "submitted" or task.get("submission_id") != api_event.get("submission_id"):
             return True
-        elif os.getenv("AGENTTEAMS_AGENT_ROLE") in {"leader", "team_leader"}:
+        elif os.getenv("AGENTTEAMS_AGENT_ROLE") in {"leader", "team_leader"} and automatic_plan:
             ctx.extras["review_task_token"] = _review_task.set((api_event["task_id"], api_event["submission_id"]))
         ctx.inject_context("Authoritative task state was checked before execution: " + json.dumps({k:task.get(k) for k in ("task_id", "project_id", "status", "assigned_to", "spec_path", "result_path", "submission_id")}), source="teamharness_api_state")
     if os.getenv("AGENTTEAMS_AGENT_ROLE") != "manager":
@@ -439,15 +440,25 @@ async def _manager_report_context(ctx: Any) -> bool:
                 source="teamharness_acceptance_tools",
             )
         if os.getenv("AGENTTEAMS_AGENT_ROLE") in {"leader", "team_leader"} and os.getenv("TEAMHARNESS_COORDINATION_URL"):
+            if api_event.get("kind") == "task_submitted" and not automatic_plan:
+                ctx.inject_context(
+                    "Check and accept or return this submission, then continue your existing manual DAG or Loop "
+                    "iteration/delegation protocol. Do not end merely because one result was accepted. "
+                    "A Loop does not receive the finite project_ready closure event.",
+                    source="teamharness_manual_continuation",
+                )
+                return False
             ctx.inject_context(
                 "Your coordination transport is the Agent API. For a finite plan with known execution specs, "
                 "use projectflow start_project with dispatchMode automatic, all leaf specs, assignees and dependencies. "
                 "Accept checked results; the task system dispatches newly ready leaves. Matrix messages are progress "
                 "projections and do not wake Agents. Do not send duplicate assignments or poll for progress. "
-                "For task_submitted, check and accept or return only this submission, then end this turn. "
+                "For an automatic finite task_submitted, check and accept or return only this submission, then end this turn. "
                 "The Controller sends project_ready when all execution leaves are accepted. Only on project_ready, "
                 "verify the whole request and call complete_project with projectId and report (your concise final "
-                "user report). This closes coordinating parents, saves the report and notifies the requester in one operation.",
+                "user report). This closes coordinating parents, saves the report and notifies the requester in one operation. "
+                "For manual DAG or Loop plans, continue your existing iteration/delegation protocol after acceptance; "
+                "Loops do not wait for the finite project_ready event.",
                 source="teamharness_api_coordination",
             )
         return False

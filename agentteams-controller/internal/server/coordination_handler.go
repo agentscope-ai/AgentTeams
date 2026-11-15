@@ -54,6 +54,8 @@ type coordinationEvent struct {
 	External          bool           `json:"external,omitempty"`
 	EligibleAssignees []string       `json:"eligible_assignees,omitempty"`
 	FinalReport       string         `json:"final_report,omitempty"`
+	PlanType          string         `json:"-"`
+	DispatchMode      string         `json:"-"`
 }
 
 var coordinationSafeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -246,6 +248,8 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			return reject()
 		}
 		e.RoomID = coordinationString(project, "room_id")
+		e.PlanType = coordinationString(project, "plan_type")
+		e.DispatchMode = coordinationString(project, "dispatch_mode")
 		e.RequesterRoute = coordinationMap(project, "requester_reply_route")
 		var task map[string]any
 		if e.TaskID != "" {

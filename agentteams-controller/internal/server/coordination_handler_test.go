@@ -380,3 +380,27 @@ func TestCoordinationUsesRuntimeExecutionBudget(t *testing.T) {
 		t.Fatal("transport imposed a short execution deadline instead of the runtime budget")
 	}
 }
+
+func TestCoordinationPlanHintsUseCanonicalState(t *testing.T) {
+	h, s := coordinationFixture(t)
+	key := "teams/alpha/shared/projects/p1/meta.json"
+	b, _ := s.GetObject(context.Background(), key)
+	var p map[string]any
+	_ = json.Unmarshal(b, &p)
+	p["plan_type"] = "loop"
+	p["dispatch_mode"] = "automatic"
+	putProject(s, key, p)
+	e, err := h.resolve(context.Background(), coordinationEvent{Kind: "task_assigned", ProjectID: "p1", TaskID: "t1", DeliveryID: "delegate-1", PlanType: "dag", DispatchMode: "manual"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := coordinationPayload(e)["channel_meta"].(map[string]any)["teamharness_coordination"].(map[string]any)
+	if meta["plan_type"] != "loop" || meta["dispatch_mode"] != "automatic" {
+		t.Fatal("plan hints did not use canonical state")
+	}
+	e.Kind = "task_submitted"
+	input := coordinationPayload(e)["input"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(input, "manual DAG or Loop") {
+		t.Fatal("Loop received automatic finite continuation instructions")
+	}
+}

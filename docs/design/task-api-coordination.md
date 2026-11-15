@@ -42,7 +42,10 @@ once the original user conversation has actually received the report.
 The Leader can store a complete finite plan with `start_project` and
 `dispatchMode: automatic`. Accepting a checked result dispatches newly ready
 stored leaf specs without another routing decision. A matching durable
-acceptance ends the review turn without another model call. The Controller
+acceptance ends the review turn without another model call only for automatic
+finite plans. Canonical plan type and dispatch mode accompany the callback;
+manual DAG and Loop acceptance retains its existing iteration/delegation turn
+instead of being stopped after one result. The Controller
 owns the `project_ready` transition; the Leader handles whole-plan acceptance
 only in that closure turn. `complete_project` with a
 Leader-approved `report` closes coordinating parents only after every execution

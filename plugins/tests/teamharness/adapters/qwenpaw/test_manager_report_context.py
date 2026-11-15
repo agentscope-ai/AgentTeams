@@ -127,3 +127,18 @@ def test_api_final_report_is_relayed_only_after_canonical_validation(monkeypatch
     skip = asyncio.run(plugin._manager_report_context(ctx))
     assert (ctx.extras.get("verified_final_report") == report and bool(report)) is relay
     if relay: assert skip is True
+
+@pytest.mark.parametrize('plan_type,dispatch_mode,finish_review', [('dag','automatic',True),('dag','manual',False),('loop','automatic',False)])
+def test_only_automatic_finite_acceptance_ends_the_review_turn(monkeypatch,plan_type,dispatch_mode,finish_review):
+    spec=importlib.util.spec_from_file_location('plan_review_plugin',SOURCE)
+    plugin=importlib.util.module_from_spec(spec);spec.loader.exec_module(plugin)
+    monkeypatch.setenv('AGENTTEAMS_AGENT_ROLE','leader')
+    monkeypatch.setenv('TEAMHARNESS_COORDINATION_URL','http://controller/api/v1/coordination')
+    monkeypatch.setattr(plugin,'_controller_json',lambda path:{'task_id':'t','project_id':'p','status':'submitted','submission_id':'s'})
+    async def schemas():return []
+    texts=[]
+    meta={'teamharness_coordination':{'kind':'task_submitted','task_id':'t','project_id':'p','submission_id':'s','plan_type':plan_type,'dispatch_mode':dispatch_mode}}
+    ctx=SimpleNamespace(request=SimpleNamespace(channel_meta=meta),extras={},agent=SimpleNamespace(toolkit=SimpleNamespace(get_tool_schemas=schemas)),inject_context=lambda text,**kw:texts.append(text))
+    assert asyncio.run(plugin._manager_report_context(ctx)) is False
+    assert ('review_task_token' in ctx.extras) is finish_review
+    if not finish_review:assert any('continue' in t.lower() and ('manual' in t.lower() or 'loop' in t.lower()) for t in texts)

@@ -7,6 +7,9 @@ description: Manage AgentTeams resources through the Controller as Manager.
 
 You manage resources with the `agt` CLI. Your Controller token is already
 configured; never extract credentials to call the API manually.
+Use the commands documented in the relevant Skill before exploring the CLI.
+Only inspect help for the specific missing or rejected command/flag; do not
+repeat top-level help or try task/project mutations to supervise a Leader.
 
 ## Discover and change resources
 

@@ -51,6 +51,13 @@ Use the Leader's completion or blocker message as your next trigger. Do not
 sleep, poll (including bounded polling), or inspect task/tracing state merely
 to wait for the Leader. Do not take over the Leader's workflow.
 
+Query Tracing only when the user explicitly asks you to diagnose or analyze
+execution. Collection being enabled, slow progress, acknowledgements, and
+completion or blocker notifications do not authorize a diagnosis. Relay a
+blocker instead of starting an investigation yourself. If the user only asks
+for progress, make one targeted task/project lookup, report that snapshot,
+and end your turn; do not poll or query Tracing.
+
 When a Leader reports completion, a blocker, or a decision in another room,
 send the meaningful outcome to your admin DM (`member.personalRoomId`) with
 `message`. Do not leave the admin's result only in the Leader's room.

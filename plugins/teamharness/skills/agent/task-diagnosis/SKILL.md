@@ -1,6 +1,6 @@
 ---
 name: task-diagnosis
-description: Diagnose missing replies, runtime errors and slow execution using authorized task traces; as Manager, inspect component and Agent CPU, memory and container logs.
+description: Diagnose missing replies, runtime errors and slow execution using authorized task traces; as Manager, use only when the user explicitly requests diagnosis or execution analysis.
 ---
 
 # Diagnose Task Execution
@@ -9,6 +9,12 @@ Use this skill when you need to explain why an Agent conversation, session,
 or task failed, stalled, retried, or produced an unexpected result. You use your own Controller identity:
 as Leader you can inspect your team; as Manager you can inspect authorized
 teams. Never request or extract Langfuse project credentials.
+
+As Manager, start this workflow only when the user explicitly asks you to
+diagnose or analyze execution. Enabled trace collection, slow progress, and
+Leader/Worker acknowledgements, completion reports or blocker notifications
+are not diagnosis requests. For an ordinary progress question, query the
+relevant task/project once and report its state without reading Tracing.
 
 ## Inspect Runtime Health as Manager
 

@@ -64,7 +64,9 @@ admission or receipt lookup.
 
 The native console task API does not provide a durable idempotent admission
 lookup. If admission outcome is unknown, the Controller records failure for
-operator recovery rather than replaying a potentially side-effecting run. This
+operator recovery rather than replaying a potentially side-effecting run. A
+missing native execution receipt is also a visible terminal delivery failure;
+it is not retried forever or treated as proof of business completion. This
 transport does not claim exactly-once execution of external tools.
 
 Failed deliveries are projected with an idempotent receipt ID into the task

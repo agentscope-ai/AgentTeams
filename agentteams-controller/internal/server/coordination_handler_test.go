@@ -49,6 +49,49 @@ func TestCoordinationRoutesFromCanonicalTask(t *testing.T) {
 	}
 }
 
+func TestCoordinationActorUsesRegisteredCredentialName(t *testing.T) {
+	h, _ := coordinationFixture(t)
+	e, err := h.resolve(context.Background(), coordinationEvent{Kind: "handoff", Recipient: "@lead:test", OriginEventID: "source-event", SourceRoute: map[string]any{"target_session": "!source:test", "target_user": "@human:test"}}, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ActorName != "default" {
+		t.Fatalf("credential lookup used alias %s", e.ActorName)
+	}
+	e, err = h.resolve(context.Background(), coordinationEvent{Kind: "task_assigned", ProjectID: "p1", TaskID: "t1", DeliveryID: "delegate-1"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-runtime", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ActorName != "lead-cr" {
+		t.Fatalf("credential lookup used runtime name %s", e.ActorName)
+	}
+}
+
+func TestCoordinationMissingNativeReceiptFailsWithoutReplay(t *testing.T) {
+	h, _ := coordinationFixture(t)
+	posts := 0
+	native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			posts++
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer native.Close()
+	h.workerURL = func(string, map[string]string) string { return native.URL }
+	e, err := h.resolve(context.Background(), coordinationEvent{Kind: "task_assigned", ProjectID: "p1", TaskID: "t1", DeliveryID: "delegate-1"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.projectEvent = func(context.Context, coordinationEvent, string, string, string, string, string) (string, error) {
+		return "matrix-receipt", nil
+	}
+	d := coordinationDelivery{Event: e, Status: "running", NativeID: "lost-receipt"}
+	h.advance(context.Background(), &d, func() error { return nil })
+	if d.Status != "failed" || !strings.Contains(d.Error, "receipt") || posts != 0 {
+		t.Fatalf("missing receipt was not terminal: status=%s posts=%d error=%s", d.Status, posts, d.Error)
+	}
+}
+
 func TestCoordinationRejectsUnsafeEvents(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

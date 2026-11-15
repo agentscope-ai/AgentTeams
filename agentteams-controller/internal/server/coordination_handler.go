@@ -180,6 +180,7 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			return e, err
 		}
 		e.Actor = actor.Status.MatrixUserID
+		e.ActorName = actor.Name
 		recipient, err := h.worker(ctx, e.Recipient)
 		if err != nil {
 			return e, err
@@ -219,6 +220,7 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		if err != nil {
 			return e, err
 		}
+		e.ActorName = actor.Name
 		e.Actor = actor.Status.MatrixUserID
 		requiredRole := ""
 		if caller.Role == authpkg.RoleTeamLeader {

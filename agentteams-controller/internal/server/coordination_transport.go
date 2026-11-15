@@ -18,6 +18,8 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
 
+var errNativeReceiptMissing = errors.New("native execution receipt is missing")
+
 func (h *CoordinationHandler) native(ctx context.Context, method, target string, body any) (map[string]any, error) {
 	var input io.Reader
 	if body != nil {
@@ -37,6 +39,9 @@ func (h *CoordinationHandler) native(ctx context.Context, method, target string,
 		return nil, err
 	}
 	defer response.Body.Close()
+	if method == http.MethodGet && response.StatusCode == http.StatusNotFound {
+		return nil, errNativeReceiptMissing
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, fmt.Errorf("native HTTP %d", response.StatusCode)
 	}
@@ -192,6 +197,11 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 	h.projectApprovals(ctx, e, d)
 	result, err := h.native(ctx, "GET", e.TargetURL+"/api/console/chat/task/"+url.PathEscape(d.NativeID), nil)
 	if err != nil {
+		if errors.Is(err, errNativeReceiptMissing) {
+			d.Status = "failed"
+			d.Error = "native execution receipt no longer available; operator recovery required"
+			return
+		}
 		d.Error = "native execution status unavailable"
 		return
 	}

@@ -47,7 +47,7 @@ def test_ack_allows_exact_own_task_output_cleanup(cleanup):
 @pytest.mark.parametrize("target", ["meta.json", "spec.md", "result.md", "base", "inputs", "."])
 def test_task_control_and_inputs_do_not_gain_cleanup_permission(cleanup, target):
     _, root, _, decision = cleanup
-    assert decision("rm -rf "+str(root / target)) != "allow"
+    assert decision("rm -rf "+str(root)+"/"+target) != "allow"
 
 
 @pytest.mark.parametrize("change", ["cancelled", "new-owner", "new-delegation"])
@@ -84,3 +84,25 @@ def test_exact_own_output_move_is_allowed_but_other_tasks_are_protected(cleanup)
 def test_compound_output_move_returns_guidance_instead_of_requesting_approval(cleanup):
     _, root, _, decision = cleanup
     assert decision(f'cd "{root}" && cat output.txt > output.new && mv output.new output.txt') == "deny"
+
+
+@pytest.mark.parametrize("target", ["workspace/verify_docs_*", "workspace/run-*", "progress/check-?.log"])
+def test_wildcards_are_allowed_only_within_task_writable_directories(cleanup, target):
+    _, root, _, decision = cleanup
+    assert decision("rm -rf "+str(root / target)) == "allow"
+
+
+@pytest.mark.parametrize("target", ["meta*", "inputs/run-*", "workspace/../meta*", "workspace/run-*/outside", "workspace/run-*/"])
+def test_wildcard_cleanup_does_not_expand_scope(cleanup, target):
+    _, root, _, decision = cleanup
+    assert decision("rm -rf "+str(root)+"/"+target) != "allow"
+
+
+def test_wildcard_cleanup_keeps_symlink_and_assignment_fences(cleanup):
+    _, root, state, decision = cleanup
+    other = root.parent / "t2"; other.mkdir()
+    (root / "workspace").symlink_to(other, target_is_directory=True)
+    assert decision("rm -rf "+str(root / "workspace/run-*")) != "allow"
+    (root / "workspace").unlink(); (root / "workspace").mkdir()
+    state["notifyTxn"] = "different"
+    assert decision("rm -rf "+str(root / "workspace/run-*")) != "allow"

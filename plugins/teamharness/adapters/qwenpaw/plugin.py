@@ -107,21 +107,31 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 plain = re.sub(r"^export QWENPAW_SESSION_ID='[^'\r\n]*' && ", "", command, count=1)
                 base = Path(cwd) if cwd else None
                 words = shlex.split(plain)
+                pattern_cleanup = False
                 if words and words[0] in {"mv", "/bin/mv", "/usr/bin/mv"}:
                     if len(words) != 3 or re.search(r"[;&|<>`$\n*?(){}\[\]]", plain) or not all(Path(p).is_absolute() for p in words[1:]):
                         return False
                 elif not is_private_cleanup(plain, root, None, base):
-                    return False
+                    if (not words or words[0] not in {"rm", "/bin/rm", "/usr/bin/rm"}
+                            or re.search(r"[;&|<>`$\n(){}]", plain)
+                            or not any(re.search(r"[*?\[]", word) for word in words[1:])
+                            or any(word.startswith("-") and word not in {"-r", "-f", "-rf", "-fr", "--recursive", "--force", "--"} for word in words[1:])):
+                        return False
+                    pattern_cleanup = True
                 for word in words[1:]:
                     if word.startswith("-"):
                         continue
                     target = Path(word)
+                    if pattern_cleanup and (word.endswith("/") or re.search(r"[*?\[]", str(target.parent))):
+                        return False
                     # Do not interpret relative paths against a guessed cwd.
                     if not target.is_absolute() and base is None:
                         return False
                     target = (target if target.is_absolute() else base / target).resolve()
                     relative = target.relative_to(root)
                     if not relative.parts or relative.parts[0] in {"meta.json", "spec.md", "result.md", "base", "inputs"}:
+                        return False
+                    if pattern_cleanup and (len(relative.parts) < 2 or relative.parts[0] not in {"workspace", "progress"}):
                         return False
                 current = await asyncio.to_thread(_controller_json, "tasks/" + urllib.parse.quote(task_id, safe="") + "/meta")
                 return (current.get("task_id") == task_id and current.get("status") == "in_progress"

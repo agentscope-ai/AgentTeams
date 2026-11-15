@@ -35,6 +35,8 @@ class NativeCoordinationTest(unittest.TestCase):
                 return await middleware.on_check_permission(None, {"tool_call":SimpleNamespace(name="execute_shell_command"),
                     "tool_input":{"command":command}}, native)
             self.assertEqual(asyncio.run(decide(f'mv {root}/new {root}/output')).behavior, PermissionBehavior.ALLOW)
+            self.assertEqual(asyncio.run(decide(f'rm -rf {root}/workspace/run-*')).behavior, PermissionBehavior.ALLOW)
+            self.assertEqual(asyncio.run(decide(f'rm -rf {root}/inputs/run-*')).behavior, PermissionBehavior.ASK)
             self.assertEqual(asyncio.run(decide(f'mv {root}/new {root.parent}/other/output')).behavior, PermissionBehavior.ASK)
             self.assertEqual(asyncio.run(decide(f'cd {root} && mv new output')).behavior, PermissionBehavior.DENY)
             state["status"] = "cancelled"

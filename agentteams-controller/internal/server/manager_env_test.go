@@ -38,6 +38,9 @@ func TestManagerEnvRoundTrip(t *testing.T) {
 		if returned["envEditable"] != true {
 			t.Fatal("missing environment editing capability")
 		}
+		if returned["env"] == nil {
+			t.Fatal("editable environment must return an explicit object, including when empty")
+		}
 		if body == `{"env":{}}` {
 			if len(saved.Spec.Env) != 0 {
 				t.Fatal("empty env did not clear variables")
@@ -59,7 +62,7 @@ func TestManagerEnvRoundTrip(t *testing.T) {
 		if err := json.Unmarshal(read.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)
 		}
-		if !response.Editable || len(response.Env) != len(saved.Spec.Env) || response.Env["API_KEY"] != saved.Spec.Env["API_KEY"] {
+		if !response.Editable || response.Env == nil || len(response.Env) != len(saved.Spec.Env) || response.Env["API_KEY"] != saved.Spec.Env["API_KEY"] {
 			t.Fatal("saved env did not read back")
 		}
 	}

@@ -1703,6 +1703,9 @@ func (h *ResourceHandler) GetManager(w http.ResponseWriter, r *http.Request) {
 	resp := managerToResponse(&mgr)
 	if canManageWorkerEnv(r) {
 		resp.Env = mgr.Spec.Env
+		if resp.Env == nil {
+			resp.Env = map[string]string{}
+		}
 		resp.EnvEditable = true
 	}
 	httputil.WriteJSON(w, http.StatusOK, resp)
@@ -1799,6 +1802,9 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 		resp := managerToResponse(&mgr)
 		if canManageWorkerEnv(r) {
 			resp.Env = mgr.Spec.Env
+			if resp.Env == nil {
+				resp.Env = map[string]string{}
+			}
 			resp.EnvEditable = true
 		}
 		httputil.WriteJSON(w, http.StatusOK, resp)
@@ -1983,7 +1989,7 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 
 func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 	resp := ManagerResponse{
-		Ready: m.Status.Ready,
+		Ready:         m.Status.Ready,
 		Name:          m.Name,
 		Phase:         m.Status.Phase,
 		State:         m.Spec.DesiredState(),

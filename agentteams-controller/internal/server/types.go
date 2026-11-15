@@ -665,7 +665,7 @@ type UpdateManagerRequest struct {
 }
 
 type ManagerResponse struct {
-	Ready bool `json:"ready"`
+	Ready bool   `json:"ready"`
 	Name  string `json:"name"`
 	Phase string `json:"phase"`
 	State string `json:"state,omitempty"` // desired lifecycle state
@@ -688,7 +688,7 @@ type ManagerResponse struct {
 	WelcomeSent bool `json:"welcomeSent"`
 
 	// Environment values are returned only by privileged detail/update requests.
-	Env         map[string]string `json:"env,omitempty"`
+	Env         map[string]string `json:"env,omitzero"`
 	EnvEditable bool              `json:"envEditable,omitempty"`
 }
 

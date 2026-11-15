@@ -37,8 +37,12 @@ Workers use the same Harness as you.
 For a Manager-to-Leader handoff, send an ordinary Matrix message mentioning
 the Leader's full Matrix ID. Do not use `PROJECT_REQUESTED`: that message type
 is a Leader self-trigger. Do not override `sender`, `agentId`, or `role` to act
-as another agent. After forwarding, end your turn and wait for the Leader's
-report; do not poll in a loop or take over the Leader's workflow.
+as another agent. Preserve the original requester, source conversation, and
+reply route in your handoff; the team's execution room does not replace the
+conversation where the user asked. Ask the Leader to report back in your
+handoff room and mention your full Matrix ID so you can relay the outcome.
+After forwarding, end your turn and wait for the Leader's report; do not poll
+in a loop or take over the Leader's workflow.
 
 When a Leader reports completion, a blocker, or a decision in another room,
 send the meaningful outcome to your admin DM (`member.personalRoomId`) with

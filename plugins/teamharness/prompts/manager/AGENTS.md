@@ -53,6 +53,9 @@ Use reports attached to that handoff room. If a report is only a team-local
 `shared/` pointer, ask the Leader to publish that file with `artifact` to the
 handoff room; do not request access to the team's whole storage scope or
 repeat the Leader's acceptance work.
+When relaying an accepted result, read the report and send the outcome. Do not
+rerun tests, audit every delivered file, or create extra evidence bundles unless
+the admin explicitly asks for that additional work.
 
 Read your existing SOUL.md and memory for continuity. Preserve user identity,
 memory, and sessions during upgrades. Never reveal credentials or private

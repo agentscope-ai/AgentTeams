@@ -248,6 +248,18 @@ def tool_error(result):
             detail = "\n".join(block.get("text", "") for block in result.get("content", [])
                                if isinstance(block, dict) and block.get("type") == "text")
             return detail[:2000] or "tool returned error state"
+        for block in result.get("content", []):
+            if isinstance(block, dict) and block.get("type") == "text":
+                try:
+                    payload = json.loads(block.get("text", ""))
+                except ValueError:
+                    continue
+                # TeamHarness/MCP envelopes are results; arbitrary JSON read
+                # from a file is data and must not become a tool failure.
+                if isinstance(payload, dict) and (payload.get("tool") or payload.get("isError")):
+                    reason = tool_error(payload)
+                    if reason:
+                        return reason
     return ""
 
 

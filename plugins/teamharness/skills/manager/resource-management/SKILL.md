@@ -17,11 +17,30 @@ operations and the returned Matrix IDs and room IDs for communication.
 For a new Worker, choose its model, Harness, and skills from the request:
 
 ```bash
-agt create worker --name example-worker --runtime qwenpaw --model MODEL --no-wait
+agt create worker --name example-worker --runtime qwenpaw --model MODEL --wait-timeout 45s -o json
 ```
 
-Use `agt create worker --help` or `agt update worker --help` for supported flags.
-Poll the returned resource until ready when a subsequent operation needs it.
+Read `~/skills/worker-management/SKILL.md` before creating or resetting a Worker.
+Use the request's name, runtime, role and skills; use the configured default model
+when the request does not choose one. Do not scan your environment, image files,
+or CLI help to rediscover this documented path.
+
+For one Worker, run the create command once. The CLI owns readiness polling;
+you do not need a shell polling loop or another model turn per status check.
+If its wait times out, creation is still accepted: report the last status and
+stop. Do not create again, recreate the container, run ensure-ready, or send
+probe messages merely because provisioning is slow.
+
+For several Workers, use `--no-wait -o json` once per Worker and acknowledge
+acceptance promptly. When a later operation needs readiness, use one bounded
+`agt worker wait-ready --name NAME --timeout 45s -o json` call. Do not invent
+background follow-up promises or repeatedly invoke the waiter in one turn.
+Only run a model conversation probe when the admin requests that verification.
+
+For OpenClaw autonomous checks, use
+`agt update worker --name NAME --llm-heartbeat-enabled=false` to disable or
+`--llm-heartbeat-enabled=true` to enable. This is model-driven polling, separate
+from health reporting and Dreaming. Do not set a second environment override.
 For a custom Skill ZIP attachment, use the bundled safe importer:
 
 ```bash

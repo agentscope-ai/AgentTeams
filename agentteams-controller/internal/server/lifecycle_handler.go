@@ -433,7 +433,7 @@ func (h *LifecycleHandler) GetWorkerRuntimeStatus(w http.ResponseWriter, r *http
 		writeK8sError(w, "get worker team membership", terr)
 		return
 	} else if ok {
-		applyTeamMember(&resp, team, member)
+		applyTeamMember(&resp, team, member, worker.Spec.LlmHeartbeatEnabled)
 	}
 
 	b := h.registry.DetectWorkerBackend(r.Context())

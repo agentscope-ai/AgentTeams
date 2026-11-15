@@ -30,19 +30,20 @@ func createCmd() *cobra.Command {
 
 func createWorkerCmd() *cobra.Command {
 	var (
-		name        string
-		model       string
-		runtime     string
-		image       string
-		identity    string
-		soul        string
-		soulFile    string
-		skills      string
-		packageURI  string
-		expose      string
-		outputFmt   string
-		waitTimeout time.Duration
-		noWait      bool
+		name                string
+		model               string
+		runtime             string
+		image               string
+		identity            string
+		soul                string
+		soulFile            string
+		skills              string
+		packageURI          string
+		expose              string
+		outputFmt           string
+		waitTimeout         time.Duration
+		noWait              bool
+		llmHeartbeatEnabled bool
 	)
 
 	cmd := &cobra.Command{
@@ -89,6 +90,9 @@ func createWorkerCmd() *cobra.Command {
 			setIfNotEmpty(req, "identity", identity)
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
+			if cmd.Flags().Changed("llm-heartbeat-enabled") {
+				req["llmHeartbeatEnabled"] = llmHeartbeatEnabled
+			}
 			if skills != "" {
 				req["skills"] = splitCSV(skills)
 			}
@@ -142,6 +146,7 @@ func createWorkerCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&outputFmt, "output", "o", "", "Output format (json)")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 3*time.Minute, "Maximum time to wait for the Worker to report Ready")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return immediately after the controller accepts the create request, without polling for Ready")
+	cmd.Flags().BoolVar(&llmHeartbeatEnabled, "llm-heartbeat-enabled", false, "Enable OpenClaw model-driven autonomous checks (default off)")
 	return cmd
 }
 

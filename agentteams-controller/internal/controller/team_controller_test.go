@@ -1610,6 +1610,28 @@ func TestReconcileTeamTeamReferences_HeartbeatFromTeamCR(t *testing.T) {
 	if hbReq.WorkerName != "lead" {
 		t.Errorf("heartbeat WorkerName=%q, want lead", hbReq.WorkerName)
 	}
+
+	// An explicit Worker switch must survive the Team's later policy overlay.
+	var updated v1beta1.Worker
+	if err := c.Get(ctx, client.ObjectKeyFromObject(leaderWorker), &updated); err != nil {
+		t.Fatal(err)
+	}
+	disabled := false
+	updated.Spec.LlmHeartbeatEnabled = &disabled
+	if err := c.Update(ctx, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.reconcileTeam(ctx, team, client.MergeFrom(team.DeepCopy())); err != nil {
+		t.Fatal(err)
+	}
+	last := deployer.Calls.InjectHeartbeatConfig[len(deployer.Calls.InjectHeartbeatConfig)-1]
+	if last.Enabled || last.Every != "0m" {
+		t.Fatalf("Team restored disabled heartbeat: %#v", last)
+	}
+	coord := deployer.Calls.InjectCoordinationContext[len(deployer.Calls.InjectCoordinationContext)-1]
+	if coord.HeartbeatEvery != "" {
+		t.Fatalf("disabled Leader still instructed to poll: %#v", coord)
+	}
 }
 
 func TestWorkerToTeamMapFunc(t *testing.T) {

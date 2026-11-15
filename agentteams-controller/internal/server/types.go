@@ -8,6 +8,7 @@ import (
 // --- Worker API types ---
 
 type CreateWorkerRequest struct {
+	LlmHeartbeatEnabled          *bool                              `json:"llmHeartbeatEnabled,omitempty"`
 	Env                          map[string]string                  `json:"env,omitempty"`
 	Name                         string                             `json:"name"`
 	WorkerName                   string                             `json:"workerName,omitempty"`
@@ -48,9 +49,10 @@ type CreateWorkerRequest struct {
 // UpdateWorkerRequest preserves modelProvider when omitted or null and clears it
 // when an explicit empty string is supplied.
 type UpdateWorkerRequest struct {
-	Env        map[string]string `json:"env,omitempty"`
-	WorkerName string            `json:"workerName,omitempty"`
-	Model      string            `json:"model,omitempty"`
+	LlmHeartbeatEnabled *bool             `json:"llmHeartbeatEnabled,omitempty"`
+	Env                 map[string]string `json:"env,omitempty"`
+	WorkerName          string            `json:"workerName,omitempty"`
+	Model               string            `json:"model,omitempty"`
 	// SubagentModel is a pointer so callers can distinguish omission (nil:
 	// keep the current value) from an explicit clear ("" — the worker
 	// returns to inheriting the team default / the runtime default).
@@ -90,14 +92,15 @@ type UpdateWorkerRequest struct {
 }
 
 type WorkerResponse struct {
-	EnvEditable      bool              `json:"envEditable"`
-	Env              map[string]string `json:"env,omitempty"`
-	Name             string            `json:"name"`
-	WorkerName       string            `json:"workerName,omitempty"`
-	Phase            string            `json:"phase"`
-	ContainerManaged bool              `json:"containerManaged"`
-	State            string            `json:"state,omitempty"` // desired lifecycle state
-	Model            string            `json:"model,omitempty"`
+	LlmHeartbeatEnabled *bool             `json:"llmHeartbeatEnabled,omitempty"`
+	EnvEditable         bool              `json:"envEditable"`
+	Env                 map[string]string `json:"env,omitempty"`
+	Name                string            `json:"name"`
+	WorkerName          string            `json:"workerName,omitempty"`
+	Phase               string            `json:"phase"`
+	ContainerManaged    bool              `json:"containerManaged"`
+	State               string            `json:"state,omitempty"` // desired lifecycle state
+	Model               string            `json:"model,omitempty"`
 	// ModelProvider is the worker's LLM provider (WorkerSpec.ModelProvider,
 	// an APIG Model API name). The model alias alone does not select the
 	// upstream when the deployment has several Higress providers.
@@ -192,6 +195,7 @@ type workerListProjection struct {
 
 // WorkerSpecView is the fields=spec projection of a worker.
 type WorkerSpecView struct {
+	LlmHeartbeatEnabled          *bool             `json:"llmHeartbeatEnabled,omitempty"`
 	Name                         string            `json:"name"`
 	WorkerName                   string            `json:"workerName,omitempty"`
 	ContainerManaged             bool              `json:"containerManaged"`
@@ -243,6 +247,7 @@ type WorkerStatusView struct {
 // WorkerSpecStatusView is the fields=spec,status projection: the union of
 // WorkerSpecView and WorkerStatusView in WorkerResponse field order.
 type WorkerSpecStatusView struct {
+	LlmHeartbeatEnabled          *bool             `json:"llmHeartbeatEnabled,omitempty"`
 	Name                         string            `json:"name"`
 	WorkerName                   string            `json:"workerName,omitempty"`
 	Phase                        string            `json:"phase"`
@@ -284,6 +289,7 @@ type WorkerSpecStatusView struct {
 // configuration fields (GET /api/v1/workers?fields=spec).
 func (r WorkerResponse) SpecView() WorkerSpecView {
 	return WorkerSpecView{
+		LlmHeartbeatEnabled:          r.LlmHeartbeatEnabled,
 		Name:                         r.Name,
 		WorkerName:                   r.WorkerName,
 		ContainerManaged:             r.ContainerManaged,
@@ -339,6 +345,7 @@ func (r WorkerResponse) StatusView() WorkerStatusView {
 // union (GET /api/v1/workers?fields=spec,status).
 func (r WorkerResponse) SpecStatusView() WorkerSpecStatusView {
 	return WorkerSpecStatusView{
+		LlmHeartbeatEnabled:          r.LlmHeartbeatEnabled,
 		Name:                         r.Name,
 		WorkerName:                   r.WorkerName,
 		Phase:                        r.Phase,

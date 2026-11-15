@@ -47,12 +47,13 @@ type WorkerConfigRequest struct {
 	// SubagentModelName optionally names the model for spawned subagents
 	// (QwenPaw >= 2.1.1 native subagent_model). Written to
 	// agents.defaults.model.subagent when non-empty.
-	SubagentModelName string
-	AIGatewayURL      string           // per-worker AI Gateway URL override (from modelProvider)
-	TeamLeaderName    string           // if non-empty, this is a team worker
-	ChannelPolicy     *ChannelPolicy   // optional communication policy overrides
-	Heartbeat         *HeartbeatConfig // optional: team leader heartbeat settings
-	Runtime           string           // agent runtime (openclaw | copaw | hermes | qwenpaw | deepseek-harness)
+	SubagentModelName   string
+	AIGatewayURL        string           // per-worker AI Gateway URL override (from modelProvider)
+	TeamLeaderName      string           // if non-empty, this is a team worker
+	ChannelPolicy       *ChannelPolicy   // optional communication policy overrides
+	Heartbeat           *HeartbeatConfig // optional: team leader heartbeat settings
+	LlmHeartbeatEnabled *bool            // explicit Worker override for OpenClaw autonomous checks
+	Runtime             string           // agent runtime (openclaw | copaw | hermes | qwenpaw | deepseek-harness)
 }
 
 // ChannelPolicy describes additive/subtractive communication rules.

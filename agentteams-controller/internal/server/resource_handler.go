@@ -13,6 +13,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
@@ -150,6 +151,10 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	if !h.validateWorkerEnvRequest(w, r, req.Env) {
 		return
 	}
+	if req.LlmHeartbeatEnabled != nil && !canManageWorkerEnv(r) {
+		httputil.WriteError(w, http.StatusForbidden, "only Manager or platform Admin can change autonomous checks")
+		return
+	}
 
 	// containerManaged default is true (controller manages container).
 	containerManaged := true
@@ -167,6 +172,10 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = h.defaultWorkerModel
 	}
+	if req.LlmHeartbeatEnabled != nil && runtime != "openclaw" {
+		httputil.WriteError(w, http.StatusBadRequest, "llmHeartbeatEnabled is supported for OpenClaw Workers only")
+		return
+	}
 
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
@@ -174,6 +183,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Namespace: h.namespace,
 		},
 		Spec: v1beta1.WorkerSpec{
+			LlmHeartbeatEnabled:          req.LlmHeartbeatEnabled,
 			Env:                          req.Env,
 			Model:                        req.Model,
 			SubagentModel:                req.SubagentModel,
@@ -249,7 +259,7 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 			writeK8sError(w, "get worker", terr)
 			return
 		} else if ok {
-			applyTeamMember(&resp, team, member)
+			applyTeamMember(&resp, team, member, worker.Spec.LlmHeartbeatEnabled)
 		}
 		// Scoped readers (team leaders or humans) may only fetch workers in
 		// the teams they control; L3 (worker-scoped) humans may additionally
@@ -489,7 +499,7 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 			resp.EnvEditable = false
 		}
 		if hit, ok := teamIndex[list.Items[i].Name]; ok {
-			applyTeamMember(&resp, hit.team, hit.member)
+			applyTeamMember(&resp, hit.team, hit.member, list.Items[i].Spec.LlmHeartbeatEnabled)
 		}
 		// Scoped readers (team leaders or humans) only see the workers in
 		// the teams they control; L3 (worker-scoped) humans only see their
@@ -538,6 +548,10 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 	if !h.validateWorkerEnvRequest(w, r, req.Env) {
 		return
 	}
+	if req.LlmHeartbeatEnabled != nil && !canManageWorkerEnv(r) {
+		httputil.WriteError(w, http.StatusForbidden, "only Manager or platform Admin can change autonomous checks")
+		return
+	}
 
 	ctx := r.Context()
 	caller := authpkg.CallerFromContext(ctx)
@@ -570,6 +584,17 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		// (return to team default / runtime default).
 		if req.SubagentModel != nil {
 			worker.Spec.SubagentModel = *req.SubagentModel
+		}
+		if req.LlmHeartbeatEnabled != nil {
+			runtime := worker.Spec.Runtime
+			if req.Runtime != "" {
+				runtime = req.Runtime
+			}
+			if runtime != "openclaw" {
+				httputil.WriteError(w, http.StatusBadRequest, "llmHeartbeatEnabled is supported for OpenClaw Workers only")
+				return
+			}
+			worker.Spec.LlmHeartbeatEnabled = req.LlmHeartbeatEnabled
 		}
 		if req.LlmStreamFirstContentTimeout != nil {
 			worker.Spec.LlmStreamFirstContentTimeout = *req.LlmStreamFirstContentTimeout
@@ -1874,6 +1899,10 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		LastRunAt:                    w.Status.LastRunAt,
 		LastFinishAt:                 w.Status.LastFinishAt,
 	}
+	if w.Spec.Runtime == "openclaw" {
+		enabled := w.Spec.LlmHeartbeatEnabled != nil && *w.Spec.LlmHeartbeatEnabled
+		resp.LlmHeartbeatEnabled = &enabled
+	}
 	resp.RuntimeDeprecated = strings.EqualFold(w.Spec.Runtime, backend.RuntimeCopaw)
 	if resp.Phase == "" {
 		resp.Phase = "Pending"
@@ -2098,6 +2127,9 @@ func (h *ResourceHandler) checkScopedWorkerUpdate(ctx context.Context, caller *a
 		return http.StatusForbidden, "team leaders cannot update Worker resources; ask Manager or platform Admin"
 	}
 	var forbidden []string
+	if req.LlmHeartbeatEnabled != nil {
+		forbidden = append(forbidden, "llmHeartbeatEnabled")
+	}
 	if req.WorkerName != "" {
 		forbidden = append(forbidden, "workerName")
 	}
@@ -2283,9 +2315,14 @@ func findTeamMember(ctx context.Context, c client.Client, namespace, name string
 	return nil, "", false, nil
 }
 
-func applyTeamMember(resp *WorkerResponse, t *v1beta1.Team, memberName string) {
+func applyTeamMember(resp *WorkerResponse, t *v1beta1.Team, memberName string, heartbeatOverride *bool) {
 	resp.Team = t.Name
 	resp.Role = teamMemberRole(t, memberName)
+	if resp.LlmHeartbeatEnabled != nil && resp.Role == "team_leader" {
+		hb := agentconfig.ResolveLLMHeartbeat(heartbeatOverride,
+			&agentconfig.HeartbeatConfig{Enabled: t.Spec.HeartbeatEvery != "" && t.Spec.HeartbeatEvery != "0m", Every: t.Spec.HeartbeatEvery})
+		resp.LlmHeartbeatEnabled = &hb.Enabled
+	}
 	if ms := t.Status.MemberByName(memberName); ms != nil {
 		if resp.RoomID == "" {
 			resp.RoomID = ms.RoomID

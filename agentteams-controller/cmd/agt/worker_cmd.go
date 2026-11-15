@@ -18,7 +18,40 @@ func workerCmd() *cobra.Command {
 	cmd.AddCommand(workerSleepCmd())
 	cmd.AddCommand(workerEnsureReadyCmd())
 	cmd.AddCommand(workerStatusCmd())
+	cmd.AddCommand(workerWaitReadyCmd())
 	cmd.AddCommand(workerReportReadyCmd())
+	return cmd
+}
+
+// Wait without changing lifecycle state or asking an agent to poll repeatedly.
+func workerWaitReadyCmd() *cobra.Command {
+	var name, output string
+	var timeout time.Duration
+	cmd := &cobra.Command{
+		Use:   "wait-ready",
+		Short: "Wait for an existing Worker to report ready",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateWorkerName(name); err != nil {
+				return err
+			}
+			if timeout <= 0 {
+				return fmt.Errorf("--timeout must be positive")
+			}
+			status, err := waitForWorkerReady(NewAPIClient(), name, timeout)
+			if err != nil {
+				return err
+			}
+			if output == "json" {
+				printJSON(status)
+			} else {
+				fmt.Printf("worker/%s ready\n", name)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "Existing Worker name (required)")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Output format (json)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 45*time.Second, "Maximum readiness wait; timeout does not delete or recreate the Worker")
 	return cmd
 }
 

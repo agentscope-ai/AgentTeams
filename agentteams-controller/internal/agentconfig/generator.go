@@ -254,8 +254,12 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		},
 	}
 
-	// Add heartbeat config for team leaders
-	if req.Heartbeat != nil && req.Heartbeat.Enabled {
+	// OpenClaw enrolls an implicit heartbeat when the key is absent. Its strict
+	// schema accepts every, not enabled; explicitly write 0m for ordinary Workers.
+	if req.Runtime == "" || req.Runtime == "openclaw" {
+		hb := ResolveLLMHeartbeat(req.LlmHeartbeatEnabled, req.Heartbeat)
+		config["agents"].(map[string]interface{})["defaults"].(map[string]interface{})["heartbeat"] = map[string]interface{}{"every": hb.Every}
+	} else if req.Heartbeat != nil && req.Heartbeat.Enabled {
 		agents := config["agents"].(map[string]interface{})
 		defaults := agents["defaults"].(map[string]interface{})
 		hb := map[string]interface{}{"enabled": true}
@@ -653,9 +657,8 @@ func (g *Generator) allModelAliases(pid, selectedModel, subagentModel string) ma
 
 // InjectHeartbeat reads existing openclaw.json bytes, injects or updates the
 // heartbeat configuration under agents.defaults.heartbeat, and returns the
-// updated JSON bytes. If enabled is false or every is empty, the heartbeat
-// key is removed.
-func InjectHeartbeat(existing []byte, enabled bool, every string) []byte {
+// updated JSON bytes. Disabled OpenClaw checks use every=0m, never omission.
+func InjectHeartbeat(existing []byte, enabled bool, every, runtime string) []byte {
 	var config map[string]interface{}
 	if len(existing) > 0 {
 		_ = json.Unmarshal(existing, &config)
@@ -674,7 +677,10 @@ func InjectHeartbeat(existing []byte, enabled bool, every string) []byte {
 		agents["defaults"] = defaults
 	}
 
-	if enabled && every != "" {
+	if runtime == "" || runtime == "openclaw" {
+		hb := ResolveLLMHeartbeat(nil, &HeartbeatConfig{Enabled: enabled, Every: every})
+		defaults["heartbeat"] = map[string]interface{}{"every": hb.Every}
+	} else if enabled && every != "" {
 		defaults["heartbeat"] = map[string]interface{}{"enabled": true, "every": every}
 	} else {
 		delete(defaults, "heartbeat")

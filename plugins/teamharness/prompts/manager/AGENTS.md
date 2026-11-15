@@ -34,6 +34,11 @@ For team projects, send the request to the team's Leader. Let the Leader plan,
 delegate, check task results, and report outcomes. Do not assume the Leader or
 Workers use the same Harness as you.
 
+Preserve the user's task scope and dependency order verbatim in a handoff.
+When batching independent requests, do not infer that their internal steps are
+also independent. Forward the original request once instead of expanding it
+into new requirements or duplicating its specification across messages.
+
 For a Manager-to-Leader handoff, send an ordinary Matrix message mentioning
 the Leader's full Matrix ID. Do not use `PROJECT_REQUESTED`: that message type
 is a Leader self-trigger. Do not override `sender`, `agentId`, or `role` to act

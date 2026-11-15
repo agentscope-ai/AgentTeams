@@ -79,6 +79,7 @@ def _prepare(
     with_workspace: bool = True,
 ) -> _SendCapture | None:
     capture: _SendCapture | None = None
+    monkeypatch.setenv("AGENTTEAMS_SHARED_STORAGE_PREFIX", "teams/test/shared")
     for key in ("TEAMHARNESS_SHARED_DIR", "AGENTTEAMS_SHARED_DIR", "QWENPAW_WORKING_DIR", "COPAW_WORKING_DIR"):
         monkeypatch.delenv(key, raising=False)
     if with_workspace:
@@ -317,3 +318,26 @@ def test_self_trigger_type_keeps_exact_body(
     # 8 lines, but the PROJECT_REQUESTED contract keeps the exact body.
     assert sent["content"]["body"] == text
     assert "fullReportPath" not in sent
+
+
+@pytest.mark.parametrize("explicit_storage", [True, False])
+def test_global_report_pointer_resolves_from_a_team_workspace(tmp_path, monkeypatch, explicit_storage):
+    _prepare(tmp_path, monkeypatch)
+    from mcp.artifact.filesync import _resolve_filesync
+
+    text = "\n".join([f"{LEADER} task handoff"] + [f"requirement {i}" for i in range(2, 9)])
+    manager_storage = {"sharedPrefix": "storage/shared", "globalSharedPrefix": "storage/shared"}
+    team_storage = {"sharedPrefix": "storage/teams/team-a/shared", "globalSharedPrefix": "storage/shared"}
+    if explicit_storage:
+        sent = _send(tmp_path, text, dry_run=True, storage=manager_storage)
+    else:
+        monkeypatch.delenv("AGENTTEAMS_SHARED_STORAGE_PREFIX")
+        monkeypatch.setenv("AGENTTEAMS_STORAGE_PREFIX", "storage")
+        sent = _send(tmp_path, text, dry_run=True)
+    read_path = _report_relpath(text).replace("shared/", "global-shared/", 1)
+    assert sent["content"]["body"].endswith(read_path)
+    sender = _resolve_filesync({"action": "stat", "workspaceDir": str(tmp_path), "path": sent["fullReportPath"], "storage": manager_storage})
+    receiver = _resolve_filesync({"action": "cat", "workspaceDir": str(tmp_path / "receiver"), "path": read_path, "storage": team_storage})
+    assert sender[3] == receiver[3]
+    assert sent["content"]["m.mentions"] == {"user_ids": [LEADER]}
+    assert not (tmp_path / "shared/reports").exists()

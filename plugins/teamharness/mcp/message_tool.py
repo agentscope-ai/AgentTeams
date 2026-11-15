@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from mcp.common.paths import _optional_workspace_dir
+from mcp.common.paths import _default_global_shared_prefix, _default_shared_prefix, _optional_workspace_dir
 from mcp.common import refs
 
 _filesync = refs.proxy("_filesync")
@@ -418,7 +418,15 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
                 digest = hashlib.sha256(f"{target_id}\0{message_text}".encode("utf-8")).hexdigest()[:16]
                 report_relpath = f"shared/reports/{digest}/report.md"
                 report_path = workspace_dir / report_relpath
-                send_text = "\n".join(lines[:5]) + f"\n…中间 {len(lines) - 5} 行见 {report_relpath}"
+                storage = arguments.get("storage") if isinstance(arguments.get("storage"), dict) else {}
+                shared_prefix = str(storage.get("sharedPrefix") or _default_shared_prefix()).strip("/")
+                global_prefix = str(storage.get("globalSharedPrefix") or _default_global_shared_prefix()).strip("/")
+                # A Manager's shared tree is global; a Team receiver's shared
+                # tree is not. Use the existing read-only global namespace.
+                read_path = report_relpath
+                if shared_prefix == global_prefix:
+                    read_path = report_relpath.replace("shared/", "global-shared/", 1)
+                send_text = "\n".join(lines[:5]) + f"\n…中间 {len(lines) - 5} 行见 {read_path}"
     content = deps.matrix_content(send_text, mentions)
     trigger = _self_trigger_intent(arguments, route, channel=channel, target_id=target_id)
     if _message_type(arguments) in SELF_TRIGGER_MESSAGE_TYPES and trigger is None:

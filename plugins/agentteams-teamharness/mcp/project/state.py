@@ -65,6 +65,13 @@ def _normalize_task(raw: dict[str, Any], previous: dict[str, Any] | None = None)
     }
     if cancellation:
         normalized["cancellation"] = dict(cancellation)
+    parent = previous.get("parent_task_id", "")
+    for key in ("parentTaskId", "parent_task_id"):
+        if key in raw:
+            parent = raw[key]
+            break
+    if parent:
+        normalized["parent_task_id"] = _safe_id(parent, "parentTaskId")
     return normalized
 
 
@@ -120,6 +127,22 @@ def _validate_task_graph(tasks: list[dict[str, Any]]) -> None:
 
     for task_id in deps_by_id:
         visit(task_id, [])
+
+    by_id = {task["task_id"]: task for task in tasks}
+    for task in tasks:
+        path = {task["task_id"]}
+        parent = task.get("parent_task_id")
+        while parent:
+            if parent not in by_id:
+                raise ValueError(f"task {task['task_id']} has unknown parent: {parent}")
+            if parent in path:
+                raise ValueError(f"task parent cycle detected: {parent}")
+            path.add(parent)
+            parent = by_id[parent].get("parent_task_id")
+    for task in tasks:
+        parent = task.get("parent_task_id")
+        if parent and by_id[parent].get("status") == "completed" and task.get("status") != "completed":
+            raise ValueError(f"task {parent} has unfinished subtasks")
 
 
 def _safe_loop_status(value: Any) -> str:
@@ -214,8 +237,11 @@ def _ready_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     tasks = project.get("tasks", []) if isinstance(project.get("tasks"), list) else []
     status_by_id = {task.get("task_id"): task.get("status") for task in tasks}
+    parents = {task.get("parent_task_id") for task in tasks if task.get("parent_task_id")}
     ready: list[dict[str, Any]] = []
     for task in tasks:
+        if task.get("task_id") in parents:
+            continue
         if task.get("status") not in {"planned", "assigned"}:
             continue
         if all(status_by_id.get(dep) == "completed" for dep in task.get("depends_on", [])):
@@ -246,8 +272,11 @@ def _ready_loop_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     tasks = loop.get("tasks", []) if isinstance(loop.get("tasks"), list) else []
     status_by_id = {task.get("task_id"): task.get("status") for task in tasks}
+    parents = {task.get("parent_task_id") for task in tasks if task.get("parent_task_id")}
     ready: list[dict[str, Any]] = []
     for task in tasks:
+        if task.get("task_id") in parents:
+            continue
         if task.get("status") not in {"planned", "assigned"}:
             continue
         if all(status_by_id.get(dep) == "completed" for dep in task.get("depends_on", [])):

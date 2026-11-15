@@ -5,6 +5,21 @@ description: "Use when you act as Leader and maintain durable TeamHarness projec
 
 # Project Management
 
+## Main tasks and subtasks
+
+Keep Projects as optional organizational containers for larger work. You can
+plan multiple main tasks within one Project. A main task with subtasks represents
+the complete request you coordinate; a leaf task is an independently executable
+Worker assignment. Set `parentTaskId` on each subtask to its main task's ID.
+Keep `dependsOn` separate: it lists execution prerequisites, not parentage.
+
+Use `plan_dag` to persist the full plan, including the main tasks and subtasks.
+Delegate only ready leaf tasks. Do not delegate a coordinating parent to a
+Worker. Keep its status open while any subtask is unfinished. After all subtasks
+are accepted and you verify the overall deliverable, update the main task to
+`completed` through `plan_dag`, preserving the rest of the graph. Completing one
+subtask never completes the main task. Do not create a Project for each subtask.
+
 Use this skill when maintaining durable project state.
 
 A project owns the plan, context, dependencies, and accepted progress. Keep the

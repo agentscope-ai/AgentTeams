@@ -695,7 +695,12 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
-            _sync_project(arguments, project_id)
+            if not _sync_project(arguments, project_id):
+                return _sync_failure_result({
+                    "tool": "projectflow",
+                    "action": action,
+                    "project": project,
+                }, action)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -752,7 +757,12 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
-            _sync_project(arguments, project_id)
+            if not _sync_project(arguments, project_id):
+                return _sync_failure_result({
+                    "tool": "projectflow",
+                    "action": action,
+                    "project": project,
+                }, action)
 
             task_dir = _task_dir(arguments, task_id)
             task_dir.mkdir(parents=True, exist_ok=True)

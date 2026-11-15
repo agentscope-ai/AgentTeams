@@ -207,6 +207,7 @@ def test_projectflow_create_excluded(tmp_path: Path, monkeypatch) -> None:
     server = _load_server()
     fake = FakeFilesync()
     monkeypatch.setattr(server, "_filesync", fake)
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: True)
 
     workspace = tmp_path / "agent"
     result = server._projectflow(_arguments(workspace, "create_project", title="New"))

@@ -1622,3 +1622,21 @@ def test_project_planning_refuses_an_unreadable_authoritative_state(server, tmp_
     assert result.get("retryable") is True
     assert _read_project(workspace, pid) == original
     assert writes == []
+
+
+@pytest.mark.parametrize("action", ["create_project", "create_quick_project"])
+def test_project_creation_sync_failure_cannot_announce_success(server, tmp_path, monkeypatch, action):
+    workspace = tmp_path / "agent"
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: False)
+    task_sync = []
+    monkeypatch.setattr(server, "_sync_task", lambda *args, **kwargs: task_sync.append(args) or True)
+    payload = dict(projectId="create-sync", title="bounded task")
+    if action == "create_quick_project":
+        payload.update(assignedTo=WORKER, roomId=ROOM, spec="Implement the requested function.")
+    result = server._projectflow(_arguments(workspace, action, **payload))
+    assert result["ok"] is False
+    assert result["synced"] is False
+    assert result["statePersisted"] is True
+    assert "notificationNeeded" not in result
+    assert task_sync == []
+    assert not (workspace / "shared" / "tasks" / "create-sync-01" / "meta.json").exists()

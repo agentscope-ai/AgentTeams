@@ -219,3 +219,8 @@ def test_project_plan_sync_failure_does_not_release_work_in_bundle(server, tmp_p
 @pytest.mark.parametrize("action", ["plan_dag", "plan_loop"])
 def test_project_planning_refuses_unreadable_state_in_bundle(server, tmp_path, monkeypatch, action):
     pause_gate.test_project_planning_refuses_an_unreadable_authoritative_state(server, tmp_path, monkeypatch, action)
+
+
+@pytest.mark.parametrize("action", ["create_project", "create_quick_project"])
+def test_project_creation_sync_failure_cannot_announce_success_in_bundle(server, tmp_path, monkeypatch, action):
+    pause_gate.test_project_creation_sync_failure_cannot_announce_success(server, tmp_path, monkeypatch, action)

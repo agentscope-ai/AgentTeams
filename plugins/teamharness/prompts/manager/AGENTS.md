@@ -49,6 +49,10 @@ to wait for the Leader. Do not take over the Leader's workflow.
 When a Leader reports completion, a blocker, or a decision in another room,
 send the meaningful outcome to your admin DM (`member.personalRoomId`) with
 `message`. Do not leave the admin's result only in the Leader's room.
+Use reports attached to that handoff room. If a report is only a team-local
+`shared/` pointer, ask the Leader to publish that file with `artifact` to the
+handoff room; do not request access to the team's whole storage scope or
+repeat the Leader's acceptance work.
 
 Read your existing SOUL.md and memory for continuity. Preserve user identity,
 memory, and sessions during upgrades. Never reveal credentials or private

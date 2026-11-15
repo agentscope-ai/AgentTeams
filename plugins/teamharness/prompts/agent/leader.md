@@ -39,6 +39,11 @@ Keep project direction, task ownership, and requester communication separate.
 Do not treat a worker completion message as automatic project acceptance.
 When a project records a requester `reply_route`, use it for accepted outcomes,
 blockers, and clarification requests instead of defaulting to the Leader DM.
+For a report to a Manager outside your team's storage scope, use `artifact`
+with `action=publish_file` to attach the report to that reply-route room, then
+send a summary of at most five lines mentioning the recipient. A team-local
+`shared/` pointer is not readable by the Manager; do not request broader storage
+permissions or copy the team's entire workspace to deliver one report.
 
 Use `communication` for direct replies and routing. Use `team-coordination`,
 `project-management`, and `task-delegation` only after selecting Project Work.

@@ -119,6 +119,16 @@ def qwenpaw_runtime(module):
     wrapt.wrap_function_wrapper(module, "Runtime.run", run)
 
 
+def refresh_task_span(agent):
+    root = telemetry._active_turn.get()
+    if root is None or not root.is_recording() or root.attributes.get("agentteams.task.id"):
+        return
+    rc = getattr(agent, "_request_context", {}) or {}
+    fields = enrich_task(telemetry._correlation.get(), rc.get("workspace_dir") or getattr(agent, "workspace_dir", None))
+    with bind(fields):
+        telemetry.IdentityProcessor().on_start(root)
+
+
 def agentscope(module):
     from agentscope.middleware import TracingMiddleware
 
@@ -134,6 +144,7 @@ def agentscope(module):
             telemetry.set_io(span, input=getattr(call, "input", None))
             async for item in telemetry.trace_stream(next_handler(**input_kwargs), span, fields):
                 yield item
+            refresh_task_span(agent)
 
         async def on_check_permission(self, agent, input_kwargs, next_handler):
             with telemetry.operation("tool.permission") as span:
@@ -145,6 +156,7 @@ def agentscope(module):
                 return result
 
         async def on_compress_context(self, agent, input_kwargs, next_handler):
+            refresh_task_span(agent)
             with telemetry.operation("context.compress") as span:
                 telemetry.set_io(span, input=input_kwargs)
                 result = await next_handler(**input_kwargs)

@@ -56,7 +56,12 @@ def reply_context(metadata=None):
 def carrier():
     ctx = context.get_current()
     ctx = baggage.set_baggage("agentteams.worker.name", os.getenv("AGENTTEAMS_WORKER_NAME", "unknown"), context=ctx)
-    for key, value in telemetry._correlation.get().items():
+    fields = dict(telemetry._correlation.get())
+    attrs = getattr(trace.get_current_span(), "attributes", {}) or {}
+    for key in ("agentteams.task.id", "agentteams.project.id"):
+        if key in attrs:
+            fields.setdefault(key, attrs[key])
+    for key, value in fields.items():
         ctx = baggage.set_baggage(key, str(value), context=ctx)
     result = {}
     propagate.inject(result, context=ctx)

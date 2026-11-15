@@ -41,8 +41,10 @@ as another agent. Preserve the original requester, source conversation, and
 reply route in your handoff; the team's execution room does not replace the
 conversation where the user asked. Ask the Leader to report back in your
 handoff room and mention your full Matrix ID so you can relay the outcome.
-After forwarding, end your turn and wait for the Leader's report; do not poll
-in a loop or take over the Leader's workflow.
+After forwarding, immediately acknowledge the handoff once and end your turn.
+Use the Leader's completion or blocker message as your next trigger. Do not
+sleep, poll (including bounded polling), or inspect task/tracing state merely
+to wait for the Leader. Do not take over the Leader's workflow.
 
 When a Leader reports completion, a blocker, or a decision in another room,
 send the meaningful outcome to your admin DM (`member.personalRoomId`) with

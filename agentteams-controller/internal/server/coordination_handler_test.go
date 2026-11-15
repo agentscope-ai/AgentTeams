@@ -67,6 +67,27 @@ func TestCoordinationActorUsesRegisteredCredentialName(t *testing.T) {
 	}
 }
 
+func TestCoordinationRecoveryRetainsCanonicalProjectionIdentity(t *testing.T) {
+	h, _ := coordinationFixture(t)
+	native := httptest.NewServer(http.NotFoundHandler())
+	defer native.Close()
+	h.managerURL = func(string) string { return native.URL }
+	h.projectEvent = func(context.Context, coordinationEvent, string, string, string, string, string) (string, error) {
+		return "receipt", nil
+	}
+	e, err := h.resolve(context.Background(), coordinationEvent{Kind: "handoff", Recipient: "@lead:test", OriginEventID: "old", SourceRoute: map[string]any{"target_session": "!source:test", "target_user": "@human:test"}}, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.workerURL = func(string, map[string]string) string { return native.URL }
+	e.ActorName = "manager"
+	d := coordinationDelivery{Event: e, Status: "running", NativeID: "lost"}
+	h.advance(context.Background(), &d, func() error { return nil })
+	if d.Event.ActorName != "default" {
+		t.Fatal("failure projection retained an obsolete actor alias")
+	}
+}
+
 func TestCoordinationMissingNativeReceiptFailsWithoutReplay(t *testing.T) {
 	h, _ := coordinationFixture(t)
 	posts := 0

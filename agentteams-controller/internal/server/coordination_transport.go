@@ -131,6 +131,7 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 		d.Error = "recipient or execution identity changed"
 		return
 	}
+	d.Event.ActorName = e.ActorName
 	p, t, err := h.state(ctx, e)
 	if err != nil {
 		d.Error = "canonical state unavailable"

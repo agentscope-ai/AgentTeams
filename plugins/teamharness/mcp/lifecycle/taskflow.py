@@ -378,6 +378,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if not room_id:
                 raise ValueError("roomId is required")
             project = _read_json(_project_state_path(arguments, project_id))
+            if any(node.get("parent_task_id") == task_id for node in project.get("tasks", [])):
+                raise ValueError("delegate subtasks instead of their coordinating parent task")
             paused, pause_sources = _loop_pause_state(project or {})
             if paused:
                 raise ValueError(f"project is paused (sources: {', '.join(pause_sources)})")
@@ -540,6 +542,10 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "spec_path": f"shared/tasks/{task_id}/spec.md",
                 "notifyTxn": notify_txn,
             }
+            for node in project.get("tasks", []):
+                if node.get("task_id") == task_id and node.get("parent_task_id"):
+                    task["parent_task_id"] = node["parent_task_id"]
+                    break
             if decision_class:
                 task["decision_class"] = decision_class
             if assigned_to:

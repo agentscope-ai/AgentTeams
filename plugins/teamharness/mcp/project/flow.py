@@ -331,6 +331,8 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
     if not accepted and node_status == "completed":
         result_status_value = "REVISION_NEEDED"
         node_status = "revision"
+    if node_status == "completed" and any(node.get("parent_task_id") == task_id and node.get("status") != "completed" for node in project.get("tasks", [])):
+        raise ValueError(f"task {task_id} has unfinished subtasks")
     current_node_status = _project_task_status(project, task_id)
     if current_node_status in TERMINAL_TASK_STATUSES:
         if current_node_status != node_status:

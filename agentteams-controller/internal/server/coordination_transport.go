@@ -100,7 +100,7 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 	if user == "" {
 		user = e.Actor
 	}
-	return map[string]any{"user_id": user, "session_id": coordinationSession(e), "input": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": text}}}}, "channel_meta": meta, "request_context": map[string]any{"teamharness_coordination": meta}, "timeout": 600}
+	return map[string]any{"user_id": user, "session_id": coordinationSession(e), "input": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": text}}}}, "channel_meta": meta, "request_context": map[string]any{"teamharness_coordination": meta}}
 }
 func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelivery, persist func() error) {
 	if d.NativeID != "" && d.Event.Kind == "project_ready" {

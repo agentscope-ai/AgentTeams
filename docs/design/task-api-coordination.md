@@ -55,6 +55,11 @@ admission with the same identity reuses the receipt; changing its payload is
 rejected. Paused plans wait, while cancelled or superseded execution identities
 do not start another run.
 
+Paused deliveries do not expire by elapsed queue time. Native executions use
+the runtime's configured execution budget; the transport does not replace it
+with a shorter model timeout. HTTP request timeouts still bound each individual
+admission or receipt lookup.
+
 The native console task API does not provide a durable idempotent admission
 lookup. If admission outcome is unknown, the Controller records failure for
 operator recovery rather than replaying a potentially side-effecting run. This

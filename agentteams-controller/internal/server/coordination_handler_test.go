@@ -273,3 +273,38 @@ func TestCoordinationReadyRequiresAllExecutionLeaves(t *testing.T) {
 		})
 	}
 }
+
+func TestCoordinationPausedDeliveryDoesNotExpireByWallClock(t *testing.T) {
+	h, store := coordinationFixture(t)
+	projectKey := "teams/alpha/shared/projects/p1/meta.json"
+	p, _ := h.read(context.Background(), projectKey)
+	p["status"] = "paused"
+	putProject(store, projectKey, p)
+	event, err := h.resolve(context.Background(), coordinationEvent{Kind: "task_assigned", ProjectID: "p1", TaskID: "t1", DeliveryID: "delegate-1"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := coordinationDelivery{Event: event, Status: "queued", Created: time.Now().Add(-24 * time.Hour)}
+	data, _ := json.Marshal(d)
+	key := coordinationPending + event.ID + ".json"
+	_ = store.PutObject(context.Background(), key, data)
+	h.projectEvent = func(context.Context, coordinationEvent, string, string, string, string, string) (string, error) {
+		t.Error("paused delivery was reported as a failure")
+		return "$unexpected", nil
+	}
+	h.drain(context.Background())
+	data, err = store.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatal("paused delivery disappeared from the durable queue")
+	}
+	_ = json.Unmarshal(data, &d)
+	if d.Status != "queued" || d.NativeID != "" || d.Error != "" {
+		t.Fatalf("paused receipt: %+v", d)
+	}
+}
+
+func TestCoordinationUsesRuntimeExecutionBudget(t *testing.T) {
+	if _, forced := coordinationPayload(coordinationEvent{Kind: "task_assigned"})["timeout"]; forced {
+		t.Fatal("transport imposed a short execution deadline instead of the runtime budget")
+	}
+}

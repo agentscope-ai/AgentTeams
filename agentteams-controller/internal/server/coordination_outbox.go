@@ -184,9 +184,6 @@ func (h *CoordinationHandler) step(ctx context.Context, key string) {
 		// side-effecting execution; a runtime idempotency receipt is required.
 		d.Status = "failed"
 		d.Error = "native admission outcome unknown; operator recovery required"
-	} else if now.Sub(d.Created) > 15*time.Minute {
-		d.Status = "failed"
-		d.Error = "coordination delivery deadline exceeded"
 	} else {
 		h.advance(ctx, &d, func() error {
 			next, _ := json.Marshal(d)

@@ -41,6 +41,8 @@ def test_ack_pulls_inputs_and_returns_local_paths_in_one_receipt(assignment):
     args, pulled, upstream = assignment
     result = invoke(args)
     assert result["ok"] and result["synced"]
+    assert Path(result["scratchDirectory"]).is_dir()
+    assert Path(result["scratchDirectory"]).parent == upstream.parent / "current"
     assert "upstream" in pulled
     assert result["inputs"][0] == {"taskId": "upstream", "directory": str(upstream.resolve()),
         "readOnly": True, "summary": "Implementation accepted", "deliverables": ["shared/tasks/upstream/solution.py"]}
@@ -67,5 +69,12 @@ def test_unavailable_or_foreign_inputs_fail_before_ack(assignment, monkeypatch, 
         state = json.loads((upstream / "meta.json").read_text())
         state["project_id"] = "other"
         (upstream / "meta.json").write_text(json.dumps(state))
+    assert not invoke(args)["ok"]
+    assert json.loads((upstream.parent / "current/meta.json").read_text())["status"] == "assigned"
+
+
+def test_scratch_symlink_escape_does_not_commit_ack(assignment):
+    args, _, upstream = assignment
+    (upstream.parent / "current/workspace").symlink_to(upstream, target_is_directory=True)
     assert not invoke(args)["ok"]
     assert json.loads((upstream.parent / "current/meta.json").read_text())["status"] == "assigned"

@@ -786,6 +786,10 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     inputs.append({"taskId": dependency, "directory": str(_task_dir(arguments, dependency).resolve()),
                         "readOnly": True, "summary": str(upstream.get("summary") or "")[:1024],
                         "deliverables": upstream.get("deliverables", [])})
+            scratch = _task_dir(arguments, task_id) / "workspace"
+            if not scratch.resolve().is_relative_to(_task_dir(arguments, task_id).resolve()):
+                raise ValueError("task workspace escapes its task directory")
+            scratch.mkdir(exist_ok=True)
             if task.get("status") != "submitted":
                 # Tightening: ack only makes sense after the assignment
                 # (planned/prepared/missing -> structured error, not a
@@ -821,8 +825,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "task": task,
                 "spec": spec,
                 "taskDirectory": str(_task_dir(arguments, task_id).resolve()),
+                "scratchDirectory": str(scratch.resolve()),
                 "inputs": inputs,
-                "executionGuidance": "This ACK pulled your task and accepted prerequisite directories. Read the local files; submit_task synchronizes and publishes declared outputs. Do not repeat those filesync pulls or pushes.",
+                "executionGuidance": "This ACK pulled your task and accepted prerequisite directories. Read the local files; submit_task synchronizes and publishes declared outputs. Do not repeat those filesync pulls or pushes. Create tests and temporary directories under scratchDirectory; do not invent a global /tmp path. Keep upstream inputs read-only.",
                 "pulled": pulled,
                 "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
             }

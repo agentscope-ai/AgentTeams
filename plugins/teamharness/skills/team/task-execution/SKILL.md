@@ -90,6 +90,9 @@ their local paths, summaries and deliverables in `inputs`. Read those local
 files as read-only inputs rather than issuing another filesync pull for each
 prerequisite. `submit_task` already synchronizes and publishes your declared
 deliverables; do not pre-push the same task directory.
+Use the ACK's existing `scratchDirectory` for test copies and temporary work,
+for example `mktemp -d <scratchDirectory>/run-XXXXXX`. Do not invent global
+`/tmp` paths for ordinary task scratch work.
 
 ## Execute
 

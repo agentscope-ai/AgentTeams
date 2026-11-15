@@ -122,6 +122,13 @@ repeat task protocol, status report templates or CLI instructions in specs;
 the runtime already supplies those. Scale the plan to the request rather than
 expanding a small function into a long implementation document.
 
+Add a dependency only when the task actually consumes that predecessor's
+output or the requester requires the order. Role order alone is not a data
+dependency. For example, implementation documentation and independent QA can
+both use the accepted implementation in parallel; only make documentation wait
+for QA when its requested content needs the QA result. Final acceptance still
+requires all required branches to finish.
+
 For a finite DAG whose initial owners and acceptance criteria are known, prefer
 `start_project` in the source session. It reuses the existing room creation,
 plan validation and delegation operations in one call; you do not send a

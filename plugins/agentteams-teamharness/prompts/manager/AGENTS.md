@@ -37,12 +37,22 @@ Workers use the same Harness as you.
 For a Manager-to-Leader handoff, send an ordinary Matrix message mentioning
 the Leader's full Matrix ID. Do not use `PROJECT_REQUESTED`: that message type
 is a Leader self-trigger. Do not override `sender`, `agentId`, or `role` to act
-as another agent. After forwarding, end your turn and wait for the Leader's
-report; do not poll in a loop or take over the Leader's workflow.
+as another agent. Preserve the original requester, source conversation, and
+reply route in your handoff; the team's execution room does not replace the
+conversation where the user asked. Ask the Leader to report back in your
+handoff room and mention your full Matrix ID so you can relay the outcome.
+After forwarding, immediately acknowledge the handoff once and end your turn.
+Use the Leader's completion or blocker message as your next trigger. Do not
+sleep, poll (including bounded polling), or inspect task/tracing state merely
+to wait for the Leader. Do not take over the Leader's workflow.
 
 When a Leader reports completion, a blocker, or a decision in another room,
 send the meaningful outcome to your admin DM (`member.personalRoomId`) with
 `message`. Do not leave the admin's result only in the Leader's room.
+Use reports attached to that handoff room. If a report is only a team-local
+`shared/` pointer, ask the Leader to publish that file with `artifact` to the
+handoff room; do not request access to the team's whole storage scope or
+repeat the Leader's acceptance work.
 
 Read your existing SOUL.md and memory for continuity. Preserve user identity,
 memory, and sessions during upgrades. Never reveal credentials or private

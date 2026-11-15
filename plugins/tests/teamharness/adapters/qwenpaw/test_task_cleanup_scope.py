@@ -70,3 +70,17 @@ def test_other_task_and_symlink_escape_do_not_gain_permission(cleanup):
 def test_tmp_wildcard_is_returned_to_agent_without_human_approval(cleanup):
     _, _, _, decision = cleanup
     assert decision('rm -rf "${TMPDIR:-/tmp}"/old_check_*') == "deny"
+
+
+def test_exact_own_output_move_is_allowed_but_other_tasks_are_protected(cleanup):
+    _, root, _, decision = cleanup
+    assert decision(f'mv "{root}/output.new" "{root}/output.txt"') == "allow"
+    assert decision(f'mv "{root}/output.new" "{root}/meta.json"') != "allow"
+    assert decision(f'mv "{root}/output.new" "{root}"') != "allow"
+    assert decision(f'mv "{root}/output.new" "{root.parent}/other/output.txt"') != "allow"
+    assert decision(f'mv "{root}/output.new" "{root}/output.txt"; touch /tmp/outside') != "allow"
+
+
+def test_compound_output_move_returns_guidance_instead_of_requesting_approval(cleanup):
+    _, root, _, decision = cleanup
+    assert decision(f'cd "{root}" && cat output.txt > output.new && mv output.new output.txt') == "deny"

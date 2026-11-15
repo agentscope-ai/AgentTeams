@@ -273,7 +273,7 @@ assert(project_skill.include?("PROJECT_REQUESTED") && project_skill_text.include
 assert(project_skill.include?("Do not call this in the requester/source session"), "project skill quick task creation must run in the task room")
 assert(project_skill.include?("Project Status Reports"), "project skill must include requester status report template")
 assert(project_skill.include?("owner or executor cells are descriptive text") && project_skill.include?("Do not prefix them with `@`"), "project report template must avoid display-only Matrix mentions")
-assert(project_skill.include?("After the project state changes"), "project skill must require requester visibility after accepted state changes")
+assert(normalized(project_skill).include?("Keep intermediate results in the Task room; they do not trigger a Manager report") && project_skill.include?("once at final completion"), "project skill must retain intermediate progress in the task room and deliver the final requester report")
 assert(project_skill.include?("publishArtifacts: true") && project_skill.include?("parentEventId"), "project skill must document explicit project artifact publish after requester report")
 assert(project_skill.include?("non-Matrix channel") && project_skill.include?("do not claim that a file was attached") && project_skill.include?("platform object-storage view"), "project requester report template must avoid fake external-channel file attachment claims")
 assert(project_skill.include?("Task room coordination") && project_skill.include?("do not count as the requester report"), "project skill must not count task-room coordination as requester reporting")

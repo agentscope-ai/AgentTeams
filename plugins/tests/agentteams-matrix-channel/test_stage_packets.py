@@ -8,11 +8,18 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 
-@unittest.skipUnless(importlib.util.find_spec("qwenpaw") and importlib.util.find_spec("nio"), "native channel dependencies required")
+def _native_channel_available():
+    try:
+        return bool(importlib.util.find_spec("qwenpaw.schemas") and importlib.util.find_spec("nio"))
+    except (ModuleNotFoundError, ValueError):
+        return False
+
+
+@unittest.skipUnless(_native_channel_available(), "native channel dependencies required")
 class StagePacketTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        root = Path(__file__).resolve().parents[3]
+        root = Path(__file__).resolve().parents[3] if len(Path(__file__).resolve().parents) > 3 else Path("/nonexistent")
         cls.root = root
         path = root / "plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py"
         if not path.exists():

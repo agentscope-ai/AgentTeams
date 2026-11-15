@@ -96,19 +96,23 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
     class TeamHarnessSanitizer(MiddlewareBase):
         _submitted_task = ""
         _accepted_task = ""
-        _task_cleanup = None
+        _task_scope = None
 
-        async def _allow_task_cleanup(self, command: str, cwd: str | None) -> bool:
-            if not self._task_cleanup:
+        async def _allow_task_output_change(self, command: str, cwd: str | None) -> bool:
+            if not self._task_scope:
                 return False
-            task_id, root, assignee, delegation = self._task_cleanup
+            task_id, root, assignee, delegation = self._task_scope
             try:
                 from qwenpaw_worker.cleanup_policy import is_private_cleanup
                 plain = re.sub(r"^export QWENPAW_SESSION_ID='[^'\r\n]*' && ", "", command, count=1)
                 base = Path(cwd) if cwd else None
-                if not is_private_cleanup(plain, root, None, base):
+                words = shlex.split(plain)
+                if words and words[0] in {"mv", "/bin/mv", "/usr/bin/mv"}:
+                    if len(words) != 3 or re.search(r"[;&|<>`$\n*?(){}\[\]]", plain) or not all(Path(p).is_absolute() for p in words[1:]):
+                        return False
+                elif not is_private_cleanup(plain, root, None, base):
                     return False
-                for word in shlex.split(plain)[1:]:
+                for word in words[1:]:
                     if word.startswith("-"):
                         continue
                     target = Path(word)
@@ -117,7 +121,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                         return False
                     target = (target if target.is_absolute() else base / target).resolve()
                     relative = target.relative_to(root)
-                    if relative.parts[0] in {"meta.json", "spec.md", "result.md", "base", "inputs"}:
+                    if not relative.parts or relative.parts[0] in {"meta.json", "spec.md", "result.md", "base", "inputs"}:
                         return False
                 current = await asyncio.to_thread(_controller_json, "tasks/" + urllib.parse.quote(task_id, safe="") + "/meta")
                 return (current.get("task_id") == task_id and current.get("status") == "in_progress"
@@ -128,10 +132,10 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         async def on_check_permission(self, agent: Any, input_kwargs: dict[str, Any], next_handler: Callable[..., Any]) -> Any:
             call = input_kwargs.get("tool_call")
             command = str((input_kwargs.get("tool_input") or {}).get("command") or "")
-            if getattr(call, "name", "") == "execute_shell_command" and _compound_private_cleanup(command):
+            if getattr(call, "name", "") == "execute_shell_command" and (_compound_private_cleanup(command) or self._task_scope and _compound_task_move(command)):
                 from agentscope.permission import PermissionBehavior, PermissionDecision
                 return PermissionDecision(behavior=PermissionBehavior.DENY, message=_CLEANUP_GUIDANCE)
-            if getattr(call, "name", "") == "execute_shell_command" and await self._allow_task_cleanup(command, (input_kwargs.get("tool_input") or {}).get("cwd")):
+            if getattr(call, "name", "") == "execute_shell_command" and await self._allow_task_output_change(command, (input_kwargs.get("tool_input") or {}).get("cwd")):
                 from agentscope.permission import PermissionBehavior, PermissionDecision
                 return PermissionDecision(behavior=PermissionBehavior.ALLOW, message="Cleanup is confined to the current acknowledged task's writable outputs.")
             return await next_handler(**input_kwargs)
@@ -185,7 +189,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             command = str(args.get("command") or "") if isinstance(args, dict) else ""
             if (
                 getattr(call, "name", "") == "execute_shell_command"
-                and _compound_private_cleanup(command)
+                and (_compound_private_cleanup(command) or self._task_scope and _compound_task_move(command))
             ):
                 from agentscope.tool import ToolResponse
 
@@ -217,11 +221,11 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                         if result.get("ok") is True and result.get("synced") is True and args.get("action") == "ack_task" and task.get("status") == "in_progress":
                             directory = Path(result.get("taskDirectory") or ".")
                             if directory.is_absolute() and directory.name == task.get("task_id") and directory.parent.name == "tasks" and task.get("notifyTxn"):
-                                self._task_cleanup = (task["task_id"], directory.resolve(), task.get("assigned_to"), task["notifyTxn"])
+                                self._task_scope = (task["task_id"], directory.resolve(), task.get("assigned_to"), task["notifyTxn"])
                         if args.get("action") != "submit_task":
                             continue
                         if result.get("ok") is True and result.get("synced") is True and task.get("status") == "submitted":
-                            self._task_cleanup = None
+                            self._task_scope = None
                         if (isinstance(result, dict) and result.get("ok") is True and result.get("synced") is True
                                 and (result.get("notification") or {}).get("sent") is True
                                 and _execution_task.get() and (result.get("task") or {}).get("task_id") == _execution_task.get()
@@ -237,6 +241,7 @@ _CLEANUP_GUIDANCE = (
     "No command was executed. Separate private temporary-directory cleanup from setup/tests. "
     "Use a fresh mktemp directory without deleting an old one, then run cleanup as a standalone "
     "rm with its explicit private path. Shell variables do not persist between calls. "
+    "For output replacement, use write_file or a standalone mv with explicit absolute source and destination paths. "
     "Shared/out-of-scope deletion still requires approval."
 )
 
@@ -245,6 +250,11 @@ def _compound_private_cleanup(command: str) -> bool:
     command = re.sub(r"^export QWENPAW_SESSION_ID='[^'\r\n]*' && ", "", command, count=1)
     return bool(("TMPDIR" in command or "mktemp" in command) and re.search(r"[;&|\n*?\[]", command)
                 and re.search(r"(?:^|[;&\n])\s*(?:/bin/|/usr/bin/)?rm\b", command))
+
+
+def _compound_task_move(command: str) -> bool:
+    command = re.sub(r"^export QWENPAW_SESSION_ID='[^'\r\n]*' && ", "", command, count=1)
+    return bool(re.search(r"[;&|\n]", command) and re.search(r"(?:^|[;&\n])\s*(?:/bin/|/usr/bin/)?mv\b", command))
 
 
 def _load_trace_module() -> Any | None:

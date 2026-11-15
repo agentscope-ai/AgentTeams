@@ -17,6 +17,29 @@ def _native_sdk_available():
 
 @unittest.skipUnless(_native_sdk_available(), "native SDK required")
 class NativeCoordinationTest(unittest.TestCase):
+    def test_exact_output_move_permission_is_task_scoped(self):
+        from agentscope.permission import PermissionBehavior, PermissionDecision
+        import tempfile
+        path = Path("/opt/agentteams/qwenpaw-builtin/plugins/teamharness/plugin.py")
+        spec = importlib.util.spec_from_file_location("native_output_scope_plugin", path)
+        plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tasks/t1"; root.mkdir(parents=True)
+            state = {"task_id":"t1", "status":"in_progress", "assigned_to":"worker", "notifyTxn":"d1"}
+            plugin._controller_json = lambda _: state
+            middleware = plugin._sanitizer_factory(None, None)
+            middleware._task_scope = ("t1", root, "worker", "d1")
+            async def decide(command):
+                async def native(**kw):
+                    return PermissionDecision(behavior=PermissionBehavior.ASK, message="native policy")
+                return await middleware.on_check_permission(None, {"tool_call":SimpleNamespace(name="execute_shell_command"),
+                    "tool_input":{"command":command}}, native)
+            self.assertEqual(asyncio.run(decide(f'mv {root}/new {root}/output')).behavior, PermissionBehavior.ALLOW)
+            self.assertEqual(asyncio.run(decide(f'mv {root}/new {root.parent}/other/output')).behavior, PermissionBehavior.ASK)
+            self.assertEqual(asyncio.run(decide(f'cd {root} && mv new output')).behavior, PermissionBehavior.DENY)
+            state["status"] = "cancelled"
+            self.assertEqual(asyncio.run(decide(f'mv {root}/new {root}/output')).behavior, PermissionBehavior.ASK)
+
     def test_durable_submit_finishes_without_a_second_model_call(self):
         self._assert_durable_transition_finishes("submit_task", "teamharness__taskflow", {
             "ok": True, "synced": True, "task": {"task_id": "atomic-1", "status": "submitted"},

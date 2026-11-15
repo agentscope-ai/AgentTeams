@@ -464,11 +464,19 @@ If delivery failed, resolve its explicit error and retry `complete_project`
 idempotently. For legacy or non-Matrix routes without automatic delivery,
 use the Requester Report Delivery Protocol once at final completion.
 
+The standalone MCP records pending requester delivery in `requester_report`.
+Native CoPaw `projectflow` does not invent a
+`requester_report` marker when its runtime has not supplied one. An absent
+marker is not permission to omit the report: deliver the verified final result
+through the requester route once. In Agent API mode, check the durable delivery
+receipt rather than treating queue admission as the Human's receipt.
+
 Task room coordination, Worker completion messages, downstream assignment
 messages, and tool-call summaries do not count as the requester report. You may
-batch several accepted task results and downstream delegations into one
-requester report, but do not omit the report when accepted project state
-changed.
+summarize accepted task results in the final requester report. Keep ordinary
+intermediate changes in the Task room; do not wake a Manager to supervise each
+step. Surface a blocker only when the requester must act, or progress when the
+requester explicitly asks for it. The final report remains required.
 
 ## Project Status Reports
 
@@ -528,7 +536,7 @@ Keep the report envelope consistent across DAG and Loop:
 
 For Matrix requester reports, this section may say the report file or artifact
 was published to the requester room only after `artifact publish_file` succeeds.
-For DingTalk, Feishu, WeChat, or other non-Matrix requester reports, say the
+For a non-Matrix channel, do not claim that a file was attached. Say the
 files are available from the shared workspace or platform object-storage view;
 do not say "attached", "uploaded to this chat", "click the file card", or
 "view the file here".

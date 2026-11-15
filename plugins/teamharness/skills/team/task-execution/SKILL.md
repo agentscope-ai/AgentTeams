@@ -53,8 +53,8 @@ boundary conflict to the Leader. Put Worker-owned deliverables under
 
 ## Acknowledge
 
-When you are mentioned with `TASK_ASSIGNED`, first pull or inspect the task
-directory if needed, then acknowledge with `taskflow`:
+When you receive `TASK_ASSIGNED`, acknowledge with `taskflow` first. That
+operation pulls the authoritative task context; do not pre-pull it separately:
 
 ```json
 {
@@ -85,6 +85,11 @@ shared/tasks/{task-id}/spec.md
 before doing the work.
 `ack_task` already returns this spec and pulls the task files. Use that
 response; do not immediately repeat filesync pull or a shell read of spec.md.
+For automatic plans it also pulls accepted prerequisite directories and returns
+their local paths, summaries and deliverables in `inputs`. Read those local
+files as read-only inputs rather than issuing another filesync pull for each
+prerequisite. `submit_task` already synchronizes and publishes your declared
+deliverables; do not pre-push the same task directory.
 
 ## Execute
 

@@ -383,7 +383,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             nodes = project.get("tasks", []) + (project.get("loop", {}).get("tasks", []) if isinstance(project.get("loop"), dict) else [])
             by_id = {node.get("task_id"): node for node in nodes}
             blocked_by = [dep for dep in by_id.get(task_id, {}).get("depends_on", []) if by_id.get(dep, {}).get("status") != "completed"]
-            if blocked_by:
+            # Loop readiness is iteration-aware; retain its existing dispatch
+            # protocol rather than applying the finite-DAG status shortcut.
+            if blocked_by and project.get("plan_type") != "loop":
                 return {
                     "ok": False, "tool": "taskflow", "action": action,
                     "retryable": False, "blockedBy": blocked_by,
@@ -767,6 +769,23 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             _require_task_assignee(task)
             pulled = True
             _require_task_mutable(arguments, task, task_id, action, to_status="in_progress")
+            inputs = []
+            project_id = str(task.get("project_id") or "")
+            if project_id and project_id != pid and not _pull_project(arguments, project_id):
+                return _pull_failed_response("taskflow", action)
+            project = _read_json(_project_state_path(arguments, project_id)) if project_id else {}
+            if project.get("dispatch_mode") == "automatic" and project.get("plan_type") != "loop":
+                node = next((n for n in project.get("tasks", []) if n.get("task_id") == task_id), None)
+                if node is None:
+                    raise ValueError("assigned task is missing from the authoritative plan")
+                for dependency in node.get("depends_on", []):
+                    dependency = _safe_id(dependency, "dependency")
+                    upstream = _load_authoritative_task(arguments, dependency)
+                    if upstream.get("project_id") != project_id or upstream.get("status") != "completed":
+                        raise ValueError(f"prerequisite {dependency} is not an accepted result in this project")
+                    inputs.append({"taskId": dependency, "directory": str(_task_dir(arguments, dependency).resolve()),
+                        "readOnly": True, "summary": str(upstream.get("summary") or "")[:1024],
+                        "deliverables": upstream.get("deliverables", [])})
             if task.get("status") != "submitted":
                 # Tightening: ack only makes sense after the assignment
                 # (planned/prepared/missing -> structured error, not a
@@ -802,6 +821,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "task": task,
                 "spec": spec,
                 "taskDirectory": str(_task_dir(arguments, task_id).resolve()),
+                "inputs": inputs,
+                "executionGuidance": "This ACK pulled your task and accepted prerequisite directories. Read the local files; submit_task synchronizes and publishes declared outputs. Do not repeat those filesync pulls or pushes.",
                 "pulled": pulled,
                 "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
             }

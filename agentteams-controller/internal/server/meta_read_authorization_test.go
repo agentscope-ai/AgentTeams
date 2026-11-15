@@ -27,9 +27,9 @@ func TestMetaReadRoutesUseScopedReaderAuthorization(t *testing.T) {
 		{"leader", &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead", Team: "alpha-team"}, 200, 404},
 		{"admin", &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "admin"}, 200, 200},
 		{"manager", &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"}, 200, 200},
-		// The existing worker read prohibition remains: this addition serves
-		// the workbench, without granting a new worker/project control surface.
-		{"worker", &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "worker", Team: "alpha-team"}, 403, 403},
+		// API notifications require Workers to verify their execution state;
+		// the read is restricted to their own team, like conditional commits.
+		{"worker", &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "worker", Team: "alpha-team"}, 200, 403},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

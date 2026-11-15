@@ -15,9 +15,12 @@ import urllib.parse
 import urllib.request
 
 from mcp.common.paths import _default_global_shared_prefix, _default_shared_prefix, _optional_workspace_dir
+from mcp.room.matrix import _matrix_user_id
+from mcp.transport.coordination import deliver_event
 from mcp.common import refs
 
 _filesync = refs.proxy("_filesync")
+_publish_workspace_artifact = refs.proxy("_publish_workspace_artifact")
 
 
 SELF_TRIGGER_MESSAGE_TYPES = {"PROJECT_REQUESTED"}
@@ -84,6 +87,53 @@ def _message_type(arguments: dict[str, Any]) -> str:
             if value is not None:
                 return _text(value)
     return ""
+
+
+def _direct_message_room(homeserver: str, token: str, recipient: str) -> str:
+    """Resolve the current sender's private pair, never an admin-owned DM."""
+    if not _is_matrix_user_id(recipient) or any(c.isspace() for c in recipient):
+        raise ValueError("a full recipient Matrix user ID is required")
+
+    def request(path: str, body: dict[str, Any] | None = None) -> Any:
+        req = urllib.request.Request(
+            f"{homeserver}/_matrix/client/v3/{path}",
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            method="POST" if body is not None else "GET",
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return json.loads(response.read().decode())
+
+    sender = request("account/whoami")["user_id"]
+    if recipient == sender:
+        raise ValueError("self-trigger messages require an explicit room target")
+    pair = "\0".join(sorted([sender, recipient]))
+    local_alias = "agentteams-dm-" + hashlib.sha256(pair.encode()).hexdigest()[:24]
+    alias = f"#{local_alias}:{sender.split(':', 1)[1]}"
+    directory = "directory/room/" + urllib.parse.quote(alias, safe="")
+    try:
+        room_id = request(directory)["room_id"]
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+        try:
+            return request("createRoom", {
+                "room_alias_name": local_alias, "preset": "private_chat",
+                "is_direct": True, "invite": [recipient],
+            })["room_id"]
+        except urllib.error.HTTPError as create_error:
+            if create_error.code != 409:
+                raise
+            room_id = request(directory)["room_id"]
+    room = urllib.parse.quote(room_id, safe="")
+    joined = set(request(f"rooms/{room}/joined_members").get("joined", {}))
+    if sender not in joined or not joined.issubset({sender, recipient}):
+        raise ValueError("direct room membership does not match the sender and recipient")
+    if recipient not in joined:
+        member = request(f"rooms/{room}/state/m.room.member/" + urllib.parse.quote(recipient, safe=""))
+        if member.get("membership") != "invite":
+            raise ValueError("recipient is not joined or invited to the direct room")
+    return room_id
 
 
 def _agent_from(value: Any) -> str:
@@ -393,8 +443,27 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
         target_kind, target_id = deps.matrix_target(_target_value(arguments, route))
     except ValueError as exc:
         return {"ok": False, "tool": "message", "error": str(exc)}
+    direct_handoff = target_kind == "user"
+    if direct_handoff and refs.resolve("_runtime_role")() == "manager":
+        delivery = deliver_event("handoff", recipient=target_id, text=message_text,
+            origin_event_id=arguments.get("originEventId"), source_route=arguments.get("requesterReplyRoute") or {},
+            room_id=(arguments.get("requesterReplyRoute") or {}).get("target_session"))
+        if delivery is not None:
+            return {"ok": bool(delivery.get("sent")), "tool": "message", "transport": "agent-api",
+                    "delivery": delivery, "messageId": delivery.get("eventId"), "error": delivery.get("error")}
     if target_kind == "user":
-        return {"ok": False, "tool": "message", "error": "Matrix user targets are not supported yet"}
+        if _message_type(arguments) in SELF_TRIGGER_MESSAGE_TYPES:
+            return {"ok": False, "tool": "message", "error": "PROJECT_REQUESTED requires an explicit room target"}
+        if arguments.get("dryRun"):
+            return {"ok": True, "tool": "message", "dryRun": True, "targetKind": "user", "target": target_id}
+        try:
+            target_id = _direct_message_room(
+                os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/"),
+                os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", ""), target_id,
+            )
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as exc:
+            return {"ok": False, "tool": "message", "error": f"direct room resolution failed: {exc}"}
+        target_kind = "room"
 
     mentions = deps.mentions(message_text, target_id)
     blocked = deps.ping_pong_error(message_text, mentions)
@@ -410,6 +479,7 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
     # (PROJECT_REQUESTED) keep their exact body contract.
     send_text = message_text
     report_path: Path | None = None
+    attach_report = False
     if _message_type(arguments) not in SELF_TRIGGER_MESSAGE_TYPES:
         lines = message_text.splitlines()
         if len(lines) > 5:
@@ -426,8 +496,31 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
                 read_path = report_relpath
                 if shared_prefix == global_prefix:
                     read_path = report_relpath.replace("shared/", "global-shared/", 1)
-                send_text = "\n".join(lines[:5]) + f"\n…中间 {len(lines) - 5} 行见 {read_path}"
+                    send_text = "\n".join(lines[:5]) + f"\n…中间 {len(lines) - 5} 行见 {read_path}"
+                else:
+                    attach_report = True
+                    send_text = "\n".join(lines[:5]) + "\n…完整报告见本房间附件 report.md"
     content = deps.matrix_content(send_text, mentions)
+    api_coordination = bool(os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip())
+    if api_coordination:
+        if _message_type(arguments) in SELF_TRIGGER_MESSAGE_TYPES:
+            return {"ok": False, "error": "API coordination does not dispatch through Matrix; use projectflow start_project or taskflow delegate_task"}
+        content["org.agentteams.progress_only"] = True
+    coordinator_route = arguments.get("coordinatorReplyRoute")
+    if direct_handoff and refs.resolve("_runtime_role")() == "manager":
+        coordinator_route = {"channel": "matrix", "target_session": target_id, "target_user": _matrix_user_id()}
+    if isinstance(coordinator_route, dict) and coordinator_route.get("target_session"):
+        content["org.agentteams.coordinator_route"] = coordinator_route
+        content["body"] = "CoordinatorReplyRoute: " + json.dumps(coordinator_route, ensure_ascii=False) + "\n" + content["body"]
+    if isinstance(arguments.get("requesterReplyRoute"), dict):
+        content["org.agentteams.requester_route"] = arguments["requesterReplyRoute"]
+    if isinstance(arguments.get("workflowEvent"), dict):
+        content["org.agentteams.workflow"] = arguments["workflowEvent"]
+    if report_path is not None and len(message_text.encode("utf-8")) <= 16384:
+        full_text = message_text
+        if isinstance(coordinator_route, dict) and coordinator_route.get("target_session"):
+            full_text = "CoordinatorReplyRoute: " + json.dumps(coordinator_route, ensure_ascii=False) + "\n" + full_text
+        content["org.agentteams.report"] = {"text": full_text}
     trigger = _self_trigger_intent(arguments, route, channel=channel, target_id=target_id)
     if _message_type(arguments) in SELF_TRIGGER_MESSAGE_TYPES and trigger is None:
         return {
@@ -473,14 +566,13 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
         "mentions": mentions,
         "content": content,
     }
+    if api_coordination:
+        base["projectionOnly"] = True
     if trigger is not None:
         base["trigger"] = trigger
     if report_path is not None:
         base["fullReportPath"] = str(report_path.relative_to(workspace_dir).as_posix())
-        base["warning"] = (
-            "report body exceeds 5 lines; the room message carries the "
-            "first 5 lines plus a pointer to the full report"
-        )
+        base["reportDelivery"] = {"status": "planned", "readerPath": "room_attachment" if attach_report else read_path}
     if arguments.get("dryRun"):
         base["dryRun"] = True
         return base
@@ -502,9 +594,20 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
             sync_args.update(action=sync_action, path=base["fullReportPath"])
             if not _filesync(sync_args).get("ok"):
                 return {"ok": False, "tool": "message", "error": "full report could not be published to shared storage"}
+        if attach_report:
+            attachment = _publish_workspace_artifact(
+                {**arguments, "publishId": f"report-{digest}"},
+                room_id=target_id, source_path=base["fullReportPath"],
+                filename="report.md", expected_prefix="shared/reports",
+                summary="", mentions=[],
+            )
+            if attachment.get("status") != "published":
+                return {"ok": False, "tool": "message", "error": f"full report attachment failed: {attachment.get('error', 'unknown error')}"}
+            base["reportAttachment"] = attachment
+        base["reportDelivery"]["status"] = "published"
 
     room_id = urllib.parse.quote(target_id, safe="")
-    txn_id = f"teamharness-{os.getpid()}-{int(time.time() * 1000)}"
+    txn_id = urllib.parse.quote(str(arguments.get("transactionId") or f"teamharness-{os.getpid()}-{int(time.time() * 1000)}"), safe="")
     url = f"{homeserver}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}"
     request = urllib.request.Request(
         url,

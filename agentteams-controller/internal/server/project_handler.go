@@ -66,19 +66,22 @@ func NewProjectHandler(c client.Client, namespace string, o oss.StorageClient, m
 // --- internal model (mirrors meta.json, tolerant to extra fields) ---
 
 type projectMeta struct {
-	ProjectID       string            `json:"project_id"`
-	Title           string            `json:"title"`
-	Status          string            `json:"status"`
-	PlanType        string            `json:"plan_type"`
-	TeamID          string            `json:"team_id"`
-	Mode            string            `json:"mode"`
-	Source          string            `json:"source,omitempty"`
-	Tasks           []projectTaskMeta `json:"tasks"`
-	Loop            *loopMeta         `json:"loop,omitempty"`
-	Requester       string            `json:"requester,omitempty"`
-	RequesterReport map[string]any    `json:"requester_report,omitempty"`
-	ReplyRoute      map[string]any    `json:"reply_route,omitempty"`
-	SourceRoomID    string            `json:"source_room_id,omitempty"`
+	ProjectID           string            `json:"project_id"`
+	Title               string            `json:"title"`
+	Status              string            `json:"status"`
+	PlanType            string            `json:"plan_type"`
+	TeamID              string            `json:"team_id"`
+	Mode                string            `json:"mode"`
+	DispatchMode        string            `json:"dispatch_mode,omitempty"`
+	RoomID              string            `json:"room_id,omitempty"`
+	Source              string            `json:"source,omitempty"`
+	Tasks               []projectTaskMeta `json:"tasks"`
+	Loop                *loopMeta         `json:"loop,omitempty"`
+	Requester           string            `json:"requester,omitempty"`
+	RequesterReport     map[string]any    `json:"requester_report,omitempty"`
+	ReplyRoute          map[string]any    `json:"reply_route,omitempty"`
+	RequesterReplyRoute map[string]any    `json:"requester_reply_route,omitempty"`
+	SourceRoomID        string            `json:"source_room_id,omitempty"`
 	// human-intervention audit fields (written by the lifecycle write API;
 	// tolerated by json.Unmarshal when absent, and passed through here so
 	// consumers can show who paused/resumed and why).
@@ -109,6 +112,7 @@ type projectTaskMeta struct {
 	ParentTaskID string                    `json:"parent_task_id,omitempty"`
 	Title        string                    `json:"title"`
 	AssignedTo   string                    `json:"assigned_to"`
+	Spec         string                    `json:"spec,omitempty"`
 	DependsOn    []string                  `json:"depends_on"`
 	Status       string                    `json:"status"`
 	Cancellation *taskCancellationDecision `json:"cancellation,omitempty"`
@@ -3262,6 +3266,10 @@ func pauseSourcesContain(sources []string, source string) bool {
 func (h *ProjectHandler) GetProjectMeta(w http.ResponseWriter, r *http.Request) {
 	pwc, failed := h.readProjectWriteContext(w, r)
 	if failed {
+		return
+	}
+	if caller := authpkg.CallerFromContext(r.Context()); caller != nil && caller.Role == authpkg.RoleWorker && !callerMatchesStorageTeam(caller, pwc.team, pwc.crToEffective) {
+		writeError(w, http.StatusForbidden, "worker can only read project meta in its own team")
 		return
 	}
 	data, err := h.oss.GetObject(r.Context(), pwc.key)

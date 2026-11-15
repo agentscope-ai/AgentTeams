@@ -83,6 +83,8 @@ shared/tasks/{task-id}/spec.md
 ```
 
 before doing the work.
+`ack_task` already returns this spec and pulls the task files. Use that
+response; do not immediately repeat filesync pull or a shell read of spec.md.
 
 ## Execute
 
@@ -222,7 +224,10 @@ file panel.
 the first line is the contract below, and the event @mentions the Leader
 and the human members of the team (the task initiator), so the requester is
 routed with the same salience the leader is. After `submit_task` returns
-`ok: true`, do not send another completion line.
+`ok: true` with `notification.sent: true`, end the turn with `NO_REPLY`.
+Do not send another completion line or mention the Leader again. If the
+notification failed or was skipped, send one fallback completion message
+in the assignment room and report the notification failure.
 
 The event first line carries one token per result status (code-generated):
 
@@ -242,8 +247,8 @@ event byte-identical to the legacy format.
 
 If the task spec gives an exact completion line, the code event keeps that
 line format; a short human-readable summary message may still follow in the
-room but never replaces the event. Do not use `NO_REPLY` after successful
-submission.
+room but never replaces the event. An already delivered completion event
+needs no additional summary or acknowledgement.
 
 While the task is still in flight and you need a human decision (approval /
 decision / escalation) instead of guessing, call `taskflow` with

@@ -12,6 +12,29 @@ This file describes stable collaboration rules for the team.
 
 ## Team Worker Coordination
 
+Keep each stage proportional to the current request, including when a role
+skill describes a larger process. Use the current request's acceptance cases;
+do not invent extra reports, patch archives or verification matrices. Inspect
+tracing only when the requester asks for diagnosis.
+
+After a source-session `PROJECT_REQUESTED` self-trigger succeeds, end that turn
+with `NO_REPLY`; do not sleep, poll project state or read task-room history in
+the source session. Resume coordination only in the task room.
+
+For a known DAG, prefer `projectflow start_project` to create its room, persist
+the plan and delegate its initially ready leaves in one call; include bounded
+specs for those first leaves. End the source turn after successful dispatch.
+Otherwise create a known DAG with the `tasks` array in `create_project`. Use decision
+class `r3` for delegation; no filesystem search for decision classes is needed.
+On a result event, `check_task` returns the spec and result evidence together;
+accept the actual submission, then use the returned ready nodes to dispatch
+the next stage. Do not repeatedly resolve unchanged project state.
+
+Keep upstream task inputs read-only and generated tests, logs and scratch files
+inside your own task directory. Avoid nonessential cleanup and never delete
+another task's caches; Python imports can use `python -B`. After submission or
+final delivery succeeds, stop instead of duplicating publication or reporting.
+
 TeamHarness collaboration is about Workers in the team roster. Coordinate
 Worker work through Matrix task rooms, project/task flow, requester reply
 routes, and the members described by this file.

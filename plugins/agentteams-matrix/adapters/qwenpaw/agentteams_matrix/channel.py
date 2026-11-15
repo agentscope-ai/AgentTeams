@@ -2249,6 +2249,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "is_dm": is_dm,
                 "is_group": not is_dm,
                 "worker_name": worker_name,
+                "agent_matrix_user_id": self._user_id,
                 "event_id": event.event_id,
                 "session_source_event_ids": self._session_source_ids(room_id, event.event_id, not is_dm),
                 "sender_id": sender_id,
@@ -2529,6 +2530,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         room: MatrixRoom,
         event: RoomMessageText,
     ) -> None:
+        if (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.progress_only") is True:
+            return
         room_id = room.room_id
         sender_id = event.sender
         teamharness_self_trigger = None
@@ -2547,6 +2550,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return
 
         text = event.body or ""
+        report = (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.report", {})
+        full_text = report.get("text") if isinstance(report, dict) else None
+        if isinstance(full_text, str) and len(full_text.encode("utf-8")) <= 16384:
+            preview = "\n".join(full_text.splitlines()[:5])
+            if preview and text.startswith(preview):
+                text = full_text
 
         # Use Matrix API to reliably detect DM rooms
         # (nio's room.users is unreliable after token restore)
@@ -2707,10 +2716,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "is_dm": is_dm,
                 "is_group": not is_dm,
                 "worker_name": worker_name,
+                "agent_matrix_user_id": self._user_id,
                 "event_id": event.event_id,
                 "session_source_event_ids": self._session_source_ids(room_id, event.event_id, not is_dm and not is_slash_cmd and not is_thread_event),
                 "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
+                "teamharness_workflow": (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.workflow", {}),
+                "teamharness_requester_route": (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.requester_route", {}),
+                "teamharness_coordinator_route": (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.coordinator_route", {}),
                 "is_thread_event": is_thread_event,
             },
         }
@@ -2889,6 +2902,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "is_dm": is_dm,
                 "is_group": not is_dm,
                 "worker_name": worker_name,
+                "agent_matrix_user_id": self._user_id,
                 "event_id": event.event_id,
                 "session_source_event_ids": self._session_source_ids(room_id, event.event_id, not is_dm and not is_thread_event),
                 "thread_root_event_id": event.event_id,
@@ -4408,6 +4422,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             "is_dm": False,
             "is_group": True,
             "worker_name": worker_name,
+                "agent_matrix_user_id": self._user_id,
             "event_id": meta_dict.get("event_id"),
             "thread_root_event_id": meta_dict.get("thread_root_event_id")
             or meta_dict.get("event_id"),

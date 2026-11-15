@@ -417,6 +417,8 @@ def _matrix_send_file_summary(
     if missing:
         text = " ".join(missing) + " " + text
     content = _matrix_content(text, mxids)
+    if os.getenv("TEAMHARNESS_COORDINATION_URL"):
+        content["org.agentteams.progress_only"] = True
     summary_txn_id = f"{file_txn_id}-summary"
     url = (
         f"{homeserver}/_matrix/client/v3/rooms/{encoded_room_id}/send/"
@@ -493,6 +495,8 @@ def _matrix_send_file_event(
             "mimetype": mimetype,
         },
     }
+    if os.getenv("TEAMHARNESS_COORDINATION_URL"):
+        content["org.agentteams.progress_only"] = True
     if parent_event_id:
         content["m.relates_to"] = {
             "rel_type": MATRIX_ATTACHMENT_REL_TYPE,

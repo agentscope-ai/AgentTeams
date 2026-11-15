@@ -56,9 +56,12 @@ type ServerDeps struct {
 
 // HTTPServer serves the unified controller REST API.
 type HTTPServer struct {
-	Addr   string
-	Mux    *http.ServeMux
-	server *http.Server
+	Addr               string
+	Mux                *http.ServeMux
+	server             *http.Server
+	coordination       *CoordinationHandler
+	coordinationCtx    context.Context
+	coordinationCancel context.CancelFunc
 }
 
 // newRuntimeRegistry builds the registry of runtime adapters compiled into
@@ -74,9 +77,12 @@ func newRuntimeRegistry() *runtimeconfig.Registry {
 
 func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux := http.NewServeMux()
+	coordinationCtx, coordinationCancel := context.WithCancel(context.Background())
 	s := &HTTPServer{
-		Addr: addr,
-		Mux:  mux,
+		Addr:               addr,
+		Mux:                mux,
+		coordinationCtx:    coordinationCtx,
+		coordinationCancel: coordinationCancel,
 		server: &http.Server{
 			Addr:    addr,
 			Handler: withControllerHTTPMetrics(mux),
@@ -84,6 +90,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	}
 
 	mw := deps.AuthMw
+	s.coordination = NewCoordinationHandler(deps)
+	mux.Handle("POST /api/v1/coordination/events", mw.Authenticate(http.HandlerFunc(s.coordination.PostEvent)))
+	mux.Handle("GET /api/v1/coordination/events/{id}", mw.Authenticate(http.HandlerFunc(s.coordination.GetEvent)))
 
 	// Container-level telemetry is restricted to administrator/Manager
 	// identities; scoped Humans, Leaders and Workers cannot read host logs.
@@ -539,6 +548,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 }
 
 func (s *HTTPServer) Start() error {
+	if s.coordination != nil && s.coordinationCtx != nil {
+		defer s.coordinationCancel()
+		go s.coordination.Run(s.coordinationCtx)
+	}
 	logger := log.Log.WithName("http-server")
 	logger.Info("starting unified REST API server", "addr", s.Addr)
 	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -550,6 +563,9 @@ func (s *HTTPServer) Start() error {
 // Shutdown gracefully stops the HTTP server, waiting for in-flight requests
 // to finish or ctx to be cancelled. Idempotent.
 func (s *HTTPServer) Shutdown(ctx context.Context) error {
+	if s.coordinationCancel != nil {
+		s.coordinationCancel()
+	}
 	return s.server.Shutdown(ctx)
 }
 

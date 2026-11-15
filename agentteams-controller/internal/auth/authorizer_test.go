@@ -660,9 +660,9 @@ func TestAuthorizer_ProjectMetaCommit(t *testing.T) {
 			"leader cross-team"},
 		{human, AuthzRequest{Action: ActionUpdate, ResourceKind: "project-meta", ResourceName: "p2", ResourceTeam: "beta-team"},
 			"human cross-team"},
-		// Non-Update actions on the kind stay closed (the route is PUT only).
-		{workerSame, AuthzRequest{Action: ActionGet, ResourceKind: "project-meta", ResourceName: "p1"},
-			"worker get project-meta"},
+		// Other actions on record kinds stay closed.
+		{workerSame, AuthzRequest{Action: ActionList, ResourceKind: "project-meta"},
+			"worker list project-meta"},
 		{leader, AuthzRequest{Action: ActionDelete, ResourceKind: "project-meta", ResourceName: "p1"},
 			"leader delete project-meta"},
 		// REGRESSION NAIL: "project" Update stays closed to workers — this
@@ -675,6 +675,24 @@ func TestAuthorizer_ProjectMetaCommit(t *testing.T) {
 	for _, tc := range denied {
 		if err := az.Authorize(tc.caller, tc.req); err == nil {
 			t.Errorf("%s: want deny, got allow", tc.why)
+		}
+	}
+}
+
+func TestAuthorizer_WorkerReadsCoordinationStateWithinTeam(t *testing.T) {
+	az := NewAuthorizer()
+	worker := &CallerIdentity{Role: RoleWorker, Username: "alpha-dev", Team: "alpha"}
+	for _, kind := range []string{"project-meta", "task-meta"} {
+		for _, team := range []string{"", "alpha"} {
+			if err := az.Authorize(worker, AuthzRequest{Action: ActionGet, ResourceKind: kind, ResourceTeam: team}); err != nil {
+				t.Fatalf("worker cannot read %s in own team: %v", kind, err)
+			}
+		}
+		if err := az.Authorize(worker, AuthzRequest{Action: ActionGet, ResourceKind: kind, ResourceTeam: "beta"}); err == nil {
+			t.Fatalf("worker read crossed team boundary for %s", kind)
+		}
+		if err := az.Authorize(&CallerIdentity{Role: RoleWorker, Username: "standalone"}, AuthzRequest{Action: ActionGet, ResourceKind: kind}); err == nil {
+			t.Fatalf("team-less worker read %s", kind)
 		}
 	}
 }

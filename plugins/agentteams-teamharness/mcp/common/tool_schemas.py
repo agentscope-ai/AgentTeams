@@ -73,7 +73,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "target": {
                     "type": "string",
                     "description": (
-                        "Matrix room target for cross-room sends, for example "
+                        "Matrix room or user target for cross-room sends, for example user:@leader:domain or "
                         "room:!room:domain. For PROJECT_REQUESTED self-trigger, "
                         "pass the target task room as a room:!room:domain string."
                     ),
@@ -146,6 +146,11 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "text": {
                     "type": "string",
                     "description": "Plain message text for ordinary cross-room or external sends. message and body aliases are also accepted.",
+                },
+                "requesterReplyRoute": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "description": "Original requester route supplied by the runtime; preserve it across handoffs.",
                 },
                 "dryRun": {
                     "type": "boolean",
@@ -351,7 +356,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "or Project Work mode is selected: create quick projects, create "
             "projects, plan or update DAG and Loop work, query ready nodes, "
             "and record loop iterations. Do not use for ordinary direct "
-            "replies or one-off checks. complete_project persists the "
+            "replies or one-off checks. start_project combines task-room creation, "
+            "initial DAG storage and first ready assignments; supply create_project "
+            "fields plus tasks with specs for initially ready nodes. complete_project persists the "
             "terminal state locally and syncs it to shared storage before "
             "the PROJECT_COMPLETED event is emitted; if that sync fails the "
             "action returns a retryable failure with the event withheld, so "
@@ -363,6 +370,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "action": {
                     "type": "string",
                     "enum": [
+                        "start_project",
+                        "advance_project",
                         "create_project",
                         "create_quick_project",
                         "resolve_project",
@@ -593,7 +602,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "decisionClass": {
                     "type": "string",
-                    "description": "Delegate_task decision class r1..r6 (contracts/decision-classes.json); required while the protocol.enforce switch is on.",
+                    "description": "Use r3 for delegate_task, including first assignment. Other classes: r1 result acceptance, r2 cancellation, r4 loop review, r5 project lifecycle, r6 attention escalation. Required while protocol.enforce is on.",
                 },
                 "workspaceDir": {
                     "type": "string",

@@ -65,6 +65,8 @@ def _normalize_task(raw: dict[str, Any], previous: dict[str, Any] | None = None)
     }
     if cancellation:
         normalized["cancellation"] = dict(cancellation)
+    if "spec" in raw or "spec" in previous:
+        normalized["spec"] = str(raw.get("spec", previous.get("spec", ""))).strip()
     parent = previous.get("parent_task_id", "")
     for key in ("parentTaskId", "parent_task_id"):
         if key in raw:

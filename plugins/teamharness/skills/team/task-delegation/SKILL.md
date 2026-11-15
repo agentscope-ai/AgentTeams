@@ -63,16 +63,20 @@ and Worker invites before Project Work reaches this skill.
 ## Delegate Task
 
 Call `taskflow` with `role: "leader"` and pass `payload` as an object:
+Use `decisionClass: "r3"` for delegation (including the first assignment).
+The tool schema supplies this contract; do not search the filesystem or old
+repositories for decision-class definitions during a routine assignment.
 
 ```json
 {
   "role": "leader",
   "action": "delegate_task",
+  "decisionClass": "r3",
   "payload": {
     "projectId": "demo-project-001",
     "taskId": "demo-project-001-01",
     "roomId": "room:!task-room:matrix.local",
-    "spec": "# Task demo-project-001-01\n\n## Context\nExplain why this task exists.\n\n## Expected Result\nCreate deliverables under shared/tasks/demo-project-001-01/ and submit a result with STATUS, SUMMARY, DELIVERABLES, and 3-5 short CONCLUSIONS (one line each).\n\n## Acceptance Criteria\n- The result addresses the task scope.\n- Deliverables are listed in result.md.\n\n## Completion Report\nAfter `taskflow submit_task` returns `ok: true`, reply in the current Task room and mention the exact Leader Matrix user from this task context:\n\n<Leader Matrix user> TASK_COMPLETED: demo-project-001-01 - Result: shared/tasks/demo-project-001-01/result.md\n\nDo not use `NO_REPLY` after a successful task submission.\n"
+    "spec": "# Task demo-project-001-01\n\n## Context\nExplain why this task exists.\n\n## Expected Result\nCreate deliverables under shared/tasks/demo-project-001-01/ and submit a result with STATUS, SUMMARY, DELIVERABLES, and 3-5 short CONCLUSIONS (one line each).\n\n## Acceptance Criteria\n- The result addresses the task scope.\n- Deliverables are listed in result.md.\n\n## Completion Report\nAfter `taskflow submit_task` returns `ok: true`, if `notification.sent` is true, end your turn with `NO_REPLY`. Otherwise send one fallback in the current Task room:\n\n<Leader Matrix user> TASK_COMPLETED: demo-project-001-01 - Result: shared/tasks/demo-project-001-01/result.md\n\nDo not send a duplicate completion message after automatic delivery.\n"
   }
 }
 ```
@@ -97,12 +101,14 @@ and result path adjusted for the actual task:
 ```text
 ## Completion Report
 
-After `taskflow submit_task` returns `ok: true`, reply in the current assignment
-room and mention the exact Leader Matrix user from this task context:
+After `taskflow submit_task` returns `ok: true`, inspect `notification.sent`.
+When true, the completion event already mentions the Leader: end your turn
+with `NO_REPLY`. Only when notification failed or was skipped, send this
+fallback in the current assignment room:
 
 <Leader Matrix user> TASK_COMPLETED: demo-project-001-01 - Result: shared/tasks/demo-project-001-01/result.md
 
-Do not use `NO_REPLY` after a successful task submission.
+Do not send a duplicate completion message after automatic delivery.
 ```
 
 If the project node already contains a custom completion line, preserve it and
@@ -136,6 +142,12 @@ Do not ask the Worker to edit project files. Do not ask several Workers to own
 the same task directory.
 
 ## Check Submitted Task
+
+`check_task` returns the task metadata, structured result, task spec and result
+report together. Review this snapshot first; read the referenced files only
+when `contextTruncated` is true or you need additional acceptance evidence.
+After `accept_task_result`, use its returned `readyNodes`/`readyLoopNodes`
+directly instead of querying project context and readiness again.
 
 When a Worker reports completion or blocker status, call:
 

@@ -380,6 +380,15 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project = _read_json(_project_state_path(arguments, project_id))
             if any(node.get("parent_task_id") == task_id for node in project.get("tasks", [])):
                 raise ValueError("delegate subtasks instead of their coordinating parent task")
+            nodes = project.get("tasks", []) + (project.get("loop", {}).get("tasks", []) if isinstance(project.get("loop"), dict) else [])
+            by_id = {node.get("task_id"): node for node in nodes}
+            blocked_by = [dep for dep in by_id.get(task_id, {}).get("depends_on", []) if by_id.get(dep, {}).get("status") != "completed"]
+            if blocked_by:
+                return {
+                    "ok": False, "tool": "taskflow", "action": action,
+                    "retryable": False, "blockedBy": blocked_by,
+                    "error": "dependencies are not accepted; wait for their completion event before delegating, do not poll",
+                }
             paused, pause_sources = _loop_pause_state(project or {})
             if paused:
                 raise ValueError(f"project is paused (sources: {', '.join(pause_sources)})")
@@ -792,6 +801,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "action": action,
                 "task": task,
                 "spec": spec,
+                "taskDirectory": str(_task_dir(arguments, task_id).resolve()),
                 "pulled": pulled,
                 "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
             }
@@ -1959,12 +1969,21 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task = _load_task(arguments, task_id)
             result, validation_errors = _task_result_from_meta(task)
             effective = task.get("status") == "submitted" and not validation_errors
+            reports = {}
+            for name in ("spec", "result"):
+                path = _task_dir(arguments, task_id) / f"{name}.md"
+                if path.is_file() and not path.is_symlink():
+                    with path.open(encoding="utf-8", errors="replace") as report:
+                        reports[name] = report.read(8193)
             return {
                 "ok": True,
                 "tool": "taskflow",
                 "action": action,
                 "task": task,
                 "result": result,
+                "spec": reports.get("spec", "")[:8192],
+                "report": reports.get("result", "")[:8192],
+                "contextTruncated": any(len(text) > 8192 for text in reports.values()),
                 "validationErrors": validation_errors,
                 "effective": effective,
                 "pulled": pulled,

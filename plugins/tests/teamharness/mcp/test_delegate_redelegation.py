@@ -125,6 +125,23 @@ def delegate_side_effects(
     return calls
 
 
+@pytest.mark.parametrize("dependency_status", ["planned", "assigned", "submitted", "blocked", "revision"])
+def test_unaccepted_dependency_prevents_dispatch(tmp_path, delegate_side_effects, dependency_status):
+    project_id, task_id = _write_assigned_task(tmp_path)
+    path = tmp_path / "shared/projects" / project_id / "meta.json"
+    project = json.loads(path.read_text())
+    project["tasks"][0]["depends_on"] = ["upstream"]
+    project["tasks"].append({"task_id": "upstream", "status": dependency_status})
+    server._write_json(path, project)
+    before = (tmp_path / "shared/tasks" / task_id / "meta.json").read_bytes()
+    result = _delegate(tmp_path, task_id, WORKER_B)
+    assert result["ok"] is False
+    assert result["retryable"] is False
+    assert result["blockedBy"] == ["upstream"]
+    assert delegate_side_effects["notify"] == []
+    assert (tmp_path / "shared/tasks" / task_id / "meta.json").read_bytes() == before
+
+
 def test_redelegation_to_different_assignee_sends_fresh_notification(
     tmp_path: Path,
     delegate_side_effects: dict[str, list[Any]],

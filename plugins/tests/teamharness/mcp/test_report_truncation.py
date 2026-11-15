@@ -55,6 +55,13 @@ class _SendCapture:
 
     def __init__(self) -> None:
         self.requests: list[tuple[str, dict[str, Any]]] = []
+        self.artifacts: list[dict[str, Any]] = []
+
+    def publish(self, arguments, **kwargs):
+        assert not self.requests, "the report attachment must precede the notification"
+        assert (Path(arguments["workspaceDir"]) / kwargs["source_path"]).is_file()
+        self.artifacts.append(kwargs)
+        return {"status": "published", "mxcUri": "mxc://matrix.local/report", "eventId": "$report"}
 
     def urlopen(self, request: Any, timeout: Any = None) -> _FakeResponse:
         url = request.full_url if hasattr(request, "full_url") else str(request)
@@ -68,9 +75,33 @@ def _report_relpath(text: str) -> str:
     return f"shared/reports/{digest}/report.md"
 
 
+def test_manager_handoff_preserves_a_reply_room_the_leader_can_access(tmp_path, monkeypatch):
+    capture = _prepare(tmp_path, monkeypatch)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
+    monkeypatch.setenv("AGENTTEAMS_MATRIX_USER_ID", "@coordinator:matrix.local")
+    monkeypatch.setattr(sys.modules["mcp.message_tool"], "_direct_message_room", lambda *a: ROOM)
+    result = server._message({"target": "user:@lead:matrix.local", "channel": "matrix",
+        "message": "@lead:matrix.local implement the accepted request", "workspaceDir": str(tmp_path),
+        "requesterReplyRoute": {"channel": "matrix", "target_session": "!human:matrix.local", "target_user": "@human:matrix.local"}})
+    assert result["ok"]
+    content = capture.requests[-1][1]
+    assert content["org.agentteams.coordinator_route"] == {
+        "channel": "matrix", "target_session": ROOM, "target_user": "@coordinator:matrix.local"}
+    assert content["org.agentteams.requester_route"]["target_session"] == "!human:matrix.local"
+
+
+def test_api_coordination_messages_are_progress_not_a_second_dispatch(tmp_path, monkeypatch):
+    _prepare(tmp_path, monkeypatch)
+    monkeypatch.setenv("TEAMHARNESS_COORDINATION_URL", "http://controller/coordination")
+    result = server._message({"target": TARGET, "channel": "matrix", "message": LEADER + " Result submitted.",
+                              "workspaceDir": str(tmp_path), "dryRun": True})
+    assert result["ok"] and result["projectionOnly"]
+    assert result["content"]["org.agentteams.progress_only"] is True
+
+
 def _pointer(text: str) -> str:
     lines = text.splitlines()
-    return "\n".join(lines[:5]) + f"\n…中间 {len(lines) - 5} 行见 {_report_relpath(text)}"
+    return "\n".join(lines[:5]) + "\n…完整报告见本房间附件 report.md"
 
 
 def _prepare(
@@ -86,6 +117,7 @@ def _prepare(
         monkeypatch.setenv("AGENTTEAMS_MATRIX_URL", "http://matrix.local")
         monkeypatch.setenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "test-token")
         capture = _SendCapture()
+        monkeypatch.setattr(server, "_publish_workspace_artifact", capture.publish)
         monkeypatch.setattr(server.urllib.request, "urlopen", capture.urlopen)
         remote = tmp_path / "remote-shared"
 
@@ -140,7 +172,8 @@ def test_six_lines_truncated_with_pointer_and_mentions(
     # The @target (line 1 here) stays in the body AND in m.mentions.
     assert sent["content"]["m.mentions"] == {"user_ids": [LEADER]}
     assert sent["fullReportPath"] == _report_relpath(text)
-    assert "report body exceeds 5 lines" in sent["warning"]
+    assert sent["reportDelivery"]["status"] == "planned"
+    assert "warning" not in sent
     # dryRun: pointer is exact, nothing written.
     assert not (tmp_path / "shared" / "reports").exists()
 
@@ -154,7 +187,7 @@ def test_ten_lines_pointer_reports_hidden_count(
     sent = _send(tmp_path, text, dry_run=True)
 
     assert sent["ok"] is True
-    assert sent["content"]["body"].endswith(f"\n…中间 5 行见 {_report_relpath(text)}")
+    assert sent["content"]["body"].endswith("\n…完整报告见本房间附件 report.md")
     assert sent["content"]["body"].splitlines()[-2] == "line 5"
     assert len(sent["content"]["body"].splitlines()) == 6
 
@@ -249,12 +282,23 @@ def test_report_is_published_before_notification(
     text = "\n".join(f"line {i}" for i in range(8))
     sent = _send(tmp_path, text)
     assert sent["ok"] is True
+    assert len(capture.artifacts) == 1
+    assert capture.artifacts[0]["room_id"] == ROOM
+    assert sent["reportAttachment"]["mxcUri"] == "mxc://matrix.local/report"
     assert calls == ["push", "stat"]
     rel = sent["fullReportPath"]
     (receiver / rel).parent.mkdir(parents=True, exist_ok=True)
     (receiver / rel).write_bytes((remote / rel).read_bytes())
     assert (receiver / rel).read_text() == text + "\n"
     assert len(capture.requests) == 1
+
+
+def test_failed_report_attachment_does_not_send_inaccessible_pointer(tmp_path, monkeypatch):
+    capture = _prepare(tmp_path, monkeypatch)
+    monkeypatch.setattr(server, "_publish_workspace_artifact", lambda *a, **k: {"status": "failed", "error": "upload failed"})
+    sent = _send(tmp_path, "\n".join(f"line {i}" for i in range(8)))
+    assert sent["ok"] is False
+    assert not capture.requests
 
 
 @pytest.mark.parametrize("failed_action", ["push", "stat"])

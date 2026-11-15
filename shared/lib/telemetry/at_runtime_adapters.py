@@ -167,6 +167,9 @@ def agentscope(module):
         # AgentScope's public middleware API captures model context, tools,
         # tool-call IDs, usage, agent state and errors without SDK double counting.
         middlewares = list((args[4] if len(args) > 4 else kwargs.get("middlewares")) or [])
+        # QwenPaw already supplies the standard middleware. Replace that
+        # instance so our outcome/task hooks run without double instrumentation.
+        middlewares = [WorkerTracingMiddleware() if type(m) is TracingMiddleware else m for m in middlewares]
         if not any(isinstance(m, TracingMiddleware) for m in middlewares):
             middlewares.insert(0, WorkerTracingMiddleware())
         if len(args) > 4:

@@ -174,6 +174,14 @@ def test_returned_tool_errors_are_detected():
     assert not telemetry.tool_error({"exit_code": 0, "stdout": "error count: 0"})
 
 
+def test_denied_and_wrapped_tool_failures_are_detected():
+    assert telemetry.tool_error({"state": "denied", "content": [{"type": "text", "text": "Approval timed out after 300s"}]}) == "Approval timed out after 300s"
+    assert telemetry.tool_error({"ok": False})
+    assert telemetry.tool_error({"content": [{"type": "text", "text": '{"ok": false, "error": "invalid artifact path"}'}]}) == "invalid artifact path"
+    assert not telemetry.tool_error({"content": [{"type": "text", "text": "No error found"}]})
+    assert not telemetry.tool_error({"content": [{"type": "text", "text": '{"ok": true}'}]})
+
+
 def test_runtime_handles_in_request_are_not_serialized_as_json():
     class Request:
         def model_dump(self, mode):

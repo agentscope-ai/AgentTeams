@@ -240,14 +240,19 @@ def tool_error(result):
     if hasattr(result, "model_dump"):
         result = result.model_dump(mode="json")
     if isinstance(result, dict):
-        if result.get("error") or result.get("failed") or result.get("isError"):
+        if result.get("error") or result.get("failed") or result.get("isError") or result.get("ok") is False:
             return str(result.get("error") or result.get("failed") or "tool error")[:2000]
         if result.get("exit_code", 0) not in (0, None):
             return f"exit_code={result['exit_code']}"
-        if str(result.get("state", "")).lower() in ("error", "failed"):
+        if str(result.get("state", "")).lower() in ("error", "failed", "denied"):
             detail = "\n".join(block.get("text", "") for block in result.get("content", [])
                                if isinstance(block, dict) and block.get("type") == "text")
             return detail[:2000] or "tool returned error state"
+        for block in result.get("content", []):
+            if isinstance(block, dict) and block.get("type") == "text":
+                reason = tool_error(block.get("text", ""))
+                if reason:
+                    return reason
     return ""
 
 

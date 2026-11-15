@@ -648,6 +648,7 @@ type CreateManagerRequest struct {
 }
 
 type UpdateManagerRequest struct {
+	Env           map[string]string                  `json:"env,omitempty"`
 	Model         string                             `json:"model,omitempty"`
 	ModelProvider *string                            `json:"modelProvider,omitempty"`
 	Runtime       string                             `json:"runtime,omitempty"`
@@ -685,6 +686,10 @@ type ManagerResponse struct {
 	// + welcome prompt actually delivered). Always present (false until set)
 	// so the install script can rely on a stable JSON shape.
 	WelcomeSent bool `json:"welcomeSent"`
+
+	// Environment values are returned only by privileged detail/update requests.
+	Env         map[string]string `json:"env,omitempty"`
+	EnvEditable bool              `json:"envEditable,omitempty"`
 }
 
 type ManagerListResponse struct {

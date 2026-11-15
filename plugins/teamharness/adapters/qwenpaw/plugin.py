@@ -467,6 +467,12 @@ async def _manager_report_context(ctx: Any) -> bool:
         team = await asyncio.to_thread(_controller_json, "teams/" + urllib.parse.quote(project.get("team_id", ""), safe=""))
         if not any(m.get("role") == "team_leader" and m.get("matrixUserID") == sender for m in team.get("members", [])):
             return True
+        report = meta.get("teamharness_final_report")
+        if (meta.get("api_projection") and api_event.get("kind") == "project_completed"
+                and api_event.get("project_id") == event["project_id"]
+                and isinstance(report, str) and report.strip()):
+            ctx.extras["verified_final_report"] = report
+            return True
         route = project.get("requester_reply_route") or {}
         if route:
             ctx.extras["final_route_token"] = _requester_route.set(route)
@@ -514,7 +520,7 @@ def _register_coordination_hook(api: Any) -> None:
                 from agentscope.message import Msg
 
                 return HookResult(action=HookAction.SHORT_CIRCUIT, payload=Msg(
-                    name="Manager", content=[{"type": "text", "text": "NO_REPLY"}], role="assistant"))
+                    name="Manager", content=[{"type": "text", "text": getattr(ctx, "extras", {}).get("verified_final_report", "NO_REPLY")}], role="assistant"))
             return HookResult()
 
     class CoordinationExit(HookBase):

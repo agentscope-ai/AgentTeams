@@ -94,6 +94,7 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 		text = "PROJECT_READY_TO_CLOSE: " + e.ProjectID + "\nEvery execution leaf has been accepted. Verify the complete request from these accepted results, then call projectflow complete_project with projectId and report (your concise final user report). That single operation closes coordinating parents, saves the report, completes the project and notifies the original coordinator. Do not modify accepted artifacts, repeat QA or end with a pending parent.\n" + text
 	case "project_completed":
 		meta["teamharness_workflow"] = map[string]any{"type": "PROJECT_COMPLETED", "project_id": e.ProjectID}
+		meta["teamharness_final_report"] = e.FinalReport
 		text = "PROJECT_COMPLETED: " + e.ProjectID + "\nThe final state is accepted. Reply with the concise final report; the dispatcher returns it to the original Matrix conversation. Do not send another message or poll.\n" + text
 	}
 	user := coordinationString(original, "target_user")

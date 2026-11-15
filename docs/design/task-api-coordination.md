@@ -33,7 +33,9 @@ once the original user conversation has actually received the report.
   notifies the Leader once if the coordinating parent/project still needs
   closure. Loop iterations are not treated as finite completed plans.
 - `project_completed`: the registered Leader notifies the saved Manager route.
-  The Manager reports to the saved original user conversation. A direct Human
+  The Manager validates the completed state and registered Leader, then relays
+  the saved Leader report without another model call. The Controller projects
+  that response to the saved original user conversation. A direct Human
   requester retains the existing direct Matrix report path. This is a completion
   notification, not a stop/cancel call against a Manager session.
 

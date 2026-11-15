@@ -77,12 +77,20 @@ func TestCoordinationFinalUsesSavedRequester(t *testing.T) {
 	_ = json.Unmarshal(b, &p)
 	p["status"] = "completed"
 	putProject(s, key, p)
-	got, err := h.resolve(context.Background(), coordinationEvent{Kind: "project_completed", ProjectID: "p1", Recipient: "@other:test", RoomID: "!wrong:test"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	s.PutObject(context.Background(), "teams/alpha/shared/projects/p1/result.md", []byte("Accepted canonical report"))
+	got, err := h.resolve(context.Background(), coordinationEvent{Kind: "project_completed", ProjectID: "p1", Text: "Caller report", Recipient: "@other:test", RoomID: "!wrong:test"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Recipient != "@manager:test" || got.RequesterRoute["target_session"] != "!source:test" {
 		t.Fatal("did not preserve requester route")
+	}
+	if got.FinalReport != "Accepted canonical report" {
+		t.Fatal("final notification did not load the saved report")
+	}
+	meta := coordinationPayload(got)["channel_meta"].(map[string]any)
+	if meta["teamharness_final_report"] != got.FinalReport {
+		t.Fatal("canonical report missing from native notification")
 	}
 	if got.TargetURL != "http://agentteams-manager:18799" {
 		t.Fatalf("manager url %s", got.TargetURL)

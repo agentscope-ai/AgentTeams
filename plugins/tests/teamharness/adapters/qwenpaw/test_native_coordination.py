@@ -116,6 +116,12 @@ class NativeCoordinationTest(unittest.TestCase):
         asyncio.run(run())
 
     def test_peer_update_does_not_enter_model_executor(self):
+        self._assert_model_executor_skipped()
+
+    def test_verified_final_report_does_not_enter_model_executor(self):
+        self._assert_model_executor_skipped("Verified accepted report")
+
+    def _assert_model_executor_skipped(self, final_report=None):
         import qwenpaw.runtime.runtime as runtime_module
         from qwenpaw.runtime.hooks import HookResult
         from qwenpaw.runtime.phases import Phase
@@ -141,7 +147,8 @@ class NativeCoordinationTest(unittest.TestCase):
             hook_registry=SimpleNamespace(run=run_phase), modes=[],
             slash_command_registry=SimpleNamespace(dispatch=AsyncMock(return_value=None))))
         runtime = runtime_module.Runtime(workspace=workspace, app_services=None)
-        ctx = SimpleNamespace(session_id="matrix:!test:test", input_msgs=[], extras={}, agent=None)
+        ctx = SimpleNamespace(session_id="matrix:!test:test", input_msgs=[],
+            extras={"verified_final_report": final_report} if final_report else {}, agent=None)
         runtime._normalize = lambda request: request
         runtime._build_context = lambda request: ctx
 
@@ -151,7 +158,10 @@ class NativeCoordinationTest(unittest.TestCase):
         with patch.object(plugin, "_manager_report_context", AsyncMock(return_value=True)), \
              patch.object(runtime_module, "AgentBuilder", return_value=SimpleNamespace(build=AsyncMock(return_value=SimpleNamespace()))), \
              patch.object(runtime_module, "AgentExecutor", side_effect=AssertionError("peer event started the model")):
-            self.assertTrue(asyncio.run(run()))
+            events = asyncio.run(run())
+            self.assertTrue(events)
+            if final_report:
+                self.assertIn(final_report, str(events))
 
 
 if __name__ == "__main__":

@@ -53,6 +53,7 @@ type coordinationEvent struct {
 	TargetURL         string         `json:"-"`
 	External          bool           `json:"external,omitempty"`
 	EligibleAssignees []string       `json:"eligible_assignees,omitempty"`
+	FinalReport       string         `json:"final_report,omitempty"`
 }
 
 var coordinationSafeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -335,6 +336,11 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			if caller.Role != authpkg.RoleTeamLeader || coordinationString(project, "status") != "completed" {
 				return reject()
 			}
+			report, readErr := h.deps.OSS.GetObject(ctx, path.Join("teams", e.StorageTeam, "shared/projects", e.ProjectID, "result.md"))
+			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+				return e, readErr
+			}
+			e.FinalReport = strings.TrimSpace(string(report))
 			route := coordinationMap(project, "reply_route")
 			target := coordinationString(route, "target_user")
 			var managers v1beta1.ManagerList

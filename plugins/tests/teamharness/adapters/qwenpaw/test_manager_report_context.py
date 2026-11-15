@@ -99,3 +99,31 @@ def test_result_review_uses_acceptance_tools_without_reexecuting_worker_work(mon
         agent=SimpleNamespace(toolkit=SimpleNamespace(get_tool_schemas=schemas,remove_tool=remove)), extras={}, inject_context=lambda *a,**kw:None)
     assert asyncio.run(plugin._manager_report_context(ctx)) is False
     assert names == ["read_file", "teamharness__taskflow", "teamharness__projectflow"]
+
+
+@pytest.mark.parametrize("status,sender,kind,report,relay", [
+    ("completed", "@leader:test", "project_completed", "Accepted final report", True),
+    ("active", "@leader:test", "project_completed", "Premature report", False),
+    ("completed", "@other:test", "project_completed", "Untrusted report", False),
+    ("completed", "@leader:test", "handoff", "Intermediate report", False),
+    ("completed", "@leader:test", "project_completed", "", False),
+])
+def test_api_final_report_is_relayed_only_after_canonical_validation(monkeypatch, status, sender, kind, report, relay):
+    spec = importlib.util.spec_from_file_location("final_relay_plugin", SOURCE)
+    plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
+    def state(path):
+        if path == "humans": return {"humans": []}
+        if path.endswith("/meta"): return {"status": status, "team_id": "team"}
+        return {"members": [{"role": "team_leader", "matrixUserID": "@leader:test"}]}
+    monkeypatch.setattr(plugin, "_controller_json", state)
+    async def schemas(): return []
+    meta = {"sender_id": sender, "room_id": "!room:test", "api_projection": True,
+        "teamharness_workflow": {"type": "PROJECT_COMPLETED", "project_id": "p"},
+        "teamharness_coordination": {"kind": kind, "project_id": "p"},
+        "teamharness_final_report": report}
+    ctx = SimpleNamespace(request=SimpleNamespace(channel_meta=meta), extras={},
+        agent=SimpleNamespace(toolkit=SimpleNamespace(get_tool_schemas=schemas)), inject_context=lambda *a,**kw:None)
+    skip = asyncio.run(plugin._manager_report_context(ctx))
+    assert (ctx.extras.get("verified_final_report") == report and bool(report)) is relay
+    if relay: assert skip is True

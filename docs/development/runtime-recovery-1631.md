@@ -21,7 +21,7 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 
 Candidate companion pins on this Draft branch: Codex `f1d28b5fdb6f44526787a9e17a03145ffb43fbc3`
 and Hermes `0b0892f3aad69c9e655a41a3a95902f8ea1e1185`, plus DeepSeek
-`0c4de5faa2ce1a94824d8a7f8b473d66f2999472`. All consume the shared
+`3edd9b0334423ecc366213975bbdf10044426c64`. All consume the shared
 Core contract at `2c90bccfedb563cbf94e3e1a932fd2effd7b5e23`. These are review
 candidates, not accepted/released Harness versions.
 
@@ -65,6 +65,12 @@ candidates, not accepted/released Harness versions.
   session returns a dedicated error before admitting input/tools, permitting a
   fresh session; other native failures fence uncertainty and bypass ordinary
   Matrix event retries. This adapter has no real-model Task acceptance yet.
+- DSH's native subprocess scrubber removes the Controller credential-file
+  environment variable. Its MCP transport now forwards that scoped file path
+  explicitly. A real installed MCP transport/checkpoint tool regression first
+  reproduced the connection closing, then verified supervisor process headers,
+  authorization and conditional checkpoint HTTP after the fix. Its Task HTTP
+  server is a fixture; this is not real-model Task continuation.
 - Verified incoming Hermes assignments retain their actual Matrix event ID in
   the native input, allowing its native commit to produce a real read receipt.
   Startup-only recovery does not manufacture a Matrix source/read. The wake
@@ -95,6 +101,7 @@ candidates, not accepted/released Harness versions.
 | Codex recovery admission/session/delivery/reassignment | 9 passed; 38 total | mocked client; no native model |
 | Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; SDK cache/admission tests use mocked Task client; real normal restart and valid native-session reuse passed case 11; remaining scenario set open |
 | DeepSeek startup recovery | partial | 62 Python and 7 Node tests passed; Task client mocked; native missing-session/no-input, tool/read, resume/error and stop/steer smokes passed with a deterministic model; real-model Task continuation untested |
+| DeepSeek native MCP checkpoint scope | passed, HTTP fixture | actual SDK scrubber and stdio MCP tool preserve credential-file access, process fence and conditional Task HTTP; no model/real Task acceptance |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
 | Two real Harness continuation chain | cases 06/07 passed; full scenario sets incomplete | real Codex to Hermes and reverse replacements, same Task, generation 1 to 2, checkpoint 4 to 10, all steps once, no new input, one final report |

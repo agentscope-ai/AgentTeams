@@ -224,8 +224,7 @@ jobs:
 
       - name: Run DeepSeek Harness bridge tests
         run: |
-          python3 -m unittest discover -s deepseek-harness/tests -p 'test_*.py' -v
-          node --test deepseek-harness/tests/*.test.mjs
+          make -C deepseek-harness test
 
   mcp-setup-tests:
     runs-on: ubuntu-latest

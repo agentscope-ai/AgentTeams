@@ -19,8 +19,8 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenClaw | `5e44ebecabf878eda499b668c9627208dbfa6049` | matched |
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
-Candidate companion pins on this Draft branch: Codex `4759ede928424af7d4d29c6ee0e22391ba3d5a16`
-and Hermes `7038a26ef3880c229933e7768ad1421b7b9fd74f`. Both consume the shared
+Candidate companion pins on this Draft branch: Codex `852fe57fe9e7daa5805c9cf14d6bafd66dcb9995`
+and Hermes `7bbde8b3972ff66b20cf6e7cb25d582527ade60a`. Both consume the shared
 Core contract at `3fe81174f391f7741f5f5471b110616742d1de91`. These are review
 candidates, not accepted/released Harness versions.
 
@@ -55,15 +55,44 @@ candidates, not accepted/released Harness versions.
 | Controller server/auth/backend suites | passed | Go tests; no native model |
 | Existing Controller cutover race tests | passed | disappearance ordering only |
 | Recovery/instance identity regressions | passed | Go tests with fake storage/backend HTTP |
-| Shared recovery client | 6 passed | Python unit tests |
-| Task metadata commit and transition validation + shared recovery | 29 passed | Python tests |
+| Shared recovery client | 9 passed | Python unit tests |
+| Task metadata commit and transition validation + shared recovery | 32 passed | Python tests |
 | Codex existing suite | 29 passed | SDK/transport unit fixtures |
-| Codex recovery admission/session/delivery/reassignment | 4 passed | mocked client; no native model |
-| Hermes startup recovery | initial adapter implemented | 28 host unit tests passed, 1 skipped; installed SDK recovery/admission smokes passed at `2d27ef0` with mocked Task client; latest native upgrade CI pending |
+| Codex recovery admission/session/delivery/reassignment | 9 passed; 38 total | mocked client; no native model |
+| Hermes startup recovery | initial adapter implemented | 28 host unit tests passed, 1 skipped; installed SDK recovery/admission smoke passed with mocked Task client; `3477332` hosted image/test checks passed; latest head pending |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
-| Two real Harness continuation chain | not tested | no passing record |
+| Two real Harness continuation chain | blocked during first admission; no passing record | isolated Matrix/Controller/two Worker boot passed; first Task remained assigned, ledger empty; stale standalone role bypassed recovery and is now fixed in source |
 | Result saved / reply unsent against real Matrix | not tested | distinct from execution continuation |
+
+### Isolated live fixture (2026-11-16)
+
+`tests/runtime_recovery_e2e.py` is an opt-in setup/seed driver, not an automated
+passing acceptance test. It uses only resources prefixed
+`recovery-1631-live-20261116`, its own data volume, and a non-overlapping subnet.
+The three-step helper is executed only by the real Harness's native model tool;
+the driver does not execute steps on the Worker's behalf. Its persisted ledger
+counts executions, and immutable step artifacts are uploaded before checkpoints.
+No cross-Harness replacement or step execution has passed yet.
+
+Live setup exposed and source regressions now cover these issues:
+
+- A Worker created before joining a Team kept `standalone` in its container
+  environment. Native startup must still use authenticated self-discovery.
+- Real Hermes `openclaw.json` has no `team_id`. It cannot gate Task recovery.
+- A delivered progress turn does not complete an `in_progress` Task. Submitted
+  saved replies remain delivery-only, and a delivered native turn is not replayed.
+- Codex recovery must retain original Matrix source IDs, exclude synthetic
+  recovery IDs from read receipts, and preserve other rooms' same-ID admissions.
+
+Local Docker disk cleanup removed the previous build blocker. Overlay image
+startup required executable modes on the entrypoint and copied `mc-wrapper.sh`;
+the official Harness Dockerfiles already set these modes. Real Qwen
+`qwen3.6-plus` Responses gateway probe returned HTTP 200. This is provider
+connectivity evidence, not native Task execution. Codex tracing bootstrap lacks
+`opentelemetry` in this image; trace ingestion/readback remains open. Only the
+new fixture's Collector/Controller joined the existing tracing network; existing
+service configuration and volumes were not changed.
 
 Reproduce the focused checks from Core:
 

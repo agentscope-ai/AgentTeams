@@ -90,6 +90,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	}
 
 	mw := deps.AuthMw
+	archives := NewTaskRoomArchiveHandler(deps)
+	mux.Handle("GET /api/v1/task-rooms/archived", mw.Authenticate(http.HandlerFunc(archives.List)))
+	mux.Handle("GET /api/v1/task-rooms/{roomId}/archive", mw.Authenticate(http.HandlerFunc(archives.Status)))
+	for _, action := range []string{"archive", "unarchive", "delete"} {
+		mux.Handle("POST /api/v1/task-rooms/{roomId}/"+action, mw.Authenticate(archives.Mutate(action)))
+	}
 	s.coordination = NewCoordinationHandler(deps)
 	mux.Handle("POST /api/v1/coordination/events", mw.Authenticate(http.HandlerFunc(s.coordination.PostEvent)))
 	mux.Handle("POST /api/v1/teams/{name}/task-rooms/{roomId}/join-humans", mw.Authenticate(http.HandlerFunc(s.coordination.JoinTaskRoomHumans)))

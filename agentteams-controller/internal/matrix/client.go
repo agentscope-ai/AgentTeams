@@ -317,6 +317,11 @@ func (c *TuwunelClient) UserID(localpart string) string {
 	return fmt.Sprintf("@%s:%s", localpart, c.config.Domain)
 }
 
+// ControllerAdminToken is used only after Controller lifecycle authorization.
+func (c *TuwunelClient) ControllerAdminToken(ctx context.Context) (string, error) {
+	return c.ensureAdminToken(ctx)
+}
+
 // ensureAdminToken obtains and caches an admin access token via Login.
 func (c *TuwunelClient) ensureAdminToken(ctx context.Context) (string, error) {
 	if t, ok := c.adminToken.Load().(string); ok && t != "" {

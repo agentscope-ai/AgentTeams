@@ -13,6 +13,8 @@ export CONDUWUIT_REGISTRATION_TOKEN="${AGENTTEAMS_REGISTRATION_TOKEN}"
 export CONDUWUIT_ALLOW_LEGACY_MEDIA=true
 export CONDUWUIT_ALLOW_UNSTABLE_ROOM_VERSIONS=true
 export CONDUWUIT_DB_POOL_WORKERS_LIMIT=32
+# Keep existing AgentTeams creator power-level overrides valid on Tuwunel 2.x.
+export CONDUWUIT_DEFAULT_ROOM_VERSION="${CONDUWUIT_DEFAULT_ROOM_VERSION:-\"10\"}"
 # Disable Tuwunel's default new-user displayname suffix ("💕") so Matrix
 # profiles match the AgentTeams worker/human/manager names exactly.
 export CONDUWUIT_NEW_USER_DISPLAYNAME_SUFFIX="${CONDUWUIT_NEW_USER_DISPLAYNAME_SUFFIX:-}"

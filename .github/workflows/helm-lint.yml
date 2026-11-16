@@ -43,6 +43,7 @@ on:
       - 'tests/check-unified-harness-versions.ps1'
       - 'tests/check-manager-dm-room.sh'
       - 'tests/check-matrix-login-session.sh'
+      - 'tests/lib/matrix-client.sh'
       - 'tests/check-installer-codex-image.sh'
       - 'tests/check-installer-codex-image.ps1'
       - 'tests/check-teamharness-acceptance-observer.sh'

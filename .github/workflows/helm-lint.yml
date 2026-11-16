@@ -42,6 +42,7 @@ on:
       - 'tests/check-unified-harness-versions.sh'
       - 'tests/check-unified-harness-versions.ps1'
       - 'tests/check-manager-dm-room.sh'
+      - 'tests/check-matrix-login-session.sh'
       - 'tests/check-installer-codex-image.sh'
       - 'tests/check-installer-codex-image.ps1'
       - 'tests/check-teamharness-acceptance-observer.sh'
@@ -172,6 +173,9 @@ jobs:
 
       - name: Check Manager room discovery
         run: bash tests/check-manager-dm-room.sh
+
+      - name: Check shared Matrix Admin test session
+        run: bash tests/check-matrix-login-session.sh
 
       - name: Check TeamHarness acceptance observer
         run: bash tests/check-teamharness-acceptance-observer.sh

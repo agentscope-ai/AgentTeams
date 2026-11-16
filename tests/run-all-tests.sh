@@ -218,6 +218,7 @@ _setup_manager_identity() {
         return 0
     }
     admin_token=$(echo "${admin_login}" | jq -r '.access_token')
+    export TEST_MATRIX_ADMIN_SESSION="$admin_token"
     manager_user="@manager:${TEST_MATRIX_DOMAIN}"
 
     dm_room=$(matrix_find_dm_room "${admin_token}" "${manager_user}" 2>/dev/null || true)

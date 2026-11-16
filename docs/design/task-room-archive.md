@@ -64,6 +64,11 @@ the upstream room-version-12 default. Embedded startup and Helm retain room
 version 10 for newly created rooms. Existing rooms are not rewritten. Helm's
 startup probe allows first-boot migrations to finish before liveness checks.
 
+Tuwunel 2.0 logs out devices by default on an admin password reset. Initial
+password assignment preserves the newly issued session. Its successful-password
+login limit also remains enabled; integration tests reuse one Admin session
+across cases rather than logging in repeatedly.
+
 The embedded Controller image copies Tuwunel's static `/usr/bin/tuwunel`; rebuild
 it after integrating the image pin. The standalone Helm deployment uses that
 Tuwunel image directly. Rebuild Dashboard for its Controller relay and archive UI.

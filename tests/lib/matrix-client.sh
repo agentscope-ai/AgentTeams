@@ -39,6 +39,15 @@ matrix_login() {
     local username="$1"
     local password="$2"
 
+    # The orchestrator shares one Admin session across child test processes.
+    # Tuwunel 2.0 rate-limits repeated successful password logins per account.
+    if [ "$username" = "${TEST_ADMIN_USER:-}" ] && \
+       [ "$password" = "${TEST_ADMIN_PASSWORD:-}" ] && \
+       [ -n "${TEST_MATRIX_ADMIN_SESSION:-}" ]; then
+        jq -cn --arg access_token "$TEST_MATRIX_ADMIN_SESSION" '{access_token:$access_token}'
+        return 0
+    fi
+
     exec_in_manager curl -sf -X POST "${TEST_MATRIX_DIRECT_URL}/_matrix/client/v3/login" \
         -H 'Content-Type: application/json' \
         -d '{

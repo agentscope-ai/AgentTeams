@@ -646,7 +646,8 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         "action": "ack_task",
         "payload": {"taskId": context_task_id},
     })
-    context_result_path = pathlib.Path("#{workspace}") / "shared/tasks/context-parent-task/result.md"
+    context_report_source = f"shared/tasks/{context_task_id}/qa-report.md"
+    context_result_path = pathlib.Path("#{workspace}") / context_report_source
     invalid_inline = payload("taskflow", {
         "role": "worker", "action": "submit_task",
         "payload": {"taskId": context_task_id, "status": "SUCCESS", "resultMarkdown": 42},
@@ -668,7 +669,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             "taskId": context_task_id,
             "status": "SUCCESS",
             "summary": "Submitted using Matrix context parent.",
-            "resultMarkdown": "context result body\\n",
+            "resultMarkdown": "context result body\\n", "resultPath": context_report_source,
             "deliverables": [],
         },
     })
@@ -678,7 +679,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         "role": "worker", "action": "submit_task",
         "payload": {"taskId": context_task_id, "status": "SUCCESS",
                     "summary": "Submitted using Matrix context parent.",
-                    "resultMarkdown": "context result body\\n", "deliverables": []},
+                    "resultMarkdown": "context result body\\n", "resultPath": context_report_source, "deliverables": []},
     }
     inline_retry = payload("taskflow", inline_retry_args)
     if not inline_retry.get("ok") or not inline_retry.get("reused"):
@@ -687,6 +688,16 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     inline_conflict = payload("taskflow", inline_retry_args)
     if inline_conflict.get("ok") or context_result_path.read_text(encoding="utf-8") != "context result body\\n":
         raise AssertionError(f"retry must not mutate a submitted report: {inline_conflict!r}")
+    if (context_result_path.parent / "result.md").exists():
+        raise AssertionError("named canonical report must not create a duplicate result.md")
+    checked_named = payload("taskflow", {"role":"leader", "action":"check_task", "payload":{"taskId":context_task_id}})
+    if checked_named.get("report") != "context result body\\n" or not checked_named.get("effective"):
+        raise AssertionError(f"check_task must return the actual canonical report: {checked_named!r}")
+    inline_retry_args["payload"]["resultMarkdown"] = "context result body\\n"
+    inline_retry_args["payload"]["resultPath"] = f"shared/tasks/{context_task_id}/another.md"
+    changed_path = payload("taskflow", inline_retry_args)
+    if changed_path.get("ok") or (context_result_path.parent/"another.md").exists():
+        raise AssertionError("retry must not change canonical report identity")
     context_published = context_submitted.get("publishedArtifacts") or []
     if len(context_published) != 1 or context_published[0].get("status") != "published":
         raise AssertionError(f"context submit_task should publish result artifact: {context_submitted!r}")

@@ -24,7 +24,7 @@ from mcp.common.errors import (
 from mcp.common.identity import _canonical_account, _canonical_assignee
 from mcp.common.io import _atomic_write_text, _read_json, _safe_read_bytes, _utc_timestamp
 from mcp.common.payload import _first_text, _payload, _safe_id
-from mcp.common.paths import _project_state_path, _task_dir, _task_state_path
+from mcp.common.paths import _project_state_path, _task_dir, _task_state_path, _task_result_path
 from mcp.artifact.publish import (
     _attachment_parent_event_id,
     _normalize_workspace_artifact_path,
@@ -787,7 +787,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     directory = _task_dir(arguments, dependency).resolve()
                     previews = []
                     prefix = f"shared/tasks/{dependency}/"
-                    for source in dict.fromkeys([prefix + "result.md", *upstream.get("deliverables", [])]):
+                    for source in dict.fromkeys([upstream.get("result_path") or prefix + "result.md", *upstream.get("deliverables", [])]):
                         if not preview_budget:
                             break
                         if not isinstance(source, str) or not source.startswith(prefix):
@@ -917,6 +917,10 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 not isinstance(result_markdown, str) or not result_markdown.strip()
             ):
                 raise ValueError("resultMarkdown must be a non-empty string")
+            report_source, report_file = _task_result_path(arguments, task_id,
+                payload["resultPath"] if "resultPath" in payload else task.get("result_path") or None)
+            if "resultPath" in payload and result_markdown is None and not report_file.is_file():
+                raise ValueError("resultPath report does not exist; write it or supply resultMarkdown")
             submitted_result = {
                 "status": status,
                 "summary": summary,
@@ -924,6 +928,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             }
             submitted_digest = _task_result_digest(submitted_result)
             if task.get("status") == "submitted":
+                if report_source != (task.get("result_path") or f"shared/tasks/{task_id}/result.md"):
+                    raise ValueError("resultPath conflicts with existing submitted report")
                 persisted_digest = _first_text(
                     task.get("result_digest"),
                     task.get("resultDigest"),
@@ -933,8 +939,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 if persisted_digest != submitted_digest:
                     raise ValueError("submit_task conflicts with existing submission")
                 if result_markdown is not None:
-                    result_file = _task_dir(arguments, task_id) / "result.md"
-                    if not result_file.is_file() or result_file.read_text(encoding="utf-8") != result_markdown:
+                    if not report_file.is_file() or report_file.read_text(encoding="utf-8") != result_markdown:
                         raise ValueError("resultMarkdown conflicts with existing submitted report")
                 submission_id = _first_text(
                     task.get("submission_id"),
@@ -1084,8 +1089,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task_dir.mkdir(parents=True, exist_ok=True)
             submission_id = uuid.uuid4().hex
             submitted_at = _utc_timestamp()
-            if result_markdown is not None or (task_dir / "result.md").is_file():
-                result_path_extra = {"result_path": f"shared/tasks/{task_id}/result.md"}
+            if result_markdown is not None or report_file.is_file():
+                result_path_extra = {"result_path": report_source}
             else:
                 result_path_extra = {}
                 task.pop("result_path", None)
@@ -1104,7 +1109,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 submission_extra["submitted_by_source"] = _transition_actor_source(arguments)
             try:
                 if result_markdown is not None:
-                    _atomic_write_text(task_dir / "result.md", result_markdown)
+                    _atomic_write_text(report_file, result_markdown)
                 _transition_task(
                     arguments,
                     task,
@@ -2030,8 +2035,15 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             result, validation_errors = _task_result_from_meta(task)
             effective = task.get("status") == "submitted" and not validation_errors
             reports = {}
-            for name in ("spec", "result"):
-                path = _task_dir(arguments, task_id) / f"{name}.md"
+            paths = {"spec": _task_dir(arguments, task_id) / "spec.md"}
+            try:
+                paths["result"] = _task_result_path(arguments, task_id, task.get("result_path") or None)[1]
+                if task.get("result_path") and not paths["result"].is_file():
+                    validation_errors.append("submitted report is unavailable")
+            except ValueError as exc:
+                validation_errors.append(str(exc))
+            effective = effective and not validation_errors
+            for name, path in paths.items():
                 if path.is_file() and not path.is_symlink():
                     with path.open(encoding="utf-8", errors="replace") as report:
                         reports[name] = report.read(8193)

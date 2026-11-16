@@ -131,8 +131,11 @@ actual findings and verification evidence; this does not run tests for you.
 For report-style tasks, supply the full requested report, not just a summary.
 If no separate report filename was requested, use this canonical report
 instead of also writing a duplicate completion document. If you already wrote
-the report, omit `resultMarkdown` to preserve it. A retry
-with this field must carry exactly the same text as the submitted report.
+the report, omit `resultMarkdown` to preserve it. If it has a different requested
+filename, pass its task-scoped path as `payload.resultPath`; submission, evidence
+review and attachments then use that same file. Do not write a duplicate
+`result.md`. You can also supply both fields to save the report at that path in
+the submission call. A retry must preserve the submitted path and report text.
 
 For long-running tasks, report progress periodically with the `report_progress`
 action (a short `note`, ≤ 200 chars). It records a progress entry in the task's

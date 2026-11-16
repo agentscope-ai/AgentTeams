@@ -124,8 +124,14 @@ normal tool protocol. Manual DAG and Loop continuation remain explicit.
 
 Shared `submit_task` accepts optional `resultMarkdown`: the Worker's complete
 report is saved as its own task's `result.md` in the submission operation.
-Omitting the field preserves an existing report. Submitted retries require the
-same report text; invalid input cannot change the report or task state. This
+Optional `resultPath` identifies a report already written under that task, or
+the destination for `resultMarkdown`. Submission, shared-storage synchronization,
+artifact publication, prerequisite previews and review use that single canonical
+file rather than generating another completion document. Omitting both fields
+preserves the existing canonical report, defaulting to `result.md`.
+Submitted retries require the same path and report text; invalid input cannot
+change the report or task state. Protocol/input files and symbolic links are
+not valid report destinations. This
 combines report persistence with submission, not execution with acceptance.
 
 The argument compatibility layer preserves explicit report fields whether they

@@ -192,15 +192,23 @@ def _completion_artifact_registered(arguments: dict[str, Any], task_id: str) -> 
     """C-1: a completed task counts only if a real artifact was registered.
 
     "Registered" means the task's result artifact exists in the workspace
-    (`shared/tasks/<task_id>/result.md`) or the task record carries a
+    (the canonical task report, defaulting to `result.md`) or the task record carries a
     validated result with nonblank task-scoped deliverables. The status alone
     is not evidence of delivery — that is exactly the fake-completion
     loophole this gate removes.
     """
-    if (_task_dir(arguments, task_id) / "result.md").is_file():
-        return True
     task_meta = _load_authoritative_task_optional(arguments, task_id)
+    if not task_meta:
+        return (_task_dir(arguments, task_id) / "result.md").is_file()
     if not isinstance(task_meta, dict) or task_meta.get("task_id") != task_id:
+        return False
+    from mcp.common.paths import _task_result_path
+    try:
+        if _task_result_path(arguments, task_id, task_meta.get("result_path") or None)[1].is_file():
+            return True
+    except ValueError:
+        return False
+    if task_meta.get("result_path"):
         return False
     result, errors = _task_result_from_meta(task_meta)
     return not errors and any(path.strip() for path in result["deliverables"])

@@ -20,6 +20,7 @@ const coordinationPending = "control/coordination/pending/"
 const coordinationDone = "control/coordination/completed/"
 
 type coordinationDelivery struct {
+	Transport      string            `json:"transport,omitempty"`
 	Approvals      map[string]string `json:"approvals,omitempty"`
 	Event          coordinationEvent `json:"event"`
 	Status         string            `json:"status"`
@@ -92,6 +93,9 @@ func (h *CoordinationHandler) PostEvent(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	delivery := coordinationDelivery{Event: resolved, Status: "queued", Created: time.Now().UTC()}
+	if os.Getenv("AGENTTEAMS_COORDINATION_TRANSPORT") == "matrix" && resolved.Kind == "task_assigned" {
+		delivery.Transport = "matrix"
+	}
 	data, _ := json.Marshal(delivery)
 	if err := h.deps.OSS.PutObjectIfAbsent(r.Context(), coordinationPending+resolved.ID+".json", data); err != nil {
 		if errors.Is(err, oss.ErrPreconditionFailed) {
@@ -223,7 +227,7 @@ func (h *CoordinationHandler) step(ctx context.Context, key string) {
 	}
 }
 
-// GetEvent exposes delivery receipts to the originating Agent and operators;
+// GetEvent exposes delivery receipts to the originating/receiving Agent and operators;
 // task state and report contents stay on their existing scoped read surfaces.
 func (h *CoordinationHandler) GetEvent(w http.ResponseWriter, r *http.Request) {
 	if h.deps.OSS == nil {
@@ -254,11 +258,16 @@ func (h *CoordinationHandler) GetEvent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 503, "invalid coordination receipt")
 			return
 		}
-		if caller.Role != authpkg.RoleAdmin && (caller.Username != d.Event.ActorName || caller.Role != d.Event.ActorRole) {
+		recipient := false
+		if d.Event.RecipientKind == "worker" && (caller.Role == authpkg.RoleWorker || caller.Role == authpkg.RoleTeamLeader) {
+			worker, lookupErr := h.worker(r.Context(), caller.Username)
+			recipient = lookupErr == nil && worker.Name == d.Event.RecipientName && worker.Status.MatrixUserID == d.Event.Recipient
+		}
+		if caller.Role != authpkg.RoleAdmin && (caller.Username != d.Event.ActorName || caller.Role != d.Event.ActorRole) && !recipient {
 			writeError(w, 404, "coordination receipt not found")
 			return
 		}
-		httputil.WriteJSON(w, 200, map[string]any{"event_id": id, "kind": d.Event.Kind, "project_id": d.Event.ProjectID, "task_id": d.Event.TaskID, "status": d.Status, "created": d.Created, "error": d.Error, "native_id": d.NativeID, "user_event_id": d.UserEventID, "failure_event_id": d.FailureEventID})
+		httputil.WriteJSON(w, 200, map[string]any{"event_id": id, "kind": d.Event.Kind, "project_id": d.Event.ProjectID, "task_id": d.Event.TaskID, "status": d.Status, "created": d.Created, "error": d.Error, "native_id": d.NativeID, "user_event_id": d.UserEventID, "failure_event_id": d.FailureEventID, "actor": d.Event.Actor, "recipient": d.Event.Recipient, "delivery_id": d.Event.DeliveryID, "transport": d.Transport})
 		return
 	}
 	writeError(w, 404, "coordination receipt not found")

@@ -34,7 +34,7 @@ class StagePacketTest(unittest.TestCase):
             spec.loader.exec_module(module)
         cls.channel_type = module.AgentTeamsMatrixChannel
 
-    def receive(self, full, body):
+    def receive(self, full, body, extra=None):
         channel = self.channel_type(process=lambda *args, **kwargs: None)
         channel._user_id = "@receiver:test"
         channel._session_receipts = object()
@@ -45,6 +45,7 @@ class StagePacketTest(unittest.TestCase):
             "org.agentteams.workflow": {"type": "PROJECT_COMPLETED", "project_id": "p"},
             "org.agentteams.requester_route": {"channel": "matrix", "target_session": "!human:test"},
         }})
+        event.source["content"].update(extra or {})
         with patch.object(channel, "_is_dm_room", AsyncMock(return_value=True)), \
              patch.object(channel, "_announce_session_receipts", AsyncMock()), \
              patch.object(channel, "_send_typing", AsyncMock()), \
@@ -54,7 +55,43 @@ class StagePacketTest(unittest.TestCase):
              patch.object(channel, "_strip_mention_prefix", side_effect=lambda text, room: text), \
              patch.object(channel, "_control_command_text", return_value=None):
             asyncio.run(channel._on_room_event(SimpleNamespace(room_id="!room:test"), event))
-        return received[0]
+        return received[0] if received else None
+
+    def assignment(self):
+        return {"session_id": "coordination-task:t:dispatch-1", "input": [{"content": [{"text": "Read the bounded task spec and ACK t."}]}], "channel_meta": {
+            "room_id": "!room:test", "sender_id": "@leader:test", "agent_matrix_user_id": "@receiver:test",
+            "task_id": "t", "project_id": "p", "teamharness_coordination": {"kind": "task_assigned", "task_id": "t", "project_id": "p", "delivery_id": "dispatch-1"}}}
+
+    def test_matrix_assignment_uses_bounded_context_and_isolated_session(self):
+        packet = self.receive("", "@receiver 前置环节已验收，请继续任务。", {"org.agentteams.coordination": self.assignment()})
+        self.assertEqual(packet["content_parts"][0].text, "Read the bounded task spec and ACK t.")
+        self.assertEqual(packet["meta"]["event_id"], "$event")
+        self.assertTrue(packet["meta"]["teamharness_matrix_coordination"])
+        channel = self.channel_type(process=lambda *args, **kwargs: None)
+        self.assertEqual(channel.get_debounce_key(packet), "coordination-task:t:dispatch-1")
+        request = channel.build_agent_request_from_native(packet)
+        self.assertEqual(request.session_id, "coordination-task:t:dispatch-1")
+        self.assertEqual(channel.get_to_handle_from_request(request), "!room:test")
+
+    def test_forged_sender_or_recipient_cannot_enter_control_context(self):
+        for key, value in (("sender_id", "@impostor:test"), ("agent_matrix_user_id", "@other:test"), ("room_id", "!other:test")):
+            control = self.assignment(); control["channel_meta"][key] = value
+            self.assertIsNone(self.receive("", "visible message", {"org.agentteams.coordination": control}))
+
+    def test_control_responses_remain_visible_without_waking_peers(self):
+        channel = self.channel_type(process=lambda *args, **kwargs: None)
+        content = channel._matrix_text_content("!room:test", "Result submitted", {"teamharness_matrix_coordination": True}, "m.text")
+        self.assertTrue(content["org.agentteams.progress_only"])
+        self.assertEqual(content["m.mentions"], {"user_ids": []})
+
+    def test_control_edits_cannot_wake_peers_either(self):
+        channel = self.channel_type(process=lambda *args, **kwargs: None)
+        channel._client = object()
+        channel._room_send_with_retry = AsyncMock()
+        asyncio.run(channel._edit_matrix_event("!room:test", "$root", "Result submitted", msgtype="m.text", progress_only=True))
+        content = channel._room_send_with_retry.call_args.args[2]
+        self.assertTrue(content["org.agentteams.progress_only"])
+        self.assertTrue(content["m.new_content"]["org.agentteams.progress_only"])
 
     def test_full_handoff_and_verified_event_metadata_reach_request(self):
         full = "\n".join(f"acceptance {n}" for n in range(8))
@@ -71,7 +108,7 @@ class StagePacketTest(unittest.TestCase):
     def test_api_progress_projection_never_starts_another_agent_turn(self):
         channel = self.channel_type(process=lambda *args, **kwargs: None)
         channel._is_dm_room = AsyncMock(side_effect=AssertionError("projection reached routing"))
-        event = SimpleNamespace(source={"content": {"org.agentteams.progress_only": True}})
+        event = SimpleNamespace(source={"content": {"org.agentteams.progress_only": True, "m.mentions": {"user_ids": ["@receiver:test"]}}})
         asyncio.run(channel._on_room_event(SimpleNamespace(room_id="!room:test"), event))
 
 

@@ -96,6 +96,12 @@ for example `mktemp -d <scratchDirectory>/run-XXXXXX`. Do not invent global
 Temporary-file cleanup is not an acceptance requirement. If cleanup is needed,
 run it separately with an explicit absolute path in your own task outputs; do
 not append deletion to setup or test commands.
+Treat each shell-tool invocation as a fresh shell: variables from an earlier
+call are not available in the next one. Use the ACK's absolute task and scratch
+paths in every command, or initialize and validate variables in that same
+command. Never let an empty path variable turn a task output into a file or
+directory under `/`. Leave harmless temporary files in your task scratch rather
+than blocking delivery on optional cleanup.
 
 ## Execute
 
@@ -121,6 +127,13 @@ audit history without changing task state or notifying the room — use it to ma
 multi-stage work visible, not as a status update.
 
 If blocked, submit a `BLOCKED` result instead of silently waiting.
+
+When performing independent QA, judge pass/fail against the agreed acceptance
+criteria. Keep exploratory findings separate; do not invent stricter behavior
+for unspecified inputs. If a required case fails, submit the reproducible
+failure promptly for Leader review instead of repeatedly rerunning it or
+editing upstream deliverables. Record ambiguous extra cases as observations
+and let the Leader resolve the contract.
 
 ## Coding CLI runs (when used)
 

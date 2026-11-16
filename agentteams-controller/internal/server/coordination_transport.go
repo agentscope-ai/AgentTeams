@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -164,6 +165,17 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 			d.Status = "ignored"
 			return
 		}
+		if d.Transport == "matrix" {
+			// Matrix transaction IDs make an uncertain send safe to retry.
+			id, sendErr := h.sendMatrixContent(ctx, e.ActorRole, e.ActorName, e.RoomID, e.ID, coordinationMatrixAssignment(e, p), false)
+			if sendErr != nil {
+				d.Error = "Matrix assignment unavailable"
+				return
+			}
+			d.NativeID, d.MatrixEventID = "matrix:"+id, id
+			d.Status, d.Error = "running", ""
+			return
+		}
 		// Persist before admission. An ambiguous response cannot safely be retried
 		// against a runtime that lacks an idempotent admission-receipt API.
 		d.Status = "dispatching"
@@ -185,6 +197,26 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 		d.Status = "running"
 		d.Error = ""
 		return
+	}
+	if d.Transport == "matrix" {
+		h.projectApprovals(ctx, e, d)
+		if status := coordinationString(t, "status"); status == "cancelled" || status == "revision" || status == "blocked" {
+			d.Status, d.Error = "ignored", "assignment no longer executable"
+			return
+		}
+		if status := coordinationString(t, "status"); status == "in_progress" || status == "submitted" || status == "completed" {
+			if d.AckEventID == "" {
+				id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, e.RoomID, e.ID+"-ack", "已接收「"+coordinationTaskTitle(e, p)+"」，开始处理。")
+				if sendErr != nil {
+					return
+				}
+				d.AckEventID, d.Error = id, ""
+			}
+			if status != "in_progress" {
+				d.Status = "completed"
+			}
+		}
+		return // Track execution/approvals through submission without Worker HTTP execution calls.
 	}
 	if d.MatrixEventID == "" {
 		label := map[string]string{"handoff": "已交接", "task_assigned": "已派发", "task_submitted": "已提交，待验收", "project_ready": "执行任务已验收，开始汇总", "project_completed": "已完成，正在回报"}[e.Kind]
@@ -304,6 +336,44 @@ func coordinationLabel(e coordinationEvent) string {
 	}
 	return e.RecipientName
 }
+
+func coordinationTaskTitle(e coordinationEvent, p map[string]any) string {
+	nodes, _ := p["tasks"].([]any)
+	for _, item := range nodes {
+		n, _ := item.(map[string]any)
+		if coordinationString(n, "task_id") == e.TaskID && coordinationString(n, "title") != "" {
+			return coordinationString(n, "title")
+		}
+	}
+	return e.TaskID
+}
+
+func coordinationMatrixAssignment(e coordinationEvent, p map[string]any) map[string]any {
+	nodes, _ := p["tasks"].([]any)
+	titles := map[string]string{}
+	var dependencies []any
+	for _, item := range nodes {
+		n, _ := item.(map[string]any)
+		titles[coordinationString(n, "task_id")] = coordinationString(n, "title")
+		if coordinationString(n, "task_id") == e.TaskID {
+			dependencies, _ = n["depends_on"].([]any)
+		}
+	}
+	var prior []string
+	for _, dependency := range dependencies {
+		id, _ := dependency.(string)
+		if titles[id] != "" {
+			prior = append(prior, "「"+titles[id]+"」")
+		}
+	}
+	prefix := "任务已分配。"
+	if len(prior) > 0 {
+		prefix = "前置的" + strings.Join(prior, "、") + "环节已验收通过。"
+	}
+	body := e.Recipient + " " + prefix + "请继续开始「" + coordinationTaskTitle(e, p) + "」任务，按任务要求完成并提交结果。"
+	formatted := strings.ReplaceAll(html.EscapeString(body), html.EscapeString(e.Recipient), `<a href="https://matrix.to/#/`+url.PathEscape(e.Recipient)+`">`+html.EscapeString(strings.Split(e.Recipient, ":")[0])+`</a>`)
+	return map[string]any{"msgtype": "m.text", "body": body, "format": "org.matrix.custom.html", "formatted_body": formatted, "m.mentions": map[string]any{"user_ids": []string{e.Recipient}}, "org.agentteams.coordination": coordinationPayload(e)}
+}
 func coordinationAssistantText(result map[string]any) string {
 	var texts []string
 	messages, _ := result["output"].([]any)
@@ -326,6 +396,9 @@ func (h *CoordinationHandler) project(ctx context.Context, e coordinationEvent, 
 	return h.projectContent(ctx, kind, name, room, txn, map[string]any{"msgtype": "m.text", "body": text})
 }
 func (h *CoordinationHandler) projectContent(ctx context.Context, kind, name, room, txn string, content map[string]any) (string, error) {
+	return h.sendMatrixContent(ctx, kind, name, room, txn, content, true)
+}
+func (h *CoordinationHandler) sendMatrixContent(ctx context.Context, kind, name, room, txn string, content map[string]any, progressOnly bool) (string, error) {
 	if h.deps.Provisioner == nil || h.deps.MatrixConfig.ServerURL == "" || !strings.HasPrefix(room, "!") {
 		return "", fmt.Errorf("Matrix projection unavailable")
 	}
@@ -334,8 +407,10 @@ func (h *CoordinationHandler) projectContent(ctx context.Context, kind, name, ro
 		return "", err
 	}
 	target := strings.TrimRight(h.deps.MatrixConfig.ServerURL, "/") + "/_matrix/client/v3/rooms/" + url.PathEscape(room) + "/send/m.room.message/" + url.PathEscape(txn)
-	content["m.mentions"] = map[string]any{"user_ids": []string{}}
-	content["org.agentteams.progress_only"] = true
+	if _, exists := content["m.mentions"]; !exists {
+		content["m.mentions"] = map[string]any{"user_ids": []string{}}
+	}
+	content["org.agentteams.progress_only"] = progressOnly
 	data, _ := json.Marshal(content)
 	req, err := http.NewRequestWithContext(ctx, "PUT", target, bytes.NewReader(data))
 	if err != nil {

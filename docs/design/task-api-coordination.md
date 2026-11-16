@@ -84,3 +84,15 @@ notifications for several independent main tasks in a shared project, optional
 projects, cross-team projects and other runtime adapters still require their
 own contracts and end-to-end validation. Do not treat project completion as
 proof that these broader task models have been validated.
+
+## Experimental Matrix Worker dispatch
+
+`AGENTTEAMS_COORDINATION_TRANSPORT=matrix` selects Controller-originated Matrix mentions for `task_assigned` events. The default HTTP transport remains available. Handoff, acceptance review, whole-plan closure and Manager completion callbacks currently retain HTTP; this is a Worker-dispatch experiment, not a claim that every callback has migrated.
+
+The Controller sends as the registered Leader, with the registered Worker in `m.mentions`, a fixed prerequisite/task description, and a structured coordination packet. The packet retains the existing bounded spec, original requester route and per-delegation session. The Worker checks the current task fence and its own authenticated dispatch receipt; it does not need permission to list the team roster. Ordinary room history is not prepended to this control request.
+
+Matrix send retries use the same transaction ID. A Worker is marked started only after the task's real ACK changes its authoritative state, not merely after Matrix accepts the message. The outbox continues monitoring task submission and approval resolutions until execution ends. Delivery transport is stored with the outbox entry; changing the local transport setting does not rewrite admitted entries. A cancelled or superseded assignment is ignored.
+
+The Worker uses the normal Matrix streaming output path for visible tool calls, execution progress and results. Detailed model reasoning is suppressed for these structured control turns. Responses and edits carry `org.agentteams.progress_only` so visible feedback cannot reopen another Agent execution alongside the authoritative task callback.
+
+Validation scope remains QwenPaw finite task plans. Other Matrix runtime adapters and native Loop transport have not been validated by this experiment.

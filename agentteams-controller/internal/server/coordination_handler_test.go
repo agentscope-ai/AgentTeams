@@ -7,7 +7,9 @@ import (
 	"fmt"
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +34,121 @@ func coordinationFixture(t *testing.T) (*CoordinationHandler, *ossfake.Memory) {
 	putProject(store, "teams/alpha/shared/projects/p1/meta.json", map[string]any{"project_id": "p1", "team_id": "alpha", "status": "active", "room_id": "!task:test", "reply_route": map[string]any{"target_user": "@manager:test"}, "requester_reply_route": map[string]any{"target_user": "@human:test", "target_session": "!source:test"}})
 	putProject(store, "teams/alpha/shared/tasks/t1/meta.json", map[string]any{"task_id": "t1", "project_id": "p1", "status": "assigned", "assigned_to": "@worker:test", "notifyTxn": "delegate-1", "submission_id": "submission-1"})
 	return NewCoordinationHandler(ServerDeps{Client: k, Namespace: "default", OSS: store, ContainerPrefix: "agentteams-worker-"}), store
+}
+
+func TestMatrixAssignmentCarriesMentionsAndCanonicalPrerequisites(t *testing.T) {
+	e := coordinationEvent{Kind: "task_assigned", TaskID: "dev", DeliveryID: "d1", Recipient: "@worker:test", Actor: "@lead:test", RoomID: "!task:test"}
+	p := map[string]any{"tasks": []any{map[string]any{"task_id": "analysis", "title": "需求分析"}, map[string]any{"task_id": "dev", "title": "开发 <CSV>", "depends_on": []any{"analysis"}}}}
+	content := coordinationMatrixAssignment(e, p)
+	if !strings.Contains(content["body"].(string), "前置的「需求分析」环节已验收通过") || !strings.Contains(content["formatted_body"].(string), "&lt;CSV&gt;") {
+		t.Fatal("missing prerequisite context or unsafe HTML")
+	}
+	if content["m.mentions"].(map[string]any)["user_ids"].([]string)[0] != "@worker:test" {
+		t.Fatal("assignment did not mention its registered Worker")
+	}
+	if content["org.agentteams.coordination"].(map[string]any)["session_id"] != "coordination-task:dev:d1" {
+		t.Fatal("task execution lost its isolated session")
+	}
+}
+
+func TestMatrixAssignmentTracksAckAndSubmissionWithoutWorkerExecutionHTTP(t *testing.T) {
+	h, store := coordinationFixture(t)
+	native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/teamharness/coordination/approvals" {
+			t.Error("Matrix dispatch called Worker execution API")
+		}
+		_, _ = w.Write([]byte(`{"approvals":[]}`))
+	}))
+	defer native.Close()
+	h.workerURL = func(string, map[string]string) string { return native.URL }
+	e, err := h.resolve(context.Background(), coordinationEvent{Kind: "task_assigned", ProjectID: "p1", TaskID: "t1", DeliveryID: "delegate-1"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acks := 0
+	h.projectEvent = func(context.Context, coordinationEvent, string, string, string, string, string) (string, error) {
+		acks++
+		return "$ack", nil
+	}
+	d := coordinationDelivery{Event: e, Transport: "matrix", Status: "running", NativeID: "matrix:$assignment", MatrixEventID: "$assignment"}
+	h.advance(context.Background(), &d, func() error { return nil })
+	if acks != 0 || d.Status != "running" {
+		t.Fatal("send was mistaken for Worker ACK")
+	}
+	putProject(store, "teams/alpha/shared/tasks/t1/meta.json", map[string]any{"task_id": "t1", "project_id": "p1", "status": "in_progress", "assigned_to": "@worker:test", "notifyTxn": "delegate-1"})
+	h.advance(context.Background(), &d, func() error { return nil })
+	if acks != 1 || d.Status != "running" || d.AckEventID == "" {
+		t.Fatal("ACK did not start execution/approval tracking")
+	}
+	putProject(store, "teams/alpha/shared/tasks/t1/meta.json", map[string]any{"task_id": "t1", "project_id": "p1", "status": "submitted", "assigned_to": "@worker:test", "notifyTxn": "delegate-1"})
+	h.advance(context.Background(), &d, func() error { return nil })
+	if acks != 1 || d.Status != "completed" {
+		t.Fatal("submission repeated ACK or did not finish tracking")
+	}
+}
+
+func TestCoordinationReceiptIsReadableOnlyByActorOrActualRecipient(t *testing.T) {
+	h, store := coordinationFixture(t)
+	e, err := h.resolve(context.Background(), coordinationEvent{Kind: "task_assigned", ProjectID: "p1", TaskID: "t1", DeliveryID: "delegate-1"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(coordinationDelivery{Event: e, Transport: "matrix", Status: "queued"})
+	_ = store.PutObject(context.Background(), coordinationPending+e.ID+".json", data)
+	for _, tc := range []struct {
+		name string
+		role string
+		want int
+	}{{"worker-cr", authpkg.RoleWorker, 200}, {"worker-runtime", authpkg.RoleWorker, 200}, {"lead-cr", authpkg.RoleTeamLeader, 200}, {"lead-cr", authpkg.RoleWorker, 404}, {"human", authpkg.RoleHuman, 404}} {
+		req := withCaller(httptest.NewRequest("GET", "/coordination/events/"+e.ID, nil), &authpkg.CallerIdentity{Role: tc.role, Username: tc.name, Team: "alpha"})
+		req.SetPathValue("id", e.ID)
+		response := httptest.NewRecorder()
+		h.GetEvent(response, req)
+		if response.Code != tc.want {
+			t.Fatalf("%s/%s got %d, want %d", tc.role, tc.name, response.Code, tc.want)
+		}
+	}
+}
+
+func TestMatrixAssignmentKeepsApprovalResolutionsVisibleAfterAck(t *testing.T) {
+	h, store := coordinationFixture(t)
+	e, err := h.resolve(context.Background(), coordinationEvent{Kind: "task_assigned", ProjectID: "p1", TaskID: "t1", DeliveryID: "delegate-1"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statuses []string
+	homeserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var content map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&content)
+		if content["org.agentteams.progress_only"] != true {
+			t.Error("approval update could wake an Agent")
+		}
+		statuses = append(statuses, coordinationString(coordinationMap(content, "org.agentteams.approval"), "status"))
+		_, _ = w.Write([]byte(`{"event_id":"$approval"}`))
+	}))
+	defer homeserver.Close()
+	creds := &service.FileCredentialStore{Dir: t.TempDir()}
+	_ = creds.Save(context.Background(), "worker-cr", &service.WorkerCredentials{MatrixToken: "test-token"})
+	h.deps.Provisioner = service.NewProvisioner(service.ProvisionerConfig{Creds: creds})
+	h.deps.MatrixConfig = matrix.Config{ServerURL: homeserver.URL}
+	status := "pending"
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/teamharness/coordination/approvals" {
+			t.Error("unexpected Worker execution call")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"approvals": []any{map[string]any{"request_id": "approval-1", "status": status, "session_id": coordinationSession(e), "tool_name": "Bash"}}})
+	}))
+	defer worker.Close()
+	h.workerURL = func(string, map[string]string) string { return worker.URL }
+	putProject(store, "teams/alpha/shared/tasks/t1/meta.json", map[string]any{"task_id": "t1", "project_id": "p1", "status": "in_progress", "assigned_to": "@worker:test", "notifyTxn": "delegate-1"})
+	d := coordinationDelivery{Event: e, Transport: "matrix", Status: "running", NativeID: "matrix:$assignment", AckEventID: "$ack"}
+	h.advance(context.Background(), &d, func() error { return nil })
+	status = "approved"
+	h.advance(context.Background(), &d, func() error { return nil })
+	h.advance(context.Background(), &d, func() error { return nil })
+	if strings.Join(statuses, ",") != "pending,approved" || d.Status != "running" {
+		t.Fatalf("approval lifecycle lost after ACK: %v, %s", statuses, d.Status)
+	}
 }
 
 func TestCoordinationRoutesFromCanonicalTask(t *testing.T) {

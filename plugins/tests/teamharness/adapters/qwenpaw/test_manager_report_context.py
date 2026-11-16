@@ -10,6 +10,22 @@ import pytest
 SOURCE = Path(__file__).resolve().parents[5] / "plugins/teamharness/adapters/qwenpaw/plugin.py"
 
 
+@pytest.mark.parametrize("sender,skip", [("@leader:test", False), ("@peer:test", True)])
+def test_matrix_assignment_requires_registered_leader(monkeypatch, sender, skip):
+    spec = importlib.util.spec_from_file_location("matrix_assignment_plugin", SOURCE)
+    plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    def read(path):
+        if path.startswith("tasks/"):
+            return {"task_id":"t", "project_id":"p", "status":"assigned", "assigned_to":"@worker:test", "notifyTxn":"d1"}
+        return {"kind":"task_assigned", "actor":"@leader:test", "recipient":"@worker:test", "task_id":"t", "project_id":"p", "delivery_id":"d1"}
+    monkeypatch.setattr(plugin, "_controller_json", read)
+    meta = {"sender_id": sender, "agent_matrix_user_id":"@worker:test", "teamharness_matrix_coordination":True,
+            "teamharness_coordination":{"id":"receipt-1", "kind":"task_assigned", "task_id":"t", "project_id":"p", "delivery_id":"d1"}}
+    ctx = SimpleNamespace(request=SimpleNamespace(channel_meta=meta), agent=SimpleNamespace(), extras={}, inject_context=lambda *a,**kw:None)
+    assert asyncio.run(plugin._manager_report_context(ctx)) is skip
+
+
 @pytest.mark.parametrize("sender,event,skip", [
     ("@human:test", {}, False),
     ("@leader:test", {}, True),

@@ -420,6 +420,13 @@ async def _manager_report_context(ctx: Any) -> bool:
                 return True
             if task.get("assigned_to") not in {meta.get("agent_matrix_user_id"), os.getenv("AGENTTEAMS_WORKER_NAME")}:
                 return True
+            if meta.get("teamharness_matrix_coordination"):
+                receipt = await asyncio.to_thread(_controller_json, "coordination/events/" + urllib.parse.quote(api_event.get("id", ""), safe=""))
+                if (receipt.get("kind") != "task_assigned" or receipt.get("actor") != meta.get("sender_id")
+                        or receipt.get("recipient") != meta.get("agent_matrix_user_id")
+                        or receipt.get("task_id") != api_event["task_id"] or receipt.get("project_id") != api_event["project_id"]
+                        or receipt.get("delivery_id") != api_event["delivery_id"]):
+                    return True
             ctx.extras["execution_task_token"] = _execution_task.set(api_event["task_id"])
         elif task.get("status") != "submitted" or task.get("submission_id") != api_event.get("submission_id"):
             return True

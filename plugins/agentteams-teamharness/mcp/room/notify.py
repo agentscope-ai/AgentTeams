@@ -5,6 +5,8 @@ import json
 
 import os
 
+import time
+
 import uuid
 
 from typing import Any
@@ -80,8 +82,8 @@ def _validate_assignee_membership(room_id: str, assignee: str) -> dict[str, Any]
     """Validate that the assignee is a joined member of the target Matrix room.
 
     Strict when the Matrix environment is configured and the assignee is a
-    Matrix mxid (``@user:server``): a missing membership is a retryable
-    failure so delegation never marks a task assigned when the Worker cannot
+    Matrix mxid (``@user:server``): allow an existing invitation a bounded
+    readiness wait, but never mark a task assigned when the Worker cannot
     receive the automatic notification. Skipped when the Matrix environment is
     unavailable (the notification would be skipped anyway) or the assignee is a
     display name (there is no mxid to verify).
@@ -98,6 +100,16 @@ def _validate_assignee_membership(room_id: str, assignee: str) -> dict[str, Any]
         return {"ok": True, "skipped": f"assignee is a display name, not an mxid: {assignee}"}
     try:
         members = _matrix_room_member_user_ids(matrix_room_id, {"join"})
+        if assignee_mxid not in members and assignee_mxid in _matrix_room_member_user_ids(matrix_room_id, {"join", "invite"}):
+            # New rooms can return before an invited Agent's sync accepts.
+            # This is protocol readiness, not a reason to regenerate a plan.
+            deadline = time.monotonic() + 5
+            while assignee_mxid not in members:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.2, remaining))
+                members = _matrix_room_member_user_ids(matrix_room_id, {"join"})
     except (ValueError, urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         return {"ok": False, "error": f"cannot verify room membership: {exc}"}
     if assignee_mxid in members:

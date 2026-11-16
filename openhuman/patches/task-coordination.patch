@@ -10,7 +10,7 @@ index bdb3e04..6f6f463 100644
 +#[cfg(feature = "channel-matrix")]
 +mod task_coordination;
 diff --git a/src/openhuman/channels/providers/matrix.rs b/src/openhuman/channels/providers/matrix.rs
-index 321f904..d518527 100644
+index 321f904..6615b1e 100644
 --- a/src/openhuman/channels/providers/matrix.rs
 +++ b/src/openhuman/channels/providers/matrix.rs
 @@ -645,6 +645,10 @@ impl Channel for MatrixChannel {
@@ -54,12 +54,13 @@ index 321f904..d518527 100644
                      &allowed_users,
                      &sender,
                      room.room_id().as_str() == target_room.as_str(),
-@@ -791,10 +805,14 @@ impl Channel for MatrixChannel {
+@@ -791,10 +805,15 @@ impl Channel for MatrixChannel {
                      return;
                  }
 
 -                let mut body = match &event.content.msgtype {
-+                let coordination_session = coordination_body.as_ref().map(|packet| packet.session.clone());
++                // Use the real Matrix notification event as a native conversation thread.
++                let coordination_session = coordination_body.as_ref().map(|_| event.event_id.to_string());
 +                let mut body = match coordination_body {
 +                    Some(packet) => packet.text,
 +                    None => match &event.content.msgtype {
@@ -70,7 +71,7 @@ index 321f904..d518527 100644
                  };
 
                  if crate::openhuman::approval::matrix::answer(
-@@ -818,10 +836,6 @@ impl Channel for MatrixChannel {
+@@ -818,10 +837,6 @@ impl Channel for MatrixChannel {
                      }
                  }
 
@@ -81,7 +82,7 @@ index 321f904..d518527 100644
                  let mut inputs = vec![body.clone()];
                  let mut source_event_ids = vec![event_id.clone()];
                  let direct = channel.direct_members(room.room_id().as_str(), my_user_id.as_str(), &sender).await;
-@@ -861,7 +875,7 @@ impl Channel for MatrixChannel {
+@@ -861,7 +876,7 @@ impl Channel for MatrixChannel {
                          .duration_since(std::time::UNIX_EPOCH)
                          .unwrap_or_default()
                          .as_secs(),

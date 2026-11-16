@@ -9,7 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / 'openhuman/scripts/openhuman-worker-entrypoint.sh').read_text()
-BOOTSTRAP = re.search(r'if \[ .*?\n    # Native channel turns.*?\nfi\n(?=\n# --- LLM)', SOURCE, re.S).group(0)
+BOOTSTRAP = re.search(r'if \[ .*?\n    # Native channel turns.*?\nfi\n(?=\npython3 /opt/agentteams/scripts/configure-teamharness.py)', SOURCE, re.S).group(0)
 # Start at the conditional immediately before the native-channel comment.
 BOOTSTRAP = BOOTSTRAP[BOOTSTRAP.rfind('\nif [', 0, BOOTSTRAP.index('# Native channel turns')) + 1:]
 

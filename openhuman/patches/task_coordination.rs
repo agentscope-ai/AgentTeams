@@ -9,7 +9,7 @@ use std::collections::HashSet;
 static ROOMS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 pub fn is_control_room(room: &str) -> bool { ROOMS.lock().unwrap().contains(room) }
 
-pub struct Notification { pub text: String, pub session: String }
+pub struct Notification { pub text: String }
 
 pub async fn prepare(content: &Value, room: &str, sender: &str, own: &str) -> Option<Notification> {
     let mut child = tokio::process::Command::new("python3")
@@ -25,5 +25,5 @@ pub async fn prepare(content: &Value, room: &str, sender: &str, own: &str) -> Op
     let packet: Value = serde_json::from_slice(&result.stdout).ok()?;
     let text = packet.get("text")?.as_str()?.to_owned();
     ROOMS.lock().unwrap().insert(room.to_owned());
-    Some(Notification { text, session: packet.get("session_id")?.as_str()?.to_owned() })
+    Some(Notification { text })
 }

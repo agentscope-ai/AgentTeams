@@ -7,6 +7,8 @@ description: "Use as Leader to start ordinary team work with taskflow start_task
 
 ## Default: one main Task, executable subtasks
 
+Answer ordinary direct replies without creating durable Task or Project state.
+
 For ordinary team work, use `taskflow start_task`. Do not create a Project,
 including a hidden or temporary one. Only create a Project when the user
 explicitly requests one. Automatic cross-team Project creation is future work;

@@ -19,8 +19,9 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenClaw | `5e44ebecabf878eda499b668c9627208dbfa6049` | matched |
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
-Candidate companion pins on this Draft branch: Codex `1cbc9665d0d69ef18b467ce2cdaca284596e73ed`
-and Hermes `fe1c61efa6f6261ebbb213d6f72c7d93760f488e`. Both consume the shared
+Candidate companion pins on this Draft branch: Codex `f1d28b5fdb6f44526787a9e17a03145ffb43fbc3`
+and Hermes `0b0892f3aad69c9e655a41a3a95902f8ea1e1185`, plus DeepSeek
+`0c4de5faa2ce1a94824d8a7f8b473d66f2999472`. All consume the shared
 Core contract at `2c90bccfedb563cbf94e3e1a932fd2effd7b5e23`. These are review
 candidates, not accepted/released Harness versions.
 
@@ -58,6 +59,11 @@ candidates, not accepted/released Harness versions.
   live persisted SDK row; otherwise recovery creates a new conversation.
   Concurrent recovery admission is serialized. Installed SDK tests cover
   these paths with a mocked Task client; real Hermes reuse remains untested.
+- DeepSeek discovers/claims Tasks before Matrix admission, preserves first-sync
+  pending input, and uses the same checkpoint/result contract. A missing native
+  session returns a dedicated error before admitting input/tools, permitting a
+  fresh session; other native failures fence uncertainty and bypass ordinary
+  Matrix event retries. This adapter has no real-model Task acceptance yet.
 - Verified incoming Hermes assignments retain their actual Matrix event ID in
   the native input, allowing its native commit to produce a real read receipt.
   Startup-only recovery does not manufacture a Matrix source/read. The wake
@@ -87,12 +93,14 @@ candidates, not accepted/released Harness versions.
 | Codex existing suite | 29 passed | SDK/transport unit fixtures |
 | Codex recovery admission/session/delivery/reassignment | 9 passed; 38 total | mocked client; no native model |
 | Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; installed SDK tests cover concurrent admission and persisted valid/expired/missing/stale/foreign session selection with a mocked Task client; real Hermes session reuse untested |
+| DeepSeek startup recovery | partial | 62 Python and 7 Node tests passed; Task client mocked; native missing-session/no-input, tool/read, resume/error and stop/steer smokes passed with a deterministic model; real-model Task continuation untested |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
 | Two real Harness continuation chain | cases 06/07 passed; full scenario sets incomplete | real Codex to Hermes and reverse replacements, same Task, generation 1 to 2, checkpoint 4 to 10, all steps once, no new input, one final report |
 | Result saved / reply unsent against real Matrix | passed, bounded case 01 | zero model calls, unchanged step ledger, one report body; event `$8KK7IrnddlsgCgKUTyJpzAzQZ8EPAxbDooNOOvwc7Hg` |
 | Return to retained old Codex session | passed for delivery-only case 02 | zero model calls, unchanged steps; execution continuation with stale session still open |
 | Codex normal restart and valid native-session reuse | case 08 passed | same container ID, new process/start identity, same actual native thread, latest-checkpoint digest matched, all steps once and one final reply |
+| Canonical final report after execution recovery | case 09 passed | Core `2c90bccf`, Codex `1cbc966`, Hermes `0b0892f`; real replacement continuation, same Task, each step once, zero new Matrix input, unique final reply bytes exactly match the submitted report |
 
 The metadata-commit tests load another assembled server namespace and rebind
 global refs. Combining them with the MCP suites in one pytest process failed
@@ -130,6 +138,15 @@ actual start/process identities and execution generation changed. The local
 session was unexpired and matched checkpoint 4, and the real native thread ID
 was reused. Checkpoint 10 was delivered with each step once and no new input.
 This does not accept every same-Harness restart/session scenario.
+
+[Case 09](evidence/runtime-recovery-1631-case09.json) passed the updated
+Codex-to-Hermes forced replacement in the new November 17 fixture, using Core
+`2c90bccf`, Codex `1cbc966` and Hermes `0b0892f`. It additionally compares the
+Matrix final body and checkpoint result bytes with the authoritative submitted
+report. Task ID stayed stable, generation advanced 1 to 2, checkpoint 4 to 10,
+each step ran once, and the original read/final events and zero new external
+inputs were verified. This does not validate startup of the retained old
+Matrix database.
 
 Recorded live failures and partial evidence:
 
@@ -183,6 +200,16 @@ restarting that fixture's Matrix process did not immediately restore service.
 Case 09 has not been seeded and adds no real execution acceptance. No Matrix
 backlog or database was cleared.
 
+A second fixture, `recovery-1631-live-20261117`, has its own new data volume
+and non-overlapping network. Its Controller and Matrix health checks returned
+200; this is setup evidence, not recovery of the retained old database. Run
+the driver with `RECOVERY_E2E_PREFIX=recovery-1631-live-20261117`; fresh setup
+also requires an inspected `RECOVERY_E2E_SUBNET` (this run used
+`10.231.164.0/24`). Private state/bootstrap files are scoped to that prefix.
+The first updated overlay lacked the copied mc wrapper's executable mode;
+the corrected Harness overlays use `local-20261117013200`. This was a local
+overlay packaging failure; the canonical Dockerfiles already set that mode.
+
 Reproduce the focused checks from Core:
 
 ```sh
@@ -209,9 +236,11 @@ The last command requires the independent Codex repository checked out at
   Harnesses, including native tool interruption uncertainty. Normal subprocess
   restarts within one live container still fail closed on the process conflict;
   a verified process-tree handoff is required to make that path automatic.
-- Finish/validate Hermes native persistence/reuse and interruption handling;
-  implement/validate QwenPaw, DeepSeek, OpenClaw and OpenHuman startup resume
-  and delivery adapters. Audit same-process retry and revision handling.
+- Validate real Hermes native persistence/reuse and interruption handling,
+  and DeepSeek Task continuation; implement/validate QwenPaw, OpenClaw and
+  OpenHuman startup resume and delivery adapters. Audit same-process retry
+  and revision handling, including uncertain Matrix HTTP acceptance across
+  device/transport changes; stable transactions alone do not prove that case.
 - Resolve Manager ordinary-message handoff/receipts from the original #1631
   reproduction. Worker Task fences do not resolve Manager cursor replay alone.
 - Verify all six same-Harness and 30 directed cross-Harness combinations,

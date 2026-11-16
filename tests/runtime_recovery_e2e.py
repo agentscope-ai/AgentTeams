@@ -7,6 +7,7 @@ import json
 import base64
 import hashlib
 import os
+import re
 from pathlib import Path
 import secrets
 import subprocess
@@ -14,13 +15,16 @@ import sys
 import time
 import urllib.request
 
-PREFIX = "recovery-1631-live-20261116"
+PREFIX = os.getenv("RECOVERY_E2E_PREFIX", "recovery-1631-live-20261116")
+if not re.fullmatch(r"recovery-1631-live-\d{8}", PREFIX):
+    raise ValueError("Use a dated, disposable recovery-1631-live-YYYYMMDD prefix")
 CONTROLLER = PREFIX + "-controller"
 NETWORK = PREFIX + "-net"
-STATE = Path("/tmp/recovery-1631-e2e-state.json")
+STATE = Path("/tmp/recovery-1631-e2e-state.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-state.json")
+PRIVATE_BOOTSTRAP = Path("/tmp/recovery-1631-bootstrap.private.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-bootstrap.private.json")
 CORE_IMAGE = "recovery-1631/controller:local-20261117002500"
-HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117002500",
-                  "hermes": "recovery-1631/hermes:local-20261117011500"}
+HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117013200",
+                  "hermes": "recovery-1631/hermes:local-20261117013200"}
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
@@ -148,7 +152,7 @@ def refresh_controller():
         raise RuntimeError("Only this fixture's labelled disposable Controller may be replaced")
     # Preserve the exact private bootstrap environment before stopping. A disk
     # or runtime error during replacement must remain safely retryable.
-    backup = Path("/tmp/recovery-1631-controller-inspect.private.json")
+    backup = Path("/tmp/" + PREFIX + "-controller-inspect.private.json")
     with os.fdopen(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as stream:
         json.dump(original, stream)
     args = ["run", "-d", "--name", CONTROLLER, "--network", NETWORK,
@@ -176,7 +180,8 @@ events=pathlib.Path("/var/log/agentteams/workers/agent-a/events.jsonl")
 rows=[json.loads(x) for x in events.read_text().splitlines()] if events.exists() else []
 journal=home/"runtime/codex-bridge-state.json"
 cache=json.loads(journal.read_text()).get("task_sessions",{}).get("recovery-team/"+task_id) if journal.exists() else None
-print(json.dumps({"hermes":[r for r in rows if r.get("event")=="task.recovery.session" and r.get("task_id")==task_id],"codex":cache}))
+print(json.dumps({"hermes":[r for r in rows if r.get("event")=="task.recovery.session" and r.get("task_id")==task_id],
+    "hermes_cache":[r for r in rows if r.get("event")=="task.recovery.cache" and r.get("task_id")==task_id],"codex":cache}))
 '''
     return json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
 
@@ -318,9 +323,17 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         digest = hashlib.sha256(json.dumps(before["task"]["execution"]["checkpoint"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         assert cache["checkpoint_digest"] == digest
         assert native["codex"]["thread_id"] == cache["thread_id"], "valid native session was not reused"
+    if MODE == "restart" and SOURCE == "hermes":
+        cache = before["native_sessions"]["hermes_cache"][-1]
+        assert cache["expires_at"] > before["recorded_at"]
+        digest = hashlib.sha256(json.dumps(before["task"]["execution"]["checkpoint"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert cache["checkpoint_digest"] == digest
+        resumed = native["hermes"][-1]
+        assert resumed["session_id"] == cache["session_id"] and resumed["reused"] is True
     sources = {"core": labels["io.agentteams.recovery.core-sha"],
         SOURCE: old_source["io.agentteams.recovery.harness-sha"], TARGET: labels["io.agentteams.recovery.harness-sha"]}
     proof = {"task_id": TASK_ID, "case": CASE, "scope": f"one real {SOURCE}-to-{TARGET} in-progress continuation", "mode": MODE,
+        "fixture_prefix": PREFIX, "authoritative_report_verified": True,
         "sources": sources, "native_recovery_sessions": native,
         "generation_before": before["task"]["execution"]["generation"], "generation_after": execution["generation"],
         "checkpoint_before": before["task"]["execution"]["checkpoint"]["version"], "checkpoint_after": cp["version"],
@@ -363,7 +376,7 @@ def setup(*, restore=False):
         "AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN": secrets.token_urlsafe(32),
         "AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN": secrets.token_urlsafe(32),
     }
-    private = Path("/tmp/recovery-1631-bootstrap.private.json")
+    private = PRIVATE_BOOTSTRAP
     if restore and private.exists():
         env = json.loads(private.read_text())
     with os.fdopen(os.open(private, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as stream:
@@ -371,7 +384,7 @@ def setup(*, restore=False):
     # This Mac's default Docker pools are exhausted by existing installations.
     # Use the separately inspected, non-overlapping disposable test subnet.
     if not restore:
-        docker("network", "create", "--subnet", "10.231.163.0/24", NETWORK)
+        docker("network", "create", "--subnet", os.getenv("RECOVERY_E2E_SUBNET", "10.231.163.0/24"), NETWORK)
         docker("volume", "create", PREFIX + "-data")
     else:
         docker("volume", "inspect", PREFIX + "-data")

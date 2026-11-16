@@ -674,7 +674,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if member.worker.Spec.DeployMode != nil {
 			deployMode = *member.worker.Spec.DeployMode
 		}
-		if !backend.UsesMemberRuntimeConfig(runtime) && runtime != backend.RuntimeCopaw && deployMode != v1beta1.DeployModeEdge {
+		if !backend.UsesMemberRuntimeConfig(runtime) && runtime != backend.RuntimeCopaw && runtime != backend.RuntimeHermes && deployMode != v1beta1.DeployModeEdge {
 			continue
 		}
 		role := RoleTeamWorker

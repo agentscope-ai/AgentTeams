@@ -119,7 +119,8 @@ func taskRoomRights(caller *authpkg.CallerIdentity, meta map[string]any, teams [
 	}
 	teamName, _ := meta["teamName"].(string)
 	for _, team := range teams {
-		if team.Spec.EffectiveTeamName(team.Name) != teamName || !caller.TeamMatches(team.Name) {
+		storageName := team.Spec.EffectiveTeamName(team.Name)
+		if (team.Name != teamName && storageName != teamName) || (!caller.TeamMatches(team.Name) && !caller.TeamMatches(storageName)) {
 			continue
 		}
 		switch caller.Role {

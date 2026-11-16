@@ -182,3 +182,22 @@ func TestTaskRoomArchiveLeaderUsesCanonicalCRIdentity(t *testing.T) {
 		t.Fatal("runtime name must not impersonate the owning Leader CR")
 	}
 }
+
+func TestTaskRoomArchiveMatchesExistingTeamNameAliases(t *testing.T) {
+	team := v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "team-cr"}, Spec: v1beta1.TeamSpec{TeamName: "storage-team", Admin: &v1beta1.TeamAdminSpec{Name: "alice"}, WorkerMembers: []v1beta1.TeamWorkerRef{{Name: "leader-cr", Role: "team_leader"}}}}
+	for _, roomTeam := range []string{team.Name, team.Spec.TeamName} {
+		for _, scope := range []string{team.Name, team.Spec.TeamName} {
+			for _, role := range []string{authpkg.RoleHuman, authpkg.RoleTeamLeader} {
+				caller := &authpkg.CallerIdentity{Role: role, Username: "alice", HumanPermissionLevel: 2, Teams: []string{scope}}
+				if role == authpkg.RoleTeamLeader {
+					caller.Username, caller.WorkerName = "leader-cr", "leader-runtime"
+					caller.Team, caller.Teams = scope, nil
+				}
+				read, archive, remove := taskRoomRights(caller, map[string]any{"roomKind": "task_room", "teamName": roomTeam}, []v1beta1.Team{team})
+				if !read || !archive || remove != (role == authpkg.RoleHuman) {
+					t.Fatalf("role=%s roomTeam=%s scope=%s: read=%v archive=%v delete=%v", role, roomTeam, scope, read, archive, remove)
+				}
+			}
+		}
+	}
+}

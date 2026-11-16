@@ -455,6 +455,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "Stable external requester room/conversation id to persist with external project and task state.",
                 },
+                "report": {
+                    "type": "string",
+                    "description": "Verified final user report for complete_project; saved before terminal state and delivery.",
+                },
                 "accepted": {
                     "type": "boolean",
                     "description": (
@@ -565,6 +569,13 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "summary": {
                     "type": "string",
                     "description": "Worker result summary for submit_task.",
+                },
+                "resultMarkdown": {
+                    "type": "string",
+                    "description": (
+                        "Optional complete result.md body saved with submit_task. "
+                        "Omit to preserve an existing report; retries require identical text."
+                    ),
                 },
                 "deliverables": {
                     "type": "array",

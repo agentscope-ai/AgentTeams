@@ -17,6 +17,59 @@ def _native_sdk_available():
 
 @unittest.skipUnless(_native_sdk_available(), "native SDK required")
 class NativeCoordinationTest(unittest.TestCase):
+    def test_fixed_ack_and_review_are_prepared_without_model_decisions(self):
+        from agentscope.agent import Agent
+        from agentscope.model import ChatModelBase
+        from agentscope.tool import Toolkit, FunctionTool, ToolResponse
+        from agentscope.formatter import OpenAIChatFormatter
+        from agentscope.permission import PermissionBehavior, PermissionDecision
+        from pydantic import BaseModel
+        import json
+        import os
+        import tempfile
+        path = Path("/opt/agentteams/qwenpaw-builtin/plugins/teamharness/plugin.py")
+        spec = importlib.util.spec_from_file_location("prepared_context_plugin", path)
+        plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+        class Parameters(BaseModel): pass
+        class Model(ChatModelBase):
+            def __init__(self):
+                super().__init__(None, "protocol-test", Parameters(), stream=False)
+                self.formatter = OpenAIChatFormatter()
+            async def __call__(self, *a, **kw):
+                raise AssertionError("fixed task preparation entered the model")
+        async def run(action, directory):
+            calls = []
+            current = {"task_id":"t", "project_id":"p", "status":"assigned" if action == "ack_task" else "submitted", "assigned_to":"@worker:test", "notifyTxn":"d", "submission_id":"s"}
+            prepared = {**current, "status":"in_progress" if action == "ack_task" else "submitted"}
+            async def prepare(role: str, action: str, payload: dict):
+                calls.append(action)
+                return {"ok":True,"tool":"taskflow","action":action,"synced":True,"pulled":True,"task":prepared,"taskDirectory":str(directory),"scratchDirectory":str(directory/"workspace"),"spec":"Required work","inputs":[],"report":"Required checks pass","effective":True,"validationErrors":[]}
+            toolkit = Toolkit()
+            await toolkit.add_tool(FunctionTool(prepare,name="teamharness__taskflow",permission=PermissionDecision(behavior=PermissionBehavior.ALLOW,message="Fixed isolated protocol test")))
+            agent = Agent("Worker", "Execute assigned work", Model(), toolkit=toolkit)
+            event = {"kind":"task_assigned" if action == "ack_task" else "task_submitted", "task_id":"t","project_id":"p","delivery_id":"d","submission_id":"s","plan_type":"dag","dispatch_mode":"automatic"}
+            texts = []
+            ctx=SimpleNamespace(request=SimpleNamespace(channel_meta={"teamharness_coordination":event,"agent_matrix_user_id":"@worker:test"}),agent=agent,extras={},inject_context=lambda text,**kw:texts.append(text))
+            role="worker" if action=="ack_task" else "leader"
+            try:
+                with patch.dict(os.environ,{"AGENTTEAMS_AGENT_ROLE":role}), patch.object(plugin,"_controller_json",return_value=current):
+                    self.assertFalse(await plugin._manager_report_context(ctx))
+                self.assertEqual(calls,[action])
+                self.assertEqual(ctx.extras["coordination_prefetch_tools"],1)
+                if action=="ack_task":
+                    self.assertEqual(plugin._ack_scope.get()[0],"t")
+                    self.assertTrue(any("already acknowledged" in text for text in texts))
+                else:
+                    self.assertTrue(ctx.extras["prepared_review"])
+                    self.assertTrue(any("already pulled and checked" in text for text in texts))
+            finally:
+                for name, variable in (("ack_scope_token",plugin._ack_scope),("execution_task_token",plugin._execution_task),("review_task_token",plugin._review_task)):
+                    if name in ctx.extras: variable.reset(ctx.extras[name])
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)/"tasks/t"; root.mkdir(parents=True)
+            asyncio.run(run("ack_task", root))
+            asyncio.run(run("check_task", root))
+
     def test_exact_output_move_permission_is_task_scoped(self):
         from agentscope.permission import PermissionBehavior, PermissionDecision
         import tempfile

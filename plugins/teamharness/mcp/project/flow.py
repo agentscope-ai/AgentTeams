@@ -694,8 +694,11 @@ def _start_project(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[s
     _validate_task_graph(tasks)
     if payload.get("dispatchMode") == "automatic":
         parents = {t.get("parent_task_id") for t in tasks}
-        if any(not t.get("spec") or not t.get("assigned_to") for t in tasks if t["task_id"] not in parents):
-            raise ValueError("automatic dispatch requires a spec and assignedTo for every execution task")
+        missing = [t["task_id"] + " (" + ", ".join(
+            field for field, key in (("spec", "spec"), ("assignedTo", "assigned_to")) if not t.get(key)
+        ) + ")" for t in tasks if t["task_id"] not in parents and (not t.get("spec") or not t.get("assigned_to"))]
+        if missing:
+            raise ValueError("automatic dispatch requires a spec and assignedTo for every execution task; missing: " + "; ".join(missing))
         if os.getenv("TEAMHARNESS_COORDINATION_URL"):
             from mcp.transport.coordination import native_team_members
             members = native_team_members(str(payload.get("teamId") or _runtime_team_name()))
@@ -1273,6 +1276,10 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project = _read_json(state_path)
             if not project:
                 raise ValueError("project not found")
+            if action == "complete_project" and project.get("dispatch_mode") == "automatic" and report is None:
+                saved_report = _project_dir(arguments, project_id) / "result.md"
+                if not saved_report.is_file() or not saved_report.read_text(encoding="utf-8").strip():
+                    raise ValueError("automatic completion requires a final report; pass payload.report with your verified user report")
             if report is not None:
                 paused, _ = _loop_pause_state(project)
                 if paused or project.get("status") not in {"active", "running", "completed"}:

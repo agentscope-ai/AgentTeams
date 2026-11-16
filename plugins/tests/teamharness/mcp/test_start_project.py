@@ -78,7 +78,8 @@ def test_start_retry_reuses_plan_and_does_not_reset_accepted_work(stage):
 def test_automatic_start_requires_complete_leaf_specs_before_creating_room(stage):
     args, calls = stage
     args["payload"]["dispatchMode"] = "automatic"
-    assert not invoke(args)["ok"]
+    result = invoke(args)
+    assert not result["ok"] and "stage-2 (spec)" in result["error"]
     assert not calls
 
 
@@ -144,3 +145,25 @@ def test_start_receipt_does_not_echo_plan_specs_but_keeps_durable_inputs(stage):
     saved = json.loads((Path(args["workspaceDir"]) / "shared/projects/stage/meta.json").read_text())
     assert saved["tasks"][0]["spec"] == spec.strip()
     assert result["project"]["tasks"][1]["depends_on"] == ["stage-1"]
+
+
+def test_report_arguments_are_preserved_without_overriding_explicit_payload():
+    from mcp.common.payload import _payload
+    assert _payload({"report": "Final evidence", "resultMarkdown": "Task evidence", "conclusions": ["Verified"]}) == {
+        "report": "Final evidence", "resultMarkdown": "Task evidence", "conclusions": ["Verified"]}
+    assert _payload({"report": "outer", "payload": {"report": "inner"}})["report"] == "inner"
+
+
+def test_automatic_completion_requires_report_before_terminal_writes(stage):
+    args, calls = stage
+    assert invoke(args)["ok"]
+    path = Path(args["workspaceDir"]) / "shared/projects/stage/meta.json"
+    project = json.loads(path.read_text())
+    project["dispatch_mode"] = "automatic"
+    for node in project["tasks"]: node["status"] = "completed"
+    path.write_text(json.dumps(project))
+    before = path.read_bytes()
+    args.update(action="complete_project", payload={"projectId": "stage"})
+    result = invoke(args)
+    assert not result["ok"] and "final report" in result["error"]
+    assert path.read_bytes() == before

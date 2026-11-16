@@ -93,13 +93,13 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 		roster, _ := json.Marshal(e.EligibleAssignees)
 		text += "\nRegistered assignees with native notification support: " + string(roster) + ". Select execution owners from this list; other team members cannot receive this transport yet."
 	case "task_assigned":
-		text = "TASK_ASSIGNED: " + e.TaskID + "\nFirst call taskflow ack_task after checking the current assignee and execution identity. Write outputs only in this task. Use a fresh isolated test directory instead of pre-deleting an old directory. Upstream inputs are read-only: disable test caches beside imported inputs or copy inputs to your own workspace; do not clean upstream task directories.\n" + text
+		text = "TASK_ASSIGNED: " + e.TaskID + "\nUse a synchronized runtime ACK receipt when supplied; otherwise first call taskflow ack_task after checking the current assignee and execution identity. Write outputs only in this task. Use a fresh isolated test directory instead of pre-deleting an old directory. Upstream inputs are read-only: disable test caches beside imported inputs or copy inputs to your own workspace; do not clean upstream task directories.\n" + text
 	case "task_submitted":
 		guidance := "After acceptance, continue your existing manual DAG or Loop iteration/delegation protocol. Do not wait for a finite project_ready event for a Loop."
 		if e.DispatchMode == "automatic" && e.PlanType != "loop" {
 			guidance = "After acceptance, the task system dispatches stored downstream specs. Do not redelegate or poll."
 		}
-		text = "TASK_COMPLETED: " + e.TaskID + "\nCandidate result only. Use check_task to validate the current submission before accepting. " + guidance + "\n" + text
+		text = "TASK_COMPLETED: " + e.TaskID + "\nCandidate result only. Validate the current submission with check_task or its synchronized runtime-prepared receipt before accepting. " + guidance + "\n" + text
 	case "project_ready":
 		text = "PROJECT_READY_TO_CLOSE: " + e.ProjectID + "\nEvery execution leaf has been accepted. Verify the complete request from these accepted results, then call projectflow complete_project with projectId and report (your concise final user report). That single operation closes coordinating parents, saves the report, completes the project and notifies the original coordinator. Do not modify accepted artifacts, repeat QA or end with a pending parent.\n" + text
 	case "project_completed":

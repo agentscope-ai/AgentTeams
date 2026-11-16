@@ -112,3 +112,25 @@ invites outside that scope remain unchanged. Joining uses the existing identity
 protocol without registering users, resetting passwords or changing room access.
 The operation is idempotent. Older Controllers retain the invite workflow and
 return a compatibility marker rather than preventing room creation.
+
+## Prepared protocol context and combined report submission
+
+For opted-in QwenPaw control turns, the runtime supplies the registered team
+roster at Human intake and executes the fixed ACK or submission-check operation
+before model inference. These operations use the normal scoped tools and
+state fences; they do not decide task acceptance. Preparation tool spans remain
+part of the measured total. Missing or failed preparation falls back to the
+normal tool protocol. Manual DAG and Loop continuation remain explicit.
+
+Shared `submit_task` accepts optional `resultMarkdown`: the Worker's complete
+report is saved as its own task's `result.md` in the submission operation.
+Omitting the field preserves an existing report. Submitted retries require the
+same report text; invalid input cannot change the report or task state. This
+combines report persistence with submission, not execution with acceptance.
+
+The argument compatibility layer preserves explicit report fields whether they
+arrive in `payload` or at the supported top level; an explicit payload wins.
+Automatic completion requires a supplied or previously saved final report
+before committing terminal state. A completion without a report must fail
+visibly in the tool call, rather than leave a completed plan whose requester
+notification cannot be delivered.

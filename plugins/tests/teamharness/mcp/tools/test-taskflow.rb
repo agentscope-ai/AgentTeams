@@ -647,7 +647,12 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         "payload": {"taskId": context_task_id},
     })
     context_result_path = pathlib.Path("#{workspace}") / "shared/tasks/context-parent-task/result.md"
-    context_result_path.write_text("context result body\\n", encoding="utf-8")
+    invalid_inline = payload("taskflow", {
+        "role": "worker", "action": "submit_task",
+        "payload": {"taskId": context_task_id, "status": "SUCCESS", "resultMarkdown": 42},
+    })
+    if invalid_inline.get("ok") or context_result_path.exists():
+        raise AssertionError(f"invalid inline report must fail without a write: {invalid_inline!r}")
     context_file.write_text(json.dumps({
         "rooms": {
             "!team:example.test": {
@@ -663,9 +668,25 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             "taskId": context_task_id,
             "status": "SUCCESS",
             "summary": "Submitted using Matrix context parent.",
+            "resultMarkdown": "context result body\\n",
             "deliverables": [],
         },
     })
+    if context_result_path.read_text(encoding="utf-8") != "context result body\\n":
+        raise AssertionError("inline report must be saved exactly before publication")
+    inline_retry_args = {
+        "role": "worker", "action": "submit_task",
+        "payload": {"taskId": context_task_id, "status": "SUCCESS",
+                    "summary": "Submitted using Matrix context parent.",
+                    "resultMarkdown": "context result body\\n", "deliverables": []},
+    }
+    inline_retry = payload("taskflow", inline_retry_args)
+    if not inline_retry.get("ok") or not inline_retry.get("reused"):
+        raise AssertionError(f"identical inline report retry must be idempotent: {inline_retry!r}")
+    inline_retry_args["payload"]["resultMarkdown"] = "changed submitted report"
+    inline_conflict = payload("taskflow", inline_retry_args)
+    if inline_conflict.get("ok") or context_result_path.read_text(encoding="utf-8") != "context result body\\n":
+        raise AssertionError(f"retry must not mutate a submitted report: {inline_conflict!r}")
     context_published = context_submitted.get("publishedArtifacts") or []
     if len(context_published) != 1 or context_published[0].get("status") != "published":
         raise AssertionError(f"context submit_task should publish result artifact: {context_submitted!r}")

@@ -268,3 +268,15 @@ def test_plugin_does_not_patch_qwenpaw_private_runtime():
     assert "QwenPawAgent._acting" not in source
     assert "legacy_mcp_client_to_driver" not in source
     assert "save_agent_config" not in source
+
+
+def test_planning_preload_keeps_start_contract_and_references_full_manual_skill():
+    from types import SimpleNamespace
+    module = load_plugin()
+    texts = []
+    module._load_phase_skill(SimpleNamespace(inject_context=lambda text, **kw: texts.append(text)), "project-management")
+    assert len(texts) == 1
+    assert "start_project" in texts[0] and "parentTaskId" in texts[0]
+    assert "Manual and Loop reference" not in texts[0]
+    assert "read the complete skill" in texts[0]
+    assert len(texts[0]) < len((module.ASSET_DIR / "skills/team/project-management/SKILL.md").read_text()) / 2

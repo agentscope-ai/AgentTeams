@@ -22,7 +22,7 @@ from mcp.common.errors import (
     _uncommitted_state_failure_result,
 )
 from mcp.common.identity import _canonical_account, _canonical_assignee
-from mcp.common.io import _read_json, _safe_read_bytes, _utc_timestamp
+from mcp.common.io import _atomic_write_text, _read_json, _safe_read_bytes, _utc_timestamp
 from mcp.common.payload import _first_text, _payload, _safe_id
 from mcp.common.paths import _project_state_path, _task_dir, _task_state_path
 from mcp.artifact.publish import (
@@ -889,6 +889,11 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "the notification shows the first 5 and points to "
                     f"shared/tasks/{task_id}/meta.json for the rest"
                 )
+            result_markdown = payload.get("resultMarkdown")
+            if "resultMarkdown" in payload and (
+                not isinstance(result_markdown, str) or not result_markdown.strip()
+            ):
+                raise ValueError("resultMarkdown must be a non-empty string")
             submitted_result = {
                 "status": status,
                 "summary": summary,
@@ -904,6 +909,10 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     persisted_digest = _task_result_digest(_submission_result(task))
                 if persisted_digest != submitted_digest:
                     raise ValueError("submit_task conflicts with existing submission")
+                if result_markdown is not None:
+                    result_file = _task_dir(arguments, task_id) / "result.md"
+                    if not result_file.is_file() or result_file.read_text(encoding="utf-8") != result_markdown:
+                        raise ValueError("resultMarkdown conflicts with existing submitted report")
                 submission_id = _first_text(
                     task.get("submission_id"),
                     task.get("submissionId"),
@@ -1052,7 +1061,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task_dir.mkdir(parents=True, exist_ok=True)
             submission_id = uuid.uuid4().hex
             submitted_at = _utc_timestamp()
-            if (task_dir / "result.md").is_file():
+            if result_markdown is not None or (task_dir / "result.md").is_file():
                 result_path_extra = {"result_path": f"shared/tasks/{task_id}/result.md"}
             else:
                 result_path_extra = {}
@@ -1071,6 +1080,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 submission_extra["submitted_by"] = _transition_actor(arguments)
                 submission_extra["submitted_by_source"] = _transition_actor_source(arguments)
             try:
+                if result_markdown is not None:
+                    _atomic_write_text(task_dir / "result.md", result_markdown)
                 _transition_task(
                     arguments,
                     task,

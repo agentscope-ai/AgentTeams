@@ -53,7 +53,9 @@ boundary conflict to the Leader. Put Worker-owned deliverables under
 
 ## Acknowledge
 
-When you receive `TASK_ASSIGNED`, acknowledge with `taskflow` first. That
+When you receive `TASK_ASSIGNED`, use a synchronized ACK receipt already
+supplied by your runtime. Do not acknowledge or pull the same assignment
+again. Otherwise, acknowledge with `taskflow` first. That
 operation pulls the authoritative task context; do not pre-pull it separately:
 
 ```json
@@ -105,6 +107,11 @@ than blocking delivery on optional cleanup.
 
 ## Execute
 
+Keep the original request's behavior and input domain authoritative. Analysis
+and checklists may organize the stated acceptance criteria, but must not turn
+optional suggestions or unspecified inputs into new required behavior. Mark
+those observations separately instead of widening the delivery contract.
+
 Keep all deliverables under the task directory. If you need private notes, use:
 
 ```text
@@ -116,10 +123,14 @@ artifact's purpose, such as `analysis.md`, `trace-summary.log`, or
 `patch-notes.md`; avoid vague names like `output.md` when there are multiple
 files.
 
-For report-style tasks whose expected output is `shared/tasks/{task-id}/result.md`,
-write the full report content to that file before calling `submit_task`.
-`submit_task` records structured status in task metadata and does not create or
-rewrite `result.md`.
+Supply your complete report as `payload.resultMarkdown` in `submit_task` to
+save `shared/tasks/{task-id}/result.md` and submit it in one call. Include the
+actual findings and verification evidence; this does not run tests for you.
+For report-style tasks, supply the full requested report, not just a summary.
+If no separate report filename was requested, use this canonical report
+instead of also writing a duplicate completion document. If you already wrote
+the report, omit `resultMarkdown` to preserve it. A retry
+with this field must carry exactly the same text as the submitted report.
 
 For long-running tasks, report progress periodically with the `report_progress`
 action (a short `note`, ≤ 200 chars). It records a progress entry in the task's
@@ -129,7 +140,11 @@ multi-stage work visible, not as a status update.
 If blocked, submit a `BLOCKED` result instead of silently waiting.
 
 When performing independent QA, judge pass/fail against the agreed acceptance
-criteria. Keep exploratory findings separate; do not invent stricter behavior
+criteria. For a small, fully specified request, run the required checklist
+together in one harness execution and submit once it passes. Do not add tool
+executions probing unspecified behavior to this delivery turn. Record optional
+observations without further probing; rerun only to repair the harness or
+investigate a failing required case. Keep exploratory findings separate; do not invent stricter behavior
 for unspecified inputs. If a required case fails, submit the reproducible
 failure promptly for Leader review instead of repeatedly rerunning it or
 editing upstream deliverables. Record ambiguous extra cases as observations
@@ -175,6 +190,7 @@ Submit with `taskflow`:
     "taskId": "demo-project-001-01",
     "status": "SUCCESS",
     "summary": "Completed the assigned work.",
+    "resultMarkdown": "# Result\nImplemented the requested behavior. Required acceptance cases 1-3 passed. See the declared output and test evidence.\n",
     "conclusions": [
       "The deliverable is at shared/tasks/demo-project-001-01/workspace/output.md.",
       "Acceptance criteria 1-3 all pass.",

@@ -63,7 +63,7 @@ def _payload(arguments: dict[str, Any]) -> dict[str, Any]:
         "title", "name", "source", "requester", "spec", "status", "summary", "notes", "topic", "admin",
         "invite", "replyRoute", "reply_route", "accepted", "resultStatus", "result_status", "reason",
         "cancelReason", "cancel_reason",
-        "targetUser", "target_user",
+        "targetUser", "target_user", "report", "resultMarkdown", "conclusions",
     ):
         if key not in data and arguments.get(key) is not None:
             data[key] = arguments[key]

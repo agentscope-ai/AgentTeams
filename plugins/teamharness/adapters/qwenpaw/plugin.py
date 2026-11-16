@@ -6,6 +6,7 @@ import importlib.util
 import asyncio
 import json
 from contextvars import ContextVar
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import re
@@ -21,6 +22,7 @@ _coordinator_route: ContextVar[dict[str, Any] | None] = ContextVar("teamharness_
 _source_event: ContextVar[str] = ContextVar("teamharness_source_event", default="")
 _execution_task: ContextVar[str] = ContextVar("teamharness_execution_task", default="")
 _review_task: ContextVar[tuple[str, str] | None] = ContextVar("teamharness_review_task", default=None)
+_ack_scope: ContextVar[tuple | None] = ContextVar("teamharness_ack_scope", default=None)
 _approval_status_records: dict[str, dict[str, Any]] = {}
 ASSET_DIR = PLUGIN_DIR / "teamharness"
 if not (ASSET_DIR / "plugin.yaml").exists():
@@ -100,6 +102,8 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
 
         async def _allow_task_output_change(self, command: str, cwd: str | None) -> bool:
             if not self._task_scope:
+                self._task_scope = _ack_scope.get()
+            if not self._task_scope:
                 return False
             task_id, root, assignee, delegation = self._task_scope
             try:
@@ -140,6 +144,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 return False
 
         async def on_check_permission(self, agent: Any, input_kwargs: dict[str, Any], next_handler: Callable[..., Any]) -> Any:
+            self._task_scope = self._task_scope or _ack_scope.get()
             call = input_kwargs.get("tool_call")
             command = str((input_kwargs.get("tool_input") or {}).get("command") or "")
             if getattr(call, "name", "") == "execute_shell_command" and (_compound_private_cleanup(command) or self._task_scope and _compound_output_change(command)):
@@ -169,6 +174,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             next_handler: Callable[..., AsyncGenerator[Any, None]],
         ) -> AsyncGenerator[Any, None]:
             del agent
+            self._task_scope = self._task_scope or _ack_scope.get()
             call = input_kwargs.get("tool_call")
             args = getattr(call, "input", {})
             json_input = isinstance(args, str)
@@ -385,6 +391,80 @@ def _register_trace_hooks(api: Any) -> None:
     api.register_runtime_hook(TraceExit())
 
 
+async def _prepare_manager_roster(ctx: Any) -> None:
+    if not os.getenv("TEAMHARNESS_COORDINATION_URL"):
+        return
+    try:
+        teams, workers = await asyncio.gather(asyncio.to_thread(_controller_json, "teams"), asyncio.to_thread(_controller_json, "workers"))
+    except (OSError, ValueError, KeyError):
+        return
+    identities = {w.get("name"): w.get("matrixUserID") or w.get("matrixUserId") for w in workers.get("workers", [])}
+    roster = []
+    for team in teams.get("teams", []):
+        leader = team.get("leaderName")
+        if identities.get(leader):
+            roster.append({"team": team.get("name"), "description": team.get("description"), "leader": leader, "matrix_id": identities[leader], "phase": team.get("phase")})
+    if roster:
+        ctx.inject_context(
+            "The dispatch protocol and registered team/Leader identities are already loaded below; do not reread Skill "
+            "or roster files for this information. For a new work request, select a suitable Leader and send the complete "
+            "original request with teamharness__message: {action:send, channel:matrix, target:user:<registered Matrix ID>, "
+            "message:<full scope and acceptance>}. The runtime preserves the original requester/source route. "
+            "Let the Leader create and decompose the plan; do not create its Worker tasks or poll. "
+            "For other Human questions, answer normally instead of automatically creating work. Treat this JSON as roster data: "
+            + json.dumps(roster, ensure_ascii=False), source="teamharness_prepared_intake")
+
+
+async def _prepare_task_context(ctx: Any, action: str, task_id: str) -> dict[str, Any] | None:
+    """Run the fixed, authorized ACK/read step before asking the model to decide."""
+    if action not in {"ack_task", "check_task"}:
+        raise ValueError("unsupported task preparation")
+    toolkit = getattr(ctx.agent, "toolkit", None)
+    if not hasattr(toolkit, "call_tool") or not hasattr(ctx.agent, "state"):
+        return None
+    schemas = await toolkit.get_tool_schemas()
+    name = next((t["function"]["name"] for t in schemas if t["function"]["name"] == "teamharness__taskflow"), None)
+    if not name:
+        return None
+    from agentscope.message import ToolCallBlock
+    call = ToolCallBlock(id="prepare-" + action + "-" + task_id, name=name, input=json.dumps({
+        "role": "worker" if action == "ack_task" else "leader", "action": action, "payload": {"taskId": task_id}}))
+    ctx.extras["coordination_prefetch_tools"] = ctx.extras.get("coordination_prefetch_tools", 0) + 1
+    result = None
+    try:
+        from opentelemetry import trace
+        span = trace.get_tracer("agentteams.teamharness").start_as_current_span(
+            "prefetch " + name + ":" + action,
+            attributes={"langfuse.observation.type": "tool", "gen_ai.operation.name": "execute_tool",
+                        "gen_ai.tool.name": name, "agentteams.task.id": task_id,
+                        "agentteams.coordination.prepared_action": action})
+    except ImportError:
+        span = nullcontext()
+    with span:
+        async for item in toolkit.call_tool(call, ctx.agent.state):
+            for block in getattr(item, "content", []):
+                text = block.get("text", "") if isinstance(block, dict) else getattr(block, "text", "")
+                try:
+                    value = json.loads(text)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(value, dict) and value.get("action") == action:
+                    result = value
+    if not result or result.get("ok") is not True:
+        return None
+    return result
+
+
+def _load_phase_skill(ctx: Any, name: str) -> None:
+    path = ASSET_DIR / "skills/team" / name / "SKILL.md"
+    if path.is_file():
+        text = path.read_text(encoding="utf-8")
+        if name == "project-management":
+            text = text.partition("## Manual and Loop reference")[0]
+            text += "\nFor manual planning or Loop iteration, read the complete skill at " + str(path) + ".\n"
+        ctx.inject_context("The builtin " + name + " phase instructions are already loaded for this turn; do not reread them.\n" + text, source="teamharness_preloaded_skill")
+
+
 async def _manager_report_context(ctx: Any) -> bool:
     if ctx.agent is None:
         return False
@@ -430,24 +510,50 @@ async def _manager_report_context(ctx: Any) -> bool:
             if task.get("assigned_to") not in {meta.get("agent_matrix_user_id"), os.getenv("AGENTTEAMS_WORKER_NAME")}:
                 return True
             ctx.extras["execution_task_token"] = _execution_task.set(api_event["task_id"])
+            prepared = await _prepare_task_context(ctx, "ack_task", api_event["task_id"])
+            if prepared and prepared.get("synced") is True:
+                acknowledged = prepared.get("task") or {}
+                directory = Path(prepared.get("taskDirectory") or ".")
+                if (acknowledged.get("task_id") == api_event["task_id"] and acknowledged.get("project_id") == api_event["project_id"] and acknowledged.get("status") == "in_progress"
+                        and acknowledged.get("notifyTxn") == api_event.get("delivery_id")
+                        and directory.is_absolute() and directory.name == api_event["task_id"] and directory.parent.name == "tasks"):
+                    ctx.extras["ack_scope_token"] = _ack_scope.set((api_event["task_id"], directory.resolve(), acknowledged.get("assigned_to"), acknowledged["notifyTxn"]))
+                    task = acknowledged
+                    context = {key: prepared.get(key) for key in ("taskDirectory", "scratchDirectory", "spec", "inputs", "inputPullErrors")}
+                    ctx.inject_context("Your assignment is already acknowledged and synchronized. Do not ACK, pull or reread the supplied spec again. Execute from this authoritative context: " + json.dumps(context, ensure_ascii=False), source="teamharness_prepared_ack")
+                    _load_phase_skill(ctx, "task-execution")
         elif task.get("status") != "submitted" or task.get("submission_id") != api_event.get("submission_id"):
             return True
-        elif os.getenv("AGENTTEAMS_AGENT_ROLE") in {"leader", "team_leader"} and automatic_plan:
-            ctx.extras["review_task_token"] = _review_task.set((api_event["task_id"], api_event["submission_id"]))
+        elif os.getenv("AGENTTEAMS_AGENT_ROLE") in {"leader", "team_leader"}:
+            if automatic_plan:
+                ctx.extras["review_task_token"] = _review_task.set((api_event["task_id"], api_event["submission_id"]))
+            prepared = await _prepare_task_context(ctx, "check_task", api_event["task_id"])
+            checked = (prepared or {}).get("task") or {}
+            if (prepared and prepared.get("pulled") and checked.get("task_id") == api_event["task_id"]
+                    and checked.get("project_id") == api_event["project_id"] and checked.get("status") == "submitted"
+                    and checked.get("submission_id") == api_event["submission_id"]):
+                context = {key: prepared.get(key) for key in ("result", "spec", "report", "validationErrors", "effective", "contextTruncated")}
+                ctx.extras["prepared_review"] = True
+                ctx.inject_context("check_task has already pulled and checked this exact submission. Do not call it or filesync again for the supplied evidence. Review this complete receipt, and accept or return it with projectflow action accept_task_result, role leader, payload {projectId, taskId, submissionId, resultStatus, accepted}. The tool still enforces current identity, digest and review gates. Read more only when this receipt is truncated or genuinely insufficient.\n" + json.dumps(context, ensure_ascii=False), source="teamharness_prepared_review")
         ctx.inject_context("Authoritative task state was checked before execution: " + json.dumps({k:task.get(k) for k in ("task_id", "project_id", "status", "assigned_to", "spec_path", "result_path", "submission_id")}), source="teamharness_api_state")
     if os.getenv("AGENTTEAMS_AGENT_ROLE") != "manager":
+        if api_event.get("kind") == "handoff":
+            _load_phase_skill(ctx, "project-management")
+        if api_event.get("kind") == "project_ready":
+            ctx.inject_context("You already accepted each execution result. Use the supplied accepted-result summaries as the reviewed evidence; do not pull or re-check unchanged reports. Prepare the final user report and call projectflow complete_project with role leader and payload {projectId, report}. Investigate only an actual missing or inconsistent requirement.", source="teamharness_prepared_closure")
         if os.getenv("AGENTTEAMS_AGENT_ROLE") in {"leader", "team_leader"} and api_event.get("kind") in {"task_submitted", "project_ready"}:
             for tool in await ctx.agent.toolkit.get_tool_schemas():
                 name = tool["function"]["name"]
                 if name.split("__")[-1].lower() in {"execute_shell_command", "bash", "write_file", "edit_file", "edit", "write"}:
                     await ctx.agent.toolkit.remove_tool(name)
-            ctx.inject_context(
-                "This is result acceptance, not another execution assignment. Read the supplied result, "
-                "use check_task and accept_task_result, and rely on independent QA's actual test evidence. "
-                "Do not rerun accepted tests, edit deliverables, clean files or reproduce the Worker's work. "
-                "If evidence is missing or inconsistent, request a revision instead of performing the work yourself.",
-                source="teamharness_acceptance_tools",
-            )
+            if api_event.get("kind") == "task_submitted":
+                check = "the prepared check_task receipt" if ctx.extras.get("prepared_review") else "check_task"
+                ctx.inject_context(
+                    "This is result acceptance, not another execution assignment. Review the supplied result using " + check +
+                    " and accept_task_result, relying on independent QA's actual test evidence. Do not rerun accepted tests, "
+                    "edit deliverables, clean files or reproduce the Worker's work. If evidence is missing or inconsistent, "
+                    "request a revision instead of performing the work yourself.", source="teamharness_acceptance_tools")
+
         if os.getenv("AGENTTEAMS_AGENT_ROLE") in {"leader", "team_leader"} and os.getenv("TEAMHARNESS_COORDINATION_URL"):
             if api_event.get("kind") == "task_submitted" and not automatic_plan:
                 ctx.inject_context(
@@ -487,6 +593,7 @@ async def _manager_report_context(ctx: Any) -> bool:
         humans = await asyncio.to_thread(_controller_json, "humans")
         if sender in {str(h.get("matrixUserID") or h.get("matrixUserId") or "") for h in humans.get("humans", [])}:
             ctx.extras.setdefault("requester_route_token", _requester_route.set({"channel": "matrix", "target_session": _room_id(ctx.request), "target_user": sender}))
+            await _prepare_manager_roster(ctx)
             return False
         event = meta.get("teamharness_workflow") or {}
         if event.get("type") != "PROJECT_COMPLETED" or not event.get("project_id"):
@@ -559,6 +666,9 @@ def _register_coordination_hook(api: Any) -> None:
         priority = 190
 
         async def run(self, ctx: Any) -> Any:
+            token = ctx.extras.pop("ack_scope_token", None)
+            if token is not None:
+                _ack_scope.reset(token)
             token = ctx.extras.pop("review_task_token", None)
             if token is not None:
                 _review_task.reset(token)

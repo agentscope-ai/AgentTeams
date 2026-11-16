@@ -26,8 +26,16 @@ Use this skill when maintaining durable project state.
 A project owns the plan, context, dependencies, and accepted progress. Keep the
 project plan separate from individual task execution logs.
 
+Keep each leaf spec within the original request. Preserve its acceptance
+criteria and input domain; do not introduce extra behavior or turn exploratory
+checks into requirements while planning or accepting results.
+
 Only advance a dependency after you accept the submitted result as the trusted
 Leader runtime.
+When your runtime supplies a synchronized `check_task` receipt for the current
+submission, review its spec, report and validation directly instead of pulling
+or checking it again. That preparation never makes the acceptance decision for
+you. Continue the normal manual DAG or Loop protocol after your decision.
 Do not use this skill for ordinary direct replies or lightweight one-off
 actions.
 
@@ -120,11 +128,19 @@ cases, required input paths and output paths. Reference accepted upstream
 artifacts instead of copying their contents into every downstream spec. Do not
 repeat task protocol, status report templates or CLI instructions in specs;
 the runtime already supplies those. Scale the plan to the request rather than
-expanding a small function into a long implementation document.
+expanding a small function into a long implementation document. For report-only
+work, use the task's canonical `result.md` as the report instead of requiring a
+second document with the same findings. Preserve any filename or separate
+artifact explicitly requested by the user. Workers can save the full report
+with `submit_task.resultMarkdown` in the submission call.
 
 Add a dependency only when the task actually consumes that predecessor's
 output or the requester requires the order. Role order alone is not a data
-dependency. For example, implementation documentation and independent QA can
+dependency. When the original request already fixes inputs, outputs and
+acceptance criteria, analysis and implementation can independently use that
+same contract; make QA consume both accepted outputs. If analysis must resolve
+an ambiguity or choose the contract, implementation must wait for it. Never
+invent parallelism across a real prerequisite. Implementation documentation and independent QA can
 both use the accepted implementation in parallel; only make documentation wait
 for QA when its requested content needs the QA result. Final acceptance still
 requires all required branches to finish.
@@ -138,7 +154,7 @@ ready leaf needs `assignedTo` and a bounded `spec`; later tasks can wait for
 their accepted inputs. Runtime-roster names or full Matrix IDs identify owners.
 
 ```json
-{"action":"start_project","payload":{"projectId":"delivery-001","title":"Bounded delivery","source":"matrix","sourceRoomId":"!source:matrix.local","requester":"@requester:matrix.local","replyRoute":{"channel":"matrix","target_session":"!coordinator:matrix.local","target_user":"@coordinator:matrix.local"},"tasks":[{"taskId":"delivery-001-analysis","assignedTo":"@analyst:matrix.local","spec":"Describe the requested behavior and acceptance cases. Submit requirements.md under your task directory."},{"taskId":"delivery-001-implementation","assignedTo":"@developer:matrix.local","dependsOn":["delivery-001-analysis"]}]}}
+{"action":"start_project","payload":{"projectId":"delivery-001","title":"Bounded delivery","source":"matrix","sourceRoomId":"!source:matrix.local","requester":"@requester:matrix.local","replyRoute":{"channel":"matrix","target_session":"!coordinator:matrix.local","target_user":"@coordinator:matrix.local"},"tasks":[{"taskId":"delivery-001-analysis","assignedTo":"@analyst:matrix.local","spec":"Describe the requested behavior and acceptance cases. Submit requirements.md under your task directory."},{"taskId":"delivery-001-implementation","assignedTo":"@developer:matrix.local","dependsOn":["delivery-001-analysis"],"spec":"Implement the accepted requirements under your task directory and submit code plus verification evidence."}]}}
 ```
 
 After successful initial assignments, end the source turn with `NO_REPLY`.
@@ -148,7 +164,9 @@ the room, project and assignment receipts; resolve the reported failure rather
 than create a second plan. The existing explicit room/self-trigger flow remains
 available when the request needs further planning in its task room.
 
-Create the project before planning tasks:
+## Manual and Loop reference
+
+For the explicit manual workflow, create the project before planning tasks:
 
 ```json
 {

@@ -68,11 +68,8 @@ func (h *LifecycleHandler) Wake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Directly operate on backend for immediate response
-	b := h.registry.DetectWorkerBackend(r.Context())
-	if b != nil {
-		_ = b.Start(r.Context(), name)
-	}
+	// The reconciler must inspect the retained instance before starting it:
+	// a sleeping Worker may have a pending Harness/image replacement.
 
 	h.setReady(name, false)
 

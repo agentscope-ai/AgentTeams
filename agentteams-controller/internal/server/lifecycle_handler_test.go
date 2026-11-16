@@ -70,8 +70,8 @@ func TestLifecycleWakeSetsRunningPhase(t *testing.T) {
 	sleeping := "Sleeping"
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
-		Spec:       v1beta1.WorkerSpec{State: &sleeping},
-		Status:     v1beta1.WorkerStatus{Phase: "Sleeping"},
+		Spec:       v1beta1.WorkerSpec{State: &sleeping, Runtime: "codex", Image: "codex:v2"},
+		Status:     v1beta1.WorkerStatus{Phase: "Sleeping", SpecHash: "previous-hermes-instance"},
 	}
 	k8sClient := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -100,6 +100,9 @@ func TestLifecycleWakeSetsRunningPhase(t *testing.T) {
 	}
 	if updated.Spec.DesiredState() != "Running" {
 		t.Fatalf("expected spec.state Running, got %q", updated.Spec.DesiredState())
+	}
+	if backendStub.startCalls != 0 {
+		t.Fatal("wake started a retained container before the reconciler checked its pending Harness/image change")
 	}
 }
 

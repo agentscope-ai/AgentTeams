@@ -91,9 +91,14 @@ for the container architecture with `go test -c ./internal/service` and run only
 `-test.run '^TestModelHealthRealHigressTuwunel$' -test.v -test.timeout 180s`.
 
 The infrastructure must run Tuwunel, Higress apiserver/controller/pilot/gateway,
-Console **and the bundled Wasm plugin server** (`start-plugin-server.sh`). A bare
-HTTP 200 before Wasm readiness is insufficient: the test also requires successful
-upstream credential replacement and rejection of an invalid consumer key.
+Console and the standard embedded `element-web` process. In the default embedded
+configuration, `start-element-web.sh` starts Nginx and also serves the bundled
+Wasm modules on port 8002 (IPv4 and IPv6); retain this process when preparing the
+isolated test stack. A separate `start-plugin-server.sh` process is an alternative
+only for a reduced test stack that omits `element-web`. Do not enable both: their
+Nginx instances can conflict on ports and PID files. A bare HTTP 200 before Wasm
+readiness is insufficient: the test also requires successful upstream credential
+replacement and rejection of an invalid consumer key.
 
 The test exercises real Higress consumer authorization and AI Proxy, actual
 Tuwunel registration/join/DM timeline, invalid HTTP-200 generations, lost notice

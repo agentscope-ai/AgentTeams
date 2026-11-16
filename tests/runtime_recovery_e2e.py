@@ -17,9 +17,9 @@ PREFIX = "recovery-1631-live-20261116"
 CONTROLLER = PREFIX + "-controller"
 NETWORK = PREFIX + "-net"
 STATE = Path("/tmp/recovery-1631-e2e-state.json")
-CORE_IMAGE = "recovery-1631/controller:local-20261116220300"
-HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261116222700",
-                  "hermes": "recovery-1631/hermes:local-20261116222700"}
+CORE_IMAGE = "recovery-1631/controller:local-20261116224200"
+HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261116224200",
+                  "hermes": "recovery-1631/hermes:local-20261116224200"}
 CASE = os.getenv("RECOVERY_E2E_CASE", "01")
 if len(CASE) != 2 or not CASE.isdecimal():
     raise ValueError("RECOVERY_E2E_CASE must be two decimal digits")

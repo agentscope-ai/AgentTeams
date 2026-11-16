@@ -19,9 +19,9 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenClaw | `5e44ebecabf878eda499b668c9627208dbfa6049` | matched |
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
-Candidate companion pins on this Draft branch: Codex `852fe57fe9e7daa5805c9cf14d6bafd66dcb9995`
-and Hermes `7bbde8b3972ff66b20cf6e7cb25d582527ade60a`. Both consume the shared
-Core contract at `3fe81174f391f7741f5f5471b110616742d1de91`. These are review
+Candidate companion pins on this Draft branch: Codex `49e88704a920e4a6f03bab610e244c865dacd7f9`
+and Hermes `702c54fcbbe6ba100bb3f305e2b14eb4c4a692f9`. Both consume the shared
+Core contract at `516f22a7fa758d128141812f3ebff076d1004725`. These are review
 candidates, not accepted/released Harness versions.
 
 ## Implemented contract
@@ -35,6 +35,10 @@ candidates, not accepted/released Harness versions.
   supervisor's process-start identity. It is independent of outbox leases.
   A different process cannot take over a still-live container, even after
   release. An unverifiable backend fails closed.
+- Harness identity comes from the actual backend instance runtime label,
+  rather than the desired Worker spec. Legacy instances without that label
+  require recreation before execution can be claimed. Sleeping Workers retain
+  the applied spec hash so a changed Harness is replaced on wake.
 - Checkpoints retain version, completed/remaining steps, operation identity
   and verification evidence, artifact digests, saved result and pending reply
   transaction/event. The server verifies persisted artifact bytes first.
@@ -47,6 +51,12 @@ candidates, not accepted/released Harness versions.
 - Codex companion work admits recovered Tasks before Matrix polling, checks
   session checkpoint digests, builds fresh sessions when stale, preserves the
   unrelated journal backlog/cursor, and separates saved-result delivery.
+- Hermes uses the SDK's actual session transition API for fresh recovery
+  sessions. Changing only the adapter queue key did not isolate SDK history.
+  Valid-session reuse remains incomplete.
+- Summary-only submissions with an execution record persist a report before
+  metadata CAS. A current active native final callback saves its answer before
+  invoking submitted-report recovery; pending saved replies stay authoritative.
 
 ## Local validation
 
@@ -55,15 +65,24 @@ candidates, not accepted/released Harness versions.
 | Controller server/auth/backend suites | passed | Go tests; no native model |
 | Existing Controller cutover race tests | passed | disappearance ordering only |
 | Recovery/instance identity regressions | passed | Go tests with fake storage/backend HTTP |
-| Shared recovery client | 9 passed | Python unit tests |
-| Task metadata commit and transition validation + shared recovery | 32 passed | Python tests |
+| Shared recovery client | 11 passed | Python unit tests |
+| Task metadata commit and transition validation + shared recovery | 34 passed | Python tests |
+| Task ownership, conclusions and continuation | 97 passed | separate MCP test process; no real model |
+| Controller full unit suite | passed | 0.519 seconds after sleeping-spec fix |
+| Controller integration envtest with race | passed | 68.402 seconds; source at runtime-identity change |
 | Codex existing suite | 29 passed | SDK/transport unit fixtures |
 | Codex recovery admission/session/delivery/reassignment | 9 passed; 38 total | mocked client; no native model |
-| Hermes startup recovery | initial adapter implemented | 28 host unit tests passed, 1 skipped; installed SDK recovery/admission smoke passed with mocked Task client; `3477332` hosted image/test checks passed; latest head pending |
+| Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; installed SDK fresh session IDs/admission smoke passed with mocked Task client; latest hosted checks tracked on PR #9 |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
-| Two real Harness continuation chain | blocked during first admission; no passing record | isolated Matrix/Controller/two Worker boot passed; first Task remained assigned, ledger empty; stale standalone role bypassed recovery and is now fixed in source |
-| Result saved / reply unsent against real Matrix | not tested | distinct from execution continuation |
+| Two real Harness continuation chain | incomplete; no clean passing run | cases 01-03 ran all steps once across Codex/Hermes, but required repairs or failed final delivery; case 04 stopped for verification; case 05 failed Harness preflight |
+| Result saved / reply unsent against real Matrix | passed, bounded case 01 | zero model calls, unchanged step ledger, one report body; event `$8KK7IrnddlsgCgKUTyJpzAzQZ8EPAxbDooNOOvwc7Hg` |
+| Return to retained old Codex session | passed for delivery-only case 02 | zero model calls, unchanged steps; execution continuation with stale session still open |
+
+The metadata-commit tests load another assembled server namespace and rebind
+global refs. Combining them with the MCP suites in one pytest process failed
+(95 failed, 36 passed); the separate CI-style commands above pass. That test
+isolation limitation remains open and is not runtime continuation evidence.
 
 ### Isolated live fixture (2026-11-16)
 
@@ -73,7 +92,28 @@ passing acceptance test. It uses only resources prefixed
 The three-step helper is executed only by the real Harness's native model tool;
 the driver does not execute steps on the Worker's behalf. Its persisted ledger
 counts executions, and immutable step artifacts are uploaded before checkpoints.
-No cross-Harness replacement or step execution has passed yet.
+Real cross-Harness replacement and step execution have been observed; the full
+execution-plus-final-delivery acceptance has no clean passing record yet.
+
+Recorded live failures and partial evidence:
+
+- Case 01: Codex step one, followed by Hermes steps two/three after fixes.
+  A later startup delivered the persisted report without model execution.
+  Report SHA256: `4c34228421d63d37a126a6ac7fa747f4e1baf1fe470a2ac418f01979dc5ed301`.
+- Case 02: Codex generation 1 step one; Hermes generation 2 steps two/three.
+  A retained old Codex session later performed saved-result delivery only,
+  event `$dP4RwwDwjELSwQ9dxRyVApoLm7M2hJOVccEOIAoyqwg`.
+- Case 03: all three steps once and native Hermes MCP submission, but final
+  delivery failed because no report file existed. This exposed the active
+  final-callback and summary-only report gaps now covered by regressions.
+- Case 04: actual fresh Hermes session `20261116_142936_8fded5cf`, but fixture
+  instructions caused duplicate operation registration. Step two remained
+  `needs_verification`; no unproved side effect was rerun. The fixture now
+  explicitly owns its own operation/checkpoint writes.
+- Case 05: actual old Hermes image on wake while desired runtime was Codex.
+  No step ran. The sleeping applied-hash/runtime-identity regression is fixed.
+- Cases 03-05 were cancelled after evidence capture. They are failed runs,
+  not accepted continuation evidence. Case 06 is a fresh run of the latest pins.
 
 Live setup exposed and source regressions now cover these issues:
 
@@ -128,12 +168,13 @@ The last command requires the independent Codex repository checked out at
 - Verify all six same-Harness and 30 directed cross-Harness combinations,
   including switching back with stale native sessions/cursors retained.
 
-Every cell below is **not tested with real Harness execution**:
+No matrix cell has completed its full required scenario set. Partial real
+execution is labelled separately from acceptance:
 
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex | untested | untested | untested | untested | untested | untested |
-| Hermes | untested | untested | untested | untested | untested | untested |
+| Codex | untested | partial; failed full acceptance | untested | untested | untested | untested |
+| Hermes | delivery-only return; continuation untested | untested | untested | untested | untested | untested |
 | QwenPaw | untested | untested | untested | untested | untested | untested |
 | DeepSeek | untested | untested | untested | untested | untested | untested |
 | OpenClaw | untested | untested | untested | untested | untested | untested |

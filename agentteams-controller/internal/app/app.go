@@ -561,6 +561,9 @@ func (a *App) initServiceLayer(_ context.Context) error {
 		MatrixDomain:    cfg.MatrixDomain,
 		NacosCredClient: a.credProvider,
 		SkillScanner:    a.skillScanner,
+		RuntimeProjection: service.RuntimeProjectionConfig{
+			AIGatewayURL: cfg.WorkerEnv.AIGatewayURL,
+		},
 	})
 
 	return nil

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -33,6 +34,7 @@ type ManagerEmbeddedConfig struct {
 
 // ManagerReconciler reconciles Manager resources.
 type ManagerReconciler struct {
+	modelHealthRunning atomic.Bool
 	client.Client
 
 	Provisioner      service.ManagerProvisioner
@@ -160,6 +162,7 @@ func (r *ManagerReconciler) reconcileManagerNormal(ctx context.Context, s *manag
 	if res, err := r.reconcileManagerContainer(ctx, s); err != nil || res.RequeueAfter > 0 {
 		return res, err
 	}
+	r.reconcileManagerModelHealth(ctx, s)
 	// Welcome message must run AFTER the container is up: the Manager's
 	// matrix user only joins the Admin DM room once OpenClaw inside the
 	// container has performed its first /sync. Sending earlier means the

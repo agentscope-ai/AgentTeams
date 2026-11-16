@@ -141,16 +141,15 @@ multi-stage work visible, not as a status update.
 
 If blocked, submit a `BLOCKED` result instead of silently waiting.
 
-When performing independent QA, judge pass/fail against the agreed acceptance
-criteria. For a small, fully specified request, run the required checklist
-together in one harness execution and submit once it passes. Do not add tool
-executions probing unspecified behavior to this delivery turn. Record optional
-observations without further probing; rerun only to repair the harness or
-investigate a failing required case. Keep exploratory findings separate; do not invent stricter behavior
-for unspecified inputs. If a required case fails, submit the reproducible
-failure promptly for Leader review instead of repeatedly rerunning it or
-editing upstream deliverables. Record ambiguous extra cases as observations
-and let the Leader resolve the contract.
+When performing independent QA, review the implementation independently and
+verify the agreed acceptance criteria plus relevant boundary and failure cases
+identified from the code and its risks. Do not skip necessary checks to reduce
+latency or tool calls. Batch related cases when practical; investigate actual
+failures and repair a broken test harness before drawing conclusions. Keep
+exploratory findings separate: do not silently turn unspecified behavior into a
+new requirement, or call untested behavior verified. Submit reproducible
+failures for Leader review instead of editing upstream deliverables. Ask the
+Leader to resolve a material contract ambiguity before declaring success.
 
 Match the depth of your work to the request. For a small task with explicit
 inputs, outputs and acceptance criteria, keep the analysis and protocol result

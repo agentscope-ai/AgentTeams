@@ -141,3 +141,10 @@ so all runtimes receive the same full request through their existing task
 protocol. Leaf ownership, spec validation, dependency gates and retry-plan
 identity remain unchanged; no extra context fetch or runtime-specific path is
 introduced.
+
+Latency is not an acceptance gate that can replace delivery quality. Independent
+QA retains implementation review, required acceptance cases and relevant
+boundary/failure checks; batching calls must not remove necessary work.
+Parallel analysis/implementation is appropriate only for a fixed original
+contract. A material ambiguity or contradictory result must be resolved before
+acceptance and downstream completion, rather than hidden to meet a timing target.

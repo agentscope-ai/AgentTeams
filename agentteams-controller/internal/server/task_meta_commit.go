@@ -445,6 +445,10 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validateMainTaskAuthority(w, current, body, authpkg.CallerFromContext(r.Context())) {
+		return
+	}
+
 	// The unified exit is the STRICT conditional write, exactly like the
 	// project meta commit: a backend whose If-Match can degrade to
 	// compare-then-put — or that does not implement it — is rejected with
@@ -466,6 +470,9 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "commit task meta: "+err.Error())
 		}
 		return
+	}
+	if bodyStatus == "assigned" && h.taskAssigned != nil {
+		h.taskAssigned()
 	}
 	committed, err := h.oss.StatMeta(r.Context(), key)
 	if err != nil {
@@ -552,6 +559,10 @@ func (h *ProjectHandler) putTaskMetaCreateIfAbsent(
 		writeError(w, http.StatusBadRequest,
 			"noncanonical task status "+strconv.Quote(bodyStatus)+
 				": the runtimes compare the exact string, so the stored value would not mean what it spells")
+		return
+	}
+
+	if !validateMainTaskAuthority(w, nil, body, caller) {
 		return
 	}
 
@@ -1432,6 +1443,27 @@ func (h *ProjectHandler) validateW2DecisionAuthority(
 		return false
 	}
 	if !h.checkStatusLane(w, cur, bod, class) {
+		return false
+	}
+	return true
+}
+
+// A subtask's plan membership is immutable; only a decision authority may
+// write the coordinating main Task. Worker execution never mutates its parent.
+func validateMainTaskAuthority(w http.ResponseWriter, before, after []byte, caller *authpkg.CallerIdentity) bool {
+	var old, next map[string]any
+	_ = json.Unmarshal(before, &old)
+	_ = json.Unmarshal(after, &next)
+	if old != nil {
+		for _, key := range []string{"main_task_id", "task_kind"} {
+			if coordinationString(old, key) != coordinationString(next, key) {
+				writeError(w, 403, "task plan membership is immutable")
+				return false
+			}
+		}
+	}
+	if coordinationString(next, "task_kind") == "main" && classifyCommitActor(caller) != actorDecider {
+		writeError(w, 403, "execution worker cannot write a coordinating main task")
 		return false
 	}
 	return true

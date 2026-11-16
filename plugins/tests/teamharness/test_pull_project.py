@@ -207,6 +207,7 @@ def test_projectflow_create_excluded(tmp_path: Path, monkeypatch) -> None:
     server = _load_server()
     fake = FakeFilesync()
     monkeypatch.setattr(server, "_filesync", fake)
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: True)
 
     workspace = tmp_path / "agent"
     result = server._projectflow(_arguments(workspace, "create_project", title="New"))
@@ -244,6 +245,8 @@ def test_projectflow_plan_loop_pulls(tmp_path: Path, monkeypatch) -> None:
         },
     })
     monkeypatch.setattr(server, "_filesync", fake)
+    # This test isolates pull/plan semantics; durable sync has separate coverage.
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: True)
 
     workspace = tmp_path / "agent"
     _write_project(workspace, "p1", {
@@ -265,6 +268,8 @@ def test_plan_loop_records_task_id(tmp_path: Path, monkeypatch) -> None:
     server = _load_server()
     fake = FakeFilesync()
     monkeypatch.setattr(server, "_filesync", fake)
+    # This test isolates pull/plan semantics; durable sync has separate coverage.
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: True)
 
     workspace = tmp_path / "agent"
     _write_task(workspace, "t1", {"task_id": "t1", "project_id": "p1", "status": "planned"})
@@ -289,6 +294,8 @@ def test_plan_loop_idempotent(tmp_path: Path, monkeypatch) -> None:
     server = _load_server()
     fake = FakeFilesync()
     monkeypatch.setattr(server, "_filesync", fake)
+    # This test isolates pull/plan semantics; durable sync has separate coverage.
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: True)
 
     workspace = tmp_path / "agent"
     _write_task(workspace, "t1", {"task_id": "t1", "project_id": "p1", "status": "planned"})
@@ -358,6 +365,8 @@ def test_plan_loop_replan_omitted_fields_preserve_anchors(tmp_path: Path, monkey
     server = _load_server()
     fake = FakeFilesync()
     monkeypatch.setattr(server, "_filesync", fake)
+    # This test isolates pull/plan semantics; durable sync has separate coverage.
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: True)
 
     workspace = tmp_path / "agent"
     _write_task(workspace, "t1", {"task_id": "t1", "project_id": "p1", "status": "planned"})
@@ -396,6 +405,8 @@ def test_plan_loop_replan_partial_omission_keeps_both_anchors(tmp_path: Path, mo
     server = _load_server()
     fake = FakeFilesync()
     monkeypatch.setattr(server, "_filesync", fake)
+    # This test isolates pull/plan semantics; durable sync has separate coverage.
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: True)
 
     workspace = tmp_path / "agent"
     _write_task(workspace, "t1", {"task_id": "t1", "project_id": "p1", "status": "planned"})

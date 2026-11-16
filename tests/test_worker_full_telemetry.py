@@ -15,6 +15,34 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 import at_telemetry as telemetry
 
 
+def test_qwenpaw_api_turn_uses_coordination_metadata(monkeypatch):
+    from types import SimpleNamespace
+    import at_runtime_adapters as adapters
+    callbacks = []
+    captured = []
+    monkeypatch.setattr(adapters.wrapt, 'wrap_function_wrapper', lambda module, name, callback: callbacks.append(callback))
+    monkeypatch.setattr(adapters, 'start_turn', lambda fields, request: captured.append(fields) or object())
+    monkeypatch.setattr(adapters, 'enrich_task', lambda fields, workspace: fields)
+    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(incoming=lambda content: {}, remember_reply=lambda *a: None))
+    async def stream(iterator, span, fields):
+        async for item in iterator:
+            yield item
+    monkeypatch.setattr(telemetry, 'trace_stream', stream)
+    adapters.qwenpaw_runtime(object())
+    meta = {'room_id': '!task:test', 'task_id': 'atomic-1', 'project_id': 'request-1'}
+    request = SimpleNamespace(session_id='coordination-task:atomic-1:dispatch-1', user_id='@requester:test',
+        channel_meta={}, request_context={'teamharness_coordination': meta})
+    runtime = SimpleNamespace(_normalize=lambda value: value, workspace=SimpleNamespace(workspace_dir=None))
+    async def wrapped(*args, **kwargs):
+        yield 'ok'
+    async def run():
+        return [item async for item in callbacks[0](wrapped, runtime, (request,), {})]
+    assert asyncio.run(run()) == ['ok']
+    assert captured[0]['agentteams.task.id'] == 'atomic-1'
+    assert captured[0]['agentteams.room.id'] == '!task:test'
+    assert captured[0]['agentteams.project.id'] == 'request-1'
+
+
 def test_local_runtime_events_keep_model_tool_failures_without_content(tmp_path, monkeypatch):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'shared/lib'))
     monkeypatch.setenv('AGENTTEAMS_LOG_DIR', str(tmp_path))
@@ -90,7 +118,7 @@ def test_agentscope_middleware_import_order_does_not_break_worker_startup(tmp_pa
     (package / 'agent/_agent.py').write_text('class Agent:\n    def __init__(self, middlewares=None): self.middlewares = middlewares\n    async def reply(self): pass\n')
     environment = {**os.environ, 'AGENTTEAMS_OTEL_ENABLED': 'true', 'AGENTTEAMS_OTEL_RUNTIME': 'qwenpaw',
                    'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'shared/lib/telemetry') + os.pathsep + str(tmp_path)}
-    result = subprocess.run([sys.executable, '-c', 'from agentscope.agent import Agent; from agentscope.middleware import TracingMiddleware; assert isinstance(Agent().middlewares[0], TracingMiddleware)'],
+    result = subprocess.run([sys.executable, '-c', 'from agentscope.agent import Agent; from agentscope.middleware import TracingMiddleware; assert isinstance(Agent().middlewares[0], TracingMiddleware); agent = Agent(middlewares=[TracingMiddleware()]); assert len(agent.middlewares) == 1; assert type(agent.middlewares[0]) is not TracingMiddleware'],
                             env=environment, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
@@ -172,6 +200,15 @@ def test_returned_tool_errors_are_detected():
     assert telemetry.tool_error('{"error":"file missing"}')
     assert telemetry.tool_error({"exit_code": 2, "stdout": ""})
     assert not telemetry.tool_error({"exit_code": 0, "stdout": "error count: 0"})
+
+
+def test_denied_and_wrapped_tool_failures_are_detected():
+    assert telemetry.tool_error({"state": "denied", "content": [{"type": "text", "text": "Approval timed out after 300s"}]}) == "Approval timed out after 300s"
+    assert telemetry.tool_error({"ok": False})
+    assert telemetry.tool_error({"content": [{"type": "text", "text": '{"ok": false, "tool": "taskflow", "error": "invalid artifact path"}'}]}) == "invalid artifact path"
+    assert not telemetry.tool_error({"content": [{"type": "text", "text": "No error found"}]})
+    assert not telemetry.tool_error({"content": [{"type": "text", "text": '{"ok": true}'}]})
+    assert not telemetry.tool_error({"state": "success", "content": [{"type": "text", "text": '{"ok": false, "error": "example data"}'}]})
 
 
 def test_runtime_handles_in_request_are_not_serialized_as_json():
@@ -399,3 +436,44 @@ def test_http_propagates_business_baggage_only_to_local_api(monkeypatch):
                 assert ("baggage" in request.headers) == (host == "localhost")
     finally:
         telemetry._correlation.reset(correlation)
+
+
+def test_task_identity_arriving_after_turn_start_reaches_children_and_carrier(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import at_runtime_adapters as adapters
+    from at_trace_transport import carrier, incoming
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins/teamharness/adapters/qwenpaw"))
+    from task_trace import find_task_trace_context
+    monkeypatch.setattr(adapters, "task_resolver", lambda: find_task_trace_context)
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
+    provider = TracerProvider()
+    provider.add_span_processor(telemetry.IdentityProcessor())
+    tracer = provider.get_tracer("test")
+    fields = {"agentteams.room.id": "!room:test", "agentteams.turn.id": "turn"}
+    correlation = telemetry._correlation.set(fields)
+    root = tracer.start_span("worker.turn")
+    active = telemetry._active_turn.set(root)
+    agent = SimpleNamespace(workspace_dir=tmp_path)
+    try:
+        adapters.refresh_task_span(agent)
+        assert "agentteams.task.id" not in root.attributes
+        task_dir = tmp_path / "shared/tasks/one"
+        task_dir.mkdir(parents=True)
+        (task_dir / "meta.json").write_text(json.dumps({"task_id": "one", "project_id": "project", "room_id": "!room:test", "assigned_to": "@alice:test", "status": "in_progress"}))
+        adapters.refresh_task_span(agent)
+        assert root.attributes["agentteams.task.id"] == "one"
+        assert root.attributes["agentteams.project.id"] == "project"
+        with trace.use_span(root, end_on_exit=False):
+            with tracer.start_as_current_span("model") as child:
+                assert child.attributes["agentteams.task.id"] == "one"
+                received = incoming({"com.agentteams.trace": carrier()}, room_id="!other:test")
+                assert received["agentteams.upstream.task_id"] == "one"
+                assert received["agentteams.project.id"] == "project"
+        # An unrelated trace must not pick up the cached task from this turn.
+        with tracer.start_as_current_span("unrelated") as unrelated:
+            assert "agentteams.task.id" not in unrelated.attributes
+    finally:
+        telemetry._active_turn.reset(active)
+        telemetry._correlation.reset(correlation)
+        root.end()
+        provider.shutdown()

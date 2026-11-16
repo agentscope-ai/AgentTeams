@@ -836,7 +836,27 @@ func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, teamToResponse(&team))
+	var workers v1beta1.WorkerList
+	if err := h.client.List(r.Context(), &workers, client.InNamespace(h.namespace)); err != nil {
+		writeK8sError(w, "get team members", err)
+		return
+	}
+	byName := make(map[string]*v1beta1.Worker, len(workers.Items))
+	for i := range workers.Items {
+		byName[workers.Items[i].Name] = &workers.Items[i]
+	}
+	response := teamToResponse(&team)
+	for _, member := range team.Spec.WorkerMembers {
+		view := TeamMemberView{Name: member.Name, Role: member.Role, Phase: "Missing"}
+		if worker := byName[member.Name]; worker != nil {
+			view.MatrixUserID = worker.Status.MatrixUserID
+			view.Runtime, view.Phase, view.State = worker.Spec.Runtime, worker.Status.Phase, worker.Spec.DesiredState()
+			view.Skills = worker.Spec.Skills
+			view.NativeCoordinationSupported = coordinationRuntimeSupported(worker.Spec.Runtime)
+		}
+		response.Members = append(response.Members, view)
+	}
+	httputil.WriteJSON(w, http.StatusOK, response)
 }
 
 func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {

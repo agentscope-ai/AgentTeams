@@ -215,6 +215,90 @@ def test_complete_project_still_allows_an_empty_project(tmp_path: Path) -> None:
     assert _persisted_project_status(tmp_path) == "completed"
 
 
+def test_coordinating_parent_uses_accepted_child_artifacts(tmp_path: Path) -> None:
+    parent = _task_node("gate-main", "completed")
+    child = {**_task_node(TASK_IDS[0], "completed"), "parent_task_id": "gate-main"}
+    _write_project(tmp_path, [parent, child])
+    _write_result(tmp_path, TASK_IDS[0])
+    assert _complete(tmp_path)["ok"] is True
+
+
+def test_parent_does_not_hide_child_without_delivery(tmp_path: Path) -> None:
+    parent = _task_node("gate-main", "completed")
+    child = {**_task_node(TASK_IDS[0], "completed"), "parent_task_id": "gate-main"}
+    _write_project(tmp_path, [parent, child])
+    rejected = _complete(tmp_path)
+    assert rejected["ok"] is False
+    assert f"{TASK_IDS[0]} (artifact=missing)" in rejected["error"]
+
+
+def test_create_project_with_initial_tasks_returns_ready_work(tmp_path):
+    result = _tool_payload("projectflow", {"action": "create_project", "workspaceDir": str(tmp_path), "payload": {
+        "projectId": PROJECT_ID, "tasks": [
+            {"taskId": "analysis"}, {"taskId": "dev", "dependsOn": ["analysis"]},
+        ],
+    }})
+    assert result["ok"] is True
+    assert [task["task_id"] for task in result["readyNodes"]] == ["analysis"]
+    persisted = json.loads((tmp_path / "shared/projects" / PROJECT_ID / "meta.json").read_text())
+    assert persisted["tasks"][1]["depends_on"] == ["analysis"]
+
+
+def test_invalid_initial_plan_does_not_create_project(tmp_path):
+    result = _tool_payload("projectflow", {"action": "create_project", "workspaceDir": str(tmp_path), "payload": {
+        "projectId": PROJECT_ID, "tasks": [{"taskId": "dev", "dependsOn": ["missing"]}],
+    }})
+    assert result["ok"] is False
+    assert not (tmp_path / "shared/projects" / PROJECT_ID / "meta.json").exists()
+
+
+def test_check_task_returns_spec_and_report_in_one_response(tmp_path):
+    task_id = TASK_IDS[0]
+    _write_task_meta(tmp_path, task_id, "submitted", deliverables=[f"shared/tasks/{task_id}/result.md"])
+    _write_result(tmp_path, task_id)
+    (tmp_path / "shared/tasks" / task_id / "spec.md").write_text("Acceptance criteria.")
+    result = _tool_payload("taskflow", {"role": "leader", "action": "check_task", "workspaceDir": str(tmp_path), "payload": {"taskId": task_id}})
+    assert result["effective"] is True
+    assert result["spec"] == "Acceptance criteria."
+    assert result["report"] == "Delivered."
+
+
+def test_acceptance_returns_next_ready_nodes_without_another_query(tmp_path, monkeypatch):
+    first, second = TASK_IDS
+    _write_project(tmp_path, [_task_node(first, "submitted"), {**_task_node(second, "planned"), "depends_on": [first]}])
+    _write_task_meta(tmp_path, first, "submitted", deliverables=[f"shared/tasks/{first}/result.md"])
+    _write_result(tmp_path, first)
+    monkeypatch.setattr(server, "_sync_task", lambda *a, **k: True)
+    result = _tool_payload("projectflow", {"role": "leader", "action": "accept_task_result", "workspaceDir": str(tmp_path), "payload": {"projectId": PROJECT_ID, "taskId": first, "resultStatus": "SUCCESS"}})
+    assert result["ok"] is True
+    assert [task["task_id"] for task in result["readyNodes"]] == [second]
+    assert not result["project"].get("requester_report", {}).get("pending")
+
+
+def test_final_report_is_sent_once_after_terminal_commit(tmp_path, monkeypatch):
+    _write_project(tmp_path, [_task_node(TASK_IDS[0], "completed")])
+    _write_result(tmp_path, TASK_IDS[0])
+    path = tmp_path / "shared/projects" / PROJECT_ID / "meta.json"
+    project = json.loads(path.read_text())
+    project["reply_route"] = {"channel": "matrix", "target_session": "!manager:test", "target_user": "@manager:test"}
+    project["requester_reply_route"] = {"channel": "matrix", "target_session": "!human:test", "target_user": "@human:test"}
+    server._write_json(path, project)
+    (path.parent / "result.md").write_text("Final acceptance report.")
+    calls = []
+    def send(arguments):
+        assert _persisted_project_status(tmp_path) == "completed"
+        calls.append(arguments)
+        return {"ok": True, "messageId": "$final"}
+    monkeypatch.setattr(server, "_message", send)
+    first = _complete(tmp_path)
+    assert first["requesterNotification"]["sent"] is True
+    assert calls[0]["workflowEvent"] == {"type": "PROJECT_COMPLETED", "project_id": PROJECT_ID}
+    assert calls[0]["requesterReplyRoute"]["target_session"] == "!human:test"
+    assert "Final acceptance report." in calls[0]["message"]
+    assert _complete(tmp_path)["requesterNotification"]["reused"] is True
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("deliverables", [[""], ["  "], ["shared/tasks/unrelated-task/result.md"], ["../../outside.md"]])
 def test_invalid_registered_deliverables_do_not_complete_project(tmp_path, deliverables):
     task_id = TASK_IDS[0]
@@ -266,3 +350,30 @@ def test_loop_completion_retains_terminal_task_contract(tmp_path: Path, status: 
     project["loop"] = {"tasks": [_task_node(TASK_IDS[0], status)]}
     server._write_json(path, project)
     assert _complete(tmp_path)["ok"] is True
+
+
+@pytest.mark.parametrize("leaf_status", ["completed", "submitted"])
+def test_leader_report_finalizes_parents_only_after_all_leaves_are_accepted(tmp_path, leaf_status):
+    root = _task_node("parent", "planned")
+    leaf = {**_task_node(TASK_IDS[0], leaf_status), "parent_task_id": "parent"}
+    _write_project(tmp_path, [root, leaf])
+    _write_task_meta(tmp_path, TASK_IDS[0], leaf_status)
+    _write_result(tmp_path, TASK_IDS[0])
+    result = _tool_payload("projectflow", {"role": "leader", "action": "complete_project", "workspaceDir": str(tmp_path),
+        "payload": {"projectId": PROJECT_ID, "report": "Accepted requirements, implementation, independent QA and usage documentation."}})
+    assert result["ok"] is (leaf_status == "completed")
+    saved = json.loads((tmp_path / "shared/projects" / PROJECT_ID / "meta.json").read_text())
+    assert saved["tasks"][0]["status"] == ("completed" if leaf_status == "completed" else "planned")
+    assert (tmp_path / "shared/projects" / PROJECT_ID / "result.md").exists() is (leaf_status == "completed")
+
+
+def test_final_report_does_not_override_cancelled_parent(tmp_path):
+    root = _task_node("parent", "cancelled")
+    leaf = {**_task_node(TASK_IDS[0], "completed"), "parent_task_id": "parent"}
+    _write_project(tmp_path, [root, leaf])
+    _write_result(tmp_path, TASK_IDS[0])
+    result = _tool_payload("projectflow", {"role": "leader", "action": "complete_project", "workspaceDir": str(tmp_path),
+        "payload": {"projectId": PROJECT_ID, "report": "All leaf results accepted."}})
+    assert not result["ok"]
+    assert _persisted_project_status(tmp_path) == "active"
+    assert not (tmp_path / "shared/projects" / PROJECT_ID / "result.md").exists()

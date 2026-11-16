@@ -22,9 +22,9 @@ from mcp.common.errors import (
     _uncommitted_state_failure_result,
 )
 from mcp.common.identity import _canonical_account, _canonical_assignee
-from mcp.common.io import _read_json, _safe_read_bytes, _utc_timestamp
+from mcp.common.io import _atomic_write_text, _read_json, _safe_read_bytes, _utc_timestamp
 from mcp.common.payload import _first_text, _payload, _safe_id
-from mcp.common.paths import _project_state_path, _task_dir, _task_state_path
+from mcp.common.paths import _project_state_path, _task_dir, _task_state_path, _task_result_path
 from mcp.artifact.publish import (
     _attachment_parent_event_id,
     _normalize_workspace_artifact_path,
@@ -335,6 +335,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
     payload = _payload(arguments)
     role = _role(arguments)
     try:
+        if action in {"start_task", "advance_task", "complete_task", "accept_task_result"}:
+            from .plans import _main_task_action
+            return _main_task_action(arguments, payload)
         # the lifecycle write API read-before-read: taskflow has no create action; every
         # action (delegate/ack/submit/cancel/check) belongs to a project.
         # Pull the authoritative meta.json first so a Controller pause /
@@ -371,15 +374,38 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # result is persisted on the task meta below. With the switch
             # off the field is ignored (pre-W2 behaviour, byte-for-byte).
             decision_class = _guard_delegate_decision_class(payload)
-            project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
+            main_task_id = str(payload.get("mainTaskId") or payload.get("main_task_id") or "")
+            project_id = str(payload.get("projectId") or payload.get("project_id") or "")
+            if not main_task_id:
+                project_id = _safe_id(project_id, "projectId")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             assigned_to = str(payload.get("assignedTo") or payload.get("assigned_to") or "").strip()
             room_id = str(payload.get("roomId") or payload.get("room_id") or "")
             if not room_id:
                 raise ValueError("roomId is required")
-            project = _read_json(_project_state_path(arguments, project_id))
+            if main_task_id:
+                from .plans import _load_main_plan
+                project = _load_main_plan(arguments, main_task_id)
+                project_id = str(project.get("project_id") or "")
+                if project.get("status") != "in_progress":
+                    raise ValueError("main task is not active")
+                if not any(n.get("task_id") == task_id for n in project.get("tasks", [])):
+                    raise ValueError("task not found in main task plan")
+            else:
+                project = _read_json(_project_state_path(arguments, project_id))
             if any(node.get("parent_task_id") == task_id for node in project.get("tasks", [])):
                 raise ValueError("delegate subtasks instead of their coordinating parent task")
+            nodes = project.get("tasks", []) + (project.get("loop", {}).get("tasks", []) if isinstance(project.get("loop"), dict) else [])
+            by_id = {node.get("task_id"): node for node in nodes}
+            blocked_by = [dep for dep in by_id.get(task_id, {}).get("depends_on", []) if by_id.get(dep, {}).get("status") != "completed"]
+            # Loop readiness is iteration-aware; retain its existing dispatch
+            # protocol rather than applying the finite-DAG status shortcut.
+            if blocked_by and project.get("plan_type") != "loop":
+                return {
+                    "ok": False, "tool": "taskflow", "action": action,
+                    "retryable": False, "blockedBy": blocked_by,
+                    "error": "dependencies are not accepted; wait for their completion event before delegating, do not poll",
+                }
             paused, pause_sources = _loop_pause_state(project or {})
             if paused:
                 raise ValueError(f"project is paused (sources: {', '.join(pause_sources)})")
@@ -399,6 +425,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 existing_task = _read_json(
                     _task_state_path(arguments, task_id), {"project_id": project_id}
                 )
+            if existing_task.get("task_id") and existing_task.get("main_task_id", "") != main_task_id:
+                raise ValueError("task ID belongs to a different main task")
             _validate_task_redelegation(arguments, project, task_id, room_id)
             _require_task_mutable(arguments, existing_task, task_id, action, to_status="assigned")
             assigned_to = str(payload.get("assignedTo") or payload.get("assigned_to") or "").strip()
@@ -467,6 +495,10 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                             summary=f"delegate_task: {task_id} assigned to {assigned_to}",
                         ),
                     }
+                if main_task_id:
+                    node = next(n for n in project["tasks"] if n["task_id"] == task_id)
+                    if node.get("status") == "planned" and not _update_project_task(arguments, project_id, task_id, status="assigned"):
+                        return {"ok": False, "retryable": True, "error": "assignment committed; main task plan update needs retry"}
                 return {
                     "ok": True,
                     "tool": "taskflow",
@@ -542,6 +574,12 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "spec_path": f"shared/tasks/{task_id}/spec.md",
                 "notifyTxn": notify_txn,
             }
+            if main_task_id:
+                task["main_task_id"] = main_task_id
+                if not existing_task.get("task_id") or existing_task.get("task_kind"):
+                    task["task_kind"] = "execution"
+                task["team_id"] = project["team_id"]
+                task["title"] = next(n["title"] for n in project["tasks"] if n["task_id"] == task_id)
             for node in project.get("tasks", []):
                 if node.get("task_id") == task_id and node.get("parent_task_id"):
                     task["parent_task_id"] = node["parent_task_id"]
@@ -645,12 +683,17 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 # A pause landing concurrently with the send itself does
                 # not recall the in-flight Matrix event (already
                 # dispatched work may finish under the agreed contract).
-                if not _pull_project(arguments, project_id):
+                if main_task_id:
+                    project = _load_main_plan(arguments, main_task_id)
+                    if project.get("status") != "in_progress":
+                        raise ValueError("main task is not active before assignment")
+                elif not _pull_project(arguments, project_id):
                     raise ValueError(
                         "cannot refresh the authoritative project state before "
                         "dispatch; refusing to send on a stale local copy (retry)"
                     )
-                project = _read_json(_project_state_path(arguments, project_id))
+                if not main_task_id:
+                    project = _read_json(_project_state_path(arguments, project_id))
                 paused, pause_sources = _loop_pause_state(project or {})
                 if paused:
                     raise ValueError(f"project is paused (sources: {', '.join(pause_sources)})")
@@ -705,8 +748,10 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 project_task_updates["assigned_to"] = assigned_to
             if source_room_id:
                 project_task_updates["source_room_id"] = source_room_id
-            _update_project_task(arguments, project_id, task_id, **project_task_updates)
+            plan_synced = _update_project_task(arguments, project_id, task_id, **project_task_updates)
             synced = _sync_task(arguments, task_id)
+            if main_task_id and not plan_synced and synced:
+                return {"ok": False, "retryable": True, "error": "assignment committed; main task plan update needs retry", "task": task}
             if not synced:
                 # The assignment was committed locally and the notification
                 # was sent, but the assigned state did not reach shared
@@ -758,6 +803,56 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             _require_task_assignee(task)
             pulled = True
             _require_task_mutable(arguments, task, task_id, action, to_status="in_progress")
+            inputs = []
+            preview_budget = 16384
+            project_id = str(task.get("project_id") or "")
+            if project_id and project_id != pid and not _pull_project(arguments, project_id):
+                return _pull_failed_response("taskflow", action)
+            if task.get("main_task_id"):
+                from .plans import _load_main_plan
+                project = _load_main_plan(arguments, task["main_task_id"])
+                if project.get("status") != "in_progress":
+                    raise ValueError("main task is not active")
+            else:
+                project = _read_json(_project_state_path(arguments, project_id)) if project_id else {}
+            if project.get("dispatch_mode") == "automatic" and project.get("plan_type") != "loop":
+                node = next((n for n in project.get("tasks", []) if n.get("task_id") == task_id), None)
+                if node is None:
+                    raise ValueError("assigned task is missing from the authoritative plan")
+                for dependency in node.get("depends_on", []):
+                    dependency = _safe_id(dependency, "dependency")
+                    upstream = _load_authoritative_task(arguments, dependency)
+                    if (upstream.get("project_id", "") != project_id or upstream.get("main_task_id", "") != task.get("main_task_id", "") or upstream.get("status") != "completed"):
+                        raise ValueError(f"prerequisite {dependency} is not an accepted result in this project")
+                    directory = _task_dir(arguments, dependency).resolve()
+                    previews = []
+                    prefix = f"shared/tasks/{dependency}/"
+                    for source in dict.fromkeys([upstream.get("result_path") or prefix + "result.md", *upstream.get("deliverables", [])]):
+                        if not preview_budget:
+                            break
+                        if not isinstance(source, str) or not source.startswith(prefix):
+                            continue
+                        file = (directory / source[len(prefix):]).resolve()
+                        if not file.is_relative_to(directory) or not file.is_file():
+                            continue
+                        limit = min(8192, preview_budget)
+                        try:
+                            with file.open("rb") as handle:
+                                data = handle.read(limit + 1)
+                            preview_budget -= min(len(data), limit)
+                            if b"\x00" in data:
+                                continue
+                            text = data[:limit].decode("utf-8", errors="ignore" if len(data) > limit else "strict")
+                        except (OSError, UnicodeDecodeError):
+                            continue
+                        previews.append({"path": source, "text": text, "truncated": len(data) > limit})
+                    inputs.append({"taskId": dependency, "directory": str(directory),
+                        "readOnly": True, "summary": str(upstream.get("summary") or "")[:1024],
+                        "deliverables": upstream.get("deliverables", []), "previews": previews})
+            scratch = _task_dir(arguments, task_id) / "workspace"
+            if not scratch.resolve().is_relative_to(_task_dir(arguments, task_id).resolve()):
+                raise ValueError("task workspace escapes its task directory")
+            scratch.mkdir(exist_ok=True)
             if task.get("status") != "submitted":
                 # Tightening: ack only makes sense after the assignment
                 # (planned/prepared/missing -> structured error, not a
@@ -792,6 +887,10 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "action": action,
                 "task": task,
                 "spec": spec,
+                "taskDirectory": str(_task_dir(arguments, task_id).resolve()),
+                "scratchDirectory": str(scratch.resolve()),
+                "inputs": inputs,
+                "executionGuidance": "This ACK pulled your task and accepted prerequisite directories. Complete text previews are supplied below; do not reread those unchanged files. Read local files when a preview is missing or truncated. submit_task synchronizes and publishes declared outputs. Do not repeat those filesync pulls or pushes. Create tests and temporary directories under scratchDirectory; do not invent a global /tmp path. Keep upstream inputs read-only.",
                 "pulled": pulled,
                 "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
             }
@@ -853,6 +952,15 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "the notification shows the first 5 and points to "
                     f"shared/tasks/{task_id}/meta.json for the rest"
                 )
+            result_markdown = payload.get("resultMarkdown")
+            if "resultMarkdown" in payload and (
+                not isinstance(result_markdown, str) or not result_markdown.strip()
+            ):
+                raise ValueError("resultMarkdown must be a non-empty string")
+            report_source, report_file = _task_result_path(arguments, task_id,
+                payload["resultPath"] if "resultPath" in payload else task.get("result_path") or None)
+            if "resultPath" in payload and result_markdown is None and not report_file.is_file():
+                raise ValueError("resultPath report does not exist; write it or supply resultMarkdown")
             submitted_result = {
                 "status": status,
                 "summary": summary,
@@ -860,6 +968,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             }
             submitted_digest = _task_result_digest(submitted_result)
             if task.get("status") == "submitted":
+                if report_source != (task.get("result_path") or f"shared/tasks/{task_id}/result.md"):
+                    raise ValueError("resultPath conflicts with existing submitted report")
                 persisted_digest = _first_text(
                     task.get("result_digest"),
                     task.get("resultDigest"),
@@ -868,6 +978,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     persisted_digest = _task_result_digest(_submission_result(task))
                 if persisted_digest != submitted_digest:
                     raise ValueError("submit_task conflicts with existing submission")
+                if result_markdown is not None:
+                    if not report_file.is_file() or report_file.read_text(encoding="utf-8") != result_markdown:
+                        raise ValueError("resultMarkdown conflicts with existing submitted report")
                 submission_id = _first_text(
                     task.get("submission_id"),
                     task.get("submissionId"),
@@ -1016,8 +1129,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task_dir.mkdir(parents=True, exist_ok=True)
             submission_id = uuid.uuid4().hex
             submitted_at = _utc_timestamp()
-            if (task_dir / "result.md").is_file():
-                result_path_extra = {"result_path": f"shared/tasks/{task_id}/result.md"}
+            if result_markdown is not None or report_file.is_file():
+                result_path_extra = {"result_path": report_source}
             else:
                 result_path_extra = {}
                 task.pop("result_path", None)
@@ -1035,6 +1148,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 submission_extra["submitted_by"] = _transition_actor(arguments)
                 submission_extra["submitted_by_source"] = _transition_actor_source(arguments)
             try:
+                if result_markdown is not None:
+                    _atomic_write_text(report_file, result_markdown)
                 _transition_task(
                     arguments,
                     task,
@@ -1959,12 +2074,28 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task = _load_task(arguments, task_id)
             result, validation_errors = _task_result_from_meta(task)
             effective = task.get("status") == "submitted" and not validation_errors
+            reports = {}
+            paths = {"spec": _task_dir(arguments, task_id) / "spec.md"}
+            try:
+                paths["result"] = _task_result_path(arguments, task_id, task.get("result_path") or None)[1]
+                if task.get("result_path") and not paths["result"].is_file():
+                    validation_errors.append("submitted report is unavailable")
+            except ValueError as exc:
+                validation_errors.append(str(exc))
+            effective = effective and not validation_errors
+            for name, path in paths.items():
+                if path.is_file() and not path.is_symlink():
+                    with path.open(encoding="utf-8", errors="replace") as report:
+                        reports[name] = report.read(8193)
             return {
                 "ok": True,
                 "tool": "taskflow",
                 "action": action,
                 "task": task,
                 "result": result,
+                "spec": reports.get("spec", "")[:8192],
+                "report": reports.get("result", "")[:8192],
+                "contextTruncated": any(len(text) > 8192 for text in reports.values()),
                 "validationErrors": validation_errors,
                 "effective": effective,
                 "pulled": pulled,

@@ -157,6 +157,15 @@ def _file_and_summary(state: _MatrixState, offset: int = 0) -> tuple[dict[str, A
     return file_event, summary_event
 
 
+def test_api_artifacts_remain_visible_without_waking_agents(matrix: _MatrixState, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TEAMHARNESS_COORDINATION_URL", "http://coordination")
+    assert _publish(tmp_path, mentions=[LEADER])["ok"]
+    file_event, summary_event = _file_and_summary(matrix)
+    for event in (file_event, summary_event):
+        assert event["content"].get("org.agentteams.progress_only") is True
+    assert summary_event["content"]["m.mentions"]["user_ids"] == [LEADER]
+
+
 def test_publish_sends_file_event_plus_mention_summary(matrix: _MatrixState, tmp_path: Path) -> None:
     """① valid MXID in m.mentions.user_ids, ② matrix.to pill in formatted_body."""
     published = _publish(tmp_path, mentions=[LEADER])

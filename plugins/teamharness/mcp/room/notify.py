@@ -5,6 +5,8 @@ import json
 
 import os
 
+import time
+
 import uuid
 
 from typing import Any
@@ -19,8 +21,9 @@ import urllib.request
 # note): mcp/ on sys.path keeps one module identity in both load modes.
 from mcp.common import refs
 from mcp.common.identity import _canonical_room_id
-from mcp.common.io import _read_json
-from mcp.common.paths import _task_state_path
+from mcp.common.io import _read_json, _utc_timestamp
+from mcp.common.paths import _task_state_path, _project_dir
+from mcp.transport.coordination import deliver_event
 from .matrix import _matrix_room_member_user_ids, _team_human_matrix_ids, _team_leader_matrix_id
 from .mention import MATRIX_ROOM_RE, _matrix_content
 
@@ -42,12 +45,47 @@ NOTIFICATION_GAP_REASONS = (
 _write_task = refs.proxy("_write_task")
 
 
+def _send_requester_completion(arguments: dict[str, Any], project: dict[str, Any], project_id: str) -> dict[str, Any]:
+    route = project.get("reply_route") or {}
+    if route.get("channel") != "matrix" or not route.get("target_session"):
+        return {"sent": False, "skipped": True}
+    if project.get("requesterCompletionEventId"):
+        return {"sent": True, "reused": True, "eventId": project["requesterCompletionEventId"]}
+    main_id = project_id if project.get("task_kind") == "main" else ""
+    report = (_task_state_path(arguments, main_id).parent if main_id else _project_dir(arguments, project_id)) / "result.md"
+    text = report.read_text(encoding="utf-8") if report.is_file() else "All project tasks have been accepted; no project summary file was provided."
+    api_delivery = deliver_event("main_task_completed" if main_id else "project_completed",
+        main_task_id=main_id, project_id=project.get("project_id", "") if main_id else project_id, recipient=route.get("target_user"),
+        room_id=project.get("room_id") or project.get("source_room_id"), text=text)
+    if api_delivery is not None and not api_delivery.get("external"):
+        if api_delivery.get("sent"):
+            project["requesterCompletionEventId"] = api_delivery.get("eventId")
+            project["requester_report"] = {"pending": False, "reason": "project_completed", "sent_at": _utc_timestamp(), "delivery_id": api_delivery.get("deliveryId")}
+        return api_delivery
+    message = refs.resolve("_message")({
+        **arguments, "action": "send", "channel": "matrix",
+        "target": "room:" + route["target_session"],
+        "message": f"{route.get('target_user', '')} {'MAIN_TASK_COMPLETED' if main_id else 'PROJECT_COMPLETED'}: {project_id}\n{text}",
+        "workflowEvent": ({"type": "MAIN_TASK_COMPLETED", "task_id": main_id} if main_id else {"type": "PROJECT_COMPLETED", "project_id": project_id}),
+        "transactionId": ("task-final-" if main_id else "project-final-") + project_id,
+        "requesterReplyRoute": project.get("requester_reply_route") or {},
+    })
+    if not message.get("ok"):
+        return {"sent": False, "error": message.get("error", "completion delivery failed")}
+    project["requesterCompletionEventId"] = message.get("messageId")
+    project["requester_report"] = {
+        "pending": False, "reason": "main_task_completed" if main_id else "project_completed", "sent_at": _utc_timestamp(),
+        "report_path": (f"shared/tasks/{main_id}/result.md" if main_id else f"shared/projects/{project_id}/result.md"),
+    }
+    return {"sent": True, "eventId": message.get("messageId")}
+
+
 def _validate_assignee_membership(room_id: str, assignee: str) -> dict[str, Any]:
     """Validate that the assignee is a joined member of the target Matrix room.
 
     Strict when the Matrix environment is configured and the assignee is a
-    Matrix mxid (``@user:server``): a missing membership is a retryable
-    failure so delegation never marks a task assigned when the Worker cannot
+    Matrix mxid (``@user:server``): allow an existing invitation a bounded
+    readiness wait, but never mark a task assigned when the Worker cannot
     receive the automatic notification. Skipped when the Matrix environment is
     unavailable (the notification would be skipped anyway) or the assignee is a
     display name (there is no mxid to verify).
@@ -64,6 +102,16 @@ def _validate_assignee_membership(room_id: str, assignee: str) -> dict[str, Any]
         return {"ok": True, "skipped": f"assignee is a display name, not an mxid: {assignee}"}
     try:
         members = _matrix_room_member_user_ids(matrix_room_id, {"join"})
+        if assignee_mxid not in members and assignee_mxid in _matrix_room_member_user_ids(matrix_room_id, {"join", "invite"}):
+            # New rooms can return before an invited Agent's sync accepts.
+            # This is protocol readiness, not a reason to regenerate a plan.
+            deadline = time.monotonic() + 5
+            while assignee_mxid not in members:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.2, remaining))
+                members = _matrix_room_member_user_ids(matrix_room_id, {"join"})
     except (ValueError, urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         return {"ok": False, "error": f"cannot verify room membership: {exc}"}
     if assignee_mxid in members:
@@ -108,6 +156,12 @@ def _send_delegate_notification(
     ``txn`` is omitted, a fresh id is generated for this send only.
     Returns the Matrix ``eventId`` on success.
     """
+    if os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip():
+        task = _read_json(_task_state_path(arguments, task_id), {})
+        api_delivery = deliver_event("task_assigned", project_id=task.get("project_id"), main_task_id=task.get("main_task_id", ""), task_id=task_id,
+            recipient=assignee, delivery_id=txn, room_id=_canonical_room_id(room_id), text=spec)
+        if api_delivery is not None:
+            return {**api_delivery, "roomId": _canonical_room_id(room_id), "assignee": assignee}
     homeserver = os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/")
     token = os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "")
     if not homeserver or not token:
@@ -212,6 +266,8 @@ def _send_project_completion_notification(
     caller persists it, and a retried complete_project reuses the
     recorded event instead of pinging the room again.
     """
+    if os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip():
+        return {"sent": False, "skipped": True, "reason": "API coordination projects completion progress"}
     leader = _team_leader_matrix_id()
     if not leader:
         return {
@@ -573,6 +629,10 @@ def _task_completion_notification(
     result and never blocks the terminal submission.
     """
     room_id = str(task.get("room_id") or "").strip()
+    api_delivery = deliver_event("task_submitted", project_id=task.get("project_id"), main_task_id=task.get("main_task_id", ""), task_id=task_id,
+        submission_id=task.get("submission_id"), room_id=_canonical_room_id(room_id), text=summary)
+    if api_delivery is not None:
+        return api_delivery
     if not room_id:
         return {"sent": False, "skipped": True, "error": "task has no room_id"}
     leader = _team_leader_matrix_id()

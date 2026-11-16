@@ -40,6 +40,7 @@ def _payload(arguments: dict[str, Any]) -> dict[str, Any]:
 
     aliases = {
         "projectId": ("projectId", "project_id"),
+        "mainTaskId": ("mainTaskId", "main_task_id"),
         "taskId": ("taskId", "task_id"),
         "loopId": ("loopId", "loop_id"),
         "roomId": ("roomId", "room_id"),
@@ -63,7 +64,7 @@ def _payload(arguments: dict[str, Any]) -> dict[str, Any]:
         "title", "name", "source", "requester", "spec", "status", "summary", "notes", "topic", "admin",
         "invite", "replyRoute", "reply_route", "accepted", "resultStatus", "result_status", "reason",
         "cancelReason", "cancel_reason",
-        "targetUser", "target_user",
+        "targetUser", "target_user", "report", "resultMarkdown", "resultPath", "conclusions",
     ):
         if key not in data and arguments.get(key) is not None:
             data[key] = arguments[key]

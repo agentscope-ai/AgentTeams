@@ -7,6 +7,9 @@ description: Manage AgentTeams resources through the Controller as Manager.
 
 You manage resources with the `agt` CLI. Your Controller token is already
 configured; never extract credentials to call the API manually.
+Use the commands documented in the relevant Skill before exploring the CLI.
+Only inspect help for the specific missing or rejected command/flag; do not
+repeat top-level help or try task/project mutations to supervise a Leader.
 
 ## Discover and change resources
 
@@ -72,12 +75,15 @@ mentions. A message in your admin DM does not dispatch work to a Worker room.
 For example, call `message` with:
 
 ```json
-{"action":"send","channel":"matrix","target":"room:!leader-room:domain","message":"@leader:domain Please coordinate this project: GOAL. Acceptance criteria: CRITERIA. Report the outcome back to me."}
+{"action":"send","channel":"matrix","target":"user:@leader:domain","message":"@leader:domain Please coordinate this project: GOAL. Acceptance criteria: CRITERIA. Report the outcome back to me."}
 ```
 
 Use ordinary text for cross-agent handoffs. `PROJECT_REQUESTED` is a Leader
 self-trigger, not a Manager delegation message. Let the tool infer your sender
 identity; do not set `agentId`, `sender`, or `role` to impersonate the Leader.
+For a known recipient, use `target: "user:@leader:domain"` with `message`.
+Your private direct room is resolved automatically. A resource's personal
+room or `leaderDMRoomID` can be a different Human's DM; do not probe or join it.
 After sending, end your turn and wait for the Leader's report. Do not take over
 projectflow/taskflow or run polling loops while the team works.
 Reply to the admin once per turn. For a team project, forward its goal and

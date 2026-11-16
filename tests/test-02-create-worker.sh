@@ -156,7 +156,13 @@ minio_wait_for_file "agents/alice/SOUL.md" 60
 ALICE_SOUL_EXISTS=$?
 assert_eq "0" "${ALICE_SOUL_EXISTS}" "Worker Alice SOUL.md exists in MinIO"
 
-ALICE_SOUL=$(minio_read_file "agents/alice/SOUL.md")
+# Runtime readiness can precede the Manager's separate role update. Wait for
+# the requested content, rather than asserting against the bootstrap SOUL.
+for _ in $(seq 1 60); do
+    ALICE_SOUL=$(minio_read_file "agents/alice/SOUL.md" 2>/dev/null || true)
+    echo "${ALICE_SOUL}" | grep -qi "frontend" && break
+    sleep 1
+done
 assert_contains_i "${ALICE_SOUL}" "frontend" "Alice's SOUL.md mentions frontend"
 
 ALICE_WORKER_JSON=$(exec_in_agent agt get workers alice -o json 2>/dev/null || echo "{}")

@@ -570,6 +570,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
     def get_debounce_key(self, payload: Any) -> str:
         if isinstance(payload, dict):
             meta = payload.get("meta") or {}
+            if meta.get("teamharness_matrix_coordination"):
+                return meta["teamharness_coordination_session"]
             room_id = meta.get("room_id")
             if room_id:
                 return f"matrix:{room_id}"
@@ -2249,6 +2251,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "is_dm": is_dm,
                 "is_group": not is_dm,
                 "worker_name": worker_name,
+                "agent_matrix_user_id": self._user_id,
                 "event_id": event.event_id,
                 "session_source_event_ids": self._session_source_ids(room_id, event.event_id, not is_dm),
                 "sender_id": sender_id,
@@ -2529,11 +2532,46 @@ class AgentTeamsMatrixChannel(BaseChannel):
         room: MatrixRoom,
         event: RoomMessageText,
     ) -> None:
+        if (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.progress_only") is True:
+            return
+        control = (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.coordination")
+        control_meta = control.get("channel_meta", {}) if isinstance(control, dict) else {}
+        if control is not None:
+            if not isinstance(control_meta, dict):
+                return
+            assignment = control_meta.get("teamharness_coordination", {})
+            if not isinstance(assignment, dict):
+                return
+            try:
+                control_text = control["input"][0]["content"][0]["text"]
+            except (KeyError, IndexError, TypeError):
+                return
+            if not isinstance(control_text, str):
+                return
+            expected_session = {
+                "handoff": "coordination-handoff:" + str(assignment.get("id", "")),
+                "task_assigned": "coordination-task:" + str(assignment.get("task_id", "")) + ":" + str(assignment.get("delivery_id", "")),
+                "task_submitted": "coordination-review:" + str(assignment.get("task_id", "")) + ":" + str(assignment.get("submission_id", "")),
+                "project_ready": "coordination-close:" + str(assignment.get("project_id", "")),
+                "main_task_ready": "coordination-close-task:" + str(assignment.get("main_task_id", "")),
+            }.get(assignment.get("kind"))
+            if expected_session and assignment.get("main_task_id") and assignment.get("id"):
+                expected_session += ":" + str(assignment["id"])
+            if (expected_session is None
+                    or control_meta.get("sender_id") != event.sender
+                    or control_meta.get("agent_matrix_user_id") != self._user_id
+                    or control_meta.get("room_id") != room.room_id
+                    or control.get("session_id") != expected_session):
+                return
         room_id = room.room_id
         sender_id = event.sender
         teamharness_self_trigger = None
         if sender_id == self._user_id:
             teamharness_self_trigger = self._teamharness_self_trigger(room_id, event)
+            if control is not None and assignment.get("kind") in {"project_ready", "main_task_ready"}:
+                # The runtime hook verifies this self-addressed closure against
+                # the Controller receipt and accepted leaf state before inference.
+                teamharness_self_trigger = {"type": "project_ready", "kind": "coordination"}
 
         # Skip own messages early
         if sender_id == self._user_id and teamharness_self_trigger is None:
@@ -2547,6 +2585,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
             return
 
         text = event.body or ""
+        report = (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.report", {})
+        full_text = report.get("text") if isinstance(report, dict) else None
+        if isinstance(full_text, str) and len(full_text.encode("utf-8")) <= 16384:
+            preview = "\n".join(full_text.splitlines()[:5])
+            if preview and text.startswith(preview):
+                text = full_text
 
         # Use Matrix API to reliably detect DM rooms
         # (nio's room.users is unreliable after token restore)
@@ -2683,7 +2727,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
             TextContent(type=ContentType.TEXT, text=command_text),
         ]
         is_slash_cmd = command_text.startswith("/")
-        if not is_dm and not is_slash_cmd:
+        if control is not None:
+            content_parts = [TextContent(type=ContentType.TEXT, text=control["input"][0]["content"][0]["text"])]
+        elif not is_dm and not is_slash_cmd:
             # Prefix sender identity so the LLM can distinguish participants
             sender_name = self._get_display_name(room, sender_id)
             content_parts[0] = TextContent(
@@ -2707,13 +2753,23 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "is_dm": is_dm,
                 "is_group": not is_dm,
                 "worker_name": worker_name,
+                "agent_matrix_user_id": self._user_id,
                 "event_id": event.event_id,
                 "session_source_event_ids": self._session_source_ids(room_id, event.event_id, not is_dm and not is_slash_cmd and not is_thread_event),
                 "thread_root_event_id": event.event_id,
                 "sender_id": sender_id,
+                "teamharness_workflow": (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.workflow", {}),
+                "teamharness_requester_route": (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.requester_route", {}),
+                "teamharness_coordinator_route": (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.coordinator_route", {}),
                 "is_thread_event": is_thread_event,
             },
         }
+        if control is not None:
+            for key in ("task_id", "main_task_id", "project_id", "teamharness_coordination", "teamharness_requester_route", "teamharness_coordinator_route"):
+                if key in control_meta:
+                    payload["meta"][key] = control_meta[key]
+            payload["meta"]["teamharness_matrix_coordination"] = True
+            payload["meta"]["teamharness_coordination_session"] = control["session_id"]
         if teamharness_self_trigger is not None:
             payload["meta"].update(
                 {
@@ -2743,6 +2799,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # pylint: disable=too-many-branches,too-many-statements
     async def _on_room_media_event(self, room: MatrixRoom, event: Any) -> None:
         """Handle incoming media messages (image, file, audio, video)."""
+        if (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.progress_only") is True:
+            return
         if event.sender == self._user_id:
             return
 
@@ -2889,6 +2947,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "is_dm": is_dm,
                 "is_group": not is_dm,
                 "worker_name": worker_name,
+                "agent_matrix_user_id": self._user_id,
                 "event_id": event.event_id,
                 "session_source_event_ids": self._session_source_ids(room_id, event.event_id, not is_dm and not is_thread_event),
                 "thread_root_event_id": event.event_id,
@@ -3086,7 +3145,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         meta = native_payload.get("meta", {})
         sender_id = native_payload.get("sender_id", "")
         room_id = meta.get("room_id", sender_id)
-        session_id = f"matrix:{room_id}"
+        session_id = meta.get("teamharness_coordination_session", f"matrix:{room_id}") if meta.get("teamharness_matrix_coordination") else f"matrix:{room_id}"
 
         # content_parts are already ContentType objects (from both
         # _on_room_event and _on_room_media_event); filter out None.
@@ -3518,6 +3577,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         *,
         msgtype: str = "m.notice",
         html: Optional[str] = None,
+        progress_only: bool = False,
     ) -> None:
         if not event_id or not self._client:
             return
@@ -3534,6 +3594,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
             "m.new_content": new_content,
             "m.relates_to": {"rel_type": "m.replace", "event_id": event_id},
         }
+        if progress_only:
+            content["org.agentteams.progress_only"] = True
+            new_content["org.agentteams.progress_only"] = True
         # Propagate m.mentions to the outer event — MSC3952 requires it on
         # the replacement event for notification delivery.
         if "m.mentions" in new_content:
@@ -3763,6 +3826,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 explicit_user_ids=explicit_ids,
             )
         self._apply_thread_relation(content, meta_dict)
+        if meta_dict.get("teamharness_matrix_coordination"):
+            content["org.agentteams.progress_only"] = True
+            content["m.mentions"] = {"user_ids": []}
         return content
 
     def _write_long_message_file(self, text: str) -> Path:
@@ -3981,6 +4047,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             text,
             msgtype=msgtype,
             html=html,
+            progress_only=bool(send_meta.get("teamharness_matrix_coordination")),
         )
 
     # ------------------------------------------------------------------
@@ -4083,7 +4150,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """Route completed messages behind a processing root."""
         del request
         message_type = getattr(event, "type", None)
-        if self._is_reasoning_message(message_type) and not self.show_thinking:
+        if self._is_reasoning_message(message_type) and (not self.show_thinking or send_meta.get("teamharness_matrix_coordination")):
             # show_thinking disabled: reasoning is never rendered to the room.
             return
         if self._is_tool_call_message(message_type) and not self.show_tool_calls:
@@ -4181,7 +4248,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         del request
         text = (accumulated_text or "").strip()
         if stream_type == "reasoning":
-            if self.show_thinking:
+            if self.show_thinking and not send_meta.get("teamharness_matrix_coordination"):
                 await self._ensure_thread_root(to_handle, send_meta)
                 if not text:
                     text = self._text_from_message_event(event)
@@ -4408,6 +4475,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             "is_dm": False,
             "is_group": True,
             "worker_name": worker_name,
+                "agent_matrix_user_id": self._user_id,
             "event_id": meta_dict.get("event_id"),
             "thread_root_event_id": meta_dict.get("thread_root_event_id")
             or meta_dict.get("event_id"),

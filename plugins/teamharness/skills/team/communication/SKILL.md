@@ -48,9 +48,10 @@ route is exactly that current room.
 ## Requester Report Delivery Protocol
 
 Use this protocol only after project state says a requester report is needed,
-for example after accepted project progress or a blocker that must be surfaced
-to the requester. When project state has a pending requester report, delivery
-to that requester route is mandatory.
+for example after final acceptance or a blocker that requires the requester to
+act. Keep ordinary intermediate progress in the Task room; do not wake a
+Manager to supervise each step. When the verified final requester report is
+pending, delivery to that requester route is mandatory.
 
 Prefer `reply_route`:
 

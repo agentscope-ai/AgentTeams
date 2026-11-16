@@ -412,7 +412,7 @@ func (a *Authorizer) authorizeWorker(caller *CallerIdentity, req AuthzRequest) e
 		// that would open pause/resume/replan/complete/cancel (registered as
 		// ActionUpdate + "project" / "task") to every worker. Pinned by
 		// TestAuthorizer_ProjectMetaCommit.
-		if req.Action == ActionUpdate {
+		if req.Action == ActionUpdate || req.Action == ActionGet {
 			return a.requireSameTeam(caller, req)
 		}
 		return deny(caller, req)

@@ -1900,3 +1900,19 @@ func (p *Provisioner) ManagerGatewayKey(ctx context.Context, name string) (strin
 	}
 	return creds.GatewayKey, nil
 }
+
+// AgentMatrixToken reads an existing runtime identity for Controller-owned
+// progress projection. It never logs in, rotates credentials or grants access.
+func (p *Provisioner) AgentMatrixToken(ctx context.Context, kind, name string) (string, error) {
+	var creds *WorkerCredentials
+	var err error
+	if kind == "manager" {
+		creds, err = p.creds.Load(ctx, name)
+	} else {
+		creds, err = p.loadWorkerCredentials(ctx, name)
+	}
+	if err != nil || creds == nil || creds.MatrixToken == "" {
+		return "", fmt.Errorf("agent Matrix credentials unavailable")
+	}
+	return creds.MatrixToken, nil
+}

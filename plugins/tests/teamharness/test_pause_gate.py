@@ -1578,3 +1578,65 @@ def test_mcp_pause_resume_control_actions_still_author_status(
     resumed = server._projectflow(_arguments(workspace, "resume_project", projectId=project_id))
     assert resumed["ok"] is True
     assert storage.remote[meta_path]["status"] == "paused"
+
+
+@pytest.mark.parametrize("action", ["plan_dag", "plan_loop"])
+def test_project_plan_sync_failure_does_not_release_work(server, tmp_path, monkeypatch, action):
+    workspace = tmp_path / "agent"
+    pid = "sync-plan"
+    _write_project(workspace, pid, {"project_id": pid, "status": "active", "tasks": []})
+    monkeypatch.setattr(server, "_pull_project", lambda *args: True)
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: False)
+    monkeypatch.setattr(server, "_sync_task", lambda *args, **kwargs: True)
+    payload = dict(projectId=pid, title="bounded task")
+    if action.startswith("plan_"):
+        payload["tasks"] = [{"taskId": pid + "-01", "title": "execute", "assignedTo": WORKER, "dependsOn": []}]
+        if action == "plan_loop":
+            payload.update(goal="finish", stopCondition="accepted", iterationTemplate="execute", maxIterations=2)
+    result = server._projectflow(_arguments(workspace, action, **payload))
+    assert result["ok"] is False
+    assert result.get("synced") is False, result
+    assert result["statePersisted"] is True
+    assert result["retryable"] is True
+    assert "notificationNeeded" not in result
+    assert "readyNodes" not in result
+    assert "readyLoopNodes" not in result
+    # Retrying the same request after storage recovers can proceed; no reset
+    # of unrelated state or manual metadata edit is needed.
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: True)
+    retry = server._projectflow(_arguments(workspace, action, **payload))
+    assert retry["ok"] is True
+
+
+@pytest.mark.parametrize("action", ["plan_dag", "plan_loop"])
+def test_project_planning_refuses_an_unreadable_authoritative_state(server, tmp_path, monkeypatch, action):
+    workspace = tmp_path / "agent"
+    pid = "sync-read"
+    original = {"project_id": pid, "status": "paused", "tasks": []}
+    _write_project(workspace, pid, original)
+    monkeypatch.setattr(server, "_pull_project", lambda *args: False)
+    writes = []
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: writes.append(args) or True)
+    result = server._projectflow(_arguments(workspace, action, projectId=pid, tasks=[]))
+    assert result["ok"] is False
+    assert result.get("retryable") is True
+    assert _read_project(workspace, pid) == original
+    assert writes == []
+
+
+@pytest.mark.parametrize("action", ["create_project", "create_quick_project"])
+def test_project_creation_sync_failure_cannot_announce_success(server, tmp_path, monkeypatch, action):
+    workspace = tmp_path / "agent"
+    monkeypatch.setattr(server, "_sync_project", lambda *args, **kwargs: False)
+    task_sync = []
+    monkeypatch.setattr(server, "_sync_task", lambda *args, **kwargs: task_sync.append(args) or True)
+    payload = dict(projectId="create-sync", title="bounded task")
+    if action == "create_quick_project":
+        payload.update(assignedTo=WORKER, roomId=ROOM, spec="Implement the requested function.")
+    result = server._projectflow(_arguments(workspace, action, **payload))
+    assert result["ok"] is False
+    assert result["synced"] is False
+    assert result["statePersisted"] is True
+    assert "notificationNeeded" not in result
+    assert task_sync == []
+    assert not (workspace / "shared" / "tasks" / "create-sync-01" / "meta.json").exists()

@@ -10,7 +10,8 @@ Use this skill when executing assigned work as a Worker or remote member.
 Claim only tasks assigned to you. Read the task spec, keep deliverables in the
 task directory, ask focused blocker questions, and submit a structured result.
 
-Do not change project-level state or project result files.
+Do not change the main Task plan, its final report, or optional Project state.
+Only update your assigned execution task through taskflow.
 
 Do not use this skill or taskflow for readiness checks, direct questions, or
 explicit requests to reply with specific text. Answer those directly in the
@@ -53,8 +54,10 @@ boundary conflict to the Leader. Put Worker-owned deliverables under
 
 ## Acknowledge
 
-When you are mentioned with `TASK_ASSIGNED`, first pull or inspect the task
-directory if needed, then acknowledge with `taskflow`:
+When you receive `TASK_ASSIGNED`, use a synchronized ACK receipt already
+supplied by your runtime. Do not acknowledge or pull the same assignment
+again. Otherwise, acknowledge with `taskflow` first. That
+operation pulls the authoritative task context; do not pre-pull it separately:
 
 ```json
 {
@@ -83,8 +86,34 @@ shared/tasks/{task-id}/spec.md
 ```
 
 before doing the work.
+`ack_task` already returns this spec and pulls the task files. Use that
+response; do not immediately repeat filesync pull or a shell read of spec.md.
+For automatic plans it also pulls accepted prerequisite directories and returns
+their local paths, summaries and deliverables in `inputs`. Read those local
+files as read-only inputs rather than issuing another filesync pull for each
+prerequisite. When `inputs[].previews` contains complete text for a file, use
+that content directly; read the local file only when the preview is missing,
+truncated or a fresh inspection is required. `submit_task` already synchronizes and publishes your declared
+deliverables; do not pre-push the same task directory.
+Use the ACK's existing `scratchDirectory` for test copies and temporary work,
+for example `mktemp -d <scratchDirectory>/run-XXXXXX`. Do not invent global
+`/tmp` paths for ordinary task scratch work.
+Temporary-file cleanup is not an acceptance requirement. If cleanup is needed,
+run it separately with an explicit absolute path in your own task outputs; do
+not append deletion to setup or test commands.
+Treat each shell-tool invocation as a fresh shell: variables from an earlier
+call are not available in the next one. Use the ACK's absolute task and scratch
+paths in every command, or initialize and validate variables in that same
+command. Never let an empty path variable turn a task output into a file or
+directory under `/`. Leave harmless temporary files in your task scratch rather
+than blocking delivery on optional cleanup.
 
 ## Execute
+
+Keep the original request's behavior and input domain authoritative. Analysis
+and checklists may organize the stated acceptance criteria, but must not turn
+optional suggestions or unspecified inputs into new required behavior. Mark
+those observations separately instead of widening the delivery contract.
 
 Keep all deliverables under the task directory. If you need private notes, use:
 
@@ -97,10 +126,26 @@ artifact's purpose, such as `analysis.md`, `trace-summary.log`, or
 `patch-notes.md`; avoid vague names like `output.md` when there are multiple
 files.
 
-For report-style tasks whose expected output is `shared/tasks/{task-id}/result.md`,
-write the full report content to that file before calling `submit_task`.
-`submit_task` records structured status in task metadata and does not create or
-rewrite `result.md`.
+Supply your complete report as `payload.resultMarkdown` in `submit_task` to
+save `shared/tasks/{task-id}/result.md` and submit it in one call. Include the
+actual findings and verification evidence; this does not run tests for you.
+After you have reviewed the actual execution results, generate the final
+report in this submission call instead of a separate `write_file` call.
+When a particular report filename is required, supply that path as `resultPath`
+alongside the full `resultMarkdown`; the tool writes that exact requested file.
+For report-style tasks, supply the full requested report, not just a summary.
+When verifying work, use the original contract and implementation to identify
+relevant valid-input limits and failure boundaries, rather than treating the
+example acceptance cases as exhaustive. Resolve conflicting derived requirements
+against the original request. Record actual coverage and remaining limitations;
+passing the executed checks does not prove that no defects exist.
+If no separate report filename was requested, use this canonical report
+instead of also writing a duplicate completion document. If you already wrote
+the report, omit `resultMarkdown` to preserve it. If it has a different requested
+filename, pass its task-scoped path as `payload.resultPath`; submission, evidence
+review and attachments then use that same file. Do not write a duplicate
+`result.md`. You can also supply both fields to save the report at that path in
+the submission call. A retry must preserve the submitted path and report text.
 
 For long-running tasks, report progress periodically with the `report_progress`
 action (a short `note`, ≤ 200 chars). It records a progress entry in the task's
@@ -108,6 +153,24 @@ audit history without changing task state or notifying the room — use it to ma
 multi-stage work visible, not as a status update.
 
 If blocked, submit a `BLOCKED` result instead of silently waiting.
+
+When performing independent QA, review the implementation independently and
+verify the agreed acceptance criteria plus relevant boundary and failure cases
+identified from the code and its risks. Do not skip necessary checks to reduce
+latency or tool calls. Batch related cases when practical; investigate actual
+failures and repair a broken test harness before drawing conclusions. Keep
+exploratory findings separate: do not silently turn unspecified behavior into a
+new requirement, or call untested behavior verified. Submit reproducible
+failures for Leader review instead of editing upstream deliverables. Ask the
+Leader to resolve a material contract ambiguity before declaring success.
+
+Match the depth of your work to the request. For a small task with explicit
+inputs, outputs and acceptance criteria, keep the analysis and protocol result
+concise instead of repeating the full specification in multiple documents.
+Batch independent reads or writes in one tool turn when supported, and run
+related acceptance cases together. Once the required evidence is complete,
+submit it; do not add another test framework, verification matrix or cleanup
+phase unless the task or an actual failure requires it.
 
 ## Coding CLI runs (when used)
 
@@ -141,6 +204,7 @@ Submit with `taskflow`:
     "taskId": "demo-project-001-01",
     "status": "SUCCESS",
     "summary": "Completed the assigned work.",
+    "resultMarkdown": "# Result\nImplemented the requested behavior. Required acceptance cases 1-3 passed. See the declared output and test evidence.\n",
     "conclusions": [
       "The deliverable is at shared/tasks/demo-project-001-01/workspace/output.md.",
       "Acceptance criteria 1-3 all pass.",
@@ -205,12 +269,13 @@ an identity or try to resolve the legacy task yourself.
 Submitting ends the task. Do not keep editing the old task after submission
 unless the Leader assigns a new task.
 
-If you already wrote a detailed `shared/tasks/{task-id}/result.md`, include that
-path in `deliverables`; do not replace the report with only a short summary.
+If a complete report already exists from an earlier work step, identify it with
+`resultPath` instead of generating it again; do not replace its evidence with
+only a short summary.
 Do not include `shared/projects/...` paths in `deliverables`.
 
 When Matrix room context is available, `submit_task` automatically publishes
-`shared/tasks/{task-id}/result.md` and eligible deliverable files under the
+the canonical report and eligible deliverable files under the
 current task directory as Matrix `m.file` events. Check `publishedArtifacts` in
 the tool result for published, skipped, or failed artifact status. Do not upload
 task artifacts manually with `message` just to make them appear in the room
@@ -222,7 +287,10 @@ file panel.
 the first line is the contract below, and the event @mentions the Leader
 and the human members of the team (the task initiator), so the requester is
 routed with the same salience the leader is. After `submit_task` returns
-`ok: true`, do not send another completion line.
+`ok: true` with `notification.sent: true`, end the turn with `NO_REPLY`.
+Do not send another completion line or mention the Leader again. If the
+notification failed or was skipped, send one fallback completion message
+in the assignment room and report the notification failure.
 
 The event first line carries one token per result status (code-generated):
 
@@ -242,8 +310,8 @@ event byte-identical to the legacy format.
 
 If the task spec gives an exact completion line, the code event keeps that
 line format; a short human-readable summary message may still follow in the
-room but never replaces the event. Do not use `NO_REPLY` after successful
-submission.
+room but never replaces the event. An already delivered completion event
+needs no additional summary or acknowledgement.
 
 While the task is still in flight and you need a human decision (approval /
 decision / escalation) instead of guessing, call `taskflow` with

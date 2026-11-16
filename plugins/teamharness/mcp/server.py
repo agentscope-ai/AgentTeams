@@ -112,13 +112,13 @@ def _tool_schema(name: str) -> dict[str, Any]:
     if name == "message" and _runtime_role() == "manager":
         return {
             "name": name,
-            "description": "Send an ordinary Matrix message to another room. Mention the Leader's full Matrix ID when forwarding a project. The sender is your current Manager identity. For the current room, reply directly.",
+            "description": "Forward a request once to a registered Leader. Use user:<roster-name> for a known Leader; the system resolves delivery and preserves the original requester. For the current room, reply directly.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["send"]},
                     "channel": {"type": "string", "enum": ["matrix"]},
-                    "target": {"type": "string", "description": "Destination as room:!roomId:domain."},
+                    "target": {"type": "string", "description": "Known Leader: user:<roster-name> or user:@leader:domain. Explicit room: room:!roomId:domain. Do not rediscover a known Leader's room."},
                     "message": {"type": "string", "description": "Text with the recipient's full Matrix mention, goal, and acceptance criteria."},
                 },
                 "required": ["target", "message"],

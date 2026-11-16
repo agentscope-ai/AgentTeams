@@ -32,7 +32,7 @@ import urllib.request
 from mcp.common import refs
 from mcp.common.identity import _canonical_room_id
 from mcp.common.io import _read_json
-from mcp.common.paths import _task_state_path, _workspace_dir
+from mcp.common.paths import _task_state_path, _workspace_dir, _task_result_path
 from mcp.common.payload import _string_list
 from mcp.room.matrix import _matrix_env, _team_leader_matrix_id
 from mcp.room.mention import MATRIX_MENTION_MXID_RE, MATRIX_ROOM_RE, _matrix_content, _matrix_target
@@ -417,6 +417,8 @@ def _matrix_send_file_summary(
     if missing:
         text = " ".join(missing) + " " + text
     content = _matrix_content(text, mxids)
+    if os.getenv("TEAMHARNESS_COORDINATION_URL"):
+        content["org.agentteams.progress_only"] = True
     summary_txn_id = f"{file_txn_id}-summary"
     url = (
         f"{homeserver}/_matrix/client/v3/rooms/{encoded_room_id}/send/"
@@ -493,6 +495,8 @@ def _matrix_send_file_event(
             "mimetype": mimetype,
         },
     }
+    if os.getenv("TEAMHARNESS_COORDINATION_URL"):
+        content["org.agentteams.progress_only"] = True
     if parent_event_id:
         content["m.relates_to"] = {
             "rel_type": MATRIX_ATTACHMENT_REL_TYPE,
@@ -806,16 +810,17 @@ def _publish_task_artifacts(
 ) -> list[dict[str, Any]]:
     room_id = str(task.get("room_id") or "")
     expected_prefix = f"shared/tasks/{task_id}"
-    result_source = f"{expected_prefix}/result.md"
+    result_source = task.get("result_path") or f"{expected_prefix}/result.md"
     # (source, filename, is_result) — the result.md summary is withheld
     # because the submit_task action sends the completion notification for
     # it in the same action (its Result line names the file and mentions
     # the leader); a second @-summary would double-notify the room.
     artifacts: list[tuple[str, str, bool]] = []
     try:
-        _normalized_result, result_path = _resolve_workspace_artifact_path(arguments, result_source, expected_prefix)
+        result_source, result_path = _task_result_path(arguments, task_id, result_source)
         if result_path.is_file():
-            artifacts.append((result_source, _task_artifact_filename(task_id, "result.md", result_artifact=True), True))
+            artifacts.append((result_source, _task_artifact_filename(task_id, result_source,
+                result_artifact=result_source == f"{expected_prefix}/result.md"), True))
     except ValueError:
         pass
     seen = {source for source, _filename, _is_result in artifacts}

@@ -73,7 +73,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "target": {
                     "type": "string",
                     "description": (
-                        "Matrix room target for cross-room sends, for example "
+                        "Matrix room or user target for cross-room sends, for example user:@leader:domain or "
                         "room:!room:domain. For PROJECT_REQUESTED self-trigger, "
                         "pass the target task room as a room:!room:domain string."
                     ),
@@ -146,6 +146,11 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "text": {
                     "type": "string",
                     "description": "Plain message text for ordinary cross-room or external sends. message and body aliases are also accepted.",
+                },
+                "requesterReplyRoute": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "description": "Original requester route supplied by the runtime; preserve it across handoffs.",
                 },
                 "dryRun": {
                     "type": "boolean",
@@ -351,7 +356,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "or Project Work mode is selected: create quick projects, create "
             "projects, plan or update DAG and Loop work, query ready nodes, "
             "and record loop iterations. Do not use for ordinary direct "
-            "replies or one-off checks. complete_project persists the "
+            "replies or one-off checks. start_project combines task-room creation, "
+            "initial DAG storage and first ready assignments; supply create_project "
+            "fields plus tasks with specs for initially ready nodes. complete_project persists the "
             "terminal state locally and syncs it to shared storage before "
             "the PROJECT_COMPLETED event is emitted; if that sync fails the "
             "action returns a retryable failure with the event withheld, so "
@@ -363,6 +370,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "action": {
                     "type": "string",
                     "enum": [
+                        "start_project",
+                        "advance_project",
                         "create_project",
                         "create_quick_project",
                         "resolve_project",
@@ -446,6 +455,14 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "Stable external requester room/conversation id to persist with external project and task state.",
                 },
+                "spec": {
+                    "type": "string",
+                    "description": "For start_project, the shared original contract materialized into each execution leaf's spec; leaf specs still define their own assignments.",
+                },
+                "report": {
+                    "type": "string",
+                    "description": "Verified final user report for complete_project; saved before terminal state and delivery.",
+                },
                 "accepted": {
                     "type": "boolean",
                     "description": (
@@ -476,7 +493,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "taskflow": {
         "description": (
-            "Coordinate bounded TeamHarness tasks after a project node is ready: "
+            "Create ordinary team work with start_task (one main Task and executable subtasks); use complete_task for its final report. Project is optional existing membership, never created implicitly. "
             "leader delegates and checks tasks; worker or remote-member "
             "acknowledges and submits results; worker or leader raises in-flight "
             "attention (approval / decision / escalation) with request_attention. "
@@ -494,6 +511,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "action": {
                     "type": "string",
                     "enum": [
+                        "start_task",
+                        "advance_task",
+                        "accept_task_result",
+                        "complete_task",
                         "delegate_task",
                         "ack_task",
                         "submit_task",
@@ -551,11 +572,18 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "spec": {
                     "type": "string",
-                    "description": "Task execution contract for delegate_task.",
+                    "description": "Original request for start_task; execution contract for delegate_task.",
                 },
                 "summary": {
                     "type": "string",
                     "description": "Worker result summary for submit_task.",
+                },
+                "resultMarkdown": {
+                    "type": "string",
+                    "description": (
+                        "Optional complete result.md body saved with submit_task. "
+                        "Omit to preserve an existing report; retries require identical text."
+                    ),
                 },
                 "deliverables": {
                     "type": "array",
@@ -593,7 +621,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "decisionClass": {
                     "type": "string",
-                    "description": "Delegate_task decision class r1..r6 (contracts/decision-classes.json); required while the protocol.enforce switch is on.",
+                    "description": "Use r3 for delegate_task, including first assignment. Other classes: r1 result acceptance, r2 cancellation, r4 loop review, r5 project lifecycle, r6 attention escalation. Required while protocol.enforce is on.",
                 },
                 "workspaceDir": {
                     "type": "string",

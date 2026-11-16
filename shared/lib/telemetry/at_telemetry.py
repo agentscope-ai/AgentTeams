@@ -240,14 +240,26 @@ def tool_error(result):
     if hasattr(result, "model_dump"):
         result = result.model_dump(mode="json")
     if isinstance(result, dict):
-        if result.get("error") or result.get("failed") or result.get("isError"):
+        if result.get("error") or result.get("failed") or result.get("isError") or result.get("ok") is False:
             return str(result.get("error") or result.get("failed") or "tool error")[:2000]
         if result.get("exit_code", 0) not in (0, None):
             return f"exit_code={result['exit_code']}"
-        if str(result.get("state", "")).lower() in ("error", "failed"):
+        if str(result.get("state", "")).lower() in ("error", "failed", "denied"):
             detail = "\n".join(block.get("text", "") for block in result.get("content", [])
                                if isinstance(block, dict) and block.get("type") == "text")
             return detail[:2000] or "tool returned error state"
+        for block in result.get("content", []):
+            if isinstance(block, dict) and block.get("type") == "text":
+                try:
+                    payload = json.loads(block.get("text", ""))
+                except ValueError:
+                    continue
+                # TeamHarness/MCP envelopes are results; arbitrary JSON read
+                # from a file is data and must not become a tool failure.
+                if isinstance(payload, dict) and (payload.get("tool") or payload.get("isError")):
+                    reason = tool_error(payload)
+                    if reason:
+                        return reason
     return ""
 
 
@@ -316,6 +328,11 @@ class IdentityProcessor(SpanProcessor):
             "agentteams.runtime": os.getenv("AGENTTEAMS_OTEL_RUNTIME", "python"),
             "agentteams.telemetry.schema": "1",
         }
+        root = _active_turn.get()
+        if root is not None and root.context.trace_id == span.context.trace_id:
+            for key in ("agentteams.task.id", "agentteams.project.id", "agentteams.task.correlation"):
+                if key in root.attributes:
+                    fields.setdefault(key, root.attributes[key])
         for key, value in fields.items():
             span.set_attribute(key, value)
             span.set_attribute(f"langfuse.observation.metadata.{key}", value)

@@ -437,6 +437,7 @@ type TeamResponse struct {
 	Admin              *v1beta1.TeamAdminSpec       `json:"admin,omitempty"`
 	HumanMembers       []v1beta1.TeamMemberSpec     `json:"humanMembers,omitempty"`
 	WorkerMembers      []v1beta1.TeamWorkerRef      `json:"workerMembers"`
+	Members            []TeamMemberView             `json:"members,omitempty"`
 	LeaderName         string                       `json:"leaderName"`
 	HeartbeatEvery     string                       `json:"heartbeatEvery,omitempty"`
 	TeamRoomID         string                       `json:"teamRoomID,omitempty"`
@@ -463,6 +464,18 @@ type TeamResponse struct {
 	LlmRateLimitPause            string `json:"llmRateLimitPause,omitempty"`
 	LlmRateLimitJitter           string `json:"llmRateLimitJitter,omitempty"`
 	LlmAcquireTimeout            string `json:"llmAcquireTimeout,omitempty"`
+}
+
+// TeamMemberView contains only the identity and readiness needed for delegation.
+type TeamMemberView struct {
+	Name                        string   `json:"name"`
+	Role                        string   `json:"role"`
+	MatrixUserID                string   `json:"matrixUserID,omitempty"`
+	Runtime                     string   `json:"runtime,omitempty"`
+	Phase                       string   `json:"phase"`
+	State                       string   `json:"state,omitempty"`
+	Skills                      []string `json:"skills,omitempty"`
+	NativeCoordinationSupported bool     `json:"nativeCoordinationSupported"`
 }
 
 type TeamListResponse struct {

@@ -97,3 +97,26 @@ def _task_state_path(arguments: dict[str, Any], task_id: str) -> Path:
     return _task_dir(arguments, task_id) / "meta.json"
 
 
+def _task_result_path(arguments: dict[str, Any], task_id: str, source: str | None = None) -> tuple[str, Path]:
+    """Resolve one canonical report, confined to this task's writable outputs."""
+    prefix = f"shared/tasks/{task_id}/"
+    source = prefix + "result.md" if source is None else source
+    if (not isinstance(source, str) or not source.startswith(prefix) or "\\" in source
+            or source.strip() != source or any(ord(char) < 32 or ord(char) == 127 for char in source)):
+        raise ValueError("resultPath must be a file under the current task directory")
+    relative = Path(source[len(prefix):])
+    if (not relative.parts or relative.as_posix() != source[len(prefix):]
+            or ".." in relative.parts or relative.parts[0] in {"meta.json", "spec.md", "base", "inputs"}):
+        raise ValueError("resultPath must name a writable task report, not protocol or input files")
+    directory = _task_dir(arguments, task_id)
+    local = directory / relative
+    if directory.is_symlink() or not local.resolve().is_relative_to(directory.resolve()):
+        raise ValueError("resultPath must stay inside the current task directory")
+    for part in (local, *local.parents):
+        if part == directory:
+            break
+        if part.is_symlink():
+            raise ValueError("resultPath must not follow symbolic links")
+    return source, local
+
+

@@ -18,8 +18,13 @@ import (
 
 type teamTask struct {
 	projectTaskMeta
-	ProjectID string `json:"project_id"`
-	TeamID    string `json:"team_id"`
+	MainTaskID   string `json:"main_task_id,omitempty"`
+	TaskKind     string `json:"task_kind,omitempty"`
+	RoomID       string `json:"room_id,omitempty"`
+	SourceRoomID string `json:"source_room_id,omitempty"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	ProjectID    string `json:"project_id"`
+	TeamID       string `json:"team_id"`
 }
 
 type taskTrace struct {

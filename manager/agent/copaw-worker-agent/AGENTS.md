@@ -51,7 +51,7 @@ Most assigned tasks move through these phases:
 | Start | In the current room, directly say that you received the message before accepting a new assigned task. | `communication` |
 | Accept | Call `taskflow(action="ack_task")`. This pulls the task directory, reads spec and metadata, acknowledges the task, and pushes the status back — all in one call. The response contains the spec content. | `task-management` |
 | Execute | Do the assigned domain work inside the task directory. | domain skills as needed |
-| Submit | Call `taskflow(action="submit_task")`. This writes the result, pushes the task directory, and verifies `result.md` on storage — all in one call. | `task-management` |
+| Submit | Call `taskflow(action="submit_task")` with the full final report. It saves the canonical report, synchronizes declared outputs and reports their delivery status in one call. | `task-management` |
 | Notify | Notify your coordinator only when there is a concrete completion, blocker, question, or requested answer. | `communication` |
 
 If the current message is a direct readiness check or explicitly asks you to reply with specific text, answer directly in the current room. Do not use `taskflow` for that check, and do not treat it as low-information chatter.

@@ -30,7 +30,7 @@ LEGACY_DIR = PLUGINS_ROOT / "teamharness"
 MATRIX_BUNDLE_DIR = PLUGINS_ROOT / "agentteams-matrix" / "adapters" / "qwenpaw"
 MATRIX_LEGACY_DIR = PLUGINS_ROOT / "agentteams-matrix-channel"
 
-DRIFT_DIRS = ("contracts", "mcp", "skills")
+DRIFT_DIRS = ("contracts", "mcp", "prompts", "skills")
 
 # (label, bundle path, legacy path, kind). ``kind`` is ``"dir"`` for a
 # whole-tree copy and ``"file"`` for a single-file copy. The teamharness

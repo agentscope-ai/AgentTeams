@@ -484,7 +484,7 @@ class TestFullLifecycle:
                     "projectId": project_id,
                     "taskId": task_id,
                     "roomId": "!worker-room:m.org",
-                    "assignedTo": "worker-a",
+                    "assignedTo": "@worker-a:m.org",
                     "spec": "Build the feature",
                 },
             })

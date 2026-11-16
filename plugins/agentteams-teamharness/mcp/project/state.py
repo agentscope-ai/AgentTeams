@@ -65,6 +65,8 @@ def _normalize_task(raw: dict[str, Any], previous: dict[str, Any] | None = None)
     }
     if cancellation:
         normalized["cancellation"] = dict(cancellation)
+    if "spec" in raw or "spec" in previous:
+        normalized["spec"] = str(raw.get("spec", previous.get("spec", ""))).strip()
     parent = previous.get("parent_task_id", "")
     for key in ("parentTaskId", "parent_task_id"):
         if key in raw:
@@ -233,7 +235,8 @@ refs.define("_write_project_plan", _write_project_plan)
 def _ready_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
     if project.get("plan_type") == "loop":
         raise ValueError(f"project plan is not a DAG: {project.get('project_id')}")
-    if str(project.get("status") or "active") != "active":
+    active = "in_progress" if project.get("task_kind") == "main" else "active"
+    if str(project.get("status") or active) != active:
         return []
     tasks = project.get("tasks", []) if isinstance(project.get("tasks"), list) else []
     status_by_id = {task.get("task_id"): task.get("status") for task in tasks}

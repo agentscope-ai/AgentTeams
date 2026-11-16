@@ -67,7 +67,7 @@ func NewTaskRoomArchiveHandler(deps ServerDeps) *TaskRoomArchiveHandler {
 			}
 			return deps.Provisioner.AgentMatrixToken(ctx, "manager", managers.Items[0].Name)
 		}
-		return deps.Provisioner.AgentMatrixToken(ctx, "worker", caller.WorkerName)
+		return deps.Provisioner.AgentMatrixToken(ctx, "worker", caller.Username)
 	}
 	return h
 }
@@ -131,7 +131,7 @@ func taskRoomRights(caller *authpkg.CallerIdentity, meta map[string]any, teams [
 			return true, admin, admin
 		case authpkg.RoleTeamLeader:
 			for _, member := range team.Spec.WorkerMembers {
-				if member.Role == "team_leader" && member.Name == caller.WorkerName {
+				if member.Role == "team_leader" && member.Name == caller.Username {
 					return true, true, false
 				}
 			}

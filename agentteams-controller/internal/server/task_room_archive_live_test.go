@@ -105,8 +105,10 @@ func TestTaskRoomArchiveLiveControllerRelay(t *testing.T) {
 	if rooms, _ := listed["rooms"].([]any); len(rooms) != 1 {
 		t.Fatalf("filtered archive list: %v", listed)
 	}
+	positions := map[string]string{}
 	for _, user := range []*matrix.UserCredentials{alice, bob} {
 		sync := request(base, "GET", "/_matrix/client/v3/sync?timeout=0", user.AccessToken, nil, 200)
+		positions[user.UserID], _ = sync["next_batch"].(string)
 		data, _ := json.Marshal(sync["rooms"])
 		if strings.Contains(string(data), room.RoomID) {
 			t.Fatal("archived room leaked into a member's sync")
@@ -127,6 +129,13 @@ func TestTaskRoomArchiveLiveControllerRelay(t *testing.T) {
 	}
 	request(controller.URL, "POST", cp+"/unarchive", alice.AccessToken, nil, 403)
 	request(controller.URL, "POST", cp+"/unarchive", bob.AccessToken, nil, 200)
+	for _, user := range []*matrix.UserCredentials{alice, bob} {
+		sync := request(base, "GET", "/_matrix/client/v3/sync?timeout=0&since="+url.QueryEscape(positions[user.UserID]), user.AccessToken, nil, 200)
+		data, _ := json.Marshal(sync["rooms"])
+		if !strings.Contains(string(data), room.RoomID) {
+			t.Fatal("restored room did not reappear in a member's incremental sync")
+		}
+	}
 	request(controller.URL, "POST", cp+"/delete", bob.AccessToken, nil, 403)
 	request(controller.URL, "POST", cp+"/archive", bob.AccessToken, nil, 200)
 	deleted := request(controller.URL, "POST", cp+"/delete", bob.AccessToken, nil, 200)

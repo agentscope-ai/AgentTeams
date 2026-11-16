@@ -167,3 +167,18 @@ func TestTaskRoomArchiveRejectsAnonymousBeforeAccessingMatrix(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskRoomArchiveLeaderUsesCanonicalCRIdentity(t *testing.T) {
+	team := v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "team-cr"}, Spec: v1beta1.TeamSpec{TeamName: "storage-team", WorkerMembers: []v1beta1.TeamWorkerRef{{Name: "leader-cr", Role: "team_leader"}}}}
+	meta := map[string]any{"roomKind": "task_room", "teamName": "storage-team"}
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "leader-cr", WorkerName: "leader-runtime", Team: team.Name}
+	read, archive, remove := taskRoomRights(caller, meta, []v1beta1.Team{team})
+	if !read || !archive || remove {
+		t.Fatalf("Leader runtime alias lost its CR permissions: read=%v archive=%v delete=%v", read, archive, remove)
+	}
+	caller.Username, caller.WorkerName = "other-cr", "leader-cr"
+	read, archive, remove = taskRoomRights(caller, meta, []v1beta1.Team{team})
+	if read || archive || remove {
+		t.Fatal("runtime name must not impersonate the owning Leader CR")
+	}
+}

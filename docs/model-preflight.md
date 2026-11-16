@@ -78,3 +78,28 @@ admin changes, recovery, state failure, authorized DM membership and nonblocking
 Controller lifecycle. `TestModelHealthGatewayMatrixHTTP` exercises both production
 HTTP clients with a lost Matrix acknowledgement and stable transaction retry.
 These fixtures do not establish real model/Higress/Tuwunel or tracing acceptance.
+
+### Opt-in deployment test
+
+`TestModelHealthRealHigressTuwunel` is disabled by default. It uses fixed test-only
+Docker DNS endpoints (`preflight-infra:8001`, `:8080`, `:6167`), a probe listener
+at `preflight-probe.test:18877`, dummy credentials and fresh Matrix test accounts.
+Enable it only inside a disposable internal Docker network with
+`AGENTTEAMS_PREFLIGHT_DEPLOYMENT_TEST=1`. No host ports, production credentials,
+Docker socket, or existing data volumes are needed. Build the service test binary
+for the container architecture with `go test -c ./internal/service` and run only
+`-test.run '^TestModelHealthRealHigressTuwunel$' -test.v -test.timeout 180s`.
+
+The infrastructure must run Tuwunel, Higress apiserver/controller/pilot/gateway,
+Console **and the bundled Wasm plugin server** (`start-plugin-server.sh`). A bare
+HTTP 200 before Wasm readiness is insufficient: the test also requires successful
+upstream credential replacement and rejection of an invalid consumer key.
+
+The test exercises real Higress consumer authorization and AI Proxy, actual
+Tuwunel registration/join/DM timeline, invalid HTTP-200 generations, lost notice
+acknowledgement and stable transaction replay, suppression after successful
+notification, recovery, and a new quota-error episode. Configuration/health
+storage uses the in-memory StorageClient fake; a new Deployer instance verifies
+that deduplication is derived from storage rather than process-local state.
+It does not boot a full Controller or Harness, verify real model generation,
+or establish Langfuse/OTEL trace acceptance.

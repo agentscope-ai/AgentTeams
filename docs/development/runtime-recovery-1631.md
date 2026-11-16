@@ -20,7 +20,7 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
 Candidate companion pins on this Draft branch: Codex `49e88704a920e4a6f03bab610e244c865dacd7f9`
-and Hermes `702c54fcbbe6ba100bb3f305e2b14eb4c4a692f9`. Both consume the shared
+and Hermes `9e7f5a8b89b4c5122cb50bab9701a9ced2e2925d`. Both consume the shared
 Core contract at `516f22a7fa758d128141812f3ebff076d1004725`. These are review
 candidates, not accepted/released Harness versions.
 
@@ -54,6 +54,10 @@ candidates, not accepted/released Harness versions.
 - Hermes uses the SDK's actual session transition API for fresh recovery
   sessions. Changing only the adapter queue key did not isolate SDK history.
   Valid-session reuse remains incomplete.
+- Verified incoming Hermes assignments retain their actual Matrix event ID in
+  the native input, allowing its native commit to produce a real read receipt.
+  Startup-only recovery does not manufacture a Matrix source/read. The wake
+  endpoint now delegates retained-instance validation/start to the reconciler.
 - Summary-only submissions with an execution record persist a report before
   metadata CAS. A current active native final callback saves its answer before
   invoking submitted-report recovery; pending saved replies stay authoritative.
@@ -65,9 +69,9 @@ candidates, not accepted/released Harness versions.
 | Controller server/auth/backend suites | passed | Go tests; no native model |
 | Existing Controller cutover race tests | passed | disappearance ordering only |
 | Recovery/instance identity regressions | passed | Go tests with fake storage/backend HTTP |
-| Shared recovery client | 11 passed | Python unit tests |
-| Task metadata commit and transition validation + shared recovery | 34 passed | Python tests |
-| Task ownership, conclusions and continuation | 97 passed | separate MCP test process; no real model |
+| Shared recovery client | 13 passed | Python unit tests plus 3 transport-error subtests |
+| Task metadata commit and transition validation + shared recovery | 36 passed | Python tests |
+| Task ownership, conclusions and continuation | 100 passed | separate MCP test process; no real model |
 | Controller full unit suite | passed | 0.519 seconds after sleeping-spec fix |
 | Controller integration envtest with race | passed | 68.402 seconds; source at runtime-identity change |
 | Codex existing suite | 29 passed | SDK/transport unit fixtures |
@@ -75,9 +79,10 @@ candidates, not accepted/released Harness versions.
 | Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; installed SDK fresh session IDs/admission smoke passed with mocked Task client; latest hosted checks tracked on PR #9 |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
-| Two real Harness continuation chain | case 06 passed; full scenario set incomplete | real Codex to Hermes replacement, same Task, generation 1 to 2, checkpoint 4 to 10, all steps once, no new input, one final report; see versioned evidence below |
+| Two real Harness continuation chain | cases 06/07 passed; full scenario sets incomplete | real Codex to Hermes and reverse replacements, same Task, generation 1 to 2, checkpoint 4 to 10, all steps once, no new input, one final report |
 | Result saved / reply unsent against real Matrix | passed, bounded case 01 | zero model calls, unchanged step ledger, one report body; event `$8KK7IrnddlsgCgKUTyJpzAzQZ8EPAxbDooNOOvwc7Hg` |
 | Return to retained old Codex session | passed for delivery-only case 02 | zero model calls, unchanged steps; execution continuation with stale session still open |
+| Codex normal restart and valid native-session reuse | case 08 passed | same container ID, new process/start identity, same actual native thread, latest-checkpoint digest matched, all steps once and one final reply |
 
 The metadata-commit tests load another assembled server namespace and rebind
 global refs. Combining them with the MCP suites in one pytest process failed
@@ -102,6 +107,19 @@ treated as the authority for an old Harness's read.
 Versioned evidence: [case 06](evidence/runtime-recovery-1631-case06.json).
 This accepts one forced-container-replacement Codex-to-Hermes run, not the
 complete per-Harness scenario set, process-only restart or valid-session reuse.
+
+[Case 07](evidence/runtime-recovery-1631-case07.json) independently passed the
+reverse Hermes-to-Codex direction using Hermes `9e7f5a8`. The original Hermes
+assignment/read receipt and Codex final reply were read back from Matrix;
+the same three once-only steps, artifact digests and Docker ordering passed.
+Each result applies to its recorded source pins and forced-replacement case.
+
+[Case 08](evidence/runtime-recovery-1631-case08.json) passed a same-Codex normal
+restart through the lifecycle API. The container ID stayed the same while its
+actual start/process identities and execution generation changed. The local
+session was unexpired and matched checkpoint 4, and the real native thread ID
+was reused. Checkpoint 10 was delivered with each step once and no new input.
+This does not accept every same-Harness restart/session scenario.
 
 Recorded live failures and partial evidence:
 
@@ -184,8 +202,8 @@ execution is labelled separately from acceptance:
 
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex | untested | replacement case 06 passed; other scenarios incomplete | untested | untested | untested | untested |
-| Hermes | delivery-only return; continuation untested | untested | untested | untested | untested | untested |
+| Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement case 06 passed; other scenarios incomplete | untested | untested | untested | untested |
+| Hermes | replacement case 07 passed; other scenarios incomplete | untested | untested | untested | untested | untested |
 | QwenPaw | untested | untested | untested | untested | untested | untested |
 | DeepSeek | untested | untested | untested | untested | untested | untested |
 | OpenClaw | untested | untested | untested | untested | untested | untested |

@@ -1,0 +1,37 @@
+{
+  "status": "passed_bounded_case",
+  "scope": "one real Codex normal container restart with valid native-session reuse",
+  "task_id": "live-codex-codex-08",
+  "model": "qwen3.6-plus",
+  "sources": {"core": "516f22a7fa758d128141812f3ebff076d1004725", "codex": "49e88704a920e4a6f03bab610e244c865dacd7f9"},
+  "container_id_before_and_after": "64b8cfd695ad2ce01be8f680d12d88aa69891fc22129eeb21eb45e26782121e8",
+  "task_status_before": "in_progress",
+  "task_status_after": "submitted",
+  "execution_generations": [1, 2],
+  "checkpoint_versions": [4, 10],
+  "native_thread_before_and_after": "01a1e4e7-cf02-72c2-b80c-b8321a57985c",
+  "valid_cache_before_restart": {
+    "runtime": "codex",
+    "expires_at": 1794928210.8514593,
+    "checkpoint_digest": "6c09f2825610bc2d67d1d1890e18ec97a200a71276fff69b124065a14851acff"
+  },
+  "cache_validation": "unexpired at the recorded pre-restart time; digest exactly matched authoritative checkpoint 4; actual resumed native thread ID unchanged",
+  "old_process": "6:1794841452839155273:b0e49698b96f460e95f2b08cf9a14633",
+  "new_process": "7:1794841968262446146:7b252e6ea9f24e0d8d7aa2230b6066d4",
+  "step_executions": [
+    {"step": "one", "count": 1, "generation": 1, "sha256": "d9d1c7192e69593285e542c708e891ec35df3f667662e1319fbf95257408b63c"},
+    {"step": "two", "count": 1, "generation": 2, "sha256": "b0e435a37e8a5a38c3223428a4bf74da7dc2f50a533ea6b2cd59a139a4ac226e"},
+    {"step": "three", "count": 1, "generation": 2, "sha256": "0eb87fb24c24d531a899b7f0e6a0f81ba5145ea43170dbd7f6e8466c96df1010"}
+  ],
+  "docker_order_ns": {"old_die": 1794841967199345537, "new_start": 1794841968238469970},
+  "matrix": {
+    "assignment_event": "$hoRv7zkQIlGG_V85n1VeS3Cjgsp7zSL_Mn-nBApxh4U",
+    "read_receipt_event": "$MB_SHnPtZHL72BRPDl64y9Pw1Na2Qo-7aeg0GE73gq8",
+    "reply_event": "$ssjuelz_WbdLKf5xpW28c9079leM0yEIf1nmOrXvLe4",
+    "external_message_inputs_after_stop": 0,
+    "final_reply_copies": 1,
+    "final_reply_sha256": "b07800ad4773f8feebc6d0467596ecdf82f855d96b1b1a860e4f51462d288f89"
+  },
+  "reproduction": "RECOVERY_E2E_CASE=08 RECOVERY_E2E_FROM=codex RECOVERY_E2E_TO=codex RECOVERY_E2E_MODE=restart python3 tests/runtime_recovery_e2e.py verify",
+  "limits": ["one normal container restart only", "same-container supervisor child restart not accepted", "missing/expired-session and complete scenario matrix still open", "trace readback not accepted"]
+}

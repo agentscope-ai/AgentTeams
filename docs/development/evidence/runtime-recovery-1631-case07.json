@@ -1,0 +1,39 @@
+{
+  "status": "passed_bounded_case",
+  "scope": "one real Hermes to Codex in-progress task continuation after forced container replacement",
+  "task_id": "live-hermes-codex-07",
+  "model": "qwen3.6-plus",
+  "sources": {
+    "core": "516f22a7fa758d128141812f3ebff076d1004725",
+    "hermes": "9e7f5a8b89b4c5122cb50bab9701a9ced2e2925d",
+    "codex": "49e88704a920e4a6f03bab610e244c865dacd7f9"
+  },
+  "task_status_before": "in_progress",
+  "task_status_after": "submitted",
+  "execution_generations": [1, 2],
+  "checkpoint_versions": [4, 10],
+  "step_executions": [
+    {"step": "one", "count": 1, "generation": 1, "sha256": "82daca068981abb7f37a8934c240bef34853bcf94359ef1dae3ec7645504b046"},
+    {"step": "two", "count": 1, "generation": 2, "sha256": "963de4b1faf3636adf25374c70ce302810325d685d49069dc010276edb27d131"},
+    {"step": "three", "count": 1, "generation": 2, "sha256": "685c3fe7f3f47c7a0d30ef7378bf7338972f77fe6b5233c2f5778772ff4cf31c"}
+  ],
+  "old_process": "1:1794841280588706060:c5241c914fe345d0b396183ba074b7ad",
+  "new_process": "6:1794841452839155273:b0e49698b96f460e95f2b08cf9a14633",
+  "source_native_session": "20261116_150226_a645aa54",
+  "target_native_thread": "01a1e4e3-282e-7bf0-ab03-315ac917d79d",
+  "docker_order_ns": {
+    "old_die": 1794841450124685018,
+    "old_destroy": 1794841450402823947,
+    "target_create": 1794841452459379812
+  },
+  "matrix": {
+    "assignment_event": "$sBn1k9qFU-aKkZc5C2i5-XgiBzLuAjwYfkfAr-_fUV8",
+    "read_receipt_event": "$1wkNTGJOM7AnkJ4ZwFvkuuQ9qShfLgMRbjneNpsq1dA",
+    "reply_event": "$fiN2iEsVrN-BHO3aHQPmi7PXg1RHrqy7y2X_KnibKDM",
+    "external_message_inputs_after_stop": 0,
+    "final_report_copies": 1,
+    "final_report_sha256": "b9fc5f9d876e59195d4ee8d12d20d60d371e56ae32165244c57df44b8a55d77f"
+  },
+  "reproduction": "RECOVERY_E2E_CASE=07 RECOVERY_E2E_FROM=hermes RECOVERY_E2E_TO=codex python3 tests/runtime_recovery_e2e.py verify",
+  "limits": ["one replacement run only", "normal restart and valid-session reuse not accepted by this case", "six-Harness and 30-direction scenario matrix incomplete", "trace readback not accepted"]
+}

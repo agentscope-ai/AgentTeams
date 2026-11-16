@@ -20,11 +20,17 @@ NETWORK = PREFIX + "-net"
 STATE = Path("/tmp/recovery-1631-e2e-state.json")
 CORE_IMAGE = "recovery-1631/controller:local-20261116224200"
 HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261116224200",
-                  "hermes": "recovery-1631/hermes:local-20261116224200"}
+                  "hermes": "recovery-1631/hermes:local-20261116225900"}
+SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
+MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
+if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
+    raise ValueError("Select a packaged Codex/Hermes Harness and replace/restart mode")
+if (MODE == "restart") != (SOURCE == TARGET):
+    raise ValueError("Restart keeps the Harness; replacement currently switches between Codex and Hermes")
 CASE = os.getenv("RECOVERY_E2E_CASE", "01")
 if len(CASE) != 2 or not CASE.isdecimal():
     raise ValueError("RECOVERY_E2E_CASE must be two decimal digits")
-TASK_ID, MAIN_ID = "live-codex-hermes-" + CASE, "live-main-" + CASE
+TASK_ID, MAIN_ID = "live-" + SOURCE + "-" + TARGET + "-" + CASE, "live-main-" + CASE
 
 
 def docker(*args, text=None):
@@ -104,7 +110,7 @@ def seed():
         "title": "Runtime recovery live acceptance", "dispatch_mode": "manual", "plan_type": "dag",
         "tasks": [{"task_id": task_id, "parent_task_id": main_id, "status": "assigned"}]}
     task = {"task_id": task_id, "main_task_id": main_id, "parent_task_id": main_id, "team_id": team,
-        "task_kind": "subtask", "title": "Run three stable steps across Codex to Hermes", "status": "assigned",
+        "task_kind": "subtask", "title": f"Run three stable steps across {SOURCE} to {TARGET}", "status": "assigned",
         "assigned_to": "@agent-a:recovery-1631.test", "room_id": room, "notifyTxn": "live-assignment-" + CASE}
     spec = f"""You are executing a bounded real runtime-recovery acceptance task {task_id} in team {team}.
 Use your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.
@@ -163,6 +169,18 @@ def refresh_controller():
     print(json.dumps({"controller_image": CORE_IMAGE, "replaced_only_owned_fixture": True}))
 
 
+def native_sessions():
+    code = '''import json,pathlib,sys
+task_id=sys.argv[1]; home=pathlib.Path("/root/agentteams-fs/agents/agent-a")
+events=pathlib.Path("/var/log/agentteams/workers/agent-a/events.jsonl")
+rows=[json.loads(x) for x in events.read_text().splitlines()] if events.exists() else []
+journal=home/"runtime/codex-bridge-state.json"
+cache=json.loads(journal.read_text()).get("task_sessions",{}).get("recovery-team/"+task_id) if journal.exists() else None
+print(json.dumps({"hermes":[r for r in rows if r.get("event")=="task.recovery.session" and r.get("task_id")==task_id],"codex":cache}))
+'''
+    return json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
+
+
 def evidence():
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     instances = []
@@ -173,7 +191,7 @@ def evidence():
             "started_at": item["State"]["StartedAt"], "finished_at": item["State"]["FinishedAt"]})
     ledger = json.loads(docker("exec", CONTROLLER, "mc", "cat",
         "agentteams/recovery-1631/teams/recovery-team/shared/tasks/" + TASK_ID + "/attempts.json"))
-    result = {"recorded_at": time.time(), "task": task, "ledger": ledger, "instances": instances}
+    result = {"recorded_at": time.time(), "task": task, "ledger": ledger, "instances": instances, "native_sessions": native_sessions()}
     path = Path("/tmp/1631-live-evidence.json")
     path.write_text(json.dumps(result, indent=2))
     with Path("/tmp/1631-live-" + CASE + "-evidence.jsonl").open("a") as stream:
@@ -188,10 +206,13 @@ def cutover():
         raise RuntimeError("Requires an actual durable step-one checkpoint on the active Task")
     name = PREFIX + "-worker-agent-a"
     old = json.loads(docker("inspect", name))[0]
-    if old["Config"]["Image"] != HARNESS_IMAGES["codex"]:
-        raise RuntimeError("The bounded first cutover requires this fixture's Codex image")
+    if old["Config"]["Image"] != HARNESS_IMAGES[SOURCE]:
+        raise RuntimeError("The cutover requires this fixture's selected source image")
     started = int(time.time())
-    api("PUT", "workers/agent-a", {"runtime": "hermes", "image": HARNESS_IMAGES["hermes"]})
+    if MODE == "restart":
+        api("POST", "workers/agent-a/restart", {})
+    else:
+        api("PUT", "workers/agent-a", {"runtime": TARGET, "image": HARNESS_IMAGES[TARGET]})
     # No Matrix input is sent. Observe the Controller's actual replacement.
     deadline = time.monotonic() + 45
     replacement = None
@@ -199,7 +220,8 @@ def cutover():
         result = subprocess.run(["docker", "inspect", name], capture_output=True, text=True)
         if result.returncode == 0:
             candidate = json.loads(result.stdout)[0]
-            if candidate["Id"] != old["Id"] and candidate["State"]["Running"]:
+            changed = candidate["Id"] != old["Id"] if MODE == "replace" else candidate["State"]["StartedAt"] != old["State"]["StartedAt"]
+            if changed and candidate["State"]["Running"]:
                 replacement = candidate
                 break
         time.sleep(1)
@@ -213,8 +235,10 @@ def cutover():
     died = [row["timeNano"] for row in rows if row["Actor"]["ID"] == old["Id"] and row["Action"] == "die"]
     removed = [row["timeNano"] for row in rows if row["Actor"]["ID"] == old["Id"] and row["Action"] == "destroy"]
     created = [row["timeNano"] for row in rows if row["Actor"]["ID"] == replacement["Id"] and row["Action"] == "create"]
-    if not died or not removed or not created or not died[-1] <= removed[-1] <= created[0]:
-        raise RuntimeError("Old process/container stop before replacement creation is not proved; inspect retained events")
+    starts = [row["timeNano"] for row in rows if row["Actor"]["ID"] == replacement["Id"] and row["Action"] == "start"]
+    ordered = bool(died and removed and created and died[-1] <= removed[-1] <= created[0]) if MODE == "replace" else bool(died and starts and died[-1] <= starts[0])
+    if not ordered:
+        raise RuntimeError("Old process stop before target creation/start is not proved; inspect retained events")
     print(json.dumps({"old_container": old["Id"], "new_container": replacement["Id"],
         "events": str(path), "external_matrix_inputs_sent": 0, "task_continuation": "not yet verified"}))
 
@@ -229,6 +253,8 @@ def verify():
     assert before["task"]["execution"]["checkpoint"]["completed_steps"] == ["one"]
     assert task["status"] == "submitted" and cp["delivery"] == "delivered"
     assert cp["completed_steps"] == ["one", "two", "three"] and not cp["remaining_steps"]
+    assert execution["instance_id"] != before["task"]["execution"]["instance_id"]
+    assert execution["process_id"] != before["task"]["execution"]["process_id"]
 
     def stored(key):
         return subprocess.run(["docker", "exec", CONTROLLER, "mc", "cat", "agentteams/recovery-1631/" + key],
@@ -244,9 +270,15 @@ def verify():
     events = [json.loads(row) for row in Path("/tmp/1631-live-" + CASE + "-cutover-events.jsonl").read_text().splitlines() if row]
     old = before["instances"][1]["id"]
     died = next(row["timeNano"] for row in events if row["Action"] == "die" and row["Actor"]["ID"] == old)
-    destroyed = next(row["timeNano"] for row in events if row["Action"] == "destroy" and row["Actor"]["ID"] == old)
-    created = next(row["timeNano"] for row in events if row["Action"] == "create" and row["Actor"]["ID"] != old)
-    assert died <= destroyed <= created
+    if MODE == "replace":
+        destroyed = next(row["timeNano"] for row in events if row["Action"] == "destroy" and row["Actor"]["ID"] == old)
+        created = next(row["timeNano"] for row in events if row["Action"] == "create" and row["Actor"]["ID"] != old)
+        assert died <= destroyed <= created
+        order = {"die": died, "destroy": destroyed, "create": created}
+    else:
+        started = next(row["timeNano"] for row in events if row["Action"] == "start" and row["Actor"]["ID"] == old)
+        assert died <= started
+        order = {"die": died, "start": started}
     code = '''import hashlib,json,pathlib,sys,urllib.parse
 from agentteams_receipts import credentials,matrix_request,RECEIPT_TYPE
 p=json.load(sys.stdin); request=matrix_request(*credentials(pathlib.Path("/root/agentteams-fs/agents/agent-a")))
@@ -260,7 +292,7 @@ while True:
  if not page["chunk"] or not page.get("end") or page["end"]==cursor: break
  cursor=page["end"]
 matches=[r["event_id"] for r in rows if hashlib.sha256(r.get("content",{}).get("body","").encode()).hexdigest()==p["sha256"]]
-external=[r["event_id"] for r in rows if r.get("type")=="m.room.message" and r.get("origin_server_ts",0)>=p["stopped_ms"] and r.get("sender")!="@agent-a:recovery-1631.test"]
+external=[r["event_id"] for r in rows if r.get("type")=="m.room.message" and p["stopped_ms"]<=r.get("origin_server_ts",0)<=event["origin_server_ts"] and r.get("sender")!="@agent-a:recovery-1631.test"]
 assert matches==[p["event"]], matches
 assert not external, external
 receipts=[r for r in rows if r.get("type")==RECEIPT_TYPE and r.get("sender")=="@agent-a:recovery-1631.test" and r.get("content",{}).get("status")=="read"]
@@ -275,19 +307,23 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         text=json.dumps({"room": task["room_id"], "event": cp["reply_event"], "sha256": cp["result"]["sha256"],
             "stopped_ms": died // 1000000, "task_id": TASK_ID})))
     old_source = next(row["Actor"]["Attributes"] for row in events if row["Action"] == "die" and row["Actor"]["ID"] == old)
-    target = json.loads(docker("inspect", PREFIX + "-worker-agent-a"))[0]
-    labels = target["Config"]["Labels"]
-    native = json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c",
-        "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path('/var/log/agentteams/workers/agent-a/events.jsonl').read_text().splitlines()]; "
-        "print(json.dumps([r for r in rows if r.get('event')=='task.recovery.session']))"))
+    labels = next(row["Actor"]["Attributes"] for row in events if row["Action"] == ("create" if MODE == "replace" else "start") and
+        ((row["Actor"]["ID"] != old) if MODE == "replace" else (row["Actor"]["ID"] == old)))
+    native = native_sessions()
+    if MODE == "restart" and SOURCE == "codex":
+        cache = before["native_sessions"]["codex"]
+        assert cache["runtime"] == "codex" and cache["expires_at"] > before["recorded_at"]
+        digest = hashlib.sha256(json.dumps(before["task"]["execution"]["checkpoint"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert cache["checkpoint_digest"] == digest
+        assert native["codex"]["thread_id"] == cache["thread_id"], "valid native session was not reused"
     sources = {"core": labels["io.agentteams.recovery.core-sha"],
-        "codex": old_source["io.agentteams.recovery.harness-sha"], "hermes": labels["io.agentteams.recovery.harness-sha"]}
-    proof = {"task_id": TASK_ID, "case": CASE, "scope": "one real Codex-to-Hermes in-progress continuation",
+        SOURCE: old_source["io.agentteams.recovery.harness-sha"], TARGET: labels["io.agentteams.recovery.harness-sha"]}
+    proof = {"task_id": TASK_ID, "case": CASE, "scope": f"one real {SOURCE}-to-{TARGET} in-progress continuation", "mode": MODE,
         "sources": sources, "native_recovery_sessions": native,
         "generation_before": before["task"]["execution"]["generation"], "generation_after": execution["generation"],
         "checkpoint_before": before["task"]["execution"]["checkpoint"]["version"], "checkpoint_after": cp["version"],
         "execution": execution, "ledger": ledger, "artifacts_verified": artifacts,
-        "docker_order_ns": {"die": died, "destroy": destroyed, "create": created}, "matrix": matrix}
+        "docker_order_ns": order, "matrix": matrix}
     path = Path("/tmp/1631-live-" + CASE + "-verified.json")
     path.write_text(json.dumps(proof, indent=2))
     print(json.dumps({"passed": True, "evidence": str(path), **proof}))

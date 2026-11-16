@@ -1163,6 +1163,18 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if _protocol_enforce_enabled():
                 submission_extra["submitted_by"] = _transition_actor(arguments)
                 submission_extra["submitted_by_source"] = _transition_actor_source(arguments)
+            cp = (task.get("execution") or {}).get("checkpoint") or {}
+            if cp.get("result"):
+                if cp.get("delivery") != "delivered":
+                    raise ValueError("deliver the pending progress reply before submitting the Task")
+                # A delivered progress turn is not the submitted result.
+                # Retire it under the execution CAS before changing status;
+                # otherwise startup can mistake it for a delivered final reply.
+                from task_recovery import Recovery
+                from mcp.common.config import _runtime_team_name
+                cp = {key: value for key, value in cp.items() if key not in {"result", "delivery", "reply_txn", "reply_event"}}
+                cp["version"] += 1
+                task["execution"] = Recovery().checkpoint(task_id, _runtime_team_name(), cp)["execution"]
             try:
                 if result_markdown is not None:
                     _atomic_write_text(report_file, result_markdown)

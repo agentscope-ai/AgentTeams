@@ -218,6 +218,9 @@ func (h *TaskRecoveryHandler) validateCheckpoint(ctx context.Context, key string
 	if cp == nil || cp.Version != version {
 		return fmt.Errorf("checkpoint version must advance from the authoritative snapshot")
 	}
+	if old != nil && old.Delivery == "pending" && (old.Result == nil || cp.Result == nil || *old.Result != *cp.Result || cp.ReplyTxn != old.ReplyTxn || (cp.Delivery != "pending" && cp.Delivery != "delivered")) {
+		return fmt.Errorf("acknowledge delivery before changing a pending saved reply")
+	}
 	if unresolvedOperation(old) && (cp.Operation == nil || cp.Operation.ID != old.Operation.ID || cp.Operation.State != "verified" || strings.TrimSpace(cp.Operation.Evidence) == "") {
 		return fmt.Errorf("verify the previous operation before continuing")
 	}

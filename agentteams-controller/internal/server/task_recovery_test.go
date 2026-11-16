@@ -160,6 +160,45 @@ func TestStandaloneWorkerDiscoveryIsEmptyWithoutInspectingStorageOrBackend(t *te
 	}
 }
 
+func TestTaskRecoveryPendingReplyCannotBeReplacedOrDropped(t *testing.T) {
+	store := ossfake.NewMemory()
+	body := []byte("Saved answer")
+	sum := sha256.Sum256(body)
+	key := "teams/alpha-team/shared/tasks/t1/checkpoints/reply.txt"
+	other := "teams/alpha-team/shared/tasks/t1/checkpoints/other.txt"
+	for _, artifact := range []string{key, other} {
+		if err := store.PutObject(t.Context(), artifact, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := taskArtifact{Key: key, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(body))}
+	old := &taskCheckpoint{Version: 1, Result: &result, Delivery: "pending", ReplyTxn: "stable"}
+	h := NewTaskRecoveryHandler(newProjectTestHandler(t, store, teamWithRoster("alpha-team")), ServerDeps{})
+	for _, change := range []string{"drop", "replace", "transaction", "delivery"} {
+		t.Run(change, func(t *testing.T) {
+			copy := result
+			next := &taskCheckpoint{Version: 2, Result: &copy, Delivery: "pending", ReplyTxn: "stable"}
+			switch change {
+			case "drop":
+				next.Result, next.Delivery, next.ReplyTxn = nil, "", ""
+			case "replace":
+				next.Result.Key = other
+			case "transaction":
+				next.ReplyTxn = "different"
+			case "delivery":
+				next.Delivery = ""
+			}
+			if err := h.validateCheckpoint(t.Context(), taskMetaKey, old, next); err == nil {
+				t.Fatal("pending saved reply was changed before delivery acknowledgement")
+			}
+		})
+	}
+	next := &taskCheckpoint{Version: 2, Result: &result, Delivery: "delivered", ReplyTxn: "stable", ReplyEvent: "$sent"}
+	if err := h.validateCheckpoint(t.Context(), taskMetaKey, old, next); err != nil {
+		t.Fatalf("same saved reply must accept delivery acknowledgement: %v", err)
+	}
+}
+
 func TestSubmittedTaskRecoversPersistedReportWithoutReexecuting(t *testing.T) {
 	for _, reportPath := range []string{"result.md", "reports/final.md"} {
 		t.Run(reportPath, func(t *testing.T) {

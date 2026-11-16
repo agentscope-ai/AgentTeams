@@ -135,6 +135,16 @@ class RecoveryTests(unittest.TestCase):
         save.assert_called_once_with("stable-task", "team", "Native final answer")
         claim.assert_not_called()
 
+    def test_active_submitted_callback_prefers_authoritative_report_over_native_text(self):
+        self.task.update(status="submitted", result_path="shared/tasks/stable-task/result.md")
+        self.task["execution"]["state"] = "active"
+        claimed = {"task": self.task, "execution": {"checkpoint": {"delivery": "pending"}}, "saved_result": "Authoritative report"}
+        with patch.object(self.recovery, "claim", return_value=claimed) as claim, patch.object(self.recovery, "save_reply") as save:
+            saved, body = self.recovery.prepare_reply("stable-task", "team", "Stale native summary")
+        self.assertEqual((saved, body), (claimed, "Authoritative report"))
+        claim.assert_called_once()
+        save.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

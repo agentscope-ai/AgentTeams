@@ -2,6 +2,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,7 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "teamharness" / "mc
 import server
 
 
-def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supplied(tmp_path, monkeypatch):
+@pytest.mark.parametrize("progress_delivery", [None, "delivered", "pending"])
+def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supplied(tmp_path, monkeypatch, progress_delivery):
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
     monkeypatch.setattr(server, "_pull_project", lambda *a, **kw: True)
@@ -18,8 +20,21 @@ def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supp
     monkeypatch.setattr(server, "_publish_task_artifacts", lambda *a, **kw: [])
     monkeypatch.setattr(server, "_task_completion_notification", lambda *a, **kw: {"sent": True})
     task_path = tmp_path / "shared/tasks/p1-01/meta.json"
+    execution = {"generation": 1}
+    if progress_delivery:
+        execution["checkpoint"] = {"version": 4, "completed_steps": ["one", "two", "three"], "remaining_steps": [],
+            "result": {"key": "old-progress.txt"}, "delivery": progress_delivery, "reply_txn": "old-progress", "reply_event": "$progress"}
     server._write_json(task_path, {"task_id": "p1-01", "project_id": "p1", "status": "in_progress",
-        "assigned_to": "alice", "execution": {"generation": 1}})
+        "assigned_to": "alice", "execution": execution})
+    checkpoints = []
+    def checkpoint(task_id, team, cp):
+        assert json.loads(task_path.read_text())["status"] == "in_progress"
+        assert cp["version"] == 5 and cp["completed_steps"] == ["one", "two", "three"]
+        assert not {"result", "delivery", "reply_txn", "reply_event"}.intersection(cp)
+        checkpoints.append(cp)
+        return {"execution": {"generation": 1, "checkpoint": cp}}
+    import task_recovery
+    monkeypatch.setattr(task_recovery, "Recovery", lambda: SimpleNamespace(checkpoint=checkpoint))
 
     def sync(*a, **kw):
         task = json.loads(task_path.read_text())
@@ -34,7 +49,14 @@ def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supp
     result = server.call_tool("taskflow", {"action": "submit_task", "workspaceDir": str(tmp_path),
         "payload": {"taskId": "p1-01", "status": "SUCCESS", "summary": "Verified all three steps",
             "deliverables": ["shared/tasks/p1-01/output/step-three.json"]}})
-    assert json.loads(result["content"][0]["text"])["ok"] is True
+    body = json.loads(result["content"][0]["text"])
+    if progress_delivery == "pending":
+        assert body["ok"] is False and "pending" in body["error"]
+        assert json.loads(task_path.read_text())["status"] == "in_progress"
+        assert not checkpoints
+    else:
+        assert body["ok"] is True
+        assert len(checkpoints) == (1 if progress_delivery else 0)
 
 
 @pytest.mark.parametrize("action", ["ack_task", "submit_task", "report_progress"])

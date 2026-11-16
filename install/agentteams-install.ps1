@@ -681,7 +681,7 @@ $script:KnownModels = @(
 
 function Test-OfficialMiniMax {
     return $script:config.LLM_PROVIDER -ceq "openai-compat" -and
-        ($script:config.OPENAI_BASE_URL -cmatch '^https://api\.minimax\.(io|cn)/v1/?$')
+        ($script:config.OPENAI_BASE_URL -cmatch '^https://(api\.minimax\.io|api\.minimaxi\.com)/v1/?$')
 }
 
 function Get-OpenAIModelDefault {

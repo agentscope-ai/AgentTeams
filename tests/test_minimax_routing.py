@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = (ROOT / 'install/agentteams-install.sh').read_text()
+POWERSHELL_INSTALL = (ROOT / 'install/agentteams-install.ps1').read_text()
 LIB = (ROOT / 'shared/lib/agentteams-env.sh').read_text()
 HIGRESS = (ROOT / 'manager/scripts/init/setup-higress.sh').read_text()
 
@@ -30,6 +31,16 @@ def bash(script, env=None, data=None):
 
 
 class MiniMaxRouting(unittest.TestCase):
+    def test_powershell_endpoint_boundary(self):
+        helper = re.search(r'function Test-OfficialMiniMax \{.*?^\}',
+                           POWERSHELL_INSTALL, re.M | re.S).group()
+        pattern = re.search(r"-cmatch '([^']+)'", helper).group(1)
+        for endpoint in ['https://api.minimax.io/v1', 'https://api.minimaxi.com/v1/']:
+            self.assertRegex(endpoint, pattern)
+        for endpoint in ['https://api.minimax.cn/v1', 'https://api.minimax.io.evil.example/v1',
+                         'https://custom.example/v1', 'http://api.minimax.io/v1']:
+            self.assertNotRegex(endpoint, pattern)
+
     def test_installer_default_and_request_boundary(self):
         requests = []
         class Handler(BaseHTTPRequestHandler):

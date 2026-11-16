@@ -10,20 +10,20 @@ index bdb3e04..6f6f463 100644
 +#[cfg(feature = "channel-matrix")]
 +mod task_coordination;
 diff --git a/src/openhuman/channels/providers/matrix.rs b/src/openhuman/channels/providers/matrix.rs
-index 321f904..50219ef 100644
+index 321f904..d518527 100644
 --- a/src/openhuman/channels/providers/matrix.rs
 +++ b/src/openhuman/channels/providers/matrix.rs
-@@ -413,6 +413,10 @@ impl MatrixChannel {
+@@ -645,6 +645,10 @@ impl Channel for MatrixChannel {
 
-     async fn ensure_room_accessible(&self, room_id: &str) -> anyhow::Result<()> {
-         let encoded_room = Self::encode_path_segment(room_id);
+         let mut content =
+             serde_json::to_value(RoomMessageEventContent::text_markdown(&message.content))?;
 +        if crate::openhuman::channels::task_coordination::is_control_room(&target_room_id) {
 +            content["org.agentteams.progress_only"] = serde_json::json!(true);
 +            content["m.mentions"] = serde_json::json!({"user_ids": []});
 +        }
          let url = format!(
              "{}/_matrix/client/v3/rooms/{}/joined_members",
-             self.homeserver, encoded_room
+             self.homeserver,
 @@ -763,16 +767,26 @@ impl Channel for MatrixChannel {
 
              async move {

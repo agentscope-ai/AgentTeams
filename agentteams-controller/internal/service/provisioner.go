@@ -1861,8 +1861,8 @@ func (p *Provisioner) BackfillLegacyPasswords(ctx context.Context) error {
 		}
 
 		creds.MatrixPassword = password
-		// Clear cached AS token — it's no longer valid after password reset
-		// and legacy mode will obtain a new token via password login.
+		// Clear the stored AS token so legacy mode obtains a fresh token
+		// through password login.
 		creds.MatrixToken = ""
 		if err := p.creds.Save(ctx, name, creds); err != nil {
 			logger.Error(err, "failed to save backfilled credentials", "name", name)

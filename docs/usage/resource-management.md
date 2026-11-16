@@ -280,7 +280,7 @@ Create `alpha-lead`, `alpha-dev`, and `alpha-qa` as Worker resources first. Mode
 | `spec.peerMentions` | bool | No | If `true` (default), team Workers may @mention each other in group rooms |
 | `spec.channelPolicy` | object | No | Team-wide overrides for group/DM allow-deny lists (same shape as Worker `channelPolicy`) |
 | `spec.admin` | object | No | Team-specific human admin (`name` required; `matrixUserId` optional). Defaults to global Admin when omitted |
-| `spec.humanMembers` | []object | No | Additional human Team members. In this version, `role: coordinator` members join the Team Room and can assign work there like the Team Admin |
+| `spec.humanMembers` | []object | No | Additional human Team members. `coordinator` can assign work; `member` joins the Team Room as an ordinary member |
 | `spec.workerMembers` | []object | Yes | References to existing Worker resources; exactly one entry must have `role: team_leader` |
 | `spec.workerMembers[].name` | string | Yes | Referenced Worker resource name |
 | `spec.workerMembers[].role` | string | Yes | `team_leader` or `worker` |
@@ -384,7 +384,7 @@ If not specified, the global Admin is used by default. The Team Admin is invited
 
 ### Team Members
 
-Use `spec.humanMembers` to add human members who are part of the Team but are not Workers. The first supported member role is `coordinator`: the member is invited to the Team Room, and Leader/Workers accept their @mentions there as authorized task assignment. Leader DM remains limited to the Team Admin and Leader.
+Use `spec.humanMembers` to add human members who are part of the Team but are not Workers. The default `coordinator` role can assign tasks to Leader/Workers through @mentions in the Team Room. The `member` role joins the Team Room without coordinator task-assignment authority. Leader DM remains limited to the Team Admin and Leader. In team updates, `admin: null` clears the explicit admin assignment; omitting `admin` preserves it.
 
 ```yaml
 spec:

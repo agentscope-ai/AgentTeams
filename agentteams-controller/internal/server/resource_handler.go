@@ -932,7 +932,7 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		if req.TeamName != "" {
 			team.Spec.TeamName = req.TeamName
 		}
-		if req.Admin != nil {
+		if req.AdminProvided || req.Admin != nil {
 			team.Spec.Admin = req.Admin
 		}
 		if req.HumanMembers != nil {
@@ -1918,6 +1918,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		RunningTaskCount:             w.Status.RunningTaskCount,
 		LastRunAt:                    w.Status.LastRunAt,
 		LastFinishAt:                 w.Status.LastFinishAt,
+		SkillWarnings:                w.Status.SkillWarnings,
 	}
 	if w.Spec.Runtime == "openclaw" {
 		enabled := w.Spec.LlmHeartbeatEnabled != nil && *w.Spec.LlmHeartbeatEnabled

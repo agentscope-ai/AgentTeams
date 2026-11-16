@@ -491,6 +491,11 @@ spec:
                 agentStatus:
                   type: string
                   description: "Worker runtime task-level state self-reported by the heartbeat: idle / running / disabled; empty when not reported."
+                skillWarnings:
+                  type: array
+                  description: "Non-blocking skill load or enable warnings reported by the runtime."
+                  items:
+                    type: string
                 runningTaskCount:
                   type: integer
                   description: "Number of active runtime tasks reported by the worker heartbeat; absent when unknown."

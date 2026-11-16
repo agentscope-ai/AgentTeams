@@ -828,6 +828,24 @@ func TestProvisionTeamRoomsInvitesCoordinatorMembersLikeTeamAdmin(t *testing.T) 
 	}
 }
 
+func TestTeamOrdinaryMemberHasRoomMembershipWithoutCoordinatorAuthority(t *testing.T) {
+	p := NewProvisioner(ProvisionerConfig{Matrix: newFakeTeamMatrix(), AdminUser: "admin"})
+	members := []v1beta1.TeamMemberSpec{
+		{Name: "alice", Role: "coordinator"},
+		{Name: "bob", Role: "member"},
+	}
+	if got := p.resolveTeamMemberMatrixIDs(members); !reflect.DeepEqual(got, []string{"@alice:localhost", "@bob:localhost"}) {
+		t.Fatalf("room members = %v", got)
+	}
+	if got := p.resolveTeamCoordinatorMatrixIDs(nil, members); !reflect.DeepEqual(got, []string{"@alice:localhost"}) {
+		t.Fatalf("coordinators = %v", got)
+	}
+	members[0].Role = "member"
+	if got := p.resolveTeamCoordinatorMatrixIDs(nil, members); len(got) != 0 {
+		t.Fatalf("demoted user retained coordinator authority: %v", got)
+	}
+}
+
 func TestProvisionTeamRoomsKeepsFallbackGlobalAdmin(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{

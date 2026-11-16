@@ -6,6 +6,8 @@ on:
       - 'worker'
       - 'worker/**'
       - 'shared/lib/agentteams_receipts.py'
+      - 'shared/lib/agentteams_skill_warnings.py'
+      - 'tests/test-skill-runtime-warnings.py'
       - 'tests/test_harness_session_receipts.py'
       - 'tests/lib/matrix-client.sh'
       - 'openhuman'
@@ -32,6 +34,8 @@ on:
       - 'worker'
       - 'worker/**'
       - 'shared/lib/agentteams_receipts.py'
+      - 'shared/lib/agentteams_skill_warnings.py'
+      - 'tests/test-skill-runtime-warnings.py'
       - 'tests/test_harness_session_receipts.py'
       - 'tests/lib/matrix-client.sh'
       - 'openhuman'
@@ -55,6 +59,16 @@ on:
   workflow_dispatch:
 
 jobs:
+  skill-warnings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pytest PyYAML
+      - run: python -m pytest tests/test-skill-runtime-warnings.py -q
+
   harness-session-receipts:
     runs-on: ubuntu-latest
     steps:

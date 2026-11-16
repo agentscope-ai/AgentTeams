@@ -17,7 +17,7 @@ AgentTeams/
 ├── qwenpaw/             # Pinned submodule: agentteams-group/agentteams-harness-qwenpaw
 ├── hermes/              # Pinned submodule: agentteams-group/agentteams-harness-hermes
 ├── deepseek-harness/    # Pinned submodule: agentteams-group/agentteams-harness-deepseek
-├── openhuman/           # OpenHuman Worker image: Rust core + native Matrix (channel-matrix feature)
+├── openhuman/           # Git submodule: agentteams-group/agentteams-harness-openhuman
 ├── openclaw-base/       # Base image: Ubuntu + Node.js + bundled agent assets + mcporter
 ├── shared/lib/          # Shared shell libs copied into images (agentteams-env.sh, render-skills.sh, …)
 ├── install/             # Install documentation, import/upgrade helpers and tests; full installer lives in website repo
@@ -191,8 +191,8 @@ The Manager uses the selected Harness image. Higress, Tuwunel, MinIO, and Elemen
 
 ### To modify the OpenHuman worker runtime
 
-- [openhuman/](openhuman/) — Rust-based Worker runtime with native Matrix support (`channel-matrix` feature flag)
-- [openhuman/Dockerfile](openhuman/Dockerfile) — Multi-stage build: `rust:1.93-bookworm` → `debian:bookworm-slim`
+- [agentteams-group/agentteams-harness-openhuman](https://github.com/agentteams-group/agentteams-harness-openhuman) — independent Rust runtime integration, checked out as the `openhuman/` Git submodule
+- [openhuman/Dockerfile](https://github.com/agentteams-group/agentteams-harness-openhuman/blob/main/Dockerfile) — Build from the Harness directory with `--build-context agentteams=.` pointing to this Core checkout. Multi-stage build: `rust:1.93-bookworm` → `debian:bookworm-slim`
 - [openhuman/scripts/openhuman-worker-entrypoint.sh](openhuman/scripts/openhuman-worker-entrypoint.sh) — Entrypoint: config.toml generation, MinIO sync, health check
 - [manager/agent/openhuman-worker-agent/](manager/agent/openhuman-worker-agent/) — Agent template and skills
 

@@ -192,12 +192,17 @@ build-hermes-worker: build-agentteams-controller ## Build Hermes Worker image
 		-t $(LOCAL_HERMES_WORKER) \
 		./hermes/
 
+openhuman/Dockerfile:
+	git submodule update --init -- openhuman
+
+build-openhuman-worker push-openhuman-worker: | openhuman/Dockerfile
+
 build-openhuman-worker: build-agentteams-controller ## Build OpenHuman Worker image (Rust + native Matrix)
 	@echo "==> Building OpenHuman Worker image: $(LOCAL_OPENHUMAN_WORKER)"
-	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_OPENHUMAN_WORKER) \
-		-f openhuman/Dockerfile .
+		./openhuman/
 
 build-qwenpaw-worker: build-agentteams-controller ## Build the shared QwenPaw Harness image
 	@echo "==> Building QwenPaw Worker image: $(LOCAL_QWENPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
@@ -415,17 +420,17 @@ push-openhuman-worker: push-agentteams-controller buildx-setup ## Build + push m
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(OPENHUMAN_WORKER_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
-		podman build --platform $(plat) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		podman build --platform $(plat) $(REGISTRY_ARG) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
-			--manifest $(OPENHUMAN_WORKER_TAG) -f openhuman/Dockerfile . && ) true
+			--manifest $(OPENHUMAN_WORKER_TAG) ./openhuman/ && ) true
 	podman manifest push --all $(OPENHUMAN_WORKER_TAG) docker://$(OPENHUMAN_WORKER_TAG)
 	$(if $(PUSH_LATEST),podman manifest push --all $(OPENHUMAN_WORKER_TAG) docker://$(OPENHUMAN_WORKER_IMAGE):latest)
 else
 	docker buildx build --builder $(BUILDX_BUILDER) --platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(OPENHUMAN_WORKER_TAG) $(if $(PUSH_LATEST),-t $(OPENHUMAN_WORKER_IMAGE):latest) \
-		--push -f openhuman/Dockerfile .
+		--push ./openhuman/
 endif
 
 push-qwenpaw-worker: push-agentteams-controller ## Build + push multi-arch QwenPaw Harness image

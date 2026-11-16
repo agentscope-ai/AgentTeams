@@ -87,7 +87,8 @@ class BuildWorkflowTests(unittest.TestCase):
                                      'push-openhuman-worker', 'IS_PODMAN=' + podman,
                                      'VERSION=v1.2.7'], cwd=ROOT, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('openhuman/Dockerfile', result.stdout)
+            self.assertIn('./openhuman/', result.stdout)
+            self.assertIn('--build-context agentteams=.', result.stdout)
             self.assertIn('agentteams/agentteams-harness-openhuman:v1.2.7', result.stdout)
         self.assertIn('agentteams-harness-openhuman',
                       next(s['run'] for s in RELEASE['jobs']['release']['steps']

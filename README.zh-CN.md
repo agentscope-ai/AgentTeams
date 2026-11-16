@@ -406,6 +406,8 @@ AgentTeams 提供多类 Worker 运行时，可以**在同一个 IM 房间中共�
 agt update worker --runtime hermes
 ```
 
+各 Harness 的实现统一维护在 `agentteams-group` 的独立仓库：[OpenClaw](https://github.com/agentteams-group/agentteams-harness-openclaw), [QwenPaw](https://github.com/agentteams-group/agentteams-harness-qwenpaw), [Hermes](https://github.com/agentteams-group/agentteams-harness-hermes), [DeepSeek](https://github.com/agentteams-group/agentteams-harness-deepseek), [OpenHuman](https://github.com/agentteams-group/agentteams-harness-openhuman), [Codex](https://github.com/agentteams-group/agentteams-harness-codex)。Core 固定引用对应提交用于构建。
+
 ## 架构
 
 ```

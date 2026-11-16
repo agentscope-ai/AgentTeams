@@ -40,7 +40,7 @@ explicit Project DAG/Loop operations remain compatible.
 
 Task/project records remain the authoritative business state. The Controller
 resolves the registered recipient and delivers scoped control notifications through
-the Agent API or the opt-in Matrix transport. Matrix also carries progress,
+the existing Matrix ingress. Matrix also carries progress,
 artifacts, approval cards and final reports; progress projections do not start
 another Agent turn.
 
@@ -75,33 +75,31 @@ once the original user conversation has actually received the report.
   assigned state before execution.
 - `task_submitted`: Worker to its registered Leader, fenced by the current
   submission identity. Submission alone never releases dependent tasks.
-- `project_ready`: after all execution leaves are accepted, the Controller
+- `main_task_ready` (legacy explicit Project plans: `project_ready`): after all execution leaves are accepted, the Controller
   notifies the Leader once if the coordinating parent/project still needs
   closure. Loop iterations are not treated as finite completed plans.
-- `project_completed`: the registered Leader notifies the saved Manager route.
-  The Manager validates the completed state and registered Leader, then relays
-  the saved Leader report without another model call. The Controller projects
+- `main_task_completed` (legacy explicit Project plans: `project_completed`):
+  the Controller validates the completed state and registered Leader, then projects
   that response to the saved original user conversation. A direct Human
   requester retains the existing direct Matrix report path. This is a completion
   notification, not a stop/cancel call against a Manager session.
 
-The Leader can store a complete finite plan with `start_project` and
-`dispatchMode: automatic`. Accepting a checked result dispatches newly ready
-stored leaf specs without another routing decision. A matching durable
-acceptance ends the review turn without another model call only for automatic
-finite plans. Canonical plan type and dispatch mode accompany the callback;
-manual DAG and Loop acceptance retains its existing iteration/delegation turn
-instead of being stopped after one result. The Controller
-owns the `project_ready` transition; the Leader handles whole-plan acceptance
-only in that closure turn. `complete_project` with a
-Leader-approved `report` closes coordinating parents only after every execution
-leaf is accepted and artifact-backed, saves the report, and notifies the source.
-It cannot clear a cancelled, blocked or unresolved task.
+The Leader stores an ordinary finite main-task plan with `taskflow start_task`.
+Accepting a checked result dispatches newly ready execution specs without another
+routing decision. The Controller owns `main_task_ready`; the Leader verifies the
+whole request and calls `complete_task` with the final report. Completion requires
+accepted, artifact-backed leaves and cannot clear cancellation or unresolved work.
+
+Existing explicit Project plans retain `start_project` with `dispatchMode:
+automatic`, `project_ready` and `complete_project`. A matching durable acceptance
+ends review without another model call only for automatic finite plans. Manual DAG
+and Loop acceptance retains its existing continuation turn. Project compatibility
+does not make Project creation part of ordinary Task intake.
 
 ## Delivery semantics
 
 The outbox is separate from task state and uses strict object-store conditional
-writes and leases. Restart resumes a saved native execution receipt. Repeated
+writes and leases. Restart resumes the saved delivery receipt. Repeated
 admission with the same identity reuses the receipt; changing its payload is
 rejected. Paused plans wait, while cancelled or superseded execution identities
 do not start another run.
@@ -111,7 +109,7 @@ the runtime's configured execution budget; the transport does not replace it
 with a shorter model timeout. HTTP request timeouts still bound each individual
 admission or receipt lookup.
 
-The native console task API does not provide a durable idempotent admission
+For pre-upgrade HTTP outbox entries only, the native console task API does not provide a durable idempotent admission
 lookup. If admission outcome is unknown, the Controller records failure for
 operator recovery rather than replaying a potentially side-effecting run. A
 missing native execution receipt is also a visible terminal delivery failure;
@@ -132,7 +130,7 @@ echo suppression. These are not six full real-model development runs.
 Cross-main/cross-team dependency dispatch and native Loop notifications remain
 outside this change.
 
-## Experimental Matrix coordination
+## Matrix coordination
 
 Registered managed Harnesses use Controller-originated Matrix mentions for handoff, assignment, submission acceptance and whole-plan closure. The legacy transport setting does not override a managed Harness's Matrix ingress. Old HTTP outbox entries retain their existing recovery semantics. The Controller relays the saved final report to the original Human conversation as the registered Manager after rechecking completed state, without a Manager execution request or another model call. This does not automatically accept submissions: the Leader still makes the acceptance decision from the supplied result and independent QA evidence.
 
@@ -140,7 +138,7 @@ The Controller sends assignments as the registered Leader and acceptance notices
 
 Matrix send retries use the same transaction ID. A Worker is marked started only after the task's real ACK changes its authoritative state, not merely after Matrix accepts the message. The outbox continues monitoring task submission and approval resolutions until execution ends. Delivery transport is stored with the outbox entry; changing the local transport setting does not rewrite admitted entries. A cancelled or superseded assignment is ignored.
 
-Workers and Leaders use isolated control sessions and validate their own durable Controller receipt before inference. A self-addressed Leader closure notification also requires that receipt and accepted leaf state. Submission messages remain pending until the authoritative task records an acceptance decision; closure remains pending until the project actually completes.
+Workers and Leaders use isolated control sessions and validate their own durable Controller receipt before inference. A self-addressed Leader closure notification also requires that receipt and accepted leaf state. Submission messages remain pending until the authoritative task records an acceptance decision; closure remains pending until the main Task (or legacy explicit Project plan) actually completes.
 
 The Worker uses the normal Matrix streaming output path for visible tool calls, execution progress and results. Detailed model reasoning is suppressed for these structured control turns. Responses and edits carry `org.agentteams.progress_only` so visible feedback cannot reopen another Agent execution alongside the authoritative task callback.
 
@@ -210,8 +208,10 @@ deduplication and checks the receipt before allowing a self-addressed closure.
 The common Python validator is shipped through the existing shared library
 build context, including for Node and Rust Harnesses. Each native bridge retains
 its own execution/session lifecycle; no second runtime scheduler is introduced.
-Main-task sessions include the stable team-scoped receipt identity so equal
-Task IDs in different teams cannot share execution/review/closure context.
+Main-task sessions use the canonical team-scoped receipt identity or its actual
+Matrix notification event/thread, so equal Task IDs in different teams cannot
+share execution/review/closure context. Opaque receipt session strings are never
+used as Matrix transport event IDs.
 
 OpenHuman binds the shared server through its existing native MCP stdio client.
 Its Task workspace is inside the native sandbox, and the orchestrator exposes

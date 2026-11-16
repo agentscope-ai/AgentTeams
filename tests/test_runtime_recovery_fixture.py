@@ -12,15 +12,24 @@ import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+import urllib.error
+import urllib.parse
+
+from fixtures.runtime_recovery_oracle import Ledger
+import tempfile
 
 
 class EffectReceiptTests(unittest.TestCase):
     def setUp(self):
-        self.task = {"task_id": "stable", "status": "in_progress", "execution": {"generation": 1}}
+        self.task = {"task_id": "stable", "status": "in_progress", "recovery_fixture": {"oracle_url": "http://oracle"},
+                     "execution": {"generation": 1, "state": "active"}}
         self.prefix = "teams/team/shared/recovery-fixtures/stable/effects/"
         self.store = {self.prefix + ".keep": b""}
         self.process = "first-process"
         self.fail_output = False
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.ledger = Ledger(Path(self.directory.name) / "effects.json")
         owner = self
         class Client:
             @property
@@ -38,6 +47,16 @@ class EffectReceiptTests(unittest.TestCase):
                     owner.assertEqual(hashlib.sha256(data).hexdigest(), artifact["sha256"])
                 owner.task["execution"]["checkpoint"] = copy.deepcopy(checkpoint)
         self.client = Client()
+
+    def http(self, request, **kwargs):
+        params = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)
+        self.task["execution"].update(process_id=self.process, instance_id="docker/" + self.process)
+        snapshot = {"instance_id": "docker/" + self.process, "tasks": [{"team_id": "team", "task": self.task}]}
+        try:
+            entry = self.ledger.effect(snapshot, "team", "stable", params["step"][0], self.process, request.method)
+        except ValueError as error:
+            raise urllib.error.HTTPError(request.full_url, 409, str(error), {}, None) from error
+        return contextlib.closing(io.BytesIO(json.dumps(entry, sort_keys=True).encode()))
 
     def mc(self, args, *, input=None, **kwargs):
         self.assertEqual(args[0], "mc")
@@ -61,7 +80,9 @@ class EffectReceiptTests(unittest.TestCase):
         output = io.StringIO()
         module = SimpleNamespace(Recovery=lambda: self.client)
         with patch.dict(sys.modules, {"task_recovery": module}), patch.object(sys, "argv", ["fixture", "stable", "team"]), \
-                patch.dict(os.environ, {"AGENTTEAMS_STORAGE_PREFIX": "alias/bucket"}), \
+                patch.dict(os.environ, {"AGENTTEAMS_STORAGE_PREFIX": "alias/bucket", "AGENTTEAMS_AUTH_TOKEN_FILE": "/mock/token"}), \
+                patch("pathlib.Path.read_text", return_value="scoped-worker-token"), \
+                patch("urllib.request.urlopen", side_effect=self.http), \
                 patch("subprocess.run", side_effect=self.mc), contextlib.redirect_stdout(output):
             try:
                 runpy.run_path(str(Path(__file__).parent / "fixtures/runtime_recovery_step.py"))
@@ -70,8 +91,7 @@ class EffectReceiptTests(unittest.TestCase):
         return output.getvalue()
 
     def receipts(self):
-        return sorted((json.loads(data) for key, data in self.store.items()
-            if key.startswith(self.prefix) and key.endswith(".json")), key=lambda entry: entry["checkpoint_version"])
+        return self.ledger.proof("team", "stable")["effects"]
 
     def test_stale_task_directory_ledger_cannot_erase_effect_receipts(self):
         self.invoke()
@@ -100,7 +120,7 @@ class EffectReceiptTests(unittest.TestCase):
 
     def test_unproved_effect_waits_for_verification(self):
         self.task["execution"]["checkpoint"] = {"version": 1, "operation": {"id": "fixture:stable:one", "state": "unknown"}}
-        with self.assertRaisesRegex(RuntimeError, "Needs verification"):
+        with self.assertRaisesRegex(urllib.error.HTTPError, "Needs verification"):
             self.invoke()
         self.assertEqual(self.receipts(), [])
 

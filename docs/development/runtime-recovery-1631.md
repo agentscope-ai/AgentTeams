@@ -19,10 +19,10 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenClaw | `5e44ebecabf878eda499b668c9627208dbfa6049` | matched |
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
-Candidate companion pins on this Draft branch: Codex `b336e815217cb821f46dbe21b3d309c44c916a3c`
-and Hermes `9c82bf1f48fccb881baafe439263958156d04713`, plus DeepSeek
-`035da1839459d03c47a30cef9a17cfa210bb0196`. All consume the shared
-Core contract at `9bdbbe92c294d0dcca2aeed5478fcf29452f3a42`. These are review
+Candidate companion pins on this Draft branch: Codex `692349083fa06fac0e8ffd0cd3761626829d6f2a`
+and Hermes `012eb7c1938c79ee9599d270aef0b5888df97c1f`, plus DeepSeek
+`0f07b3dd730e4ba124d82b14696f66dc5470f2fc`. All consume the shared
+Core contract at `45cbf4f5f6048fe4f6561462f90e1a9db6e3c15c`. These are review
 candidates, not accepted/released Harness versions.
 Core `ecb44a61` main and each companion's latest main were merged into the
 isolated work branches, preserving the runtime Skill fixes. The contract
@@ -442,8 +442,30 @@ counts to a separately owned fixture service/ledger, with Worker-readable
 results and no Worker write access to the authoritative counts. Record both
 effect execution and verification calls. This is test infrastructure, not the
 deferred product Task database. Native Python telemetry also reported missing
-`opentelemetry`; packaged dependency and trace/UI validation remain open.
+`opentelemetry`. DeepSeek now installs the shared telemetry dependencies and
+OpenAI SDK in its Python venv; packaged native smoke passed. Real DeepSeek
+trace ingestion and trace/UI validation remain open.
 The two fixture Workers were stopped with all data retained.
+
+
+### Independent effect oracle v3 (not real-model acceptance)
+
+The next fixture uses a separate HTTP service/container with its own durable
+ledger volume and no Docker socket or Worker storage mount. It forwards each
+Worker credential to real self-scoped Controller discovery and validates the
+current instance/process, Task status, registered operation and completed-step
+prefix. Only this service executes/counts the fixture side effect. Worker
+outputs are artifacts, not the authority for execution counts. The driver has a
+separate private proof credential that is never projected into Workers.
+
+Duplicate POST execution is rejected and recorded. A replacement with an
+unknown result can GET/verify an existing effect without executing it again;
+an absent result remains unproved. The ledger fsyncs before returning a result.
+Eleven local fixture/oracle/boundary tests pass, including HTTP credential
+forwarding/proof isolation, cancellation/reassignment/ownership rejection,
+restart readback and forged Worker receipt rejection. Task HTTP in those unit
+tests is mocked; fresh real-model acceptance is still required. Historical
+oracle-v2 evidence is retained with its trust limitation.
 
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |

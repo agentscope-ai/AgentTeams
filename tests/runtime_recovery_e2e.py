@@ -13,6 +13,7 @@ import secrets
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 PREFIX = os.getenv("RECOVERY_E2E_PREFIX", "recovery-1631-live-20261116")
@@ -22,10 +23,10 @@ CONTROLLER = PREFIX + "-controller"
 NETWORK = PREFIX + "-net"
 STATE = Path("/tmp/recovery-1631-e2e-state.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-state.json")
 PRIVATE_BOOTSTRAP = Path("/tmp/recovery-1631-bootstrap.private.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-bootstrap.private.json")
-CORE_IMAGE = "recovery-1631/controller:local-20261117041000"
+CORE_IMAGE = "recovery-1631/controller:local-20261117052000"
 HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117013200",
-                  "hermes": "recovery-1631/hermes:local-20261117034200",
-                  "deepseek-harness": "recovery-1631/deepseek:local-20261117034200"}
+                  "hermes": "recovery-1631/hermes:local-20261117052000",
+                  "deepseek-harness": "recovery-1631/deepseek:local-20261117052000"}
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
@@ -119,6 +120,34 @@ def prepare():
     print("Prepared native home rooms only for the disposable test members; wait for Running before seeding")
 
 
+def oracle():
+    """Start a ledger with no Worker storage mount or Docker socket."""
+    name = PREFIX + "-oracle"
+    config_path = Path("/tmp/" + PREFIX + "-oracle.private.json")
+    if config_path.exists() or subprocess.run(["docker", "inspect", name], capture_output=True).returncode == 0:
+        raise RuntimeError("Oracle already exists; inspect and retain its ledger")
+    config = {"controller": "http://" + CONTROLLER + ":8090", "proof_key": secrets.token_urlsafe(32)}
+    with os.fdopen(os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as stream:
+        json.dump(config, stream)
+    docker("volume", "create", "--label", "io.agentteams.recovery.owner=1631", name + "-ledger")
+    docker("run", "-d", "--name", name, "--network", NETWORK,
+           "--label", "io.agentteams.recovery.owner=1631", "-p", "127.0.0.1::8091",
+           "-v", str(config_path) + ":/private/config.json:ro", "-v", name + "-ledger:/ledger",
+           "-v", str(Path(__file__).resolve().parent / "fixtures/runtime_recovery_oracle.py") + ":/oracle.py:ro",
+           "--entrypoint", "python3", CORE_IMAGE, "/oracle.py")
+    print(json.dumps({"oracle": name, "worker_writable_ledger": False}))
+
+
+def oracle_proof():
+    config = json.loads(Path("/tmp/" + PREFIX + "-oracle.private.json").read_text())
+    port = docker("port", PREFIX + "-oracle", "8091/tcp").rsplit(":", 1)[1]
+    query = urllib.parse.urlencode({"team": "recovery-team", "task": TASK_ID})
+    request = urllib.request.Request("http://127.0.0.1:" + port + "/proof?" + query,
+        headers={"Authorization": "Bearer " + config["proof_key"]})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.load(response)
+
+
 def seed():
     task_id, main_id, team = TASK_ID, MAIN_ID, "recovery-team"
     member = api("GET", "workers/agent-a")
@@ -135,7 +164,9 @@ def seed():
     task = {"task_id": task_id, "main_task_id": main_id, "parent_task_id": main_id, "team_id": team,
         "task_kind": "subtask", "title": f"Run three stable steps across {SOURCE} to {TARGET}", "status": "assigned",
         "assigned_to": "@agent-a:recovery-1631.test", "room_id": room, "notifyTxn": "live-assignment-" + CASE,
-        "recovery_fixture": {"oracle_version": 2}}
+        "recovery_fixture": {"oracle_version": 3, "oracle_url": "http://" + PREFIX + "-oracle:8091"}}
+    if oracle_proof()["effects"]:
+        raise RuntimeError("This Task already has independent effects; retain its proof")
     spec = f"""You are executing a bounded real runtime-recovery acceptance task {task_id} in team {team}.
 Use your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.
 Pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/{team}/shared/tasks/{task_id}/acceptance.py into your task scratch directory using mc cp.
@@ -215,6 +246,8 @@ print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,
 
 
 def step_ledger(task):
+    if task.get("recovery_fixture", {}).get("oracle_version") == 3:
+        return oracle_proof()["effects"]
     if task.get("recovery_fixture", {}).get("oracle_version") != 2:
         return json.loads(docker("exec", CONTROLLER, "mc", "cat",
             "agentteams/recovery-1631/teams/recovery-team/shared/tasks/" + TASK_ID + "/attempts.json"))
@@ -316,8 +349,12 @@ def verify():
     ledger = step_ledger(task)
     assert [row["step"] for row in ledger] == ["one", "two", "three"]
     assert [row["generation"] for row in ledger] == [1, 2, 2]
-    if task.get("recovery_fixture", {}).get("oracle_version") == 2:
+    if task.get("recovery_fixture", {}).get("oracle_version") in {2, 3}:
         assert_step_boundaries(ledger, before["task"]["execution"]["checkpoint"]["version"])
+    if task.get("recovery_fixture", {}).get("oracle_version") == 3:
+        calls = oracle_proof()["calls"]
+        assert len([row for row in calls if row["method"] == "POST"]) == 3
+        assert all(row["accepted"] for row in calls), "Rejected effects/verification must be investigated"
     artifacts = cp["artifacts"] + [cp["result"]]
     for artifact in artifacts:
         data = stored(artifact["key"])
@@ -512,5 +549,5 @@ def members():
 
 
 if __name__ == "__main__":
-    {"setup": setup, "restore": lambda: setup(restore=True), "status": status, "members": members, "prepare": prepare, "tracing": tracing, "seed": seed,
+    {"setup": setup, "restore": lambda: setup(restore=True), "status": status, "members": members, "prepare": prepare, "oracle": oracle, "tracing": tracing, "seed": seed,
      "refresh-controller": refresh_controller, "evidence": evidence, "cutover": cutover, "verify": verify}[sys.argv[1]]()

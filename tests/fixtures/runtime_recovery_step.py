@@ -1,7 +1,7 @@
 """Deterministic side-effect fixture invoked by the real Harness's model tool.
 
-This never starts a model or resumes a Task by itself. Separate per-invocation
-effect receipts let the driver count steps even after a stale Task-dir sync.
+This never starts a model or resumes a Task by itself. A separately owned
+HTTP ledger executes/counts effects; Worker-written objects are only artifacts.
 """
 import hashlib
 import json
@@ -9,7 +9,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import uuid
+import urllib.parse
+import urllib.request
 
 sys.path.insert(0, "/opt/agentteams/scripts/lib")
 from task_recovery import Recovery
@@ -31,11 +32,6 @@ if done == ["one"] and task["execution"]["generation"] == 1:
 step = steps[len(done)]
 key = f"teams/{team}/shared/tasks/{task_id}/output/step-{step}.json"
 prefix = os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/"
-effects_prefix = f"teams/{team}/shared/recovery-fixtures/{task_id}/effects/"
-
-
-def read(key):
-    return subprocess.run(["mc", "cat", prefix + key], check=True, capture_output=True).stdout
 
 
 def write(key, data):
@@ -43,34 +39,31 @@ def write(key, data):
 
 
 operation = {"id": f"fixture:{task_id}:{step}", "state": "started"}
-listing = subprocess.run(["mc", "ls", "--json", prefix + effects_prefix], check=True, capture_output=True).stdout
-receipts = []
-for line in listing.splitlines():
-    row = json.loads(line)
-    if row.get("type") == "file" and row.get("key", "").endswith(".json"):
-        receipt_key = effects_prefix + row["key"].rsplit("/", 1)[-1]
-        data = read(receipt_key)
-        receipts.append((receipt_key, json.loads(data), data))
-existing = [receipt for receipt in receipts if receipt[1]["step"] == step]
+
+
+def effect(method):
+    token = Path(os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE") or "/var/run/secrets/agentteams/token").read_text().strip()
+    query = urllib.parse.urlencode({"team": team, "task": task_id, "step": step})
+    request = urllib.request.Request(task["recovery_fixture"]["oracle_url"] + "/effect?" + query,
+        method=method, data=b"" if method == "POST" else None,
+        headers={"Authorization": "Bearer " + token, "X-AgentTeams-Process-ID": recovery.process})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return response.read()
+
+
 if cp.get("operation", {}).get("state") in {"started", "unknown"}:
-    if cp["operation"]["id"] != operation["id"] or len(existing) != 1:
+    if cp["operation"]["id"] != operation["id"]:
         raise RuntimeError("Needs verification: operation outcome cannot be proved; no rerun")
-    receipt_key, entry, data = existing[0]
+    data = effect("GET")
 else:
-    if existing:
-        raise RuntimeError("Unexpected side effect already exists; no rerun")
     for field in ("result", "delivery", "reply_txn", "reply_event"):
         cp.pop(field, None)
     cp.update(version=cp.get("version", 0) + 1, completed_steps=done, remaining_steps=steps[len(done):], operation=operation)
     recovery.checkpoint(task_id, team, cp)
-    entry = {"step": step, "generation": task["execution"]["generation"], "process_id": recovery.process,
-        "task_id": task_id, "checkpoint_version": cp["version"]}
-    data = json.dumps(entry, sort_keys=True).encode()
-    receipt_key = effects_prefix + step + "-" + uuid.uuid4().hex + ".json"
-    write(receipt_key, data)
+    data = effect("POST")
 write(key, data)
 digest = hashlib.sha256(data).hexdigest()
-operation.update(state="verified", evidence="Persisted step output SHA256=" + digest + "; effect receipt=" + receipt_key + "; count=1")
+operation.update(state="verified", evidence="Independent effect ledger; persisted output SHA256=" + digest + "; step=" + step + "; count=1")
 cp.update(version=cp["version"] + 1, completed_steps=done + [step], remaining_steps=steps[len(done) + 1:], operation=operation,
     artifacts=cp.get("artifacts", []) + [{"key": key, "sha256": digest, "size": len(data)}])
 recovery.checkpoint(task_id, team, cp)

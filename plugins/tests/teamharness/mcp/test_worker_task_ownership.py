@@ -10,6 +10,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "teamharness" / "mc
 import server
 
 
+@pytest.mark.parametrize("old_role", ["standalone", "leader", ""])
+def test_current_member_role_overrides_stale_container_role(tmp_path, monkeypatch, old_role):
+    config = tmp_path / "runtime.json"
+    config.write_text(json.dumps({"member": {"role": "worker"}}))
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(config))
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", old_role)
+    assert server._runtime_role() == "worker"
+    assert server._role({"role": "human"}) == "worker"
+
+
 def test_checkpoint_unavailable_does_not_terminate_the_tool_server(monkeypatch):
     from task_recovery import Recovery, RecoveryUnavailable
     def unavailable(*a, **kw):

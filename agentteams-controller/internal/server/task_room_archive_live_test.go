@@ -45,6 +45,24 @@ func TestTaskRoomArchiveLiveControllerRelay(t *testing.T) {
 	bob := register("archive_bob")
 	cfg.AdminUser, cfg.AdminPassword = admin.UserID, admin.Password
 	mx = matrix.NewTuwunelClient(cfg, httpClient)
+	// Initial password assignment must preserve the registration/AS token.
+	// Tuwunel 2.0 logs out devices by default when reset-password is processed.
+	const initialPassword = "Archive-initial-password-fixture-20261116!"
+	if err := mx.SetPasswordAsAdmin(ctx, bob.UserID, initialPassword); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := mx.Login(ctx, "archive_bob", initialPassword); err == nil {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("initial password did not propagate: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := mx.VerifyAccessToken(ctx, bob.AccessToken); err != nil {
+		t.Fatalf("initial password assignment revoked the existing token: %v", err)
+	}
 	request := func(server, method, path, token string, body any, want int) map[string]any {
 		t.Helper()
 		if body == nil {

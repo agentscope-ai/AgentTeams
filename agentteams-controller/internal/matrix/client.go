@@ -603,13 +603,12 @@ func (c *TuwunelClient) loginAppServiceFresh(ctx context.Context, username strin
 // This is used in AppService mode to set initial passwords for Human users
 // so they can still log in via Element with username/password.
 func (c *TuwunelClient) SetPasswordAsAdmin(ctx context.Context, userID, password string) error {
-	cmd := fmt.Sprintf("!admin users reset-password %s %s", userID, password)
+	// Initial password assignment must not revoke the newly issued AS token.
+	cmd := fmt.Sprintf("!admin users reset-password --no-logout-devices %s %s", userID, password)
 	if err := c.AdminCommand(ctx, cmd); err != nil {
 		return err
 	}
-	// A password reset may invalidate the user's existing access tokens
-	// (see the provisioner's "clear cached AS token" convention): drop any
-	// cached one so the next Login goes to the homeserver.
+	// Switching to password authentication must obtain a fresh login token.
 	c.InvalidateUserToken(userID)
 	return nil
 }

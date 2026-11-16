@@ -368,6 +368,7 @@ func (h *CoordinationHandler) queueClosure(ctx context.Context, e coordinationEv
 	if err = h.deps.OSS.PutObjectIfAbsent(ctx, coordinationPending+ready.ID+".json", body); err != nil && !errors.Is(err, oss.ErrPreconditionFailed) {
 		return fmt.Errorf("closure notification not durable")
 	}
+	h.wakeRunner()
 	return nil
 }
 

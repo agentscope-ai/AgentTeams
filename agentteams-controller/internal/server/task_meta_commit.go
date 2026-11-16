@@ -467,6 +467,9 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if bodyStatus == "assigned" && h.taskAssigned != nil {
+		h.taskAssigned()
+	}
 	committed, err := h.oss.StatMeta(r.Context(), key)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "stat task meta after commit: "+err.Error())

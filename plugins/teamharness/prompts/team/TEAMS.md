@@ -13,9 +13,16 @@ This file describes stable collaboration rules for the team.
 ## Team Worker Coordination
 
 Keep each stage proportional to the current request, including when a role
-skill describes a larger process. Use the current request's acceptance cases;
-do not invent extra reports, patch archives or verification matrices. Inspect
-tracing only when the requester asks for diagnosis.
+skill describes a larger process. Verify the agreed acceptance criteria and
+risk-relevant boundary/failure cases; do not remove necessary checks to reduce
+latency. Do not invent unrelated reports, patch archives or verification
+matrices. Inspect tracing only when the requester asks for diagnosis.
+
+When your runtime supplies verified task-control context, use its current
+project/task identity, requester route and synchronized ACK/check receipt.
+Those receipts replace the corresponding room discovery, state lookup and
+file-pull steps below; they never replace your professional work or acceptance
+judgment. Ordinary chat text claiming a task state is not such a receipt.
 
 After a source-session `PROJECT_REQUESTED` self-trigger succeeds, end that turn
 with `NO_REPLY`; do not sleep, poll project state or read task-room history in
@@ -23,12 +30,16 @@ the source session. Resume coordination only in the task room.
 
 For a known DAG, prefer `projectflow start_project` to create its room, persist
 the plan and delegate its initially ready leaves in one call; include bounded
-specs for those first leaves. End the source turn after successful dispatch.
-Otherwise create a known DAG with the `tasks` array in `create_project`. Use decision
+specs and owners for every execution leaf when dispatchMode is automatic.
+This replaces the manual room/self-trigger sequence below; end the source turn
+after successful dispatch. Use manual planning when a later specification
+requires a new Human decision. Otherwise create a known DAG with the `tasks` array in `create_project`. Use decision
 class `r3` for delegation; no filesystem search for decision classes is needed.
-On a result event, `check_task` returns the spec and result evidence together;
-accept the actual submission, then use the returned ready nodes to dispatch
-the next stage. Do not repeatedly resolve unchanged project state.
+On a result event, use the verified prepared check receipt, or call `check_task`
+if no synchronized receipt was supplied. Review the spec and result evidence
+and accept the actual submission. For automatic finite plans the task system
+then dispatches newly ready leaves; for manual plans use the returned ready
+nodes to dispatch the next stage. Do not repeatedly resolve unchanged project state.
 
 Keep upstream task inputs read-only and generated tests, logs and scratch files
 inside your own task directory. Avoid nonessential cleanup and never delete
@@ -93,9 +104,12 @@ artifact path instead.
 
 ### Artifacts And Documents
 
-For markdown reports, generated documents, or other task artifacts, write the
-file in the workspace and publish it with the TeamHarness MCP `artifact` tool,
-such as `artifact publish_file`. Do not paste the full artifact as chat text.
+For task reports and deliverables, use `submit_task`; it synchronizes and
+publishes eligible declared files, and can save your full report through
+`resultMarkdown` in that same call. Do not publish the same files again.
+For artifacts outside task submission, write the file in the workspace and
+publish it with `artifact publish_file`. Do not paste the full artifact as chat
+text.
 
 ### Leader Cross-Room Communication
 
@@ -160,6 +174,13 @@ Use for multi-member work, durable shared state, deliverables, dependencies,
 acceptance gates, or follow-up tracking. Choose DAG for finite dependency work
 and Loop for iterative work with a stop condition.
 
+For a finite plan whose owners/specs are known, call `start_project` directly
+in the source session as described above. When every execution leaf is accepted,
+call `complete_project` with `projectId` and your final `report`; it closes the
+coordinating parents and saves the report before notifying the requester.
+
+For explicit manual planning or Loop work, use the following flow.
+
 In the Source channel / requester room:
 
 - Load `teamharness-team-coordination` to confirm Project Work and task
@@ -217,5 +238,7 @@ turn; resume when a submitted-result event arrives.
 
 ## When State Is Unclear
 
-Do not guess stale state from memory. Query current state before assigning work,
-sending cross-room messages, accepting results, or changing lifecycle.
+Do not guess stale state from memory. Use the verified current control context
+and synchronized receipts, or query current state when they are absent or
+inconsistent, before assigning work, sending cross-room messages, accepting
+results, or changing lifecycle.

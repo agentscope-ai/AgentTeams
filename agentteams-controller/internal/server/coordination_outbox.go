@@ -84,6 +84,9 @@ func (h *CoordinationHandler) PostEvent(w http.ResponseWriter, r *http.Request) 
 				writeError(w, 409, "coordination identity already has a different payload")
 				return
 			}
+			if prefix == coordinationPending {
+				h.wakeRunner()
+			}
 			httputil.WriteJSON(w, 202, map[string]any{"accepted": true, "event_id": resolved.ID, "reused": true})
 			return
 		}
@@ -103,7 +106,17 @@ func (h *CoordinationHandler) PostEvent(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 503, "coordination queue unavailable")
 		return
 	}
+	h.wakeRunner()
 	httputil.WriteJSON(w, 202, map[string]any{"accepted": true, "event_id": resolved.ID})
+}
+
+// The durable queue remains authoritative; this local hint only avoids waiting
+// for the recovery scan. Coalescing hints is safe because each drain scans it.
+func (h *CoordinationHandler) wakeRunner() {
+	select {
+	case h.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Run resumes pending receipts after restart. CAS leases serialize replicas;
@@ -117,6 +130,7 @@ func (h *CoordinationHandler) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-h.wake:
 		}
 	}
 }
@@ -171,7 +185,11 @@ func (h *CoordinationHandler) step(ctx context.Context, key string) {
 		return
 	}
 	now := time.Now().UTC()
-	if d.LeaseUntil.After(now) || d.NextAttempt.After(now) {
+	// Admission can precede the prepared -> assigned commit. Its local wake
+	// must recheck that queued intent immediately, while real delivery errors
+	// retain their retry backoff and every execution still acquires the lease.
+	waitingAssignment := d.Status == "queued" && d.Event.Kind == "task_assigned" && d.Error == ""
+	if d.LeaseUntil.After(now) || d.NextAttempt.After(now) && !waitingAssignment {
 		return
 	}
 	d.LeaseUntil = now.Add(30 * time.Second)

@@ -292,6 +292,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Projects (workflow inspection; read from object storage) ---
 	projh := NewProjectHandler(deps.Client, deps.Namespace, deps.OSS, deps.MatrixClient)
+	projh.taskAssigned = s.coordination.wakeRunner
 	if deps.APIReader != nil {
 		projh.configReader = deps.APIReader
 	}

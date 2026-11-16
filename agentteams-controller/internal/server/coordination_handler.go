@@ -24,6 +24,7 @@ import (
 // only business state machine. Callers never supply an Agent network address.
 type CoordinationHandler struct {
 	deps         ServerDeps
+	wake         chan struct{}
 	http         *http.Client
 	workerURL    func(string, map[string]string) string
 	managerURL   func(string) string
@@ -62,7 +63,7 @@ var coordinationSafeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 var errCoordinationRejected = errors.New("coordination event does not match current task ownership or execution identity")
 
 func NewCoordinationHandler(deps ServerDeps) *CoordinationHandler {
-	h := &CoordinationHandler{deps: deps, http: &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	h := &CoordinationHandler{deps: deps, wake: make(chan struct{}, 1), http: &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	h.workerURL = func(name string, env map[string]string) string {
 		return fmt.Sprintf("http://%s%s:%s", deps.ContainerPrefix, name, service.EffectiveWorkerConsolePort(env))
 	}

@@ -55,6 +55,10 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 		return reconcile.Result{}, fmt.Errorf("query container status: %w", err)
 	}
 
+	if result == nil {
+		return reconcile.Result{}, fmt.Errorf("query container status: empty result")
+	}
+
 	desiredHash := hashAppliedManagerSpec(m.Spec)
 	specChanged := managerSpecChanged(m, desiredHash)
 
@@ -73,7 +77,10 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 		if err := wb.Delete(ctx, containerName); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete container for recreate: %w", err)
 		}
-		return r.createManagerContainer(ctx, s, wb)
+		// Delete may only schedule termination. Keep the old spec hash until a
+		// subsequent Status observes absence; never overlap Harness consumers.
+		m.Status.Ready = false
+		return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 
 	case backend.StatusStopped:
 		m.Status.Ready = false
@@ -95,12 +102,13 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 		if err := wb.Delete(ctx, containerName); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete stale container: %w", err)
 		}
-		return r.createManagerContainer(ctx, s, wb)
+		return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 
 	case backend.StatusNotFound:
 		return r.createManagerContainer(ctx, s, wb)
 
 	default:
+		m.Status.Ready = false
 		if wb.Name() == "sandbox" && result.Status == backend.StatusUnknown {
 			logger.Info("sandbox manager container in transient state, waiting",
 				"status", result.Status,
@@ -112,7 +120,7 @@ func (r *ManagerReconciler) ensureManagerContainerPresent(ctx context.Context, s
 		if err := wb.Delete(ctx, containerName); err != nil && !errors.Is(err, backend.ErrNotFound) {
 			return reconcile.Result{}, fmt.Errorf("delete container in unknown state: %w", err)
 		}
-		return r.createManagerContainer(ctx, s, wb)
+		return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 	}
 }
 

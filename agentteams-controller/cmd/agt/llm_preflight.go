@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/modelhealth"
 	"github.com/spf13/cobra"
 )
 
@@ -55,12 +56,7 @@ type llmPreflightStatusError struct {
 }
 
 func (e *llmPreflightStatusError) Error() string {
-	body := sanitizePreflightBody(e.Body, e.APIKey)
-	if body == "" {
-		return fmt.Sprintf("LLM preflight failed with HTTP %d: %s", e.StatusCode, preflightStatusHint(e.StatusCode))
-	}
-	return fmt.Sprintf("LLM preflight failed with HTTP %d: %s. Response body: %s",
-		e.StatusCode, preflightStatusHint(e.StatusCode), body)
+	return fmt.Sprintf("LLM preflight failed with HTTP %d: %s", e.StatusCode, preflightStatusHint(e.StatusCode))
 }
 
 type llmPreflightTransportError struct {
@@ -69,7 +65,7 @@ type llmPreflightTransportError struct {
 }
 
 func (e *llmPreflightTransportError) Error() string {
-	return fmt.Sprintf("LLM preflight request to %s failed: %v", e.URL, e.Err)
+	return "LLM preflight transport failed; check DNS, TLS, connectivity and timeout"
 }
 
 func (e *llmPreflightTransportError) Unwrap() error {
@@ -178,13 +174,13 @@ func resolveLLMPreflightBaseURL(provider, baseURL string) (string, error) {
 
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
-		return "", fmt.Errorf("invalid LLM base URL %q: %w", baseURL, err)
+		return "", fmt.Errorf("invalid LLM base URL")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("invalid LLM base URL %q: scheme must be http or https", baseURL)
+		return "", fmt.Errorf("invalid LLM base URL: scheme must be http or https")
 	}
 	if parsed.Host == "" {
-		return "", fmt.Errorf("invalid LLM base URL %q: host is required", baseURL)
+		return "", fmt.Errorf("invalid LLM base URL: host is required")
 	}
 	return strings.TrimRight(baseURL, "/"), nil
 }
@@ -199,6 +195,10 @@ func runLLMPreflight(ctx context.Context, opts llmPreflightOptions) error {
 	if client == nil {
 		client = &http.Client{Timeout: cfg.Timeout}
 	}
+
+	copyClient := *client
+	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client = &copyClient
 
 	var lastErr error
 	for attempt := 0; attempt <= cfg.Retries; attempt++ {
@@ -220,7 +220,7 @@ func runLLMPreflightAttempt(ctx context.Context, client *http.Client, cfg llmPre
 	endpoint := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
 	payload := map[string]interface{}{
 		"model":      cfg.Model,
-		"max_tokens": 1,
+		"max_tokens": 256,
 		"messages": []map[string]string{
 			{"role": "user", "content": "Reply with only one word: ok"},
 		},
@@ -244,10 +244,17 @@ func runLLMPreflightAttempt(ctx context.Context, client *http.Client, cfg llmPre
 	}
 	defer resp.Body.Close()
 
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 65537))
+	if readErr != nil {
+		return fmt.Errorf("LLM preflight response read failed")
+	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		reason := modelhealth.Validate(body, "chat")
+		if reason != "ok" {
+			return fmt.Errorf("LLM preflight failed: %s", reason)
+		}
 		return nil
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return &llmPreflightStatusError{
 		StatusCode: resp.StatusCode,
 		Body:       string(body),
@@ -304,17 +311,6 @@ func preflightStatusHint(status int) string {
 		}
 		return "provider rejected the preflight request"
 	}
-}
-
-func sanitizePreflightBody(body, apiKey string) string {
-	body = strings.TrimSpace(body)
-	if apiKey != "" {
-		body = strings.ReplaceAll(body, apiKey, "[REDACTED]")
-	}
-	if len(body) > 1000 {
-		body = body[:1000] + "...(truncated)"
-	}
-	return body
 }
 
 func envOrDefaultLocal(key, defaultVal string) string {

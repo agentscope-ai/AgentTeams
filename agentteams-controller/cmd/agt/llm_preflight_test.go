@@ -84,8 +84,8 @@ func TestRunLLMPreflightPostsChatCompletion(t *testing.T) {
 		if body.Model != "test-model" {
 			t.Fatalf("model=%q, want test-model", body.Model)
 		}
-		if body.MaxTokens != 1 {
-			t.Fatalf("max_tokens=%d, want 1", body.MaxTokens)
+		if body.MaxTokens != 256 {
+			t.Fatalf("max_tokens=%d, want 256", body.MaxTokens)
 		}
 		if len(body.Messages) != 1 || body.Messages[0].Role != "user" {
 			t.Fatalf("messages=%+v", body.Messages)
@@ -144,6 +144,7 @@ func TestRunLLMPreflightRetriesTransientFailure(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
 	}))
 	defer srv.Close()
 
@@ -189,9 +190,20 @@ func TestRunLLMPreflightDoesNotRetryAfterContextCancellation(t *testing.T) {
 		t.Fatalf("error=%v, want context canceled", err)
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Fatalf("calls=%d, want 1", got)
+		t.Fatalf("calls=%d, want 256", got)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("elapsed=%s, want cancellation before retry backoff finishes", elapsed)
+	}
+}
+
+func TestLLMPreflightRejectsSuccessfulHTTPBusinessErrors(t *testing.T) {
+	for _, body := range []string{`{"error":{"message":"unrelated-private-secret"}}`, `{"base_resp":{"status_code":1008}}`, `{"choices":[]}`, `{"choices":[{"message":{"reasoning_content":"thinking"}}]}`} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) }))
+		err := runLLMPreflight(context.Background(), llmPreflightOptions{APIKey: "dummy", Model: "m", BaseURL: srv.URL})
+		srv.Close()
+		if err == nil || strings.Contains(err.Error(), "unrelated-private-secret") {
+			t.Fatalf("unsafe result %v", err)
+		}
 	}
 }

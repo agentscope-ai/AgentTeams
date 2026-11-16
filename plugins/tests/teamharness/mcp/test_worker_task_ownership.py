@@ -10,6 +10,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "teamharness" / "mc
 import server
 
 
+def test_checkpoint_unavailable_does_not_terminate_the_tool_server(monkeypatch):
+    from task_recovery import Recovery, RecoveryUnavailable
+    def unavailable(*a, **kw):
+        raise RecoveryUnavailable("Task recovery request failed (HTTP 503)")
+    monkeypatch.setattr(Recovery, "checkpoint", unavailable)
+    monkeypatch.setenv("AGENTTEAMS_PROCESS_ID", "actual-start")
+    result = server.handle_request({"id": 1, "method": "tools/call", "params": {"name": "taskflow", "arguments": {
+        "action": "checkpoint_task", "payload": {"taskId": "t1", "checkpoint": {"version": 1}}}}})
+    assert json.loads(result["result"]["content"][0]["text"])["ok"] is False
+    health = server.handle_request({"id": 2, "method": "tools/call", "params": {"name": "health", "arguments": {}}})
+    assert json.loads(health["result"]["content"][0]["text"])["ok"] is True
+
+
 @pytest.mark.parametrize("progress_delivery", [None, "delivered", "pending"])
 def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supplied(tmp_path, monkeypatch, progress_delivery):
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")

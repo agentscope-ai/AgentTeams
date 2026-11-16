@@ -20,6 +20,10 @@ class RecoveryConflict(ValueError):
     pass
 
 
+class RecoveryUnavailable(ValueError):
+    """A failed request is not proof that execution ownership was lost."""
+
+
 class Recovery:
     def __init__(self, *, request=None):
         self.request = request or self._request
@@ -39,7 +43,9 @@ class Recovery:
         except urllib.error.HTTPError as error:
             if error.code in {403, 404, 409, 412}:
                 raise RecoveryConflict(error.read().decode()[:1024]) from error
-            raise
+            raise RecoveryUnavailable(f"Task recovery request failed (HTTP {error.code}); read the current Task before retrying") from error
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise RecoveryUnavailable("Task recovery connection failed; read the current Task before retrying") from error
 
     def discover(self):
         return self.request("GET", "tasks/recoverable")

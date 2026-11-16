@@ -4,10 +4,11 @@ import os
 from pathlib import Path
 import sys
 import unittest
+import urllib.error
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shared/lib"))
-from task_recovery import Recovery, RecoveryConflict, enabled
+from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable, enabled
 
 
 class RecoveryTests(unittest.TestCase):
@@ -26,6 +27,17 @@ class RecoveryTests(unittest.TestCase):
     def test_managed_standalone_boot_still_discovers_later_team_assignments(self):
         with patch.dict(os.environ, {"AGENTTEAMS_CONTROLLER_URL": "http://controller", "AGENTTEAMS_AGENT_ROLE": "standalone"}):
             self.assertTrue(enabled())
+
+    def test_temporary_controller_failure_is_a_controlled_tool_error(self):
+        failures = [urllib.error.HTTPError("http://controller", 503, "Unavailable", {}, None),
+            urllib.error.URLError("connection reset"), TimeoutError()]
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__), patch.dict(os.environ, {
+                    "AGENTTEAMS_CONTROLLER_URL": "http://controller.invalid", "AGENTTEAMS_AUTH_TOKEN_FILE": "/unused"}), \
+                    patch("task_recovery.Path.read_text", return_value="private-test-token"), \
+                    patch("task_recovery.urllib.request.urlopen", side_effect=failure):
+                with self.assertRaises(RecoveryUnavailable):
+                    Recovery()._request("GET", "tasks/recoverable")
 
     def test_session_cache_requires_harness_version_and_expiry(self):
         checkpoint = self.task["execution"]["checkpoint"]

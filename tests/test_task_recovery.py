@@ -81,6 +81,32 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(sent["delivery"], "delivered")
         self.assertEqual(sent["reply_event"], "$sent")
 
+    def test_delivered_progress_allows_next_reply_but_pending_and_submitted_do_not(self):
+        cp = self.task["execution"]["checkpoint"]
+        cp.update(result={"key": "progress.txt"}, delivery="delivered", reply_txn="progress", reply_event="$progress")
+        with patch.dict(os.environ, {"AGENTTEAMS_STORAGE_PREFIX": "alias/bucket"}), patch("task_recovery.subprocess.run"):
+            self.recovery.save_reply("stable-task", "team", "Step two done")
+        saved = self.request.call_args.args[2]["checkpoint"]
+        self.assertEqual(saved["remaining_steps"], ["two", "three"])
+        self.assertNotIn("reply_event", saved)
+        self.assertNotEqual(saved["reply_txn"], "progress")
+        for status, delivery in (("in_progress", "pending"), ("submitted", "delivered")):
+            self.task["status"] = status
+            cp["delivery"] = delivery
+            self.request.reset_mock()
+            with patch("task_recovery.subprocess.run") as upload, self.assertRaises(RecoveryConflict):
+                self.recovery.save_reply("stable-task", "team", "Do not replace")
+            upload.assert_not_called()
+
+    def test_interrupted_next_turn_does_not_hide_behind_a_delivered_progress_reply(self):
+        cp = self.task["execution"]["checkpoint"]
+        cp.update(result={"key": "progress.txt"}, delivery="delivered", reply_txn="progress", reply_event="$progress")
+        self.recovery.interrupted("stable-task", "team")
+        saved = self.request.call_args.args[2]["checkpoint"]
+        self.assertEqual(saved["operation"]["state"], "unknown")
+        self.assertEqual(saved["completed_steps"], ["one"])
+        self.assertNotIn("delivery", saved)
+
 
 if __name__ == "__main__":
     unittest.main()

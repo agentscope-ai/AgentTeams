@@ -74,7 +74,7 @@ class Recovery:
         if task is None:
             raise RecoveryConflict("Task is no longer assigned to this Worker")
         cp = dict(task["execution"].get("checkpoint") or {})
-        if cp.get("result"):
+        if cp.get("result") and (cp.get("delivery") != "delivered" or task["status"] == "submitted"):
             raise RecoveryConflict("A saved reply already exists; recover its delivery instead")
         data = text.encode()
         digest = hashlib.sha256(data).hexdigest()
@@ -82,8 +82,10 @@ class Recovery:
         # mc receives bytes on stdin; no shell or native-session format is used.
         subprocess.run(["mc", "pipe", os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/" + key],
                        input=data, check=True, capture_output=True, timeout=30)
-        cp.update(version=cp.get("version", 0) + 1, result={"key": key, "sha256": digest, "size": len(data)},
-                  delivery="pending", reply_txn="task-reply:" + hashlib.sha256(f"{team}/{task_id}/{digest}".encode()).hexdigest())
+        version = cp.get("version", 0) + 1
+        cp.pop("reply_event", None)
+        cp.update(version=version, result={"key": key, "sha256": digest, "size": len(data)},
+                  delivery="pending", reply_txn="task-reply:" + hashlib.sha256(f"{team}/{task_id}/{version}/{digest}".encode()).hexdigest())
         return self.checkpoint(task_id, team, cp)
 
     def delivered(self, task_id, team, event_id):
@@ -99,11 +101,13 @@ class Recovery:
         if task is None:
             return
         cp = dict(task["execution"].get("checkpoint") or {})
-        if cp.get("result"):
+        if cp.get("result") and cp.get("delivery") != "delivered":
             return
         operation = cp.get("operation") or {}
         if operation.get("state") in {"started", "unknown"}:
             return  # Already fenced for verification; never replace its identity.
+        for field in ("result", "delivery", "reply_txn", "reply_event"):
+            cp.pop(field, None)
         operation = {"id": "native-turn:" + self.process}
         cp.update(version=cp.get("version", 0)+1, operation={**operation, "state": "unknown"})
         return self.checkpoint(task_id, team, cp)

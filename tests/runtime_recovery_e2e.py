@@ -36,13 +36,13 @@ def state():
     return json.loads(STATE.read_text())
 
 
-def api(method, path, body=None):
+def api(method, path, body=None, *, headers=None):
     token = docker("exec", CONTROLLER, "cat", "/var/run/agentteams/cli-token")
     # OrbStack may rebind dynamically published ports on network attachment.
     port = docker("port", CONTROLLER, "8090/tcp").rsplit(":", 1)[1]
     request = urllib.request.Request("http://127.0.0.1:" + port + "/api/v1/" + path,
         data=json.dumps(body).encode() if body is not None else None, method=method,
-        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", **(headers or {})})
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
 
@@ -110,11 +110,14 @@ When recovered in generation 2 or later, continue remaining steps two and three 
 Outputs are durable in the task's shared object-storage output/ directory; pull them to your task output/ directory before submission. Do not create a new task or send messages to other members.
 The external test driver will replace your container at a step boundary without sending any new Matrix message.
 """
-    objects = {main_id + "/meta.json": json.dumps(main), task_id + "/meta.json": json.dumps(task),
-        task_id + "/spec.md": spec, task_id + "/attempts.json": "[]",
+    objects = {task_id + "/spec.md": spec, task_id + "/attempts.json": "[]",
         task_id + "/acceptance.py": (Path(__file__).parent / "fixtures/runtime_recovery_step.py").read_text()}
     for suffix, value in objects.items():
         docker("exec", "-i", CONTROLLER, "mc", "pipe", "agentteams/recovery-1631/teams/" + team + "/shared/tasks/" + suffix, text=value)
+    # Use the real conditional Task creation contract. mc pipe uses a multipart
+    # ETag even for small input; it is not a substitute for Task metadata CAS.
+    for meta in (main, task):
+        api("PUT", "tasks/" + meta["task_id"] + "/meta?team=" + team, meta, headers={"If-None-Match": "*"})
     event = {"kind": "task_assigned", "main_task_id": main_id, "task_id": task_id,
              "delivery_id": task["notifyTxn"], "text": spec}
     code = """import json,os,pathlib,urllib.request,sys

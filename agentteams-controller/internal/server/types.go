@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 )
@@ -409,6 +411,7 @@ type CreateTeamRequest struct {
 }
 
 type UpdateTeamRequest struct {
+	AdminProvided                bool                       `json:"-"`
 	TeamName                     string                     `json:"teamName,omitempty"`
 	Description                  string                     `json:"description,omitempty"`
 	Admin                        *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
@@ -427,6 +430,22 @@ type UpdateTeamRequest struct {
 	LlmAcquireTimeout            *string                    `json:"llmAcquireTimeout,omitempty"`
 	PeerMentions                 *bool                      `json:"peerMentions,omitempty"`
 	ChannelPolicy                *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
+}
+
+// An explicit null clears the admin; omission preserves the current assignment.
+func (req *UpdateTeamRequest) UnmarshalJSON(data []byte) error {
+	type request UpdateTeamRequest
+	var decoded request
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, decoded.AdminProvided = fields["admin"]
+	*req = UpdateTeamRequest(decoded)
+	return nil
 }
 
 type TeamResponse struct {

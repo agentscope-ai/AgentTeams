@@ -932,7 +932,7 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		if req.TeamName != "" {
 			team.Spec.TeamName = req.TeamName
 		}
-		if req.Admin != nil {
+		if req.AdminProvided || req.Admin != nil {
 			team.Spec.Admin = req.Admin
 		}
 		if req.HumanMembers != nil {

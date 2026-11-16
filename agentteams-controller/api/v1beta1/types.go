@@ -574,7 +574,7 @@ type TeamAdminSpec struct {
 type TeamMemberSpec struct {
 	Name         string `json:"name"`
 	MatrixUserID string `json:"matrixUserId,omitempty"`
-	Role         string `json:"role,omitempty"` // coordinator (default)
+	Role         string `json:"role,omitempty"` // coordinator (default) or member
 }
 
 type TeamStatus struct {

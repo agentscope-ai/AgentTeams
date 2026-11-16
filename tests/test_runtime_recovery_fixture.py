@@ -126,6 +126,23 @@ class EffectReceiptTests(unittest.TestCase):
             self.invoke()
         self.assertEqual(self.receipts(), [])
 
+    def test_interruption_after_external_effect_requires_readback_before_continuing(self):
+        self.task["recovery_fixture"]["pause_after_effect"] = "one"
+        with patch("time.sleep", side_effect=RuntimeError("injected process stop")):
+            with self.assertRaisesRegex(RuntimeError, "injected process stop"):
+                self.invoke()
+        self.assertEqual(self.task["execution"]["checkpoint"]["operation"]["state"], "started")
+        self.assertEqual(self.task["execution"]["checkpoint"]["completed_steps"], [])
+        self.assertEqual(len(self.receipts()), 1)
+        self.task["execution"]["generation"] = 2
+        self.process = "replacement-process"
+        self.task["execution"]["checkpoint"]["artifacts"] = None  # Controller's serialized empty slice.
+        self.invoke()
+        proof = self.ledger.proof("team", "stable")
+        self.assertEqual([row["method"] for row in proof["calls"]], ["REGISTER", "POST", "GET"])
+        self.assertEqual(len(proof["effects"]), 1)
+        self.assertEqual(self.task["execution"]["checkpoint"]["operation"]["state"], "verified")
+
 
 if __name__ == "__main__":
     unittest.main()

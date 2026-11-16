@@ -545,15 +545,59 @@ Hermes `0234f38f`
 and DeepSeek `008dd4db`
 ([43960954223](https://github.com/agentteams-group/agentteams-harness-deepseek/actions/runs/43960954223)).
 Publication was not requested. Core `c7978e24` Controller checks passed; its
-full integration run remains pending. These statuses do not pre-approve later
-evidence-only commits.
+full integration run remains pending at that older head. Core `9e4fe59a`
+Controller [43963110164](https://github.com/agentscope-ai/AgentTeams/actions/runs/43963110164)
+and full integration [43963110039](https://github.com/agentscope-ai/AgentTeams/actions/runs/43963110039)
+subsequently passed. The latter Hermes job verified both the remote Task README
+and its current nonce. This does not establish the cause of the older intermittent
+README failure or pre-approve later commits.
+
+### Case 21: reverse execution continuation passed
+
+[Case 21 proof](evidence/runtime-recovery-1631-case21-verified.json) accepted one
+real DeepSeek→Hermes in-progress replacement at the same Core/shared and Harness
+SHAs as case 20. Task `live-deepseek-harness-hermes-21` retained its identity,
+generation advanced 1→2 and checkpoint 4→10. The private ledger recorded steps
+once each, generations 1/2/2 and start versions 1/5/7. The source sent a native
+read receipt; old die/destroy preceded target creation. Without new external
+Matrix input, Hermes reconstructed a fresh native session, continued steps two
+and three, retained verified artifacts and delivered exactly one canonical reply.
+The driver checks and native source audit passed. Returning to Hermes also
+retained completed Task 20 checkpoint 11 unchanged; that delivery-only cache
+check is not active same-Task A→B→A execution acceptance.
+
+### Case 22: unresolved effect captured; recovery acceptance failed
+
+[Case 22 evidence](evidence/runtime-recovery-1631-case22-failed.json) records a
+real Hermes helper process (PID 6186, start tick 22034597) interrupted after the
+independent external effect, before its verified checkpoint/artifact. The Task
+remained in progress at checkpoint 1 with a started operation and no completed
+steps. DeepSeek claimed generation 2 but exited before verifying that outcome.
+Counts stayed 1/0/0. Its first Docker state contained a network endpoint error;
+later Docker storage was confirmed full (183G/183G), and even minimal container
+creation, image deletion and cache cleanup initially failed with ENOSPC. The
+original native exit cause is not established.
+
+The fixture now exposes this bounded after-effect barrier and verifies that a
+replacement reads the previous outcome before continuing. Thirteen local
+fixture/oracle/boundary tests pass, including interruption, outcome readback,
+no duplicate effect, and Controller serialization of an empty artifact slice.
+The common verifier also compares artifact content against the independent
+ledger. Unit results do not count as a real unknown-effect recovery pass.
+
+After explicit user authorization, 92 local AT test containers and 45 selected
+AT test/1.2.7 image references were removed, with all volumes retained. Private
+container metadata and bounded v7 logs were backed up first. Minimal container
+startup passed after cleanup. The failed Task and independent ledger remain in
+their volumes; additional repaired starts must be recorded separately and must
+not reset the Task/effect count or be called a clean two-generation acceptance.
 
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement cases 06/09/13 passed; other scenarios incomplete | untested | untested | untested | untested |
 | Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | untested | replacement case 20 passed; other scenarios incomplete | untested | untested |
 | QwenPaw | untested | untested | untested | untested | untested | untested |
-| DeepSeek | untested | untested | untested | untested | untested | untested |
+| DeepSeek | untested | replacement case 21 passed; other scenarios incomplete | untested | untested | untested | untested |
 | OpenClaw | untested | untested | untested | untested | untested | untested |
 | OpenHuman | untested | untested | untested | untested | untested | untested |
 

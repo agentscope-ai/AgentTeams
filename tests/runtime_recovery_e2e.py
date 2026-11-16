@@ -29,6 +29,9 @@ HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117013200",
                   "deepseek-harness": "recovery-1631/deepseek:local-20261117053547"}
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
+FAULT = os.getenv("RECOVERY_E2E_FAULT", "")
+if FAULT not in {"", "after-effect"}:
+    raise ValueError("Unknown recovery fault injection")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
     raise ValueError("Select a packaged recovery Harness and replace/restart mode")
 if (MODE == "restart") != (SOURCE == TARGET):
@@ -173,6 +176,8 @@ print(json.dumps(any(row.get('event')=='runtime.ready' and datetime.datetime.fro
         "task_kind": "subtask", "title": f"Run three stable steps across {SOURCE} to {TARGET}", "status": "assigned",
         "assigned_to": "@agent-a:recovery-1631.test", "room_id": room, "notifyTxn": "live-assignment-" + CASE,
         "recovery_fixture": {"oracle_version": 3, "oracle_url": "http://" + PREFIX + "-oracle:8091"}}
+    if FAULT == "after-effect":
+        task["recovery_fixture"]["pause_after_effect"] = "one"
     if oracle_proof()["effects"]:
         raise RuntimeError("This Task already has independent effects; retain its proof")
     spec = f"""You are executing a bounded real runtime-recovery acceptance task {task_id} in team {team}.
@@ -186,6 +191,8 @@ When recovered in generation 2 or later, continue remaining steps two and three 
 Outputs are durable in the task's shared object-storage output/ directory; pull them to your task output/ directory before submission. Do not create a new task or send messages to other members.
 The external test driver will replace your container at a step boundary without sending any new Matrix message.
 """
+    if FAULT == "after-effect":
+        spec += "\nFault scenario: in generation 1 the helper deliberately waits after the external effect, before its artifact/checkpoint. While that invocation runs, do not invoke it again, cancel it or manually finish its checkpoint. The driver will terminate your container. In generation 2 or later, use the same helper to verify the external outcome before continuing; never re-execute the unknown effect.\n"
     objects = {task_id + "/spec.md": spec, task_id + "/attempts.json": "[]",
         task_id + "/acceptance.py": (Path(__file__).parent / "fixtures/runtime_recovery_step.py").read_text()}
     for suffix, value in objects.items():
@@ -276,6 +283,20 @@ def assert_step_boundaries(ledger, before_version):
         raise ValueError("step boundary receipts must include a registered start and verified checkpoint per step")
 
 
+def fixture_tool_processes():
+    code = '''import pathlib,json,sys
+rows=[]
+for path in pathlib.Path('/proc').glob('[0-9]*/cmdline'):
+ try:
+  args=path.read_bytes().decode().split('\\0')
+  if sys.argv[1] in args and any(arg.endswith('/acceptance.py') or arg=='acceptance.py' for arg in args):
+   rows.append({'pid':int(path.parent.name),'start_ticks':path.with_name('stat').read_text().split()[21]})
+ except FileNotFoundError:pass
+print(json.dumps(rows))
+'''
+    return json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
+
+
 def evidence():
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     instances = []
@@ -286,6 +307,8 @@ def evidence():
             "started_at": item["State"]["StartedAt"], "finished_at": item["State"]["FinishedAt"]})
     ledger = step_ledger(task)
     result = {"recorded_at": time.time(), "task": task, "ledger": ledger, "instances": instances, "native_sessions": native_sessions()}
+    if FAULT == "after-effect":
+        result["tool_processes"] = fixture_tool_processes()
     path = Path("/tmp/1631-live-evidence.json")
     path.write_text(json.dumps(result, indent=2))
     with Path("/tmp/1631-live-" + CASE + "-evidence.jsonl").open("a") as stream:
@@ -296,7 +319,12 @@ def evidence():
 def cutover():
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     cp = task.get("execution", {}).get("checkpoint", {})
-    if task["status"] != "in_progress" or cp.get("completed_steps") != ["one"] or cp.get("remaining_steps") != ["two", "three"]:
+    if FAULT == "after-effect":
+        if (task["status"] != "in_progress" or cp.get("completed_steps") != []
+                or cp.get("operation", {}).get("state") != "started"
+                or len(step_ledger(task)) != 1 or not fixture_tool_processes()):
+            raise RuntimeError("Requires an in-flight tool after its durable external effect and before checkpoint completion")
+    elif task["status"] != "in_progress" or cp.get("completed_steps") != ["one"] or cp.get("remaining_steps") != ["two", "three"]:
         raise RuntimeError("Requires an actual durable step-one checkpoint on the active Task")
     name = PREFIX + "-worker-agent-a"
     old = json.loads(docker("inspect", name))[0]
@@ -344,7 +372,11 @@ def verify():
     cp = execution["checkpoint"]
     assert task["task_id"] == before["task"]["task_id"] == TASK_ID
     assert before["task"]["status"] == "in_progress"
-    assert before["task"]["execution"]["checkpoint"]["completed_steps"] == ["one"]
+    if FAULT == "after-effect":
+        assert before["task"]["execution"]["checkpoint"]["completed_steps"] == []
+        assert before["tool_processes"], "fault scenario must interrupt an actual tool process"
+    else:
+        assert before["task"]["execution"]["checkpoint"]["completed_steps"] == ["one"]
     assert task["status"] == "submitted" and cp["delivery"] == "delivered"
     assert cp["completed_steps"] == ["one", "two", "three"] and not cp["remaining_steps"]
     assert execution["instance_id"] != before["task"]["execution"]["instance_id"]
@@ -363,6 +395,11 @@ def verify():
         calls = oracle_proof()["calls"]
         assert len([row for row in calls if row["method"] == "POST"]) == 3
         assert all(row["accepted"] for row in calls), "Rejected effects/verification must be investigated"
+        if FAULT == "after-effect":
+            assert any(row["method"] == "GET" and row["step"] == "one" and row["process_id"] == execution["process_id"] for row in calls), "replacement must verify the old effect"
+        for row in ledger:
+            output = stored("teams/recovery-team/shared/tasks/" + TASK_ID + "/output/step-" + row["step"] + ".json")
+            assert json.loads(output) == row, "step artifact differs from the independent effect result"
     artifacts = cp["artifacts"] + [cp["result"]]
     for artifact in artifacts:
         data = stored(artifact["key"])

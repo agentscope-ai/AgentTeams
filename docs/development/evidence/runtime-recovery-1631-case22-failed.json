@@ -1,0 +1,333 @@
+{
+  "case": "22",
+  "accepted": false,
+  "scope": "real Hermes-to-DeepSeek replacement with an unresolved external effect",
+  "task_id": "live-hermes-deepseek-harness-22",
+  "sources": {
+    "core_shared": "eb52bf70d0a33c848fe6a4af72833ec553cc5ce8",
+    "hermes": "0234f38f8668d943da499d2106230e62c6226087",
+    "deepseek-harness": "008dd4db04ed32786bb4c2d9eabd32eee3a49893"
+  },
+  "before_cutover": {
+    "status": "in_progress",
+    "execution": {
+      "generation": 1,
+      "instance_id": "docker/e3053b09b1792767b9f19230fe8422baa373729d5ed3a1e8fba998c356991b46/2026-11-16T22:01:18.786526575Z",
+      "process_id": "1:1794866478922532289:058bf0827e5a48518ade0eb021da3b78",
+      "runtime": "hermes",
+      "state": "needs_verification",
+      "checkpoint": {
+        "version": 1,
+        "completed_steps": [],
+        "remaining_steps": [
+          "one",
+          "two",
+          "three"
+        ],
+        "operation": {
+          "id": "fixture:live-hermes-deepseek-harness-22:one",
+          "state": "started"
+        },
+        "artifacts": null,
+        "saved_at": "2026-11-16T22:14:24.529593938Z"
+      }
+    },
+    "ledger": [
+      {
+        "checkpoint_version": 1,
+        "executed_at_ns": 1794867264543152975,
+        "generation": 1,
+        "instance_id": "docker/e3053b09b1792767b9f19230fe8422baa373729d5ed3a1e8fba998c356991b46/2026-11-16T22:01:18.786526575Z",
+        "process_id": "1:1794866478922532289:058bf0827e5a48518ade0eb021da3b78",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-22",
+        "team_id": "recovery-team"
+      }
+    ],
+    "tool_processes": [
+      {
+        "pid": 6186,
+        "start_ticks": "22034597"
+      }
+    ]
+  },
+  "failed_target": {
+    "id": "af243a2e4933c0e87d728a6df4be18e00509181bfb1e10954e613c9771d8550a",
+    "state": {
+      "Status": "exited",
+      "Running": false,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 0,
+      "ExitCode": 1,
+      "Error": "failed to set up container networking: endpoint with name recovery-1631-live-20261117-v7-worker-agent-a already exists in network recovery-1631-live-20261117-v7-net",
+      "StartedAt": "2026-11-16T22:14:31.948061545Z",
+      "FinishedAt": "2026-11-16T22:15:40.605411808Z"
+    }
+  },
+  "last_observed_execution": {
+    "generation": 2,
+    "instance_id": "docker/af243a2e4933c0e87d728a6df4be18e00509181bfb1e10954e613c9771d8550a/2026-11-16T22:14:31.948061545Z",
+    "process_id": "7:1794867273129051545:58f9628f4d2f4dc2bdc5d87320195f21",
+    "runtime": "deepseek-harness",
+    "state": "needs_verification",
+    "checkpoint": {
+      "version": 1,
+      "completed_steps": [],
+      "remaining_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "operation": {
+        "id": "fixture:live-hermes-deepseek-harness-22:one",
+        "state": "started"
+      },
+      "artifacts": null,
+      "saved_at": "2026-11-16T22:14:24.529593938Z"
+    }
+  },
+  "independent_oracle": {
+    "calls": [
+      {
+        "accepted": true,
+        "at_ns": 1794867264513249576,
+        "method": "REGISTER",
+        "process_id": "1:1794866478922532289:058bf0827e5a48518ade0eb021da3b78",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-22",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1794867264543143475,
+        "method": "POST",
+        "process_id": "1:1794866478922532289:058bf0827e5a48518ade0eb021da3b78",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-22",
+        "team_id": "recovery-team"
+      }
+    ],
+    "effects": [
+      {
+        "checkpoint_version": 1,
+        "executed_at_ns": 1794867264543152975,
+        "generation": 1,
+        "instance_id": "docker/e3053b09b1792767b9f19230fe8422baa373729d5ed3a1e8fba998c356991b46/2026-11-16T22:01:18.786526575Z",
+        "process_id": "1:1794866478922532289:058bf0827e5a48518ade0eb021da3b78",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-22",
+        "team_id": "recovery-team"
+      }
+    ],
+    "intents": [
+      {
+        "checkpoint_version": 1,
+        "generation": 1,
+        "instance_id": "docker/e3053b09b1792767b9f19230fe8422baa373729d5ed3a1e8fba998c356991b46/2026-11-16T22:01:18.786526575Z",
+        "process_id": "1:1794866478922532289:058bf0827e5a48518ade0eb021da3b78",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-22",
+        "team_id": "recovery-team"
+      }
+    ]
+  },
+  "stop_start_events": [
+    {
+      "Type": "container",
+      "Action": "exec_create: python3 -c import pathlib,json,sys\nrows=[]\nfor path in pathlib.Path('/proc').glob('[0-9]*/cmdline'):\n try:\n  args=path.read_bytes().decode().split('\\0')\n  if sys.argv[1] in args and any(arg.endswith('/acceptance.py') or arg=='acceptance.py' for arg in args):\n   rows.append({'pid':int(path.parent.name),'start_ticks':path.with_name('stat').read_text().split()[21]})\n except FileNotFoundError:pass\nprint(json.dumps(rows))\n live-hermes-deepseek-harness-22",
+      "Actor": {
+        "ID": "e3053b09b1792767b9f19230fe8422baa373729d5ed3a1e8fba998c356991b46",
+        "Attributes": {
+          "agentteams.io/runtime": "hermes",
+          "execID": "6a5f0bf7e98dd8b17bce1161eca0a9eb14ceb531506495d3af1e8de6c50b510e",
+          "image": "recovery-1631/hermes:local-20261117053547",
+          "io.agentteams.recovery.core-sha": "eb52bf70d0a33c848fe6a4af72833ec553cc5ce8",
+          "io.agentteams.recovery.harness-sha": "0234f38f8668d943da499d2106230e62c6226087",
+          "name": "recovery-1631-live-20261117-v7-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794867268,
+      "timeNano": 1794867268445348649
+    },
+    {
+      "Type": "container",
+      "Action": "exec_start: python3 -c import pathlib,json,sys\nrows=[]\nfor path in pathlib.Path('/proc').glob('[0-9]*/cmdline'):\n try:\n  args=path.read_bytes().decode().split('\\0')\n  if sys.argv[1] in args and any(arg.endswith('/acceptance.py') or arg=='acceptance.py' for arg in args):\n   rows.append({'pid':int(path.parent.name),'start_ticks':path.with_name('stat').read_text().split()[21]})\n except FileNotFoundError:pass\nprint(json.dumps(rows))\n live-hermes-deepseek-harness-22",
+      "Actor": {
+        "ID": "e3053b09b1792767b9f19230fe8422baa373729d5ed3a1e8fba998c356991b46",
+        "Attributes": {
+          "agentteams.io/runtime": "hermes",
+          "execID": "6a5f0bf7e98dd8b17bce1161eca0a9eb14ceb531506495d3af1e8de6c50b510e",
+          "image": "recovery-1631/hermes:local-20261117053547",
+          "io.agentteams.recovery.core-sha": "eb52bf70d0a33c848fe6a4af72833ec553cc5ce8",
+          "io.agentteams.recovery.harness-sha": "0234f38f8668d943da499d2106230e62c6226087",
+          "name": "recovery-1631-live-20261117-v7-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794867268,
+      "timeNano": 1794867268448204225
+    },
+    {
+      "Type": "container",
+      "Action": "exec_die",
+      "Actor": {
+        "ID": "e3053b09b1792767b9f19230fe8422baa373729d5ed3a1e8fba998c356991b46",
+        "Attributes": {
+          "agentteams.io/runtime": "hermes",
+          "execID": "6a5f0bf7e98dd8b17bce1161eca0a9eb14ceb531506495d3af1e8de6c50b510e",
+          "exitCode": "0",
+          "image": "recovery-1631/hermes:local-20261117053547",
+          "io.agentteams.recovery.core-sha": "eb52bf70d0a33c848fe6a4af72833ec553cc5ce8",
+          "io.agentteams.recovery.harness-sha": "0234f38f8668d943da499d2106230e62c6226087",
+          "name": "recovery-1631-live-20261117-v7-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794867268,
+      "timeNano": 1794867268488884378
+    },
+    {
+      "Type": "container",
+      "Action": "kill",
+      "Actor": {
+        "ID": "e3053b09b1792767b9f19230fe8422baa373729d5ed3a1e8fba998c356991b46",
+        "Attributes": {
+          "agentteams.io/runtime": "hermes",
+          "image": "recovery-1631/hermes:local-20261117053547",
+          "io.agentteams.recovery.core-sha": "eb52bf70d0a33c848fe6a4af72833ec553cc5ce8",
+          "io.agentteams.recovery.harness-sha": "0234f38f8668d943da499d2106230e62c6226087",
+          "name": "recovery-1631-live-20261117-v7-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7",
+          "signal": "9"
+        }
+      },
+      "scope": "local",
+      "time": 1794867269,
+      "timeNano": 1794867269488600127
+    },
+    {
+      "Type": "container",
+      "Action": "die",
+      "Actor": {
+        "ID": "e3053b09b1792767b9f19230fe8422baa373729d5ed3a1e8fba998c356991b46",
+        "Attributes": {
+          "agentteams.io/runtime": "hermes",
+          "execDuration": "790",
+          "exitCode": "137",
+          "image": "recovery-1631/hermes:local-20261117053547",
+          "io.agentteams.recovery.core-sha": "eb52bf70d0a33c848fe6a4af72833ec553cc5ce8",
+          "io.agentteams.recovery.harness-sha": "0234f38f8668d943da499d2106230e62c6226087",
+          "name": "recovery-1631-live-20261117-v7-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794867269,
+      "timeNano": 1794867269812756796
+    },
+    {
+      "Type": "container",
+      "Action": "destroy",
+      "Actor": {
+        "ID": "e3053b09b1792767b9f19230fe8422baa373729d5ed3a1e8fba998c356991b46",
+        "Attributes": {
+          "agentteams.io/runtime": "hermes",
+          "image": "recovery-1631/hermes:local-20261117053547",
+          "io.agentteams.recovery.core-sha": "eb52bf70d0a33c848fe6a4af72833ec553cc5ce8",
+          "io.agentteams.recovery.harness-sha": "0234f38f8668d943da499d2106230e62c6226087",
+          "name": "recovery-1631-live-20261117-v7-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794867269,
+      "timeNano": 1794867269963936313
+    },
+    {
+      "Type": "container",
+      "Action": "create",
+      "Actor": {
+        "ID": "af243a2e4933c0e87d728a6df4be18e00509181bfb1e10954e613c9771d8550a",
+        "Attributes": {
+          "agentteams.io/runtime": "deepseek-harness",
+          "image": "recovery-1631/deepseek:local-20261117053547",
+          "io.agentteams.recovery.core-sha": "eb52bf70d0a33c848fe6a4af72833ec553cc5ce8",
+          "io.agentteams.recovery.harness-sha": "008dd4db04ed32786bb4c2d9eabd32eee3a49893",
+          "name": "recovery-1631-live-20261117-v7-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794867271,
+      "timeNano": 1794867271882082089
+    },
+    {
+      "Type": "container",
+      "Action": "extract-to-dir",
+      "Actor": {
+        "ID": "af243a2e4933c0e87d728a6df4be18e00509181bfb1e10954e613c9771d8550a",
+        "Attributes": {
+          "agentteams.io/runtime": "deepseek-harness",
+          "image": "recovery-1631/deepseek:local-20261117053547",
+          "io.agentteams.recovery.core-sha": "eb52bf70d0a33c848fe6a4af72833ec553cc5ce8",
+          "io.agentteams.recovery.harness-sha": "008dd4db04ed32786bb4c2d9eabd32eee3a49893",
+          "name": "recovery-1631-live-20261117-v7-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794867271,
+      "timeNano": 1794867271902700002
+    },
+    {
+      "Type": "container",
+      "Action": "start",
+      "Actor": {
+        "ID": "af243a2e4933c0e87d728a6df4be18e00509181bfb1e10954e613c9771d8550a",
+        "Attributes": {
+          "agentteams.io/runtime": "deepseek-harness",
+          "image": "recovery-1631/deepseek:local-20261117053547",
+          "io.agentteams.recovery.core-sha": "eb52bf70d0a33c848fe6a4af72833ec553cc5ce8",
+          "io.agentteams.recovery.harness-sha": "008dd4db04ed32786bb4c2d9eabd32eee3a49893",
+          "name": "recovery-1631-live-20261117-v7-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794867272,
+      "timeNano": 1794867272923160624
+    }
+  ],
+  "failure": "Target claimed generation 2 but exited before verifying the old effect. Checkpoint remained version 1; effect counts remained 1/0/0. The initial network error and later storage exhaustion are recorded separately; the initial native exit cause is unproved.",
+  "environment": {
+    "docker_before_cleanup": "183G used of 183G; 0 available; 100%",
+    "minimal_container_start": "overlay2 init mkdir: no space left on device",
+    "initial_cleanup_failures": [
+      "image metadata temporary file: no space left on device",
+      "BuildKit containerdmeta.db: no space left on device"
+    ],
+    "later_cleanup": "User authorized stopping all local AT test containers and deleting AT test/1.2.7 images. Removed 92 containers and 45 selected image references without deleting volumes. Bounded v7 logs and private container metadata were backed up before removal. Minimal container startup subsequently passed."
+  },
+  "acceptance_limits": [
+    "No verified outcome for the unresolved effect in this real case",
+    "No completed steps two or three and no final report",
+    "Extra repair/start attempts are not a clean two-generation acceptance",
+    "Retained Task and oracle volumes must not be reset to manufacture a pass"
+  ]
+}

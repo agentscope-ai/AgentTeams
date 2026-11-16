@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 
@@ -64,10 +65,16 @@ else:
     cp.update(version=cp.get("version", 0) + 1, completed_steps=done, remaining_steps=steps[len(done):], operation=operation)
     recovery.checkpoint(task_id, team, cp)
     data = effect("POST")
+    if task["recovery_fixture"].get("pause_after_effect") == step and task["execution"]["generation"] == 1:
+        print("FAULT_AFTER_EFFECT: waiting for process termination before publishing the checkpoint", flush=True)
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            time.sleep(1)
+        raise RuntimeError("Fault-injection barrier expired without process termination")
 write(key, data)
 digest = hashlib.sha256(data).hexdigest()
 operation.update(state="verified", evidence="Independent effect ledger; persisted output SHA256=" + digest + "; step=" + step + "; count=1")
 cp.update(version=cp["version"] + 1, completed_steps=done + [step], remaining_steps=steps[len(done) + 1:], operation=operation,
-    artifacts=cp.get("artifacts", []) + [{"key": key, "sha256": digest, "size": len(data)}])
+    artifacts=(cp.get("artifacts") or []) + [{"key": key, "sha256": digest, "size": len(data)}])
 recovery.checkpoint(task_id, team, cp)
 print(json.dumps({"step": step, "checkpoint_version": cp["version"], "remaining_steps": cp["remaining_steps"], "sha256": digest}))

@@ -455,6 +455,32 @@ async def _prepare_task_context(ctx: Any, action: str, task_id: str) -> dict[str
     return result
 
 
+def _load_role_skill(ctx: Any) -> None:
+    """Load the single explicitly configured role guide, without a model lookup."""
+    config_path = os.getenv("TEAMHARNESS_RUNTIME_CONFIG", "")
+    if not config_path:
+        return
+    try:
+        import yaml
+    except ImportError:
+        return
+    try:
+        config = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+        desired = config.get("desired", {}) if isinstance(config, dict) else {}
+        skills = desired.get("skills", []) if isinstance(desired, dict) else []
+        if not isinstance(skills, list) or len(skills) != 1 or not isinstance(skills[0], str):
+            return
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", skills[0]):
+            return
+        path = Path(config_path).resolve().parent.parent / "skills" / skills[0] / "SKILL.md"
+        text = path.read_text(encoding="utf-8")
+    except (OSError, yaml.YAMLError):
+        return
+    ctx.inject_context("Your configured role skill is already loaded; do not call Skill to read it again. "
+                       "Use it with the current task contract and protocol.\n" + text,
+                       source="teamharness_preloaded_role")
+
+
 def _load_phase_skill(ctx: Any, name: str) -> None:
     path = ASSET_DIR / "skills/team" / name / "SKILL.md"
     if path.is_file():
@@ -537,6 +563,8 @@ async def _manager_report_context(ctx: Any) -> bool:
                 ctx.inject_context("check_task has already pulled and checked this exact submission. Do not call it or filesync again for the supplied evidence. Review this complete receipt, and accept or return it with projectflow action accept_task_result, role leader, payload {projectId, taskId, submissionId, resultStatus, accepted}. The tool still enforces current identity, digest and review gates. Read more only when this receipt is truncated or genuinely insufficient.\n" + json.dumps(context, ensure_ascii=False), source="teamharness_prepared_review")
         ctx.inject_context("Authoritative task state was checked before execution: " + json.dumps({k:task.get(k) for k in ("task_id", "project_id", "status", "assigned_to", "spec_path", "result_path", "submission_id")}), source="teamharness_api_state")
     if os.getenv("AGENTTEAMS_AGENT_ROLE") != "manager":
+        if api_event.get("kind") in {"handoff", "task_assigned"}:
+            _load_role_skill(ctx)
         if api_event.get("kind") == "handoff":
             _load_phase_skill(ctx, "project-management")
         if api_event.get("kind") == "project_ready":

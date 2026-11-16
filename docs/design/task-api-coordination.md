@@ -148,3 +148,10 @@ boundary/failure checks; batching calls must not remove necessary work.
 Parallel analysis/implementation is appropriate only for a fixed original
 contract. A material ambiguity or contradictory result must be resolved before
 acceptance and downstream completion, rather than hidden to meet a timing target.
+
+For native QwenPaw assignment/planning turns, a single explicitly configured
+role skill can be loaded from the existing runtime's desired skill selection.
+The runtime does not choose a role by task/member name or preload the entire
+skill catalog. Multiple selected skills retain normal on-demand selection;
+missing role files keep the existing Skill-tool path. This changes loading,
+not the role's instructions or the task acceptance criteria.

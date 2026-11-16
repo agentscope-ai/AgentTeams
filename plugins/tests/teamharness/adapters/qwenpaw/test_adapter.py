@@ -280,3 +280,20 @@ def test_planning_preload_keeps_start_contract_and_references_full_manual_skill(
     assert "Manual and Loop reference" not in texts[0]
     assert "read the complete skill" in texts[0]
     assert len(texts[0]) < len((module.ASSET_DIR / "skills/team/project-management/SKILL.md").read_text()) / 2
+
+
+@pytest.mark.parametrize("skills,expected", [(["role-guide"], True), (["role-guide", "another"], False), (["../private"], False)])
+def test_preload_uses_only_one_explicit_runtime_role_skill(tmp_path, monkeypatch, skills, expected):
+    from types import SimpleNamespace
+    import json
+    module = load_plugin()
+    runtime = tmp_path / "runtime/runtime.yaml"; runtime.parent.mkdir()
+    runtime.write_text(json.dumps({"desired": {"skills": skills}, "credentials": {"token": "must-not-leak"}}))
+    role = tmp_path / "skills/role-guide/SKILL.md"; role.parent.mkdir(parents=True)
+    role.write_text("Review the actual implementation and verify relevant boundaries.")
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(runtime))
+    texts = []
+    module._load_role_skill(SimpleNamespace(inject_context=lambda text, **kw: texts.append(text)))
+    assert bool(texts) is expected
+    assert all("must-not-leak" not in text for text in texts)
+    if expected: assert "verify relevant boundaries" in texts[0]

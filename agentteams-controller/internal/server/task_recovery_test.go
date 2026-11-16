@@ -38,6 +38,47 @@ func TestTaskRecoveryUsesActualHarnessInsteadOfDesiredSpec(t *testing.T) {
 	}
 }
 
+func TestTaskCheckpointRetainsDurableArtifactsAndVerifiedOperation(t *testing.T) {
+	store := ossfake.NewMemory()
+	data := []byte("verified step output")
+	sum := sha256.Sum256(data)
+	artifact := taskArtifact{Key: "teams/alpha-team/shared/tasks/t1/output/one", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(data))}
+	for _, key := range []string{artifact.Key, artifact.Key + "-replacement"} {
+		if err := store.PutObject(t.Context(), key, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewTaskRecoveryHandler(newProjectTestHandler(t, store, teamWithRoster("alpha-team")), ServerDeps{})
+	old := &taskCheckpoint{Version: 1, CompletedSteps: []string{"one"}, Artifacts: []taskArtifact{artifact},
+		Operation: &taskOperation{ID: "step-one", State: "verified", Evidence: "persisted receipt SHA256=" + artifact.SHA256}}
+	for _, change := range []string{"drop-artifacts", "replace-artifact", "drop-verified-operation", "rewrite-evidence", "restart-verified-operation"} {
+		t.Run(change, func(t *testing.T) {
+			op := *old.Operation
+			next := &taskCheckpoint{Version: 2, CompletedSteps: []string{"one"}, Artifacts: []taskArtifact{artifact}, Operation: &op}
+			switch change {
+			case "drop-artifacts":
+				next.Artifacts = nil
+			case "replace-artifact":
+				next.Artifacts[0].Key += "-replacement"
+			case "rewrite-evidence":
+				next.Operation.Evidence = "test"
+			case "drop-verified-operation":
+				next.Operation = nil
+			case "restart-verified-operation":
+				next.Operation.State = "started"
+			}
+			if err := h.validateCheckpoint(t.Context(), taskMetaKey, old, next); err == nil {
+				t.Fatal("checkpoint discarded durable completion evidence")
+			}
+		})
+	}
+	next := &taskCheckpoint{Version: 2, CompletedSteps: []string{"one"}, Artifacts: []taskArtifact{artifact},
+		Operation: &taskOperation{ID: "step-two", State: "started"}}
+	if err := h.validateCheckpoint(t.Context(), taskMetaKey, old, next); err != nil {
+		t.Fatalf("retained evidence must permit the next step: %v", err)
+	}
+}
+
 func TestTaskRecoveryFencesCheckpointAndProcess(t *testing.T) {
 	ctx := context.Background()
 	store := ossfake.NewMemory()
@@ -79,7 +120,7 @@ func TestTaskRecoveryFencesCheckpointAndProcess(t *testing.T) {
 	if r := call("checkpoint", "process-one", cp); r.Code != 409 {
 		t.Fatalf("old checkpoint: %d %s", r.Code, r.Body)
 	}
-	unknown := map[string]any{"version": 2, "completed_steps": []string{"one"}, "remaining_steps": []string{"two", "three"}, "operation": map[string]any{"id": "external-write", "state": "started"}}
+	unknown := map[string]any{"version": 2, "completed_steps": []string{"one"}, "remaining_steps": []string{"two", "three"}, "artifacts": cp["artifacts"], "operation": map[string]any{"id": "external-write", "state": "started"}}
 	if r := call("checkpoint", "process-one", unknown); r.Code != 200 {
 		t.Fatalf("record operation: %d %s", r.Code, r.Body)
 	}
@@ -100,7 +141,7 @@ func TestTaskRecoveryFencesCheckpointAndProcess(t *testing.T) {
 	if r := call("checkpoint", "process-two", map[string]any{"version": 3, "completed_steps": []string{"one", "two"}}); r.Code != 409 {
 		t.Fatalf("blind replay: %d %s", r.Code, r.Body)
 	}
-	verified := map[string]any{"version": 3, "completed_steps": []string{"one", "two"}, "remaining_steps": []string{"three"}, "operation": map[string]any{"id": "external-write", "state": "verified", "evidence": "external idempotency key returned object 123"}}
+	verified := map[string]any{"version": 3, "completed_steps": []string{"one", "two"}, "remaining_steps": []string{"three"}, "artifacts": cp["artifacts"], "operation": map[string]any{"id": "external-write", "state": "verified", "evidence": "external idempotency key returned object 123"}}
 	if r := call("checkpoint", "process-two", verified); r.Code != 200 {
 		t.Fatalf("verify side effect: %d %s", r.Code, r.Body)
 	}

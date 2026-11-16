@@ -240,6 +240,18 @@ func (h *TaskRecoveryHandler) validateCheckpoint(ctx context.Context, key string
 				return fmt.Errorf("a checkpoint cannot forget completed steps")
 			}
 		}
+		retained := map[taskArtifact]bool{}
+		for _, artifact := range cp.Artifacts {
+			retained[artifact] = true
+		}
+		for _, artifact := range old.Artifacts {
+			if !retained[artifact] {
+				return fmt.Errorf("a checkpoint cannot discard persisted artifact references")
+			}
+		}
+		if old.Operation != nil && old.Operation.State == "verified" && (cp.Operation == nil || (cp.Operation.ID == old.Operation.ID && *cp.Operation != *old.Operation)) {
+			return fmt.Errorf("a verified operation cannot be restarted or its evidence rewritten")
+		}
 	}
 	for _, step := range cp.RemainingSteps {
 		if step == "" || completed[step] {

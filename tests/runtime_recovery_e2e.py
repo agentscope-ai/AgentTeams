@@ -352,7 +352,7 @@ assert sources, "source assignment has no delivered native read receipt"
 print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"external_matrix_inputs_after_stop":external,"native_read_sources":sources,
     "read_receipt_events":[r["event_id"] for r in receipts if r["content"]["m.relates_to"]["event_id"] in sources]}))
 '''
-    matrix = json.loads(docker("exec", "-i", PREFIX + "-worker-agent-a", "python3", "-c", code,
+    matrix = json.loads(docker("exec", "-i", "-e", "PYTHONPATH=/opt/agentteams/scripts/lib", PREFIX + "-worker-agent-a", "python3", "-c", code,
         text=json.dumps({"room": task["room_id"], "event": cp["reply_event"], "sha256": cp["result"]["sha256"],
             "stopped_ms": died // 1000000, "task_id": TASK_ID})))
     old_source = next(row["Actor"]["Attributes"] for row in events if row["Action"] == "die" and row["Actor"]["ID"] == old)
@@ -379,6 +379,11 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         resumed = native["hermes"][-1]
         assert resumed["session_id"] == cache["session_id"] and resumed["reused"] is True
     controller = json.loads(docker("inspect", CONTROLLER))[0]
+    current = json.loads(docker("inspect", PREFIX + "-worker-agent-a"))[0]
+    assert current["Id"] == next(row["Actor"]["ID"] for row in events
+        if row["Action"] == ("create" if MODE == "replace" else "start")
+        and ((row["Actor"]["ID"] != old) if MODE == "replace" else row["Actor"]["ID"] == old)), "additional replacement requires separate evidence"
+    assert current["Id"] in execution["instance_id"]
     sources = {"core": controller["Config"]["Labels"]["io.agentteams.recovery.core-sha"],
         "shared_contract": labels["io.agentteams.recovery.core-sha"],
         SOURCE: old_source["io.agentteams.recovery.harness-sha"], TARGET: labels["io.agentteams.recovery.harness-sha"]}

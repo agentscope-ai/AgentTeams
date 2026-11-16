@@ -47,6 +47,9 @@ real-model evidence retains its original exact source pins.
 - Checkpoints retain version, completed/remaining steps, operation identity
   and verification evidence, artifact digests, saved result and pending reply
   transaction/event. The server verifies persisted artifact bytes first.
+  Later checkpoints retain published artifact references and cannot rewrite
+  evidence or restart the same verified operation. New output revisions use
+  distinct persisted artifact keys.
 - A restart with a started/unknown operation enters `needs_verification`.
   A new checkpoint must verify that operation before recording more progress.
   Generic task metadata writes cannot forge/drop the execution record; Worker
@@ -272,6 +275,20 @@ skip, DeepSeek 63 Python plus 8 Node tests. Core server/controller/backend/OSS/
 modelhealth/service/app passed (29.484/0.489/2.353/8.202/1.123/10.048/2.126s).
 The shared role fix and refreshed dependency pins still need real-model and
 exact-head hosted reruns. No existing installation was updated.
+
+[Finalization evidence](evidence/runtime-recovery-1631-case16-finalization.json):
+the retained Task was subsequently finalized after replacing only its stopped
+test Worker with the role-fixed package: generation 3 submitted and delivered
+a report, without another step receipt. This is not accepted as a clean
+Hermes-to-DeepSeek run: the model also wrote a checkpoint that dropped artifact
+references and changed the verified operation evidence to `test`. The fixture
+Controller was still `e3788c38`, which admitted those regressions. New
+Controller regressions first failed, then the updated server suite passed
+(28.434s after the final guard). The server now rejects discarded/replaced artifact references and
+dropping, restarting or rewriting the same verified operation. That protection has not
+yet been exercised by a new real-model run. The standard verifier also rejects
+an additional unrecorded replacement instead of attributing the final process
+to the original target image.
 
 The Core integration run on `3eadbca5` completed with 24 successful jobs and
 one failed Hermes LLM-interaction shard: `test-03-assign-task` found a README

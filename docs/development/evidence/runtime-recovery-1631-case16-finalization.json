@@ -1,0 +1,267 @@
+{
+  "case": "16-finalization",
+  "full_acceptance": false,
+  "scope": "Same Task finalized after role fix; not clean cross-Harness acceptance or zero-model saved-result delivery",
+  "recorded_at": 1794859118.7768419,
+  "task": {
+    "acknowledged_by_role": "worker",
+    "assigned_at": "2026-11-16T19:27:08Z",
+    "assigned_to": "@agent-a:recovery-1631.test",
+    "conclusions": [
+      "Step one executed in generation 1 with verified output SHA256=326f8599 and effect receipt.",
+      "Step two executed in generation 2 with verified output SHA256=e58a204e and effect receipt.",
+      "Step three executed in generation 2 with verified output SHA256=43e8ca9b and effect receipt."
+    ],
+    "continuation": {
+      "delivery_id": "f8a05c8fedb055c7ffdc51a068fe20f4e91693a12a261888a3d05b628defdfcc",
+      "status": "pending"
+    },
+    "deliverables": [
+      "shared/tasks/live-hermes-deepseek-harness-16/output/step-one.json",
+      "shared/tasks/live-hermes-deepseek-harness-16/output/step-two.json",
+      "shared/tasks/live-hermes-deepseek-harness-16/output/step-three.json"
+    ],
+    "execution": {
+      "generation": 3,
+      "instance_id": "docker/464e629bdc463f698f05c984b83623ff58403671d84ca55a90c196aee65c72bd/2026-11-16T19:47:12.01826363Z",
+      "process_id": "7:1794858432126708595:be3f001488a247ffacc89f7d050d5048",
+      "runtime": "deepseek-harness",
+      "state": "active",
+      "checkpoint": {
+        "version": 15,
+        "completed_steps": [
+          "one",
+          "two",
+          "three"
+        ],
+        "remaining_steps": [],
+        "operation": {
+          "id": "fixture:live-hermes-deepseek-harness-16:three",
+          "state": "verified",
+          "evidence": "test"
+        },
+        "artifacts": null,
+        "result": {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-16/result.md",
+          "sha256": "9b6084b9ae41b30e397115a0416598422ef4bdf55020046d189e78481a4d3aa5",
+          "size": 1813
+        },
+        "delivery": "delivered",
+        "reply_txn": "task-reply:0ede49ae9c8cd706a7162ca7e2b4f480b6b1d47fe73cb02405e98846b0966d1a",
+        "reply_event": "$w5tYqYTz59iY2BgeJNG3_EsgREvoT-GllFQMxcM6l6w",
+        "saved_at": "2026-11-16T19:47:43.736702756Z"
+      }
+    },
+    "history": [
+      {
+        "action": "ack_task",
+        "actor": "worker:agent-a",
+        "from": "assigned",
+        "seq": 1,
+        "to": "in_progress",
+        "ts": "2026-11-16T19:27:08Z"
+      },
+      {
+        "action": "progress",
+        "actor": "worker:agent-a",
+        "from": "in_progress",
+        "note": "Generation 1: Step one executed and verified. PAUSED_AT_STEP_BOUNDARY confirmed. Awaiting container replacement for generation 2 to continue steps two and three.",
+        "seq": 2,
+        "to": "in_progress",
+        "ts": "2026-11-16T19:28:00Z"
+      },
+      {
+        "action": "submit_task",
+        "actor": "worker:agent-a",
+        "from": "in_progress",
+        "seq": 3,
+        "to": "submitted",
+        "ts": "2026-11-16T19:47:30Z"
+      }
+    ],
+    "history_seq": 3,
+    "main_task_id": "live-main-16",
+    "notifyTxn": "live-assignment-16",
+    "parent_task_id": "live-main-16",
+    "project_id": "",
+    "recovery_fixture": {
+      "oracle_version": 2
+    },
+    "result_digest": "42095f397c756ba1a08d9ac21f9d17d584e1ac44bc992883fa887d59ec419354",
+    "result_path": "shared/tasks/live-hermes-deepseek-harness-16/result.md",
+    "result_status": "SUCCESS",
+    "room_id": "!O2HaXivPPA0SyA72M5:recovery-1631.test",
+    "spec_path": "",
+    "status": "submitted",
+    "submission_id": "76eac96b7bec40c1b197220c62b8f19f",
+    "submitted_at": "2026-11-16T19:47:30Z",
+    "submitted_by_role": "worker",
+    "summary": "All three stable steps executed and verified across hermes to deepseek-harness recovery. Steps one (gen 1), two and three (gen 2) completed with persisted effect receipts and output artifacts.",
+    "task_id": "live-hermes-deepseek-harness-16",
+    "task_kind": "subtask",
+    "task_title": "Run three stable steps across hermes to deepseek-harness",
+    "team_id": "recovery-team",
+    "title": "Run three stable steps across hermes to deepseek-harness"
+  },
+  "ledger_unchanged": [
+    {
+      "checkpoint_version": 1,
+      "generation": 1,
+      "process_id": "1:1794857177027122962:8feea22742c64efc9799b9aed9ab678a",
+      "step": "one",
+      "task_id": "live-hermes-deepseek-harness-16"
+    },
+    {
+      "checkpoint_version": 5,
+      "generation": 2,
+      "process_id": "6:1794857313890280863:53efe23e97d94d75b7d8f4a5f4eeb9ea",
+      "step": "two",
+      "task_id": "live-hermes-deepseek-harness-16"
+    },
+    {
+      "checkpoint_version": 7,
+      "generation": 2,
+      "process_id": "6:1794857313890280863:53efe23e97d94d75b7d8f4a5f4eeb9ea",
+      "step": "three",
+      "task_id": "live-hermes-deepseek-harness-16"
+    }
+  ],
+  "original_artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-16/output/step-one.json",
+      "sha256": "326f8599764a10dc4312dea16608b800ae506d3fc5dbc88d152b1cb481016b56",
+      "size": 175
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-16/output/step-two.json",
+      "sha256": "e58a204e8783129f1d5eb19d81afee820ef97704231b53c3f660e5898db36597",
+      "size": 175
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-16/output/step-three.json",
+      "sha256": "43e8ca9b3eb5be22745a5db610eb651fb27f336a296201b5cf6d4353d942453d",
+      "size": 177
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-16/result.md",
+      "sha256": "9b6084b9ae41b30e397115a0416598422ef4bdf55020046d189e78481a4d3aa5",
+      "size": 1813
+    }
+  ],
+  "matrix": {
+    "reply_event": "$w5tYqYTz59iY2BgeJNG3_EsgREvoT-GllFQMxcM6l6w",
+    "canonical_body_verified": true,
+    "report_copies": 1,
+    "history_events_checked": 358
+  },
+  "sources": {
+    "controller": "e3788c38da670c5f1d26a0985df193d0a277f3be",
+    "shared_contract": "9bdbbe92c294d0dcca2aeed5478fcf29452f3a42",
+    "deepseek-harness": "035da1839459d03c47a30cef9a17cfa210bb0196"
+  },
+  "before_retry": {
+    "scope": "Finalization retry after the retained execution-only failure, not clean cross-Harness acceptance or no-model saved-result redelivery",
+    "task": {
+      "acknowledged_by_role": "worker",
+      "assigned_at": "2026-11-16T19:27:08Z",
+      "assigned_to": "@agent-a:recovery-1631.test",
+      "execution": {
+        "generation": 2,
+        "instance_id": "docker/42c7f80a19cd35feed3a0ef86f461cd24fbd8bfdacd40465e8aaf139c66a8bcb/2026-11-16T19:28:33.75841143Z",
+        "process_id": "6:1794857313890280863:53efe23e97d94d75b7d8f4a5f4eeb9ea",
+        "runtime": "deepseek-harness",
+        "state": "active",
+        "checkpoint": {
+          "version": 12,
+          "completed_steps": [
+            "one",
+            "two",
+            "three"
+          ],
+          "remaining_steps": [],
+          "operation": {
+            "id": "fixture:live-hermes-deepseek-harness-16:three",
+            "state": "verified",
+            "evidence": "test"
+          },
+          "artifacts": null,
+          "result": {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-16/checkpoints/reply-2d620af68859fa2449de400f6757cbd99262c7931d106b410b36e0e669b0768e.txt",
+            "sha256": "2d620af68859fa2449de400f6757cbd99262c7931d106b410b36e0e669b0768e",
+            "size": 928
+          },
+          "delivery": "delivered",
+          "reply_txn": "task-reply:6336f9b66a31dfb3612bfe482e58e9520a59b198498e855d5188126d1fa79fda",
+          "reply_event": "$SXznC60CwcIh-cSBVglSfdvokGH3TypobljjOkYdDKc",
+          "saved_at": "2026-11-16T19:38:33.016742225Z"
+        }
+      },
+      "history": [
+        {
+          "action": "ack_task",
+          "actor": "worker:agent-a",
+          "from": "assigned",
+          "seq": 1,
+          "to": "in_progress",
+          "ts": "2026-11-16T19:27:08Z"
+        },
+        {
+          "action": "progress",
+          "actor": "worker:agent-a",
+          "from": "in_progress",
+          "note": "Generation 1: Step one executed and verified. PAUSED_AT_STEP_BOUNDARY confirmed. Awaiting container replacement for generation 2 to continue steps two and three.",
+          "seq": 2,
+          "to": "in_progress",
+          "ts": "2026-11-16T19:28:00Z"
+        }
+      ],
+      "history_seq": 2,
+      "main_task_id": "live-main-16",
+      "notifyTxn": "live-assignment-16",
+      "parent_task_id": "live-main-16",
+      "project_id": "",
+      "recovery_fixture": {
+        "oracle_version": 2
+      },
+      "room_id": "!O2HaXivPPA0SyA72M5:recovery-1631.test",
+      "spec_path": "",
+      "status": "in_progress",
+      "task_id": "live-hermes-deepseek-harness-16",
+      "task_kind": "subtask",
+      "task_title": "Run three stable steps across hermes to deepseek-harness",
+      "team_id": "recovery-team",
+      "title": "Run three stable steps across hermes to deepseek-harness"
+    },
+    "ledger": [
+      {
+        "checkpoint_version": 1,
+        "generation": 1,
+        "process_id": "1:1794857177027122962:8feea22742c64efc9799b9aed9ab678a",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-16"
+      },
+      {
+        "checkpoint_version": 5,
+        "generation": 2,
+        "process_id": "6:1794857313890280863:53efe23e97d94d75b7d8f4a5f4eeb9ea",
+        "step": "two",
+        "task_id": "live-hermes-deepseek-harness-16"
+      },
+      {
+        "checkpoint_version": 7,
+        "generation": 2,
+        "process_id": "6:1794857313890280863:53efe23e97d94d75b7d8f4a5f4eeb9ea",
+        "step": "three",
+        "task_id": "live-hermes-deepseek-harness-16"
+      }
+    ],
+    "old_container": "42c7f80a19cd35feed3a0ef86f461cd24fbd8bfdacd40465e8aaf139c66a8bcb",
+    "old_stopped_at": "2026-11-16T19:40:14.975088936Z",
+    "recorded_at": 1794858430.048214
+  },
+  "final_instance": {
+    "id": "464e629bdc463f698f05c984b83623ff58403671d84ca55a90c196aee65c72bd",
+    "started_at": "2026-11-16T19:47:12.01826363Z"
+  },
+  "remaining_failure": "Final checkpoint discarded artifact references and rewrote verified operation evidence; the old fixture Controller admitted it"
+}

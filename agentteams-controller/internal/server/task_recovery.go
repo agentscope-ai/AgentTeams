@@ -140,8 +140,12 @@ func recoveryStatus(task map[string]json.RawMessage) bool {
 // Namespace is fixed by this Controller and teams come from the bearer identity.
 func (h *TaskRecoveryHandler) ListRecoverableTasks(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
-	if !recoveryCaller(caller) {
+	if caller == nil || (caller.Role != authpkg.RoleWorker && caller.Role != authpkg.RoleTeamLeader) {
 		writeError(w, 403, "team worker identity required")
+		return
+	}
+	if caller.Team == "" {
+		httputil.WriteJSON(w, 200, map[string]any{"tasks": []any{}})
 		return
 	}
 	instance, runtime, err := h.instance(r.Context(), caller)

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shared/lib"))
-from task_recovery import Recovery, RecoveryConflict
+from task_recovery import Recovery, RecoveryConflict, enabled
 
 
 class RecoveryTests(unittest.TestCase):
@@ -22,6 +22,10 @@ class RecoveryTests(unittest.TestCase):
             {"task": self.task, "team_id": "team", "etag": "read-version"}]}
         self.request = Mock(return_value=self.snapshot)
         self.recovery = Recovery(request=self.request)
+
+    def test_managed_standalone_boot_still_discovers_later_team_assignments(self):
+        with patch.dict(os.environ, {"AGENTTEAMS_CONTROLLER_URL": "http://controller", "AGENTTEAMS_AGENT_ROLE": "standalone"}):
+            self.assertTrue(enabled())
 
     def test_session_cache_requires_harness_version_and_expiry(self):
         checkpoint = self.task["execution"]["checkpoint"]

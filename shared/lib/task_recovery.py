@@ -143,4 +143,4 @@ class Recovery:
 
 def enabled():
     return bool(os.getenv("AGENTTEAMS_CONTROLLER_URL") and os.getenv("AGENTTEAMS_PROCESS_ID")
-                and os.getenv("AGENTTEAMS_AGENT_ROLE", "worker") in {"worker", "remote-member", "leader", "team_leader"})
+                and os.getenv("AGENTTEAMS_AGENT_ROLE", "worker") in {"standalone", "worker", "remote-member", "leader", "team_leader"})

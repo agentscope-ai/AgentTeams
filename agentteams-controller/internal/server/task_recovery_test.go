@@ -125,3 +125,13 @@ func TestRecoverableTasksOnlyReturnsOwnAssignments(t *testing.T) {
 		t.Fatalf("scope leaked: %s (%v)", w.Body, err)
 	}
 }
+
+func TestStandaloneWorkerDiscoveryIsEmptyWithoutInspectingStorageOrBackend(t *testing.T) {
+	h := NewTaskRecoveryHandler(nil, ServerDeps{})
+	r := withCaller(httptest.NewRequest("GET", "/api/v1/tasks/recoverable", nil), &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "solo"})
+	w := httptest.NewRecorder()
+	h.ListRecoverableTasks(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"tasks":[]`) {
+		t.Fatalf("standalone discovery: %d %s", w.Code, w.Body)
+	}
+}

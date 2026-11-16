@@ -18,6 +18,10 @@ risk-relevant boundary/failure cases; do not remove necessary checks to reduce
 latency. Do not invent unrelated reports, patch archives or verification
 matrices. Inspect tracing only when the requester asks for diagnosis.
 
+When producing executable deliverables, implement the requested interfaces.
+Keep validation harnesses in your task workspace; do not add a shipped CLI,
+API or adapter merely to exercise an interface the requester already specified.
+
 When your runtime supplies verified task-control context, use its current
 project/task identity, requester route and synchronized ACK/check receipt.
 Those receipts replace the corresponding room discovery, state lookup and

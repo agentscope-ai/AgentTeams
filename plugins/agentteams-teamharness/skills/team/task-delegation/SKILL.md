@@ -184,11 +184,13 @@ DELIVERABLES:
 - shared/tasks/{task-id}/path
 ```
 
-For report-style tasks, let the Worker write the full report directly to
-`shared/tasks/{task-id}/result.md` before calling `submit_task`. The tool
-records structured status in task metadata and does not create or rewrite
-`result.md`. Do not treat `result.md` as only a short envelope when it is the
-expected deliverable.
+For report-style tasks, require one full report with actual findings and
+verification evidence. Your Worker can save it in the submission call with
+`submit_task.resultMarkdown`; use `resultPath` too when a specific task-scoped
+filename is required. An existing complete report can be referenced by
+`resultPath` alone. Do not require a separate duplicate completion document or
+an extra write before submission, and do not reduce the requested report to
+only a short envelope.
 
 Accepted statuses are:
 

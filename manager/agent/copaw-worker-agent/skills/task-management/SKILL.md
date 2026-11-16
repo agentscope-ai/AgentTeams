@@ -31,7 +31,7 @@ shared/tasks/{task-id}/progress/
 shared/tasks/{task-id}/<deliverables>
 ```
 
-`taskflow` owns `shared/tasks/{task-id}/result.md` and `meta.json`. Do not hand-edit either file. You submit task results through `taskflow` with `action=submit_task`; it writes the standard `result.md` protocol for you.
+`taskflow` owns `meta.json`; do not hand-edit task state. After executing and reviewing your work, submit the full final report with `action=submit_task` and `payload.resultMarkdown`. The default destination is `shared/tasks/{task-id}/result.md`. For a requested report filename, also supply `payload.resultPath`; for a complete report already written during the work, supply its `resultPath` without regenerating its body. Keep one canonical report instead of duplicating it in another completion document.
 
 `ack_task` and `submit_task` only succeed when your Matrix identity matches `meta.json.assigned_to`. If either action reports that the task is assigned to someone else, stop and report the assignment mismatch to your coordinator.
 
@@ -58,7 +58,7 @@ Do not edit project-level `shared/projects/{project-id}/plan.md` or `meta.json` 
    `meta.json.room_id` is the task's assignment and delivery room. Use it only when cross-room delivery is truly needed. If it is missing, stop and report a blocker in the current session instead of guessing another room.
 
 3. Execute the task. Keep deliverables inside `shared/tasks/{task-id}/`.
-4. Submit the task result with `taskflow`. This writes `shared/tasks/{task-id}/result.md`, marks local task state submitted, pushes the task directory to storage, and verifies `result.md` exists on storage:
+4. Submit the task result with `taskflow`. This saves the supplied report, marks local task state submitted, and synchronizes the canonical report and declared outputs to storage:
 
    ```json
    {

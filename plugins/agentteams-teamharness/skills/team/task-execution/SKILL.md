@@ -128,7 +128,16 @@ files.
 Supply your complete report as `payload.resultMarkdown` in `submit_task` to
 save `shared/tasks/{task-id}/result.md` and submit it in one call. Include the
 actual findings and verification evidence; this does not run tests for you.
+After you have reviewed the actual execution results, generate the final
+report in this submission call instead of a separate `write_file` call.
+When a particular report filename is required, supply that path as `resultPath`
+alongside the full `resultMarkdown`; the tool writes that exact requested file.
 For report-style tasks, supply the full requested report, not just a summary.
+When verifying work, use the original contract and implementation to identify
+relevant valid-input limits and failure boundaries, rather than treating the
+example acceptance cases as exhaustive. Resolve conflicting derived requirements
+against the original request. Record actual coverage and remaining limitations;
+passing the executed checks does not prove that no defects exist.
 If no separate report filename was requested, use this canonical report
 instead of also writing a duplicate completion document. If you already wrote
 the report, omit `resultMarkdown` to preserve it. If it has a different requested
@@ -259,12 +268,13 @@ an identity or try to resolve the legacy task yourself.
 Submitting ends the task. Do not keep editing the old task after submission
 unless the Leader assigns a new task.
 
-If you already wrote a detailed `shared/tasks/{task-id}/result.md`, include that
-path in `deliverables`; do not replace the report with only a short summary.
+If a complete report already exists from an earlier work step, identify it with
+`resultPath` instead of generating it again; do not replace its evidence with
+only a short summary.
 Do not include `shared/projects/...` paths in `deliverables`.
 
 When Matrix room context is available, `submit_task` automatically publishes
-`shared/tasks/{task-id}/result.md` and eligible deliverable files under the
+the canonical report and eligible deliverable files under the
 current task directory as Matrix `m.file` events. Check `publishedArtifacts` in
 the tool result for published, skipped, or failed artifact status. Do not upload
 task artifacts manually with `message` just to make them appear in the room

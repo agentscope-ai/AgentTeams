@@ -51,6 +51,101 @@ func TestMatrixAssignmentCarriesMentionsAndCanonicalPrerequisites(t *testing.T) 
 	}
 }
 
+func TestMatrixReviewWaitsForDurableAcceptanceAndQueuesMatrixClosure(t *testing.T) {
+	t.Setenv("AGENTTEAMS_COORDINATION_TRANSPORT", "matrix")
+	h, store := coordinationFixture(t)
+	key := "teams/alpha/shared/projects/p1/meta.json"
+	b, _ := store.GetObject(context.Background(), key)
+	var p map[string]any
+	_ = json.Unmarshal(b, &p)
+	p["dispatch_mode"] = "automatic"
+	p["tasks"] = []any{map[string]any{"task_id": "t1", "status": "submitted"}}
+	putProject(store, key, p)
+	task := map[string]any{"task_id": "t1", "project_id": "p1", "status": "submitted", "assigned_to": "@worker:test", "submission_id": "submission-1"}
+	putProject(store, "teams/alpha/shared/tasks/t1/meta.json", task)
+	e, err := h.resolve(context.Background(), coordinationEvent{Kind: "task_submitted", ProjectID: "p1", TaskID: "t1", SubmissionID: "submission-1"}, &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "worker-cr", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := coordinationDelivery{Event: e, Transport: "matrix", Status: "running", NativeID: "matrix:$review", MatrixEventID: "$review"}
+	h.advance(context.Background(), &d, func() error { return nil })
+	if d.Status != "running" {
+		t.Fatal("message delivery was mistaken for acceptance")
+	}
+	task["status"] = "completed"
+	putProject(store, "teams/alpha/shared/tasks/t1/meta.json", task)
+	p["tasks"] = []any{map[string]any{"task_id": "t1", "status": "completed"}}
+	putProject(store, key, p)
+	h.advance(context.Background(), &d, func() error { return nil })
+	ready, err := h.resolve(context.Background(), coordinationEvent{Kind: "project_ready", ProjectID: "p1"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := store.GetObject(context.Background(), coordinationPending+ready.ID+".json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var closure coordinationDelivery
+	_ = json.Unmarshal(data, &closure)
+	if d.Status != "completed" || closure.Transport != "matrix" {
+		t.Fatalf("review=%s closure=%+v", d.Status, closure)
+	}
+}
+
+func TestMatrixFinalRelaysCanonicalReportWithoutManagerExecution(t *testing.T) {
+	h, store := coordinationFixture(t)
+	key := "teams/alpha/shared/projects/p1/meta.json"
+	b, _ := store.GetObject(context.Background(), key)
+	var p map[string]any
+	_ = json.Unmarshal(b, &p)
+	p["status"] = "completed"
+	putProject(store, key, p)
+	_ = store.PutObject(context.Background(), "teams/alpha/shared/projects/p1/result.md", []byte("Saved accepted report"))
+	e, err := h.resolve(context.Background(), coordinationEvent{Kind: "project_completed", ProjectID: "p1", Text: "untrusted report"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("final relay called Manager execution API") }))
+	defer native.Close()
+	h.managerURL = func(string) string { return native.URL }
+	calls := 0
+	h.projectEvent = func(_ context.Context, _ coordinationEvent, kind, name, room, txn, text string) (string, error) {
+		calls++
+		if kind != "manager" || name != "default" || room != "!source:test" || text != "Saved accepted report" {
+			t.Fatal("wrong report identity or route")
+		}
+		return "$final", nil
+	}
+	d := coordinationDelivery{Event: e, Transport: "matrix", Status: "queued"}
+	h.advance(context.Background(), &d, func() error { return nil })
+	if d.Status != "completed" || d.UserEventID != "$final" || calls != 1 {
+		t.Fatalf("final not delivered: %+v", d)
+	}
+}
+
+func TestMatrixFinalCannotInventMissingReport(t *testing.T) {
+	h, store := coordinationFixture(t)
+	key := "teams/alpha/shared/projects/p1/meta.json"
+	b, _ := store.GetObject(context.Background(), key)
+	var p map[string]any
+	_ = json.Unmarshal(b, &p)
+	p["status"] = "completed"
+	putProject(store, key, p)
+	e, err := h.resolve(context.Background(), coordinationEvent{Kind: "project_completed", ProjectID: "p1", Text: "caller supplied report"}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.projectEvent = func(context.Context, coordinationEvent, string, string, string, string, string) (string, error) {
+		t.Fatal("missing canonical report was projected as success")
+		return "", nil
+	}
+	d := coordinationDelivery{Event: e, Transport: "matrix", Status: "queued"}
+	h.advance(context.Background(), &d, func() error { return nil })
+	if d.Status != "failed" || d.Error != "no saved final user report" {
+		t.Fatalf("missing report not visible: %+v", d)
+	}
+}
+
 func TestMatrixAssignmentTracksAckAndSubmissionWithoutWorkerExecutionHTTP(t *testing.T) {
 	h, store := coordinationFixture(t)
 	native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

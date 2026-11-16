@@ -166,10 +166,27 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 			return
 		}
 		if d.Transport == "matrix" {
+			if e.Kind == "project_completed" {
+				// The canonical completed state/report was re-read by resolve above.
+				// Relay as the registered Manager without opening another Agent turn.
+				if strings.TrimSpace(e.FinalReport) == "" {
+					d.Status = "failed"
+					d.Error = "no saved final user report"
+					return
+				}
+				id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", e.FinalReport)
+				if sendErr != nil {
+					d.Error = "final user projection unavailable"
+					return
+				}
+				d.UserEventID, d.MatrixEventID = id, id
+				d.Status, d.Error = "completed", ""
+				return
+			}
 			// Matrix transaction IDs make an uncertain send safe to retry.
-			id, sendErr := h.sendMatrixContent(ctx, e.ActorRole, e.ActorName, e.RoomID, e.ID, coordinationMatrixAssignment(e, p), false)
+			id, sendErr := h.sendMatrixContent(ctx, e.ActorRole, e.ActorName, e.RoomID, e.ID, coordinationMatrixNotification(e, p), false)
 			if sendErr != nil {
-				d.Error = "Matrix assignment unavailable"
+				d.Error = "Matrix coordination notification unavailable"
 				return
 			}
 			d.NativeID, d.MatrixEventID = "matrix:"+id, id
@@ -199,25 +216,41 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 		return
 	}
 	if d.Transport == "matrix" {
-		h.projectApprovals(ctx, e, d)
-		if status := coordinationString(t, "status"); status == "cancelled" || status == "revision" || status == "blocked" {
-			d.Status, d.Error = "ignored", "assignment no longer executable"
-			return
-		}
-		if status := coordinationString(t, "status"); status == "in_progress" || status == "submitted" || status == "completed" {
-			if d.AckEventID == "" {
-				id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, e.RoomID, e.ID+"-ack", "已接收「"+coordinationTaskTitle(e, p)+"」，开始处理。")
-				if sendErr != nil {
+		switch e.Kind {
+		case "task_assigned":
+			h.projectApprovals(ctx, e, d)
+			status := coordinationString(t, "status")
+			if status == "cancelled" || status == "revision" || status == "blocked" {
+				d.Status, d.Error = "ignored", "assignment no longer executable"
+				return
+			}
+			if status == "in_progress" || status == "submitted" || status == "completed" {
+				if d.AckEventID == "" {
+					id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, e.RoomID, e.ID+"-ack", "已接收「"+coordinationTaskTitle(e, p)+"」，开始处理。")
+					if sendErr != nil {
+						return
+					}
+					d.AckEventID, d.Error = id, ""
+				}
+				if status != "in_progress" {
+					d.Status = "completed"
+				}
+			}
+		case "task_submitted":
+			if coordinationString(t, "status") == "submitted" {
+				return
+			}
+			if coordinationString(t, "status") == "completed" {
+				if err := h.queueClosure(ctx, e, p); err != nil {
+					d.Error = err.Error()
 					return
 				}
-				d.AckEventID, d.Error = id, ""
 			}
-			if status != "in_progress" {
-				d.Status = "completed"
-			}
+			d.Status, d.Error = "completed", ""
 		}
-		return // Track execution/approvals through submission without Worker HTTP execution calls.
+		return // Business state, not delivery or a model response, proves acceptance/closure.
 	}
+
 	if d.MatrixEventID == "" {
 		label := map[string]string{"handoff": "已交接", "task_assigned": "已派发", "task_submitted": "已提交，待验收", "project_ready": "执行任务已验收，开始汇总", "project_completed": "已完成，正在回报"}[e.Kind]
 		id, err := h.projectEvent(ctx, e, e.ActorRole, e.ActorName, e.RoomID, e.ID, label+" · "+coordinationLabel(e))
@@ -301,31 +334,43 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 			d.Error = "closure state unavailable"
 			return
 		}
-		if coordinationReady(latestProject) {
-			ready, resolveErr := h.resolve(ctx, coordinationEvent{Kind: "project_ready", ProjectID: e.ProjectID}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: e.RecipientName, Team: e.Team})
-			if resolveErr != nil {
-				d.Error = "closure recipient unavailable"
-				return
-			}
-			if _, archiveErr := h.deps.OSS.GetObject(ctx, coordinationDone+ready.ID+".json"); archiveErr == nil {
-				d.Status = "completed"
-				d.Error = ""
-				return
-			} else if !errors.Is(archiveErr, os.ErrNotExist) {
-				d.Error = "closure receipt unavailable"
-				return
-			}
-			next := coordinationDelivery{Event: ready, Status: "queued", Created: time.Now().UTC()}
-			body, _ := json.Marshal(next)
-			if queueErr := h.deps.OSS.PutObjectIfAbsent(ctx, coordinationPending+ready.ID+".json", body); queueErr != nil && !errors.Is(queueErr, oss.ErrPreconditionFailed) {
-				d.Error = "closure notification not durable"
-				return
-			}
+		if err := h.queueClosure(ctx, e, latestProject); err != nil {
+			d.Error = err.Error()
+			return
 		}
 	}
+
 	d.Status = "completed"
 	d.Error = ""
 }
+func coordinationTransport(kind string) string {
+	if os.Getenv("AGENTTEAMS_COORDINATION_TRANSPORT") == "matrix" && kind != "handoff" {
+		return "matrix"
+	}
+	return ""
+}
+
+func (h *CoordinationHandler) queueClosure(ctx context.Context, e coordinationEvent, p map[string]any) error {
+	if !coordinationReady(p) {
+		return nil
+	}
+	ready, err := h.resolve(ctx, coordinationEvent{Kind: "project_ready", ProjectID: e.ProjectID}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: e.RecipientName, Team: e.Team})
+	if err != nil {
+		return fmt.Errorf("closure recipient unavailable")
+	}
+	if _, err = h.deps.OSS.GetObject(ctx, coordinationDone+ready.ID+".json"); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("closure receipt unavailable")
+	}
+	next := coordinationDelivery{Event: ready, Transport: coordinationTransport(ready.Kind), Status: "queued", Created: time.Now().UTC()}
+	body, _ := json.Marshal(next)
+	if err = h.deps.OSS.PutObjectIfAbsent(ctx, coordinationPending+ready.ID+".json", body); err != nil && !errors.Is(err, oss.ErrPreconditionFailed) {
+		return fmt.Errorf("closure notification not durable")
+	}
+	return nil
+}
+
 func lenAny(value any) int { list, _ := value.([]any); return len(list) }
 func coordinationLabel(e coordinationEvent) string {
 	if e.TaskID != "" {
@@ -374,6 +419,23 @@ func coordinationMatrixAssignment(e coordinationEvent, p map[string]any) map[str
 	formatted := strings.ReplaceAll(html.EscapeString(body), html.EscapeString(e.Recipient), `<a href="https://matrix.to/#/`+url.PathEscape(e.Recipient)+`">`+html.EscapeString(strings.Split(e.Recipient, ":")[0])+`</a>`)
 	return map[string]any{"msgtype": "m.text", "body": body, "format": "org.matrix.custom.html", "formatted_body": formatted, "m.mentions": map[string]any{"user_ids": []string{e.Recipient}}, "org.agentteams.coordination": coordinationPayload(e)}
 }
+func coordinationMatrixNotification(e coordinationEvent, p map[string]any) map[string]any {
+	content := coordinationMatrixAssignment(e, p)
+	caption := ""
+	switch e.Kind {
+	case "task_submitted":
+		caption = "「" + coordinationTaskTitle(e, p) + "」已提交结果，请检查本次提交并验收。"
+	case "project_ready":
+		caption = "所有执行环节已验收，请汇总最终结果并完成本次任务。"
+	}
+	if caption != "" {
+		body := e.Recipient + " " + caption
+		content["body"] = body
+		content["formatted_body"] = strings.ReplaceAll(html.EscapeString(body), html.EscapeString(e.Recipient), `<a href="https://matrix.to/#/`+url.PathEscape(e.Recipient)+`">`+html.EscapeString(strings.Split(e.Recipient, ":")[0])+`</a>`)
+	}
+	return content
+}
+
 func coordinationAssistantText(result map[string]any) string {
 	var texts []string
 	messages, _ := result["output"].([]any)

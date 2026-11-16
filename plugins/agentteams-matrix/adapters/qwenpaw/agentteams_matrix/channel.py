@@ -2548,8 +2548,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 return
             if not isinstance(control_text, str):
                 return
-            expected_session = "coordination-task:" + str(assignment.get("task_id", "")) + ":" + str(assignment.get("delivery_id", ""))
-            if (assignment.get("kind") != "task_assigned"
+            expected_session = {
+                "task_assigned": "coordination-task:" + str(assignment.get("task_id", "")) + ":" + str(assignment.get("delivery_id", "")),
+                "task_submitted": "coordination-review:" + str(assignment.get("task_id", "")) + ":" + str(assignment.get("submission_id", "")),
+                "project_ready": "coordination-close:" + str(assignment.get("project_id", "")),
+            }.get(assignment.get("kind"))
+            if (expected_session is None
                     or control_meta.get("sender_id") != event.sender
                     or control_meta.get("agent_matrix_user_id") != self._user_id
                     or control_meta.get("room_id") != room.room_id
@@ -2560,6 +2564,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
         teamharness_self_trigger = None
         if sender_id == self._user_id:
             teamharness_self_trigger = self._teamharness_self_trigger(room_id, event)
+            if control is not None and assignment.get("kind") == "project_ready":
+                # The runtime hook verifies this self-addressed closure against
+                # the Controller receipt and accepted leaf state before inference.
+                teamharness_self_trigger = {"type": "project_ready", "kind": "coordination"}
 
         # Skip own messages early
         if sender_id == self._user_id and teamharness_self_trigger is None:

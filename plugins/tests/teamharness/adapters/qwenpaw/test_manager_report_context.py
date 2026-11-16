@@ -158,3 +158,23 @@ def test_only_automatic_finite_acceptance_ends_the_review_turn(monkeypatch,plan_
     assert asyncio.run(plugin._manager_report_context(ctx)) is False
     assert ('review_task_token' in ctx.extras) is finish_review
     if not finish_review:assert any('continue' in t.lower() and ('manual' in t.lower() or 'loop' in t.lower()) for t in texts)
+
+
+@pytest.mark.parametrize("kind", ["task_submitted", "project_ready"])
+@pytest.mark.parametrize("forged", [False, True])
+def test_matrix_acceptance_and_closure_require_own_controller_receipt(monkeypatch, kind, forged):
+    spec = importlib.util.spec_from_file_location("matrix_review_plugin", SOURCE)
+    plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "leader")
+    event = {"id":"receipt", "kind":kind, "task_id":"t" if kind == "task_submitted" else "", "project_id":"p", "submission_id":"s" if kind == "task_submitted" else ""}
+    def read(path):
+        if path.startswith("coordination/"):
+            return {**event, "actor":"@impostor:test" if forged else "@sender:test", "recipient":"@leader:test"}
+        if path.startswith("tasks/"):
+            return {"task_id":"t", "project_id":"p", "status":"submitted", "submission_id":"s"}
+        return {"status":"active", "tasks":[{"task_id":"t", "status":"completed"}]}
+    monkeypatch.setattr(plugin, "_controller_json", read)
+    async def schemas(): return []
+    ctx = SimpleNamespace(request=SimpleNamespace(channel_meta={"teamharness_matrix_coordination":True, "sender_id":"@sender:test", "agent_matrix_user_id":"@leader:test", "teamharness_coordination":event}),
+        extras={}, agent=SimpleNamespace(toolkit=SimpleNamespace(get_tool_schemas=schemas)), inject_context=lambda *a, **kw:None)
+    assert asyncio.run(plugin._manager_report_context(ctx)) is forged

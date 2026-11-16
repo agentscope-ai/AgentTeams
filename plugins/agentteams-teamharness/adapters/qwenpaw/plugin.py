@@ -401,6 +401,15 @@ async def _manager_report_context(ctx: Any) -> bool:
         ctx.extras["coordinator_route_token"] = _coordinator_route.set(coordinator)
         ctx.inject_context("Send the verified final result to this coordinator replyRoute; the coordinator relays it to the original requester: " + json.dumps(coordinator), source="teamharness_coordinator_route")
     api_event = meta.get("teamharness_coordination") or {}
+    if meta.get("teamharness_matrix_coordination"):
+        receipt = await asyncio.to_thread(_controller_json, "coordination/events/" + urllib.parse.quote(api_event.get("id", ""), safe=""))
+        if (api_event.get("kind") not in {"task_assigned", "task_submitted", "project_ready"}
+                or receipt.get("actor") != meta.get("sender_id")
+                or receipt.get("recipient") != meta.get("agent_matrix_user_id")
+                or receipt.get("room_id", "") != meta.get("room_id", "")
+                or any(receipt.get(key, "") != api_event.get(key, "") for key in
+                       ("kind", "task_id", "project_id", "delivery_id", "submission_id"))):
+            return True
     automatic_plan = api_event.get("dispatch_mode") == "automatic" and api_event.get("plan_type") != "loop"
     if api_event.get("kind") == "project_ready":
         project = await asyncio.to_thread(_controller_json, "projects/" + urllib.parse.quote(api_event["project_id"], safe="") + "/meta")
@@ -420,13 +429,6 @@ async def _manager_report_context(ctx: Any) -> bool:
                 return True
             if task.get("assigned_to") not in {meta.get("agent_matrix_user_id"), os.getenv("AGENTTEAMS_WORKER_NAME")}:
                 return True
-            if meta.get("teamharness_matrix_coordination"):
-                receipt = await asyncio.to_thread(_controller_json, "coordination/events/" + urllib.parse.quote(api_event.get("id", ""), safe=""))
-                if (receipt.get("kind") != "task_assigned" or receipt.get("actor") != meta.get("sender_id")
-                        or receipt.get("recipient") != meta.get("agent_matrix_user_id")
-                        or receipt.get("task_id") != api_event["task_id"] or receipt.get("project_id") != api_event["project_id"]
-                        or receipt.get("delivery_id") != api_event["delivery_id"]):
-                    return True
             ctx.extras["execution_task_token"] = _execution_task.set(api_event["task_id"])
         elif task.get("status") != "submitted" or task.get("submission_id") != api_event.get("submission_id"):
             return True
@@ -456,10 +458,10 @@ async def _manager_report_context(ctx: Any) -> bool:
                 )
                 return False
             ctx.inject_context(
-                "Your coordination transport is the Agent API. For a finite plan with known execution specs, "
+                "Your coordination events are delivered by the Controller. For a finite plan with known execution specs, "
                 "use projectflow start_project with dispatchMode automatic, all leaf specs, assignees and dependencies. "
-                "Accept checked results; the task system dispatches newly ready leaves. Matrix messages are progress "
-                "projections and do not wake Agents. Do not send duplicate assignments or poll for progress. "
+                "Accept checked results; the task system dispatches newly ready leaves. Only scoped control notifications "
+                "wake Agents; progress messages do not. Do not send duplicate assignments or poll for progress. "
                 "For an automatic finite task_submitted, check and accept or return only this submission, then end this turn. "
                 "The Controller sends project_ready when all execution leaves are accepted. Only on project_ready, "
                 "verify the whole request and call complete_project with projectId and report (your concise final "

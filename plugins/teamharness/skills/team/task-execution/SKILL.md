@@ -135,6 +135,14 @@ failure promptly for Leader review instead of repeatedly rerunning it or
 editing upstream deliverables. Record ambiguous extra cases as observations
 and let the Leader resolve the contract.
 
+Match the depth of your work to the request. For a small task with explicit
+inputs, outputs and acceptance criteria, keep the analysis and protocol result
+concise instead of repeating the full specification in multiple documents.
+Batch independent reads or writes in one tool turn when supported, and run
+related acceptance cases together. Once the required evidence is complete,
+submit it; do not add another test framework, verification matrix or cleanup
+phase unless the task or an actual failure requires it.
+
 ## Coding CLI runs (when used)
 
 If this task is executed through a coding CLI (`run-coding-cli.sh` / Qwen

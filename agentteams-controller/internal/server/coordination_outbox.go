@@ -93,9 +93,7 @@ func (h *CoordinationHandler) PostEvent(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	delivery := coordinationDelivery{Event: resolved, Status: "queued", Created: time.Now().UTC()}
-	if os.Getenv("AGENTTEAMS_COORDINATION_TRANSPORT") == "matrix" && resolved.Kind == "task_assigned" {
-		delivery.Transport = "matrix"
-	}
+	delivery.Transport = coordinationTransport(resolved.Kind)
 	data, _ := json.Marshal(delivery)
 	if err := h.deps.OSS.PutObjectIfAbsent(r.Context(), coordinationPending+resolved.ID+".json", data); err != nil {
 		if errors.Is(err, oss.ErrPreconditionFailed) {
@@ -267,7 +265,7 @@ func (h *CoordinationHandler) GetEvent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "coordination receipt not found")
 			return
 		}
-		httputil.WriteJSON(w, 200, map[string]any{"event_id": id, "kind": d.Event.Kind, "project_id": d.Event.ProjectID, "task_id": d.Event.TaskID, "status": d.Status, "created": d.Created, "error": d.Error, "native_id": d.NativeID, "user_event_id": d.UserEventID, "failure_event_id": d.FailureEventID, "actor": d.Event.Actor, "recipient": d.Event.Recipient, "delivery_id": d.Event.DeliveryID, "transport": d.Transport})
+		httputil.WriteJSON(w, 200, map[string]any{"event_id": id, "kind": d.Event.Kind, "project_id": d.Event.ProjectID, "task_id": d.Event.TaskID, "status": d.Status, "created": d.Created, "error": d.Error, "native_id": d.NativeID, "user_event_id": d.UserEventID, "failure_event_id": d.FailureEventID, "actor": d.Event.Actor, "recipient": d.Event.Recipient, "delivery_id": d.Event.DeliveryID, "submission_id": d.Event.SubmissionID, "room_id": d.Event.RoomID, "transport": d.Transport})
 		return
 	}
 	writeError(w, 404, "coordination receipt not found")

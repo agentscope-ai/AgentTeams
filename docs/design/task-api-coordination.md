@@ -1,9 +1,10 @@
 # Task API coordination (opt-in)
 
 Task/project records remain the authoritative business state. The Controller
-resolves the registered recipient and delivers control notifications through the
-Agent API. Matrix carries receipts, artifacts, approval cards and final reports;
-these projections do not start another Agent turn.
+resolves the registered recipient and delivers scoped control notifications through
+the Agent API or the opt-in Matrix transport. Matrix also carries progress,
+artifacts, approval cards and final reports; progress projections do not start
+another Agent turn.
 
 The initial runtime adapter supports QwenPaw teams. Other runtimes retain their
 existing Matrix transport unless a compatible native adapter is implemented.
@@ -17,7 +18,7 @@ The runtime forwards this variable to the builtin TeamHarness MCP child process.
 `POST /api/v1/coordination/events` uses the caller's existing scoped credential.
 Its `202` response means durable queue admission, not task acceptance or delivery
 to the Human. `GET /api/v1/coordination/events/{id}` exposes a receipt to the
-originating Agent and administrators. It includes the final Matrix event ID only
+originating Agent, the actual receiving Worker/Leader, and administrators. It includes the final Matrix event ID only
 once the original user conversation has actually received the report.
 
 ## Event flow
@@ -85,13 +86,15 @@ projects, cross-team projects and other runtime adapters still require their
 own contracts and end-to-end validation. Do not treat project completion as
 proof that these broader task models have been validated.
 
-## Experimental Matrix Worker dispatch
+## Experimental Matrix coordination
 
-`AGENTTEAMS_COORDINATION_TRANSPORT=matrix` selects Controller-originated Matrix mentions for `task_assigned` events. The default HTTP transport remains available. Handoff, acceptance review, whole-plan closure and Manager completion callbacks currently retain HTTP; this is a Worker-dispatch experiment, not a claim that every callback has migrated.
+`AGENTTEAMS_COORDINATION_TRANSPORT=matrix` selects Controller-originated Matrix mentions for assignment, submission acceptance and whole-plan closure. The default HTTP transport remains available; the initial Manager-to-Leader handoff retains HTTP. The Controller relays the saved final report to the original Human conversation as the registered Manager after rechecking completed state, without a Manager execution request or another model call. This does not automatically accept submissions: the Leader still makes the acceptance decision from the supplied result and independent QA evidence.
 
-The Controller sends as the registered Leader, with the registered Worker in `m.mentions`, a fixed prerequisite/task description, and a structured coordination packet. The packet retains the existing bounded spec, original requester route and per-delegation session. The Worker checks the current task fence and its own authenticated dispatch receipt; it does not need permission to list the team roster. Ordinary room history is not prepended to this control request.
+The Controller sends assignments as the registered Leader and acceptance notices as the actual submitting Worker, with the recipient in `m.mentions`, a fixed description, and a structured coordination packet. Closure is a self-addressed Leader notice. The packet retains the existing bounded spec, original requester route and per-delegation session. The Worker checks the current task fence and its own authenticated dispatch receipt; it does not need permission to list the team roster. Ordinary room history is not prepended to this control request.
 
 Matrix send retries use the same transaction ID. A Worker is marked started only after the task's real ACK changes its authoritative state, not merely after Matrix accepts the message. The outbox continues monitoring task submission and approval resolutions until execution ends. Delivery transport is stored with the outbox entry; changing the local transport setting does not rewrite admitted entries. A cancelled or superseded assignment is ignored.
+
+Workers and Leaders use isolated control sessions and validate their own durable Controller receipt before inference. A self-addressed Leader closure notification also requires that receipt and accepted leaf state. Submission messages remain pending until the authoritative task records an acceptance decision; closure remains pending until the project actually completes.
 
 The Worker uses the normal Matrix streaming output path for visible tool calls, execution progress and results. Detailed model reasoning is suppressed for these structured control turns. Responses and edits carry `org.agentteams.progress_only` so visible feedback cannot reopen another Agent execution alongside the authoritative task callback.
 

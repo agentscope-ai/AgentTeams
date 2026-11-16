@@ -34,13 +34,13 @@ class StagePacketTest(unittest.TestCase):
             spec.loader.exec_module(module)
         cls.channel_type = module.AgentTeamsMatrixChannel
 
-    def receive(self, full, body, extra=None):
+    def receive(self, full, body, extra=None, sender="@leader:test"):
         channel = self.channel_type(process=lambda *args, **kwargs: None)
         channel._user_id = "@receiver:test"
         channel._session_receipts = object()
         received = []
         channel._enqueue = received.append
-        event = SimpleNamespace(sender="@leader:test", event_id="$event", body=body, source={"content": {
+        event = SimpleNamespace(sender=sender, event_id="$event", body=body, source={"content": {
             "org.agentteams.report": {"text": full},
             "org.agentteams.workflow": {"type": "PROJECT_COMPLETED", "project_id": "p"},
             "org.agentteams.requester_route": {"channel": "matrix", "target_session": "!human:test"},
@@ -72,6 +72,18 @@ class StagePacketTest(unittest.TestCase):
         request = channel.build_agent_request_from_native(packet)
         self.assertEqual(request.session_id, "coordination-task:t:dispatch-1")
         self.assertEqual(channel.get_to_handle_from_request(request), "!room:test")
+
+    def test_acceptance_and_self_closure_use_isolated_sessions(self):
+        for kind, session in (("task_submitted", "coordination-review:t:s1"), ("project_ready", "coordination-close:p")):
+            control = self.assignment()
+            control["session_id"] = session
+            control["channel_meta"]["teamharness_coordination"].update(kind=kind, submission_id="s1")
+            sender = "@receiver:test" if kind == "project_ready" else "@leader:test"
+            control["channel_meta"]["sender_id"] = sender
+            packet = self.receive("", "Please verify and continue", {"org.agentteams.coordination": control}, sender=sender)
+            self.assertIsNotNone(packet)
+            self.assertEqual(packet["meta"]["teamharness_coordination_session"], session)
+            self.assertEqual(packet["content_parts"][0].text, control["input"][0]["content"][0]["text"])
 
     def test_forged_sender_or_recipient_cannot_enter_control_context(self):
         for key, value in (("sender_id", "@impostor:test"), ("agent_matrix_user_id", "@other:test"), ("room_id", "!other:test")):

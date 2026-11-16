@@ -19,9 +19,9 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenClaw | `5e44ebecabf878eda499b668c9627208dbfa6049` | matched |
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
-Candidate companion pins on this Draft branch: Codex `49e88704a920e4a6f03bab610e244c865dacd7f9`
-and Hermes `9e7f5a8b89b4c5122cb50bab9701a9ced2e2925d`. Both consume the shared
-Core contract at `516f22a7fa758d128141812f3ebff076d1004725`. These are review
+Candidate companion pins on this Draft branch: Codex `1cbc9665d0d69ef18b467ce2cdaca284596e73ed`
+and Hermes `0dcbee79eb8c38c31f15197e3363fc98f7ee91d8`. Both consume the shared
+Core contract at `2c90bccfedb563cbf94e3e1a932fd2effd7b5e23`. These are review
 candidates, not accepted/released Harness versions.
 
 ## Implemented contract
@@ -61,6 +61,12 @@ candidates, not accepted/released Harness versions.
 - Summary-only submissions with an execution record persist a report before
   metadata CAS. A current active native final callback saves its answer before
   invoking submitted-report recovery; pending saved replies stay authoritative.
+- Submission retires an already-delivered progress reply before recording the
+  final task status. Final delivery prefers the persisted authoritative report;
+  an unconfirmed result/transaction cannot be replaced or discarded. Recovery
+  transport failures return controlled MCP errors rather than killing the tool
+  server. These newer safeguards have unit coverage; cases 06–08 below used the
+  earlier Core `516f22a7` contract.
 
 ## Local validation
 

@@ -195,10 +195,9 @@ func TestManagerUpdate_SpecChange_RecreatesContainer(t *testing.T) {
 
 	waitForManagerRunning(t, mgr)
 
-	mockMgrBackend.Reset()
-	mockMgrBackend.StatusFn = func(_ context.Context, _ string) (*backend.WorkerResult, error) {
-		return &backend.WorkerResult{Status: backend.StatusRunning}, nil
-	}
+	// Preserve the live container's tracked state. A permanent Running
+	// override would hide Delete's observed absence and prevent safe recreate.
+	mockMgrBackend.ClearCalls()
 
 	updateManagerSpecField(t, mgr, func(m *v1beta1.Manager) {
 		m.Spec.Model = "claude-sonnet-4-20250514"
@@ -208,6 +207,10 @@ func TestManagerUpdate_SpecChange_RecreatesContainer(t *testing.T) {
 		var m v1beta1.Manager
 		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(mgr), &m); err != nil {
 			return err
+		}
+		creates, _, _, _, _ := mockMgrBackend.CallSnapshot()
+		if len(creates) == 0 {
+			return fmt.Errorf("waiting for replacement after observed absence")
 		}
 		if m.Status.ObservedGeneration != m.Generation {
 			return fmt.Errorf("ObservedGeneration=%d, want %d", m.Status.ObservedGeneration, m.Generation)

@@ -52,7 +52,37 @@ If a task spec asks you to write or submit `shared/projects/...`, report that
 boundary conflict to the Leader. Put Worker-owned deliverables under
 `shared/tasks/{task-id}/...`; your Leader owns project-level reports.
 
-## Acknowledge
+## Restart and step checkpoints
+
+You recover the same task ID after a restart or Harness change. Your native
+session is a cache: the task system, assignment and shared checkpoint are
+authoritative. Never repeat a completed step because an old session or Matrix
+cursor lacks its messages. A read receipt and `report_progress` are not step
+checkpoints.
+
+Before a side effect, call `taskflow` with `action: checkpoint_task` and
+`payload: {taskId, checkpoint}`. Increment `checkpoint.version` from the latest
+shared checkpoint, keep `completed_steps` and `remaining_steps`, and record
+`operation: {id, state: "started"}`. When you know the outcome, save a new
+checkpoint with the same operation ID, `state: "verified"` and concrete
+`evidence`. If interrupted, verify the external outcome first; do not blindly
+run the operation again. Report an unverifiable outcome and leave it pending.
+
+If your assigned tool or script already persists this checkpoint protocol,
+invoke it unchanged. Let it register its own operation IDs before acting and
+verify them afterward; do not pre-register its IDs or add duplicate checkpoints
+outside its protocol. Check its durable checkpoint and artifacts before moving
+to the next step. If it fails, verify the outcome or leave it pending.
+
+Persist artifacts with your existing artifact/filesync tools before committing
+their `artifacts: [{key, sha256, size}]` references. Keys are full object-store
+keys within your task directory. The Controller reads and verifies each file
+before it accepts the checkpoint. Keep the task `in_progress` across step
+boundaries. To save a final reply before delivery, include a persisted `result`
+reference, `delivery: "pending"` and a stable `reply_txn`. Saving this result
+must happen before sending it; recovery of this state only resends that reply.
+
+## Acknowledge your assignment
 
 When you receive `TASK_ASSIGNED`, use a synchronized ACK receipt already
 supplied by your runtime. Do not acknowledge or pull the same assignment

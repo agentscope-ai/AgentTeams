@@ -275,6 +275,20 @@ func resolveBackendForMember(registry *backend.Registry, backendRuntime string, 
 	return wb, nil
 }
 
+// resolvePreviousMemberBackend must not use auto-detection: a missing or
+// unavailable previous backend is not permission to inspect/delete the target
+// instead. "pod" is historically recorded for embedded Docker workers too;
+// retain that alias only when no Kubernetes backend is registered.
+func resolvePreviousMemberBackend(ctx context.Context, registry *backend.Registry, recorded string) (backend.WorkerBackend, error) {
+	if recorded == v1beta1.BackendRuntimePod {
+		if wb, err := registry.GetWorkerBackend(ctx, "k8s"); err == nil {
+			return wb, nil
+		}
+		return registry.GetWorkerBackend(ctx, "docker")
+	}
+	return registry.GetWorkerBackend(ctx, recorded)
+}
+
 // MemberDeps aggregates the service-layer dependencies the member phases
 // invoke. Both WorkerReconciler and TeamReconciler build a MemberDeps once
 // and pass it through each phase.
@@ -574,10 +588,30 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	if desiredBackend != currentBackend {
 		logger.Info("backend switch detected",
 			"name", m.Name, "current", currentBackend, "desired", desiredBackend)
-		if oldWb, oldErr := resolveBackendForMember(d.Backend, currentBackend, m); oldErr == nil {
+		// Keep the old backend authoritative until its resource is observed
+		// absent. Delete can be asynchronous (Pods/Sandboxes), and a failed
+		// lookup is not proof that the previous Agent has stopped. Advancing
+		// status early would lose the old location on the next reconcile and
+		// allow both backends to consume messages as the same identity.
+		state.BackendRuntime = currentBackend
+		oldWb, oldErr := resolvePreviousMemberBackend(ctx, d.Backend, currentBackend)
+		if oldErr != nil {
+			return reconcile.Result{}, fmt.Errorf("resolve old backend during switch: %w", oldErr)
+		}
+		oldResult, oldErr := oldWb.Status(ctx, m.Name)
+		if oldErr != nil && !errors.Is(oldErr, backend.ErrNotFound) {
+			return reconcile.Result{}, fmt.Errorf("query old backend during switch: %w", oldErr)
+		}
+		if oldErr == nil && oldResult == nil {
+			return reconcile.Result{}, fmt.Errorf("query old backend during switch: missing status")
+		}
+		if oldErr == nil && oldResult.Status != backend.StatusNotFound {
 			if delErr := oldWb.Delete(ctx, m.Name); delErr != nil && !errors.Is(delErr, backend.ErrNotFound) {
 				return reconcile.Result{}, fmt.Errorf("delete old backend resource during switch: %w", delErr)
 			}
+			state.ContainerState = "stopping"
+			state.Message = "Waiting for the previous backend resource to disappear before replacement"
+			return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 		}
 		state.BackendRuntime = desiredBackend
 	}

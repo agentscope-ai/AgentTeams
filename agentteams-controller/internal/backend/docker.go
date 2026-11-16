@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 )
 
 // DockerConfig holds Docker backend configuration.
@@ -714,21 +716,31 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 	}
 
 	var inspectResp struct {
-		ID    string `json:"Id"`
+		ID     string `json:"Id"`
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
 		State struct {
-			Status string `json:"Status"`
+			Status    string `json:"Status"`
+			StartedAt string `json:"StartedAt"`
 		} `json:"State"`
 	}
 	if err := json.Unmarshal(body, &inspectResp); err != nil {
 		return nil, fmt.Errorf("parse inspect response: %w", err)
 	}
 
+	instanceID := ""
+	if inspectResp.ID != "" && inspectResp.State.StartedAt != "" {
+		instanceID = inspectResp.ID + "/" + inspectResp.State.StartedAt
+	}
 	return &WorkerResult{
 		Name:           name,
 		Backend:        "docker",
 		DeploymentMode: DeployLocal,
 		Status:         normalizeDockerStatus(inspectResp.State.Status),
 		ContainerID:    inspectResp.ID,
+		InstanceID:     instanceID,
+		Runtime:        inspectResp.Config.Labels[v1beta1.LabelRuntime],
 		RawStatus:      inspectResp.State.Status,
 	}, nil
 }
@@ -821,6 +833,7 @@ type dockerCreatePayload struct {
 	ExposedPorts     map[string]struct{}     `json:"ExposedPorts,omitempty"`
 	HostConfig       *dockerHostConfig       `json:"HostConfig,omitempty"`
 	NetworkingConfig *dockerNetworkingConfig `json:"NetworkingConfig,omitempty"`
+	Labels           map[string]string       `json:"Labels,omitempty"`
 }
 
 type dockerHostConfig struct {
@@ -866,6 +879,7 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 		Image:      req.Image,
 		Env:        envList,
 		WorkingDir: req.WorkingDir,
+		Labels:     map[string]string{v1beta1.LabelRuntime: ResolveRuntime(req.Runtime, req.RuntimeFallback)},
 	}
 
 	hc := &dockerHostConfig{

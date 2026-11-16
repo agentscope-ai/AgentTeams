@@ -1,0 +1,170 @@
+{
+  "task_id": "live-codex-hermes-13",
+  "case": "13",
+  "scope": "one real codex-to-hermes in-progress continuation",
+  "mode": "replace",
+  "fixture_prefix": "recovery-1631-live-20261117-v3",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "e3788c38da670c5f1d26a0985df193d0a277f3be",
+    "shared_contract": "2c90bccfedb563cbf94e3e1a932fd2effd7b5e23",
+    "codex": "1cbc9665d0d69ef18b467ce2cdaca284596e73ed",
+    "hermes": "6bbd17d6fa5afc48a67d744a6270b5b0d174b3c9"
+  },
+  "native_recovery_sessions": {
+    "hermes": [
+      {
+        "timestamp": "2026-11-16T19:13:44.502716+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "5b2dc633de3d4af39e9252298bf7693b",
+        "event": "task.recovery.session",
+        "task_id": "live-codex-hermes-13",
+        "team_id": "recovery-team",
+        "generation": 2,
+        "session_id": "20261116_191344_4f6d74c9",
+        "checkpoint_version": 4,
+        "reused": false
+      }
+    ],
+    "hermes_message_counts": {
+      "20261116_191344_4f6d74c9": 35
+    },
+    "hermes_cache": [
+      {
+        "timestamp": "2026-11-16T19:15:20.687884+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "5b2dc633de3d4af39e9252298bf7693b",
+        "event": "task.recovery.cache",
+        "task_id": "live-codex-hermes-13",
+        "team_id": "recovery-team",
+        "session_id": "20261116_191344_4f6d74c9",
+        "expires_at": 1794942920.680029,
+        "checkpoint_digest": "d0e086825529bea9078702f153bc8b57caef24688feaa0ab3e5179fb630fc514"
+      }
+    ],
+    "codex": {
+      "thread_id": "01a1e5c5-ff8b-7c71-a205-02ddfb804856",
+      "runtime": "codex",
+      "expires_at": 1794942770.411595,
+      "checkpoint_digest": "87aa8e69abd68b4d47c655288246de3b3f860d4096b675a46b264c1c2fcb8179"
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 4,
+  "checkpoint_after": 10,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/4a112c627d95cdca2ea745ed271f34a498d2bc5583f2ec58658ccba238ab6a49/2026-11-16T19:13:37.596548883Z",
+    "process_id": "1:1794856417754216476:5b2dc633de3d4af39e9252298bf7693b",
+    "runtime": "hermes",
+    "state": "active",
+    "checkpoint": {
+      "version": 10,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-codex-hermes-13:three",
+        "state": "verified",
+        "evidence": "Persisted step output SHA256=ad3ed98fbf6063fa162883435e623d692a57349998a56846959ebef172901371; effect receipt=teams/recovery-team/shared/recovery-fixtures/live-codex-hermes-13/effects/three-8f01148e14bf4629b83a4c20ea106f62.json; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-codex-hermes-13/output/step-one.json",
+          "sha256": "b7506e537f2c72ee9528389341efcae99ac3349b356e40f8ae873d7d00d81e33",
+          "size": 164
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-codex-hermes-13/output/step-two.json",
+          "sha256": "8fa60aca60ee0940a7833ed64ff343eee7529de577a444c3dfd55381a59835a3",
+          "size": 164
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-codex-hermes-13/output/step-three.json",
+          "sha256": "ad3ed98fbf6063fa162883435e623d692a57349998a56846959ebef172901371",
+          "size": 166
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-codex-hermes-13/result.md",
+        "sha256": "d885e016b7759498a22bc0b338e0e1ed8b23312673889c09a7f2cfaa46a65619",
+        "size": 597
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:b6ec8f12ede4adf22628790c4089c8f8e2898a40c56526b6e547b3831866d82c",
+      "reply_event": "$zxHogWO-Ib7Tz8F56cMgvHNnfI0aEnNSFhJemYsYqWg",
+      "saved_at": "2026-11-16T19:15:20.675293949Z"
+    }
+  },
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "generation": 1,
+      "process_id": "7:1794856309864820633:204846e41c90480e9a5b30deea261dbe",
+      "step": "one",
+      "task_id": "live-codex-hermes-13"
+    },
+    {
+      "checkpoint_version": 5,
+      "generation": 2,
+      "process_id": "1:1794856417754216476:5b2dc633de3d4af39e9252298bf7693b",
+      "step": "two",
+      "task_id": "live-codex-hermes-13"
+    },
+    {
+      "checkpoint_version": 7,
+      "generation": 2,
+      "process_id": "1:1794856417754216476:5b2dc633de3d4af39e9252298bf7693b",
+      "step": "three",
+      "task_id": "live-codex-hermes-13"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-hermes-13/output/step-one.json",
+      "sha256": "b7506e537f2c72ee9528389341efcae99ac3349b356e40f8ae873d7d00d81e33",
+      "size": 164
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-hermes-13/output/step-two.json",
+      "sha256": "8fa60aca60ee0940a7833ed64ff343eee7529de577a444c3dfd55381a59835a3",
+      "size": 164
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-hermes-13/output/step-three.json",
+      "sha256": "ad3ed98fbf6063fa162883435e623d692a57349998a56846959ebef172901371",
+      "size": 166
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-hermes-13/result.md",
+      "sha256": "d885e016b7759498a22bc0b338e0e1ed8b23312673889c09a7f2cfaa46a65619",
+      "size": 597
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1794856416398025138,
+    "destroy": 1794856416414946180,
+    "create": 1794856417570530393
+  },
+  "matrix": {
+    "reply_event": "$zxHogWO-Ib7Tz8F56cMgvHNnfI0aEnNSFhJemYsYqWg",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$NjrXG1zODMov7guqdO2z2Vj6sKu-y14zGjEWwSXGr24"
+    ],
+    "read_receipt_events": [
+      "$vtuf2FhAmEKl_xesGDPyH3D_P7GM3t8sw2UZmUGk0mM"
+    ]
+  },
+  "oracle_version": 2,
+  "oracle_scope": "Separate per-invocation receipt objects outside the Task directory; not storage-enforced WORM"
+}

@@ -158,6 +158,8 @@ jobs:
         run: |
           ruby plugins/tests/teamharness/test-contracts.rb
           python -m pytest tests/test_task_coordination.py -q
+          python -m pytest tests/test_task_recovery.py -q
+          python -m unittest discover -s tests -p 'test_runtime_recovery_*.py' -v
           python -m pytest plugins/tests/teamharness/mcp/test_continuation.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_delegate_redelegation.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_filesync_remote_guard.py -q

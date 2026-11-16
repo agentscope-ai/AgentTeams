@@ -1,0 +1,17 @@
+{
+  "scope": "live MinIO policy integration, not runtime continuation",
+  "fixture_prefix": "recovery-1631-live-20261117",
+  "controller_runtime_source": "2c90bccf",
+  "candidate_definition": "internal/oss/minio_admin.go",
+  "checks": {
+    "direct_write_before_protection_succeeded": true,
+    "direct_binary_metadata_write_denied": true,
+    "direct_binary_metadata_delete_denied": true,
+    "metadata_read_and_original_bytes_preserved": true,
+    "ordinary_artifact_write_read_allowed": true,
+    "controller_conditional_commit_still_succeeds": true
+  },
+  "passed": true,
+  "restored_old_fixture_policy": true,
+  "candidate_scope_limit": "The IAM wildcard also reserves meta.json below nested Task directories; compatibility with same-named artifact files remains open."
+}

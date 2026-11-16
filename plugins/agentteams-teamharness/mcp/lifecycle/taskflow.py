@@ -335,6 +335,15 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
     payload = _payload(arguments)
     role = _role(arguments)
     try:
+        if action == "checkpoint_task":
+            from task_recovery import Recovery
+            checkpoint = payload.get("checkpoint")
+            if not isinstance(checkpoint, dict):
+                raise ValueError("checkpoint_task requires payload.checkpoint")
+            task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            from mcp.common.config import _runtime_team_name
+            result = Recovery().checkpoint(task_id, _runtime_team_name(), checkpoint)
+            return {"ok": True, "tool": "taskflow", "action": action, "synced": True, **result}
         if action in {"start_task", "advance_task", "complete_task", "accept_task_result"}:
             from .plans import _main_task_action
             return _main_task_action(arguments, payload)
@@ -1129,6 +1138,13 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task_dir.mkdir(parents=True, exist_ok=True)
             submission_id = uuid.uuid4().hex
             submitted_at = _utc_timestamp()
+            if task.get("execution") and result_markdown is None and not report_file.is_file():
+                # Recovery must survive a stop between submission and the
+                # native final reply. Summary-only submissions still need a
+                # durable report, uploaded by _sync_task before metadata CAS.
+                result_markdown = "\n".join([f"# Task {task_id}", "", f"Result: {status}", "", summary, "",
+                    *[f"- {item}" for item in (conclusions or [])], "",
+                    *[f"- {item}" for item in deliverables], ""])
             if result_markdown is not None or report_file.is_file():
                 result_path_extra = {"result_path": report_source}
             else:
@@ -1147,6 +1163,18 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if _protocol_enforce_enabled():
                 submission_extra["submitted_by"] = _transition_actor(arguments)
                 submission_extra["submitted_by_source"] = _transition_actor_source(arguments)
+            cp = (task.get("execution") or {}).get("checkpoint") or {}
+            if cp.get("result"):
+                if cp.get("delivery") != "delivered":
+                    raise ValueError("deliver the pending progress reply before submitting the Task")
+                # A delivered progress turn is not the submitted result.
+                # Retire it under the execution CAS before changing status;
+                # otherwise startup can mistake it for a delivered final reply.
+                from task_recovery import Recovery
+                from mcp.common.config import _runtime_team_name
+                cp = {key: value for key, value in cp.items() if key not in {"result", "delivery", "reply_txn", "reply_event"}}
+                cp["version"] += 1
+                task["execution"] = Recovery().checkpoint(task_id, _runtime_team_name(), cp)["execution"]
             try:
                 if result_markdown is not None:
                     _atomic_write_text(report_file, result_markdown)

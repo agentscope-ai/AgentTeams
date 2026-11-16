@@ -1,0 +1,432 @@
+{
+  "case": "17",
+  "passed": false,
+  "recorded_at": 1794861790.219467,
+  "fixture_prefix": "recovery-1631-live-20261117-v4",
+  "scope": "Real Harness continuation reached final delivery but failed the prescribed side-effect fixture and checkpoint-boundary oracle",
+  "sources": {
+    "controller": "1629bdf5020816755ebd1a7853dd61972eeba133",
+    "shared_contract": "9bdbbe92c294d0dcca2aeed5478fcf29452f3a42",
+    "hermes": "9c82bf1f48fccb881baafe439263958156d04713",
+    "deepseek-harness": "035da1839459d03c47a30cef9a17cfa210bb0196"
+  },
+  "controller_binary_sha256": "a0100a2183a32a952f1331144cdf19c7f2a3a62b91ac8cfc4ae387e7e7dbeab7",
+  "task": {
+    "acknowledged_by_role": "worker",
+    "assigned_at": "2026-11-16T20:16:49Z",
+    "assigned_to": "@agent-a:recovery-1631.test",
+    "conclusions": [
+      "Step one completed in generation 1 with SHA256=cd1614f8e1715511d74f150a0393dbfa85474f0490bc3ab375d4612e5aee6d59.",
+      "Steps two and three completed in generation 2 with unique effect receipts and SHA256s.",
+      "All three step outputs verified and checkpointed via taskflow; task status in_progress advanced to submitted."
+    ],
+    "continuation": {
+      "delivery_id": "fe42ceb6686df75652564fd8d5ab84c407481d235b11a0cf5cc140f86ea8a72e",
+      "status": "pending"
+    },
+    "deliverables": [
+      "shared/tasks/live-hermes-deepseek-harness-17/output/step-one.json",
+      "shared/tasks/live-hermes-deepseek-harness-17/output/step-two.json",
+      "shared/tasks/live-hermes-deepseek-harness-17/output/step-three.json"
+    ],
+    "execution": {
+      "generation": 2,
+      "instance_id": "docker/7fb27ca016fb4419e16bb846cf2073d1755089e3602ed19f35ba75a975d923b7/2026-11-16T20:18:41.835335957Z",
+      "process_id": "7:1794860322155594986:9f159274267047828576d0385f20b02e",
+      "runtime": "deepseek-harness",
+      "state": "active",
+      "checkpoint": {
+        "version": 8,
+        "completed_steps": [
+          "one",
+          "two",
+          "three"
+        ],
+        "remaining_steps": [],
+        "operation": {
+          "id": "fixture:live-hermes-deepseek-harness-17:three",
+          "state": "verified",
+          "evidence": "Persisted step output SHA256=b0f3d46028fecddc6f92e8afb8f2969473151121d1dbe74e38008b2564977567; effect receipt=teams/recovery-team/shared/recovery-fixtures/live-hermes-deepseek-harness-17/effects/three-f41f04e803234fc9a37eb514c3fe9db1.json; count=3"
+        },
+        "artifacts": [
+          {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-17/output/step-one.json",
+            "sha256": "cd1614f8e1715511d74f150a0393dbfa85474f0490bc3ab375d4612e5aee6d59",
+            "size": 175
+          },
+          {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-17/output/step-two.json",
+            "sha256": "c9ce58ffe1717ba4dbd13e98913894a352153903c9304b805d3fa3bfd428983b",
+            "size": 175
+          },
+          {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-17/output/step-three.json",
+            "sha256": "b0f3d46028fecddc6f92e8afb8f2969473151121d1dbe74e38008b2564977567",
+            "size": 177
+          }
+        ],
+        "result": {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-17/result.md",
+          "sha256": "41a2041a50191c8e9c82f417de6b63bf4b35d5f19c7c83570617b016c6898b97",
+          "size": 1372
+        },
+        "delivery": "delivered",
+        "reply_txn": "task-reply:7621e1337decc245df2cd866f7ba6ee556b47bd777f25d13894f57f9b316cb6c",
+        "reply_event": "$TNvMPKRR5nRZq7B3k_99_12QvutZDpVpEt8IIF4itoo",
+        "saved_at": "2026-11-16T20:22:45.855529657Z"
+      }
+    },
+    "history": [
+      {
+        "action": "ack_task",
+        "actor": "worker:agent-a",
+        "from": "assigned",
+        "seq": 1,
+        "to": "in_progress",
+        "ts": "2026-11-16T20:16:49Z"
+      },
+      {
+        "action": "submit_task",
+        "actor": "worker:agent-a",
+        "from": "in_progress",
+        "seq": 2,
+        "to": "submitted",
+        "ts": "2026-11-16T20:22:30Z"
+      }
+    ],
+    "history_seq": 2,
+    "main_task_id": "live-main-17",
+    "notifyTxn": "live-assignment-17",
+    "parent_task_id": "live-main-17",
+    "project_id": "",
+    "recovery_fixture": {
+      "oracle_version": 2
+    },
+    "result_digest": "ce24cf23324ecf0b5749e23072917823b1f2aec7a97e867468a83b4de733811f",
+    "result_path": "shared/tasks/live-hermes-deepseek-harness-17/result.md",
+    "result_status": "SUCCESS",
+    "room_id": "!RaG13gKNigF6P0w3mp:recovery-1631.test",
+    "spec_path": "",
+    "status": "submitted",
+    "submission_id": "94ca0ae30b7249f09e860c1050816bc7",
+    "submitted_at": "2026-11-16T20:22:30Z",
+    "submitted_by_role": "worker",
+    "summary": "Executed all three recovery fixture steps (one in generation 1, two and three in generation 2). All step outputs persisted to object storage with verified effect receipts and checkpoint evidence.",
+    "task_id": "live-hermes-deepseek-harness-17",
+    "task_kind": "subtask",
+    "task_title": "Run three stable steps across hermes to deepseek-harness",
+    "team_id": "recovery-team",
+    "title": "Run three stable steps across hermes to deepseek-harness"
+  },
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "generation": 1,
+      "process_id": "1:1794860105966350331:c564c5a74aba4e9a8e22c14bbf4d3bd2",
+      "step": "one",
+      "task_id": "live-hermes-deepseek-harness-17"
+    },
+    {
+      "checkpoint_version": 5,
+      "generation": 2,
+      "process_id": "7:1794860322155594986:9f159274267047828576d0385f20b02e",
+      "step": "two",
+      "task_id": "live-hermes-deepseek-harness-17"
+    },
+    {
+      "checkpoint_version": 6,
+      "generation": 2,
+      "process_id": "7:1794860322155594986:9f159274267047828576d0385f20b02e",
+      "step": "three",
+      "task_id": "live-hermes-deepseek-harness-17"
+    }
+  ],
+  "before_cutover": {
+    "recorded_at": 1794860319.331552,
+    "task": {
+      "acknowledged_by_role": "worker",
+      "assigned_at": "2026-11-16T20:16:49Z",
+      "assigned_to": "@agent-a:recovery-1631.test",
+      "execution": {
+        "generation": 1,
+        "instance_id": "docker/81850db4617bcfa5774a4dedc882b271f9a12be7feb1705e213686c162b9059f/2026-11-16T20:15:05.846044335Z",
+        "process_id": "1:1794860105966350331:c564c5a74aba4e9a8e22c14bbf4d3bd2",
+        "runtime": "hermes",
+        "state": "active",
+        "checkpoint": {
+          "version": 4,
+          "completed_steps": [
+            "one"
+          ],
+          "remaining_steps": [
+            "two",
+            "three"
+          ],
+          "operation": {
+            "id": "fixture:live-hermes-deepseek-harness-17:one",
+            "state": "verified",
+            "evidence": "Persisted step output SHA256=cd1614f8e1715511d74f150a0393dbfa85474f0490bc3ab375d4612e5aee6d59; effect receipt=teams/recovery-team/shared/recovery-fixtures/live-hermes-deepseek-harness-17/effects/one-66d5303b26e64896ac183ee2efdc88a1.json; count=1"
+          },
+          "artifacts": [
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-17/output/step-one.json",
+              "sha256": "cd1614f8e1715511d74f150a0393dbfa85474f0490bc3ab375d4612e5aee6d59",
+              "size": 175
+            }
+          ],
+          "result": {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-17/checkpoints/reply-208fe514c1a165bdaac58030b4443aafd1e4b20969b38a4a750d76558ad2b2a2.txt",
+            "sha256": "208fe514c1a165bdaac58030b4443aafd1e4b20969b38a4a750d76558ad2b2a2",
+            "size": 673
+          },
+          "delivery": "delivered",
+          "reply_txn": "task-reply:807edc47f9471b8cf4abe8319284b8e9186a89c23b0dea9be8ec7d06dbc291b1",
+          "reply_event": "$iKUXFU-uiGIILLcbrn8w-oYQc7_hR6zQlim07paq-VM",
+          "saved_at": "2026-11-16T20:18:18.788170371Z"
+        }
+      },
+      "history": [
+        {
+          "action": "ack_task",
+          "actor": "worker:agent-a",
+          "from": "assigned",
+          "seq": 1,
+          "to": "in_progress",
+          "ts": "2026-11-16T20:16:49Z"
+        }
+      ],
+      "history_seq": 1,
+      "main_task_id": "live-main-17",
+      "notifyTxn": "live-assignment-17",
+      "parent_task_id": "live-main-17",
+      "project_id": "",
+      "recovery_fixture": {
+        "oracle_version": 2
+      },
+      "room_id": "!RaG13gKNigF6P0w3mp:recovery-1631.test",
+      "spec_path": "",
+      "status": "in_progress",
+      "task_id": "live-hermes-deepseek-harness-17",
+      "task_kind": "subtask",
+      "task_title": "Run three stable steps across hermes to deepseek-harness",
+      "team_id": "recovery-team",
+      "title": "Run three stable steps across hermes to deepseek-harness"
+    },
+    "ledger": [
+      {
+        "checkpoint_version": 1,
+        "generation": 1,
+        "process_id": "1:1794860105966350331:c564c5a74aba4e9a8e22c14bbf4d3bd2",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-17"
+      }
+    ],
+    "instances": [
+      {
+        "name": "recovery-1631-live-20261117-v4-controller",
+        "id": "ee5b30e0ce3966702f93fef725f097890a93527092d3841ade3eec9b40350a3d",
+        "image": "recovery-1631/controller:local-20261117041000",
+        "running": true,
+        "pid": 169876,
+        "started_at": "2026-11-16T20:13:02.192664357Z",
+        "finished_at": "0001-01-01T00:00:00Z"
+      },
+      {
+        "name": "recovery-1631-live-20261117-v4-worker-agent-a",
+        "id": "81850db4617bcfa5774a4dedc882b271f9a12be7feb1705e213686c162b9059f",
+        "image": "recovery-1631/hermes:local-20261117034200",
+        "running": true,
+        "pid": 188923,
+        "started_at": "2026-11-16T20:15:05.846044335Z",
+        "finished_at": "0001-01-01T00:00:00Z"
+      },
+      {
+        "name": "recovery-1631-live-20261117-v4-worker-leader",
+        "id": "d62528862acc4239dfd5b92df3b0698cf9cc5ea444b00815f1080fd0f9c791e4",
+        "image": "recovery-1631/hermes:local-20261117034200",
+        "running": false,
+        "pid": 0,
+        "started_at": "2026-11-16T20:15:05.246798929Z",
+        "finished_at": "2026-11-16T20:18:36.998374922Z"
+      }
+    ],
+    "native_sessions": {
+      "hermes": [
+        {
+          "timestamp": "2026-11-16T20:16:35.078100+00:00",
+          "runtime": "hermes",
+          "role": "standalone",
+          "agent_name": "agent-a",
+          "boot_id": "c564c5a74aba4e9a8e22c14bbf4d3bd2",
+          "event": "task.recovery.session",
+          "task_id": "live-hermes-deepseek-harness-17",
+          "team_id": "recovery-team",
+          "generation": 1,
+          "session_id": "20261116_201635_e09ae3bb",
+          "checkpoint_version": 0,
+          "reused": false
+        }
+      ],
+      "hermes_message_counts": {
+        "20261116_201635_e09ae3bb": 46
+      },
+      "hermes_cache": [
+        {
+          "timestamp": "2026-11-16T20:18:18.801416+00:00",
+          "runtime": "hermes",
+          "role": "standalone",
+          "agent_name": "agent-a",
+          "boot_id": "c564c5a74aba4e9a8e22c14bbf4d3bd2",
+          "event": "task.recovery.cache",
+          "task_id": "live-hermes-deepseek-harness-17",
+          "team_id": "recovery-team",
+          "session_id": "20261116_201635_e09ae3bb",
+          "expires_at": 1794946698.7937357,
+          "checkpoint_digest": "b748e537b5206f39ab51e00b7ccb1481a33967fda94a7f303b47f29efad534d1"
+        }
+      ],
+      "codex": null
+    }
+  },
+  "docker_events": [
+    {
+      "Type": "container",
+      "Action": "kill",
+      "Actor": {
+        "ID": "81850db4617bcfa5774a4dedc882b271f9a12be7feb1705e213686c162b9059f",
+        "Attributes": {
+          "agentteams.io/runtime": "hermes",
+          "image": "recovery-1631/hermes:local-20261117034200",
+          "io.agentteams.recovery.core-sha": "9bdbbe92c294d0dcca2aeed5478fcf29452f3a42",
+          "io.agentteams.recovery.harness-sha": "9c82bf1f48fccb881baafe439263958156d04713",
+          "name": "recovery-1631-live-20261117-v4-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7",
+          "signal": "9"
+        }
+      },
+      "scope": "local",
+      "time": 1794860320,
+      "timeNano": 1794860320641856619
+    },
+    {
+      "Type": "container",
+      "Action": "die",
+      "Actor": {
+        "ID": "81850db4617bcfa5774a4dedc882b271f9a12be7feb1705e213686c162b9059f",
+        "Attributes": {
+          "agentteams.io/runtime": "hermes",
+          "execDuration": "214",
+          "exitCode": "137",
+          "image": "recovery-1631/hermes:local-20261117034200",
+          "io.agentteams.recovery.core-sha": "9bdbbe92c294d0dcca2aeed5478fcf29452f3a42",
+          "io.agentteams.recovery.harness-sha": "9c82bf1f48fccb881baafe439263958156d04713",
+          "name": "recovery-1631-live-20261117-v4-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794860320,
+      "timeNano": 1794860320817295600
+    },
+    {
+      "Type": "container",
+      "Action": "destroy",
+      "Actor": {
+        "ID": "81850db4617bcfa5774a4dedc882b271f9a12be7feb1705e213686c162b9059f",
+        "Attributes": {
+          "agentteams.io/runtime": "hermes",
+          "image": "recovery-1631/hermes:local-20261117034200",
+          "io.agentteams.recovery.core-sha": "9bdbbe92c294d0dcca2aeed5478fcf29452f3a42",
+          "io.agentteams.recovery.harness-sha": "9c82bf1f48fccb881baafe439263958156d04713",
+          "name": "recovery-1631-live-20261117-v4-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794860320,
+      "timeNano": 1794860320934355383
+    },
+    {
+      "Type": "container",
+      "Action": "create",
+      "Actor": {
+        "ID": "7fb27ca016fb4419e16bb846cf2073d1755089e3602ed19f35ba75a975d923b7",
+        "Attributes": {
+          "agentteams.io/runtime": "deepseek-harness",
+          "image": "recovery-1631/deepseek:local-20261117034200",
+          "io.agentteams.recovery.core-sha": "9bdbbe92c294d0dcca2aeed5478fcf29452f3a42",
+          "io.agentteams.recovery.harness-sha": "035da1839459d03c47a30cef9a17cfa210bb0196",
+          "name": "recovery-1631-live-20261117-v4-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794860321,
+      "timeNano": 1794860321801587842
+    },
+    {
+      "Type": "container",
+      "Action": "extract-to-dir",
+      "Actor": {
+        "ID": "7fb27ca016fb4419e16bb846cf2073d1755089e3602ed19f35ba75a975d923b7",
+        "Attributes": {
+          "agentteams.io/runtime": "deepseek-harness",
+          "image": "recovery-1631/deepseek:local-20261117034200",
+          "io.agentteams.recovery.core-sha": "9bdbbe92c294d0dcca2aeed5478fcf29452f3a42",
+          "io.agentteams.recovery.harness-sha": "035da1839459d03c47a30cef9a17cfa210bb0196",
+          "name": "recovery-1631-live-20261117-v4-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794860321,
+      "timeNano": 1794860321811146663
+    },
+    {
+      "Type": "container",
+      "Action": "start",
+      "Actor": {
+        "ID": "7fb27ca016fb4419e16bb846cf2073d1755089e3602ed19f35ba75a975d923b7",
+        "Attributes": {
+          "agentteams.io/runtime": "deepseek-harness",
+          "image": "recovery-1631/deepseek:local-20261117034200",
+          "io.agentteams.recovery.core-sha": "9bdbbe92c294d0dcca2aeed5478fcf29452f3a42",
+          "io.agentteams.recovery.harness-sha": "035da1839459d03c47a30cef9a17cfa210bb0196",
+          "name": "recovery-1631-live-20261117-v4-worker-agent-a",
+          "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+          "org.opencontainers.image.version": "v1.2.7"
+        }
+      },
+      "scope": "local",
+      "time": 1794860321,
+      "timeNano": 1794860321929464235
+    }
+  ],
+  "native_audit": {
+    "helper_sha256": "f83aa59da7bd3fd61e312c58c31d1b5c1fcb91f4bbd0bc10a05bb4f9c5e9747b",
+    "helper_exit_code": 1,
+    "helper_error": "KeyError: AGENTTEAMS_AUTH_TOKEN_FILE after native shell environment scrubbing",
+    "manual_effect_receipt_uploads": [
+      "two",
+      "three"
+    ],
+    "manual_checkpoint_versions": [
+      5,
+      6
+    ],
+    "expected_registered_step_boundary_delta": 2,
+    "telemetry_gap": "Native Python shell reports missing opentelemetry dependency"
+  },
+  "scope_mount_fix_probe": {
+    "authenticated_self_discovery": true,
+    "matrix_messages_sent": 0,
+    "task_execution_mutations": 0
+  },
+  "verification_error": "step boundary receipts must include a registered start and verified checkpoint per step",
+  "fixture_workers_stopped": true
+}

@@ -559,6 +559,31 @@ func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) 
 	}
 }
 
+func TestDeployTeamRuntimeConfigsHermesPublishesTaskToolScope(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	r := &TeamReconciler{Deployer: deployer}
+	members := []teamWorkerMember{{
+		ref: v1beta1.TeamWorkerRef{Name: "hermes-worker", Role: "worker"},
+		worker: v1beta1.Worker{
+			ObjectMeta: metav1.ObjectMeta{Name: "hermes-worker", Generation: 4},
+			Spec:       v1beta1.WorkerSpec{Runtime: "hermes", Model: "qwen3.6-plus"},
+			Status:     v1beta1.WorkerStatus{MatrixUserID: "@worker:matrix.local", RoomID: "!dm:matrix.local"},
+		},
+		runtimeName: "hermes-worker",
+	}}
+	err := r.deployTeamRuntimeConfigs(context.Background(), &v1beta1.Team{}, members, "leader", "team-a", "leader", &service.TeamRoomResult{TeamRoomID: "!team:matrix.local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deployer.Calls.DeployMemberRuntimeConfig) != 1 {
+		t.Fatalf("missing Hermes Task tool scope: %+v", deployer.Calls.DeployMemberRuntimeConfig)
+	}
+	req := deployer.Calls.DeployMemberRuntimeConfig[0]
+	if req.Runtime != "hermes" || req.Role != "worker" || req.TeamName != "team-a" || req.TeamRoomID != "!team:matrix.local" {
+		t.Fatalf("wrong Hermes Task tool scope: %+v", req)
+	}
+}
+
 func TestDeployTeamRuntimeConfigsDeepSeekHarnessUsesProjectedContract(t *testing.T) {
 	deployer := mocks.NewMockDeployer()
 	r := &TeamReconciler{Deployer: deployer}

@@ -1720,6 +1720,46 @@ func TestSleepingSandboxIsNotDeletedForSpecChange(t *testing.T) {
 	}
 }
 
+func TestSleepingWorkerKeepsAppliedHashUntilChangedHarnessIsCreated(t *testing.T) {
+	worker := newWorker("solo", v1beta1.WorkerSpec{Runtime: "hermes", Image: "hermes:v1"})
+	worker.Generation = 1
+	rig := newWorkerRig(t, worker)
+	out, _, err := rig.reconcile("solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash := out.Status.SpecHash
+	sleeping := "Sleeping"
+	out.Spec.State = &sleeping
+	out.Spec.Runtime, out.Spec.Image = "codex", "codex:v2"
+	out.Generation++
+	if err := rig.client.Update(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err = rig.reconcile("solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status.SpecHash != oldHash {
+		t.Fatalf("sleeping old container was stamped with an unapplied Harness spec: got %s, want %s", out.Status.SpecHash, oldHash)
+	}
+	running := "Running"
+	out.Spec.State = &running
+	out.Generation++
+	if err := rig.client.Update(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	rig.backend.ClearCalls()
+	_, _, err = rig.reconcile("solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	creates, deletes, starts, _, _ := rig.backend.CallSnapshot()
+	if len(deletes) != 1 || len(starts) != 0 || len(creates) != 0 {
+		t.Fatalf("wake must delete stale Harness before create: creates=%v deletes=%v starts=%v", creates, deletes, starts)
+	}
+}
+
 // TestHashAppliedWorkerSpec_ExcludesServiceFields locks in that the
 // service-only fields (ServiceEnabled, Expose) are excluded from the
 // applied-spec hash. Toggling either field must NOT trigger sandbox/pod

@@ -394,7 +394,11 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	}
 	_ = ReconcileMemberExpose(ctx, deps, mctx, state)
 	applyMemberStateToWorker(w, state)
-	w.Status.SpecHash = mctx.AppliedSpecHash
+	// Sleeping retains the old container. Its applied hash must survive a
+	// Harness/image update so waking deletes it instead of starting it again.
+	if mctx.Spec.DesiredState() == "Running" {
+		w.Status.SpecHash = mctx.AppliedSpecHash
+	}
 	applyDeploymentTargetStatus(w, mctx)
 
 	// Hot-apply a changed subagent model to the running worker process

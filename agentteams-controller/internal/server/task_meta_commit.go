@@ -345,6 +345,9 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "task meta commit body must be a JSON object, not null")
 		return
 	}
+	if ifNoneMatch == "*" && !h.validateExecutionCommit(w, r, nil, body) {
+		return
+	}
 	if ifNoneMatch == "*" {
 		h.putTaskMetaCreateIfAbsent(w, r, taskID, body)
 		return
@@ -376,6 +379,9 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	currentStatus, currentStatusPresent, _ := exactTaskStatus(current)
+	if !h.validateExecutionCommit(w, r, current, body) {
+		return
+	}
 	// The commit must not drop the status: a task meta without one is not a
 	// state any runtime can interpret, and no legitimate client omits it
 	// (the sync commits the merged record).

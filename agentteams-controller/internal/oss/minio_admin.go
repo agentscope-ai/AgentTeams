@@ -267,6 +267,16 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 			},
 		)
 	}
+	// A native directory sync must not bypass Task ownership/checkpoint CAS.
+	// The Controller writes these control objects with its own storage identity.
+	statements = append(statements, s3PolicyStatement{
+		Effect: "Deny",
+		Action: []string{"s3:PutObject", "s3:DeleteObject"},
+		Resource: []string{
+			fmt.Sprintf("arn:aws:s3:::%s/shared/tasks/*/meta.json", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/teams/*/shared/tasks/*/meta.json", bucket),
+		},
+	})
 	return s3Policy{
 		Version:   "2012-10-17",
 		Statement: statements,

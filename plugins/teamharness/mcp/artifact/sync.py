@@ -368,6 +368,11 @@ def _merge_project_pause_state(
     merged = dict(local_meta or {})
     if snapshot is None:
         return merged
+    # Execution authority is never taken from a cached native session.
+    if "execution" in snapshot:
+        merged["execution"] = copy.deepcopy(snapshot["execution"])
+    else:
+        merged.pop("execution", None)
     remote_status = str(snapshot.get("status") or "")
     if remote_status == "paused":
         # A durable pause is never cleared by a client write (round 10);
@@ -828,6 +833,8 @@ def _commit_task_meta(
         method="PUT",
     )
     request.add_header("Content-Type", "application/json")
+    if os.getenv("AGENTTEAMS_PROCESS_ID"):
+        request.add_header("X-AgentTeams-Process-ID", os.environ["AGENTTEAMS_PROCESS_ID"])
     if if_none_match:
         # Create-if-absent: the consistent read saw no remote object.
         request.add_header("If-None-Match", "*")

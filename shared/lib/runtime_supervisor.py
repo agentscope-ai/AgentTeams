@@ -42,6 +42,9 @@ def main():
         os.environ['AGENTTEAMS_OTEL_RUNTIME'] = runtime
     os.environ['AGENTTEAMS_LOG_AGENT_NAME'] = name
     os.environ['AGENTTEAMS_BOOT_ID'] = uuid.uuid4().hex
+    # The supervisor owns the entire native process tree for this start.
+    # Every tool child inherits this fence; it is unrelated to outbox leases.
+    os.environ['AGENTTEAMS_PROCESS_ID'] = f"{os.getpid()}:{time.time_ns()}:{os.environ['AGENTTEAMS_BOOT_ID']}"
     os.environ.setdefault('AGENTTEAMS_LOG_DIR', '/var/log/agentteams/manager' if args.role == 'manager' else f'/var/log/agentteams/workers/{name}')
     os.environ['PYTHONUNBUFFERED'] = '1'
     if runtime == 'qwenpaw':

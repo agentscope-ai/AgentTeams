@@ -68,6 +68,12 @@ checkpoint with the same operation ID, `state: "verified"` and concrete
 `evidence`. If interrupted, verify the external outcome first; do not blindly
 run the operation again. Report an unverifiable outcome and leave it pending.
 
+If your assigned tool or script already persists this checkpoint protocol,
+invoke it unchanged. Let it register its own operation IDs before acting and
+verify them afterward; do not pre-register its IDs or add duplicate checkpoints
+outside its protocol. Check its durable checkpoint and artifacts before moving
+to the next step. If it fails, verify the outcome or leave it pending.
+
 Persist artifacts with your existing artifact/filesync tools before committing
 their `artifacts: [{key, sha256, size}]` references. Keys are full object-store
 keys within your task directory. The Controller reads and verifies each file

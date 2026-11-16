@@ -164,7 +164,9 @@ class Recovery:
             "started or unknown, verify its external outcome and save evidence before continuing; do not rerun it. "
             "Completed steps must not run again. Pull and verify referenced artifacts before using them. "
             "Save artifacts before committing their checkpoint. A read receipt or ACK is not a checkpoint.\n"
-            "Use taskflow.checkpoint_task at step boundaries. Use the same task ID for submission.\n"
+            "Use taskflow.checkpoint_task at step boundaries. If your assigned executor already persists these "
+            "checkpoints, invoke it unchanged; do not pre-register its operation IDs or commit a duplicate checkpoint "
+            "outside its protocol. Use the same task ID for submission.\n"
             + json.dumps({"task_id": task["task_id"], "team_id": task.get("team_id"),
                 "status": task["status"], "title": task.get("title"), "spec": task.get("spec"),
                 "project_id": task.get("project_id"), "main_task_id": task.get("main_task_id"),

@@ -479,6 +479,24 @@ process's unproved start. Twelve tests pass with the actual Controller state
 transition represented. No production state rule was relaxed. Both Workers
 were stopped and the failed Task and empty effect ledger were preserved.
 
+[Case 19](evidence/runtime-recovery-1631-case19-failed.json) completed source
+Hermes step one with independent ledger version 1, checkpoint version 4 and
+a durable output. The old container exited/destroyed before DeepSeek creation;
+the new native session discovered the same Task and claimed generation 2 with
+zero new external Matrix inputs. However, the target manually pre-registered
+the helper-owned step-two operation before invoking the helper. No matching
+ledger intent existed, so the target effect remained blocked. Counts were
+1/0/0, and the sample failed rather than rewinding the checkpoint or fabricating
+a result. Both Workers were stopped and their data retained.
+
+The shared resume instructions and both Task-execution Skill copies now
+explain checkpoint-owning executors: invoke them unchanged and do not register
+their operation IDs or duplicate their checkpoints outside their protocol.
+This clarifies who records the start; it retains the requirement to persist a
+start before any side effect and to verify uncertain outcomes. Recovery-client
+14 tests and the TeamHarness contract/parity check pass. A fresh real-model
+run is required to validate the instruction change.
+
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement cases 06/09/13 passed; other scenarios incomplete | untested | untested | untested | untested |

@@ -22,7 +22,7 @@ CONTROLLER = PREFIX + "-controller"
 NETWORK = PREFIX + "-net"
 STATE = Path("/tmp/recovery-1631-e2e-state.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-state.json")
 PRIVATE_BOOTSTRAP = Path("/tmp/recovery-1631-bootstrap.private.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-bootstrap.private.json")
-CORE_IMAGE = "recovery-1631/controller:local-20261117030800"
+CORE_IMAGE = "recovery-1631/controller:local-20261117041000"
 HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117013200",
                   "hermes": "recovery-1631/hermes:local-20261117034200",
                   "deepseek-harness": "recovery-1631/deepseek:local-20261117034200"}
@@ -229,6 +229,12 @@ def step_ledger(task):
     return sorted(records, key=lambda record: record["checkpoint_version"])
 
 
+def assert_step_boundaries(ledger, before_version):
+    versions = [row["checkpoint_version"] for row in ledger]
+    if versions[0] != 1 or versions[1] <= before_version or versions[2] != versions[1] + 2:
+        raise ValueError("step boundary receipts must include a registered start and verified checkpoint per step")
+
+
 def evidence():
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     instances = []
@@ -310,6 +316,8 @@ def verify():
     ledger = step_ledger(task)
     assert [row["step"] for row in ledger] == ["one", "two", "three"]
     assert [row["generation"] for row in ledger] == [1, 2, 2]
+    if task.get("recovery_fixture", {}).get("oracle_version") == 2:
+        assert_step_boundaries(ledger, before["task"]["execution"]["checkpoint"]["version"])
     artifacts = cp["artifacts"] + [cp["result"]]
     for artifact in artifacts:
         data = stored(artifact["key"])
@@ -487,7 +495,7 @@ def status():
 def members():
     # This creates resources only through this fixture's Controller CLI.
     # The existing installation and its task graph are never selected.
-    for name, runtime in (("agent-a", "codex"), ("leader", "hermes")):
+    for name, runtime in (("agent-a", SOURCE), ("leader", "hermes")):
         manifest = {"apiVersion": "agentteams.io/v1beta1", "kind": "Worker",
             "metadata": {"name": name}, "spec": {"workerName": name, "runtime": runtime,
                 "model": "qwen3.6-plus", "image": HARNESS_IMAGES[runtime]}}

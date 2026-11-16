@@ -227,6 +227,9 @@ func (h *TaskRecoveryHandler) validateCheckpoint(ctx context.Context, key string
 	if op := cp.Operation; op != nil && (op.ID == "" || (op.State != "started" && op.State != "unknown" && op.State != "verified") || (op.State == "verified" && strings.TrimSpace(op.Evidence) == "")) {
 		return fmt.Errorf("operation requires an identity, state and verification evidence")
 	}
+	if op := cp.Operation; op != nil && op.State == "verified" && (old == nil || old.Operation == nil || old.Operation.ID != op.ID) {
+		return fmt.Errorf("record the operation start before verifying it")
+	}
 	completed := map[string]bool{}
 	for _, step := range cp.CompletedSteps {
 		if step == "" || completed[step] {

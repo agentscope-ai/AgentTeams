@@ -30,7 +30,7 @@ class Recovery:
         self.process = os.environ["AGENTTEAMS_PROCESS_ID"]
 
     def _request(self, method, path, body=None, etag=None):
-        token = Path(os.environ["AGENTTEAMS_AUTH_TOKEN_FILE"]).read_text().strip()
+        token = Path(os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE") or "/var/run/secrets/agentteams/token").read_text().strip()
         headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json",
                    "X-AgentTeams-Process-ID": self.process}
         if etag:

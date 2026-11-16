@@ -1,5 +1,6 @@
 """Contract tests, not native Harness or real-model continuation evidence."""
 import copy
+import io
 import os
 from pathlib import Path
 import sys
@@ -27,6 +28,16 @@ class RecoveryTests(unittest.TestCase):
     def test_managed_standalone_boot_still_discovers_later_team_assignments(self):
         with patch.dict(os.environ, {"AGENTTEAMS_CONTROLLER_URL": "http://controller", "AGENTTEAMS_AGENT_ROLE": "standalone"}):
             self.assertTrue(enabled())
+
+    def test_scrubbed_token_file_environment_uses_the_scoped_worker_mount(self):
+        with patch.dict(os.environ, {"AGENTTEAMS_PROCESS_ID": "actual-start", "AGENTTEAMS_CONTROLLER_URL": "http://controller.invalid"}, clear=True), \
+                patch("task_recovery.Path.read_text", autospec=True, return_value="scoped-worker-token\n") as read, \
+                patch("task_recovery.urllib.request.urlopen", return_value=io.BytesIO(b'{"tasks":[]}')) as request:
+            self.assertEqual(Recovery().discover(), {"tasks": []})
+        read.assert_called_once_with(Path("/var/run/secrets/agentteams/token"))
+        headers = dict((key.lower(), value) for key, value in request.call_args.args[0].header_items())
+        self.assertEqual(headers["authorization"], "Bearer scoped-worker-token")
+        self.assertEqual(headers["x-agentteams-process-id"], "actual-start")
 
     def test_temporary_controller_failure_is_a_controlled_tool_error(self):
         failures = [urllib.error.HTTPError("http://controller", 503, "Unavailable", {}, None),

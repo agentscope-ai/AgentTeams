@@ -79,6 +79,26 @@ func TestTaskCheckpointRetainsDurableArtifactsAndVerifiedOperation(t *testing.T)
 	}
 }
 
+func TestTaskCheckpointRequiresOperationStartBeforeVerification(t *testing.T) {
+	h := &TaskRecoveryHandler{}
+	verified := &taskCheckpoint{Version: 1, Operation: &taskOperation{ID: "effect-one", State: "verified", Evidence: "persisted receipt"}}
+	if err := h.validateCheckpoint(t.Context(), taskMetaKey, nil, verified); err == nil {
+		t.Fatal("unregistered side effect was declared verified")
+	}
+	started := &taskCheckpoint{Version: 1, Operation: &taskOperation{ID: "effect-one", State: "started"}}
+	if err := h.validateCheckpoint(t.Context(), taskMetaKey, nil, started); err != nil {
+		t.Fatal(err)
+	}
+	verified.Version = 2
+	if err := h.validateCheckpoint(t.Context(), taskMetaKey, started, verified); err != nil {
+		t.Fatalf("registered operation could not be verified: %v", err)
+	}
+	next := &taskCheckpoint{Version: 3, Operation: &taskOperation{ID: "effect-two", State: "verified", Evidence: "another receipt"}}
+	if err := h.validateCheckpoint(t.Context(), taskMetaKey, verified, next); err == nil {
+		t.Fatal("next operation skipped its durable start")
+	}
+}
+
 func TestTaskRecoveryFencesCheckpointAndProcess(t *testing.T) {
 	ctx := context.Background()
 	store := ossfake.NewMemory()

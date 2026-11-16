@@ -409,6 +409,42 @@ The last command requires the independent Codex repository checked out at
 No matrix cell has completed its full required scenario set. Partial real
 execution is labelled separately from acceptance:
 
+### Case 17: rejected apparent success
+
+[Case 17](evidence/runtime-recovery-1631-case17-failed.json) ran in a fresh
+`recovery-1631-live-20261117-v4` installation (subnet `10.231.167.0/24`). The
+Controller really contained `1629bdf5`; its Linux binary SHA256 was
+`a0100a2183a32a952f1331144cdf19c7f2a3a62b91ac8cfc4ae387e7e7dbeab7`.
+Hermes `9c82bf1f` and DeepSeek `035da183` used shared Core `9bdbbe92`.
+No existing installation or old Matrix database was changed.
+
+The native DeepSeek shell scrubbed `AGENTTEAMS_AUTH_TOKEN_FILE`, although its
+MCP transport explicitly forwarded the path. The unchanged acceptance helper
+failed before execution with that missing environment key. The model then
+manually uploaded step outputs/receipts and submitted checkpoints without the
+prescribed start/verified boundary. The Task reached submitted/delivered, but
+receipt start versions were `1/5/6`, not the helper's `1/5/7` sequence. This is
+not a passing execution-continuation sample. The updated verifier rejects it.
+
+The shared recovery client now falls back to the same scoped Worker token
+mount used by `agt` when only the environment path was scrubbed; it does not
+use Matrix credentials or an admin token. The regression first raised the
+same KeyError, then all 14 recovery-client tests passed. An actual read-only
+probe inside that Worker, with the environment path removed, authenticated
+self-discovery through the mounted token. Two receipt-boundary tests cover
+the valid sequence and reject this real counterexample. The Controller also
+requires a persisted operation start before accepting verification of a new
+operation identity; the new regression first failed.
+
+This exposed a remaining oracle trust gap: Worker-written receipt objects can
+be synthesized. Before accepting another DeepSeek execution case, move effect
+counts to a separately owned fixture service/ledger, with Worker-readable
+results and no Worker write access to the authoritative counts. Record both
+effect execution and verification calls. This is test infrastructure, not the
+deferred product Task database. Native Python telemetry also reported missing
+`opentelemetry`; packaged dependency and trace/UI validation remain open.
+The two fixture Workers were stopped with all data retained.
+
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement cases 06/09/13 passed; other scenarios incomplete | untested | untested | untested | untested |

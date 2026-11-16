@@ -669,6 +669,26 @@ func TestLifecycleSkillWarningsDoNotChangePhaseAndCanBeCleared(t *testing.T) {
 	}
 }
 
+func TestSkillWarningsBeforeStartupDoNotMarkWorkerReady(t *testing.T) {
+	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "skills-worker", Namespace: "default"}, Status: v1beta1.WorkerStatus{Phase: "Pending"}}
+	k8sClient := fake.NewClientBuilder().WithScheme(newLifecycleTestScheme(t)).WithStatusSubresource(&v1beta1.Worker{}).WithObjects(worker).Build()
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry(nil), "default")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/skills-worker/skill-warnings", strings.NewReader(`{"skillWarnings":["Skill broken: load failed"]}`))
+	req.SetPathValue("name", "skills-worker")
+	rec := httptest.NewRecorder()
+	handler.ReportSkillWarnings(rec, req)
+	if rec.Code != http.StatusNoContent || handler.isReady("skills-worker") {
+		t.Fatalf("diagnostics must not mark ready: status=%d ready=%v", rec.Code, handler.isReady("skills-worker"))
+	}
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "skills-worker", Namespace: "default"}, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status.Phase != "Pending" || len(updated.Status.SkillWarnings) != 1 {
+		t.Fatalf("unexpected status: %+v", updated.Status)
+	}
+}
+
 func TestLifecycleReadyStaleLastActiveAtNotOverwritten(t *testing.T) {
 	scheme := newLifecycleTestScheme(t)
 	worker := &v1beta1.Worker{

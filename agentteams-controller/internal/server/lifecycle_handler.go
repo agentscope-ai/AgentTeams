@@ -350,6 +350,17 @@ func (h *LifecycleHandler) Ready(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ReportSkillWarnings accepts diagnostics before startup without marking ready.
+func (h *LifecycleHandler) ReportSkillWarnings(w http.ResponseWriter, r *http.Request) {
+	var report workerRuntimeReport
+	if err := json.NewDecoder(r.Body).Decode(&report); err != nil || report.SkillWarnings == nil {
+		httputil.WriteError(w, http.StatusBadRequest, "skillWarnings must be an array")
+		return
+	}
+	h.updateWorkerRuntimeReport(r.PathValue("name"), workerRuntimeReport{SkillWarnings: report.SkillWarnings})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // workerRuntimeReport is the optional heartbeat payload sent by workers.
 // Every field is optional so legacy workers (empty body) keep working.
 type workerRuntimeReport struct {

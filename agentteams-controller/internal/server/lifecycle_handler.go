@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
 	"sync"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -352,11 +353,12 @@ func (h *LifecycleHandler) Ready(w http.ResponseWriter, r *http.Request) {
 // workerRuntimeReport is the optional heartbeat payload sent by workers.
 // Every field is optional so legacy workers (empty body) keep working.
 type workerRuntimeReport struct {
-	LastActiveAt     string `json:"lastActiveAt"`
-	AgentStatus      string `json:"agentStatus"`
-	RunningTaskCount *int   `json:"runningTaskCount"`
-	LastRunAt        string `json:"lastRunAt"`
-	LastFinishAt     string `json:"lastFinishAt"`
+	LastActiveAt     string    `json:"lastActiveAt"`
+	AgentStatus      string    `json:"agentStatus"`
+	RunningTaskCount *int      `json:"runningTaskCount"`
+	LastRunAt        string    `json:"lastRunAt"`
+	LastFinishAt     string    `json:"lastFinishAt"`
+	SkillWarnings    *[]string `json:"skillWarnings"`
 }
 
 func readWorkerRuntimeReport(r *http.Request) workerRuntimeReport {
@@ -372,7 +374,7 @@ func readWorkerRuntimeReport(r *http.Request) workerRuntimeReport {
 // Worker status. Failures are non-fatal: the next heartbeat re-sends them.
 func (h *LifecycleHandler) updateWorkerRuntimeReport(name string, report workerRuntimeReport) {
 	if report.LastActiveAt == "" && report.AgentStatus == "" &&
-		report.RunningTaskCount == nil && report.LastRunAt == "" && report.LastFinishAt == "" {
+		report.RunningTaskCount == nil && report.LastRunAt == "" && report.LastFinishAt == "" && report.SkillWarnings == nil {
 		return
 	}
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -381,6 +383,10 @@ func (h *LifecycleHandler) updateWorkerRuntimeReport(name string, report workerR
 			return client.IgnoreNotFound(err)
 		}
 		changed := false
+		if report.SkillWarnings != nil && !slices.Equal(worker.Status.SkillWarnings, *report.SkillWarnings) {
+			worker.Status.SkillWarnings = slices.Clone(*report.SkillWarnings)
+			changed = true
+		}
 		if report.LastActiveAt != "" && isLastActiveNewer(report.LastActiveAt, worker.Status.LastActiveAt) {
 			worker.Status.LastActiveAt = report.LastActiveAt
 			changed = true

@@ -456,9 +456,11 @@ type WorkerStatus struct {
 	LastRunAt string `json:"lastRunAt,omitempty"`
 	// LastFinishAt is the runtime-reported timestamp of the last task finish
 	// (RFC3339 UTC, from the QwenPaw agent-status endpoint).
-	LastFinishAt string              `json:"lastFinishAt,omitempty"`
-	Message      string              `json:"message,omitempty"`
-	ExposedPorts []ExposedPortStatus `json:"exposedPorts,omitempty"`
+	LastFinishAt string `json:"lastFinishAt,omitempty"`
+	// SkillWarnings are non-blocking skill load/enable failures reported by the runtime.
+	SkillWarnings []string            `json:"skillWarnings,omitempty"`
+	Message       string              `json:"message,omitempty"`
+	ExposedPorts  []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.

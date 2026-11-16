@@ -145,6 +145,7 @@ type WorkerResponse struct {
 	RunningTaskCount *int              `json:"runningTaskCount,omitempty"`
 	LastRunAt        string            `json:"lastRunAt,omitempty"`
 	LastFinishAt     string            `json:"lastFinishAt,omitempty"`
+	SkillWarnings    []string          `json:"skillWarnings,omitempty"`
 	ExposedPorts     []ExposedPortInfo `json:"exposedPorts,omitempty"`
 	Team             string            `json:"team,omitempty"`
 	Role             string            `json:"role,omitempty"`
@@ -232,23 +233,25 @@ type WorkerSpecView struct {
 // row can be keyed by name instead of by its position in the list
 // (issue #1477).
 type WorkerStatusView struct {
-	Name             string `json:"name"`
-	WorkerName       string `json:"workerName,omitempty"`
-	Phase            string `json:"phase"`
-	ContainerState   string `json:"containerState,omitempty"`
-	Message          string `json:"message,omitempty"`
-	LastActiveAt     string `json:"lastActiveAt,omitempty"`
-	AgentStatus      string `json:"agentStatus,omitempty"`
-	RunningTaskCount *int   `json:"runningTaskCount,omitempty"`
-	LastRunAt        string `json:"lastRunAt,omitempty"`
-	LastFinishAt     string `json:"lastFinishAt,omitempty"`
-	Team             string `json:"team,omitempty"`
-	Role             string `json:"role,omitempty"`
+	SkillWarnings    []string `json:"skillWarnings,omitempty"`
+	Name             string   `json:"name"`
+	WorkerName       string   `json:"workerName,omitempty"`
+	Phase            string   `json:"phase"`
+	ContainerState   string   `json:"containerState,omitempty"`
+	Message          string   `json:"message,omitempty"`
+	LastActiveAt     string   `json:"lastActiveAt,omitempty"`
+	AgentStatus      string   `json:"agentStatus,omitempty"`
+	RunningTaskCount *int     `json:"runningTaskCount,omitempty"`
+	LastRunAt        string   `json:"lastRunAt,omitempty"`
+	LastFinishAt     string   `json:"lastFinishAt,omitempty"`
+	Team             string   `json:"team,omitempty"`
+	Role             string   `json:"role,omitempty"`
 }
 
 // WorkerSpecStatusView is the fields=spec,status projection: the union of
 // WorkerSpecView and WorkerStatusView in WorkerResponse field order.
 type WorkerSpecStatusView struct {
+	SkillWarnings                []string          `json:"skillWarnings,omitempty"`
 	LlmHeartbeatEnabled          *bool             `json:"llmHeartbeatEnabled,omitempty"`
 	Name                         string            `json:"name"`
 	WorkerName                   string            `json:"workerName,omitempty"`
@@ -338,6 +341,7 @@ func (r WorkerResponse) StatusView() WorkerStatusView {
 		RunningTaskCount: r.RunningTaskCount,
 		LastRunAt:        r.LastRunAt,
 		LastFinishAt:     r.LastFinishAt,
+		SkillWarnings:    r.SkillWarnings,
 		Team:             r.Team,
 		Role:             r.Role,
 	}
@@ -380,6 +384,7 @@ func (r WorkerResponse) SpecStatusView() WorkerSpecStatusView {
 		RunningTaskCount:             r.RunningTaskCount,
 		LastRunAt:                    r.LastRunAt,
 		LastFinishAt:                 r.LastFinishAt,
+		SkillWarnings:                r.SkillWarnings,
 		ExposedPorts:                 r.ExposedPorts,
 		Team:                         r.Team,
 		Role:                         r.Role,

@@ -25,8 +25,8 @@ STATE = Path("/tmp/recovery-1631-e2e-state.json" if PREFIX == "recovery-1631-liv
 PRIVATE_BOOTSTRAP = Path("/tmp/recovery-1631-bootstrap.private.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-bootstrap.private.json")
 CORE_IMAGE = "recovery-1631/controller:local-20261117053228"
 HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117013200",
-                  "hermes": "recovery-1631/hermes:local-20261117053228",
-                  "deepseek-harness": "recovery-1631/deepseek:local-20261117053228"}
+                  "hermes": "recovery-1631/hermes:local-20261117053547",
+                  "deepseek-harness": "recovery-1631/deepseek:local-20261117053547"}
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
@@ -154,6 +154,14 @@ def seed():
     actual = json.loads(docker("inspect", PREFIX + "-worker-agent-a"))[0]
     if member.get("phase") != "Running" or member.get("runtime") != SOURCE or not actual["State"]["Running"] or actual["Config"]["Image"] != HARNESS_IMAGES[SOURCE]:
         raise RuntimeError("Wait for the selected source Harness and image to be running before assignment")
+    ready_code = """import datetime,json,pathlib,sys
+started=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
+path=pathlib.Path('/var/log/agentteams/workers/agent-a/events.jsonl')
+rows=[json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+print(json.dumps(any(row.get('event')=='runtime.ready' and datetime.datetime.fromisoformat(row['timestamp'])>started for row in rows)))
+"""
+    if not json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", ready_code, actual["State"]["StartedAt"])):
+        raise RuntimeError("Wait for native runtime.ready after this container start before assignment")
     room = api("GET", "teams/" + team)["teamRoomID"]
     if subprocess.run(["docker", "exec", CONTROLLER, "mc", "stat",
             "agentteams/recovery-1631/teams/" + team + "/shared/tasks/" + task_id + "/meta.json"], capture_output=True).returncode == 0:

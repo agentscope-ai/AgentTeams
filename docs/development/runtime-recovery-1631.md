@@ -74,7 +74,7 @@ real-model evidence retains its original exact source pins.
   pending input, and uses the same checkpoint/result contract. A missing native
   session returns a dedicated error before admitting input/tools, permitting a
   fresh session; other native failures fence uncertainty and bypass ordinary
-  Matrix event retries. This adapter has no real-model Task acceptance yet.
+  Matrix event retries. Its bounded real-model Hermes→DeepSeek replacement passed case 20; the remaining scenario set is open.
 - DSH's native subprocess scrubber removes the Controller credential-file
   environment variable. Its MCP transport now forwards that scoped file path
   explicitly. A real installed MCP transport/checkpoint tool regression first
@@ -123,7 +123,7 @@ real-model evidence retains its original exact source pins.
 | Codex existing suite | 29 passed | SDK/transport unit fixtures |
 | Codex recovery admission/session/delivery/reassignment | 9 passed; 38 total | mocked client; no native model |
 | Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; SDK cache/admission tests use mocked Task client; real normal restart and valid native-session reuse passed case 11; remaining scenario set open |
-| DeepSeek startup recovery | partial | 63 Python and 7 Node tests passed; Task client mocked; native missing-session/no-input, tool/read, resume/error and stop/steer smokes passed with a deterministic model; real-model Task continuation not accepted yet |
+| DeepSeek startup recovery | partial | 63 Python and 7 Node tests passed; Task client mocked; native missing-session/no-input, tool/read, resume/error and stop/steer smokes passed with a deterministic model; real-model Hermes→DeepSeek replacement passed case 20; remaining scenarios open |
 | DeepSeek native MCP checkpoint scope | passed, HTTP fixture | actual SDK scrubber and stdio MCP tool preserve credential-file access, process fence and conditional Task HTTP; no model/real Task acceptance |
 | Task metadata storage authority | bounded probe and case 13 passed | full OSS unit suite 7.315s; live MinIO raw write/delete denied while reads, ordinary artifacts and Controller CAS remain functional; updated Controller completed one real Codex-to-Hermes continuation |
 | Independent receipt oracle | 3 unit tests and case 13 passed | separate per-invocation objects outside the Task directory; stale directory ledger overwrite and uncertain-effect verification covered by unit tests; receipts are not storage-enforced WORM |
@@ -497,10 +497,61 @@ start before any side effect and to verify uncertain outcomes. Recovery-client
 14 tests and the TeamHarness contract/parity check pass. A fresh real-model
 run is required to validate the instruction change.
 
+### Case 20: independent-ledger execution continuation passed
+
+[Case 20 proof](evidence/runtime-recovery-1631-case20-verified.json) accepted one
+real Hermes→DeepSeek in-progress replacement using Core/shared
+`eb52bf70d0a33c848fe6a4af72833ec553cc5ce8`, Hermes
+`0234f38f8668d943da499d2106230e62c6226087` and DeepSeek
+`008dd4db04ed32786bb4c2d9eabd32eee3a49893`. The Controller binary SHA256 is
+`b7ad1c098348085e37b4b58fc5a5d77b207cde61d0daaa30d0dc68612ec4be77`.
+The images are local overlays, not published builds: Controller
+`local-20261117053228`, Workers `local-20261117053547`.
+
+The same Task remained in progress at source checkpoint 5 after step one and
+a real native read receipt. Old die/destroy preceded target creation, and
+Docker inspect/top confirmed the old instance was absent. With no external
+Matrix input after stop, DeepSeek discovered/claimed generation 2 and created
+fresh native session `session-task-c22b4fe8f9154a55af77e9573b8fac26`.
+Its unchanged helper executed steps two/three. The private ledger recorded
+exactly three effects, generations 1/2/2 and start versions 1/6/8; all six
+intent/effect requests were accepted. Native audit found no manual
+`checkpoint_task` or raw HTTP bypass. Artifact bytes/digests were verified,
+and checkpoint 11 retained all three artifacts and the saved canonical report.
+One Matrix reply exactly matched that 762-byte report; no external message
+arrived between stop and final delivery. Repeated idempotent submission calls
+did not duplicate the final report.
+
+Preparation exposed a local overlay COPY removing the `mc` wrapper executable
+bit. Before any execution claim/model call, the Task was still assigned.
+The overlay restored the public Dockerfile's chmod, preserved the same Task
+and queued assignment, and sent no new Matrix message. Future driver seeding
+now requires `runtime.ready` after the current container start, rather than
+trusting only Docker Running. The proof records this preparation boundary and
+the actual driver file hash/source changes.
+
+Tracing was configured before model execution, capture off. Two source Hermes
+traces were read through the Controller API (`ddaae5bdbf7ce352d6c58c19ab63a887`,
+`b1b65720630bcd7dd64d4fcf5e4cc858`). A DeepSeek trace and canonical Task
+correlation were not found; browser automation timed out. Full tracing/UI
+acceptance remains open. This positive execution case does not cover abnormal
+restart, lost/expired sessions, unknown effects, cancellation/reassignment,
+saved-result redelivery or the other six-Harness/30-direction cells.
+
+Exact-head hosted checks passed for Codex `69629842`
+([43960937273](https://github.com/agentteams-group/agentteams-harness-codex/actions/runs/43960937273)),
+Hermes `0234f38f`
+([43960940113](https://github.com/agentteams-group/agentteams-harness-hermes/actions/runs/43960940113))
+and DeepSeek `008dd4db`
+([43960954223](https://github.com/agentteams-group/agentteams-harness-deepseek/actions/runs/43960954223)).
+Publication was not requested. Core `c7978e24` Controller checks passed; its
+full integration run remains pending. These statuses do not pre-approve later
+evidence-only commits.
+
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement cases 06/09/13 passed; other scenarios incomplete | untested | untested | untested | untested |
-| Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | untested | untested | untested | untested |
+| Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | untested | replacement case 20 passed; other scenarios incomplete | untested | untested |
 | QwenPaw | untested | untested | untested | untested | untested | untested |
 | DeepSeek | untested | untested | untested | untested | untested | untested |
 | OpenClaw | untested | untested | untested | untested | untested | untested |

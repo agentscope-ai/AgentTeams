@@ -8,8 +8,7 @@ on:
       - 'shared/lib/agentteams_receipts.py'
       - 'tests/test_harness_session_receipts.py'
       - 'tests/lib/matrix-client.sh'
-      - 'tests/openhuman-session-receipts/**'
-      - 'openhuman/patches/session*'
+      - 'openhuman'
       - 'hermes'
       - 'deepseek-harness'
       - '.gitmodules'
@@ -35,8 +34,7 @@ on:
       - 'shared/lib/agentteams_receipts.py'
       - 'tests/test_harness_session_receipts.py'
       - 'tests/lib/matrix-client.sh'
-      - 'tests/openhuman-session-receipts/**'
-      - 'openhuman/patches/session*'
+      - 'openhuman'
       - 'hermes'
       - 'deepseek-harness'
       - '.gitmodules'
@@ -71,7 +69,7 @@ jobs:
           node-version: '24'
       - uses: dtolnay/rust-toolchain@stable
       - run: python3 -m unittest discover -s tests -p test_harness_session_receipts.py -v
-      - run: cargo test --manifest-path tests/openhuman-session-receipts/Cargo.toml
+      - run: cargo test --locked --manifest-path openhuman/tests/session-receipts/Cargo.toml
 
   test:
     runs-on: ubuntu-latest
@@ -145,6 +143,7 @@ jobs:
           NO_PROXY: 127.0.0.1,localhost
         run: |
           ruby plugins/tests/teamharness/test-contracts.rb
+          python -m pytest tests/test_task_coordination.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_continuation.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_delegate_redelegation.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_filesync_remote_guard.py -q

@@ -10,3 +10,6 @@
 [submodule "deepseek-harness"]
 	path = deepseek-harness
 	url = https://github.com/agentteams-group/agentteams-harness-deepseek.git
+[submodule "openhuman"]
+	path = openhuman
+	url = https://github.com/agentteams-group/agentteams-harness-openhuman.git

@@ -387,6 +387,8 @@ The `copaw` value remains available for compatibility with existing CoPaw Worker
 agt update worker --runtime hermes
 ```
 
+Harness implementations are maintained in independent `agentteams-group` repositories: [OpenClaw](https://github.com/agentteams-group/agentteams-harness-openclaw), [QwenPaw](https://github.com/agentteams-group/agentteams-harness-qwenpaw), [Hermes](https://github.com/agentteams-group/agentteams-harness-hermes), [DeepSeek](https://github.com/agentteams-group/agentteams-harness-deepseek), [OpenHuman](https://github.com/agentteams-group/agentteams-harness-openhuman), [Codex](https://github.com/agentteams-group/agentteams-harness-codex). Core pins their source revisions for builds.
+
 ## Architecture
 
 ```

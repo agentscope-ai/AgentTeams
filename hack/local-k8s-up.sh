@@ -110,7 +110,9 @@ if [ "$SKIP_BUILD" = "0" ]; then
 
     log "Building worker image (openhuman)..."
     docker build -t "$OPENHUMAN_WORKER_IMAGE" \
-        -f "${PROJECT_ROOT}/openhuman/Dockerfile" "${PROJECT_ROOT}"
+        --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
+        --build-context agentteams="${PROJECT_ROOT}" \
+        "${PROJECT_ROOT}/openhuman"
 
     log "Loading images into kind cluster..."
     kind load docker-image "$MANAGER_IMAGE" --name "$CLUSTER_NAME"

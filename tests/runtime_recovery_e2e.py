@@ -104,6 +104,20 @@ def tracing():
                       "acceptance": "real trace ingestion and readback not yet verified"}))
 
 
+def prepare():
+    # Configure the SDK before assigning work. Its interactive home-channel
+    # hints would otherwise introduce extra Matrix input during cutover.
+    for name in ("agent-a", "leader"):
+        worker = api("GET", "workers/" + name)
+        if not worker.get("roomID"):
+            raise RuntimeError("Wait for the disposable member's personal room before preparation")
+        env = worker.get("env", {})
+        if env.get("MATRIX_HOME_ROOM") != worker["roomID"]:
+            env["MATRIX_HOME_ROOM"] = worker["roomID"]
+            api("PUT", "workers/" + name, {"env": env})
+    print("Prepared native home rooms only for the disposable test members; wait for Running before seeding")
+
+
 def seed():
     task_id, main_id, team = TASK_ID, MAIN_ID, "recovery-team"
     room = api("GET", "teams/" + team)["teamRoomID"]
@@ -448,5 +462,5 @@ def members():
 
 
 if __name__ == "__main__":
-    {"setup": setup, "restore": lambda: setup(restore=True), "status": status, "members": members, "tracing": tracing, "seed": seed,
+    {"setup": setup, "restore": lambda: setup(restore=True), "status": status, "members": members, "prepare": prepare, "tracing": tracing, "seed": seed,
      "refresh-controller": refresh_controller, "evidence": evidence, "cutover": cutover, "verify": verify}[sys.argv[1]]()

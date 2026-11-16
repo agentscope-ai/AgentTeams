@@ -58,7 +58,8 @@ candidates, not accepted/released Harness versions.
   routing, expiration and shared checkpoint digest. Native reuse requires a
   live persisted SDK row; otherwise recovery creates a new conversation.
   Concurrent recovery admission is serialized. Installed SDK tests cover
-  these paths with a mocked Task client; real Hermes reuse remains untested.
+  these paths with a mocked Task client; real Hermes restart/reuse passed
+  case 11 after configuring the test members' native home rooms.
 - DeepSeek discovers/claims Tasks before Matrix admission, preserves first-sync
   pending input, and uses the same checkpoint/result contract. A missing native
   session returns a dedicated error before admitting input/tools, permitting a
@@ -92,7 +93,7 @@ candidates, not accepted/released Harness versions.
 | Controller integration envtest with race | passed | 68.402 seconds; source at runtime-identity change |
 | Codex existing suite | 29 passed | SDK/transport unit fixtures |
 | Codex recovery admission/session/delivery/reassignment | 9 passed; 38 total | mocked client; no native model |
-| Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; installed SDK tests cover concurrent admission and persisted valid/expired/missing/stale/foreign session selection with a mocked Task client; real Hermes session reuse untested |
+| Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; SDK cache/admission tests use mocked Task client; real normal restart and valid native-session reuse passed case 11; remaining scenario set open |
 | DeepSeek startup recovery | partial | 62 Python and 7 Node tests passed; Task client mocked; native missing-session/no-input, tool/read, resume/error and stop/steer smokes passed with a deterministic model; real-model Task continuation untested |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
@@ -147,6 +148,21 @@ report. Task ID stayed stable, generation advanced 1 to 2, checkpoint 4 to 10,
 each step ran once, and the original read/final events and zero new external
 inputs were verified. This does not validate startup of the retained old
 Matrix database.
+
+[Case 10](evidence/runtime-recovery-1631-case10-failed.json) is retained as a
+failed full acceptance: Hermes reused the same actual native session and
+executed every step once, but four Leader home-channel setup notices arrived
+between stop and the final reply. The strict no-new-input assertion failed;
+it was not relaxed or replaced by a delivery-only result.
+
+Before the next Task, the native `MATRIX_HOME_ROOM` setting was configured on
+these disposable members through the Worker API (`prepare` command). No
+production default, Matrix history or database was changed.
+[Case 11](evidence/runtime-recovery-1631-case11.json) then passed normal Hermes
+restart plus actual valid native-session reuse, including an unexpired cache
+whose digest matched checkpoint 4, stable native session
+`20261116_174411_c9c3228e`, generation 1 to 2, three once-only steps, unique
+canonical report bytes, original read receipt, and zero new external inputs.
 
 Recorded live failures and partial evidence:
 
@@ -252,7 +268,7 @@ execution is labelled separately from acceptance:
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement case 06 passed; other scenarios incomplete | untested | untested | untested | untested |
-| Hermes | replacement case 07 passed; other scenarios incomplete | untested | untested | untested | untested | untested |
+| Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | untested | untested | untested | untested |
 | QwenPaw | untested | untested | untested | untested | untested | untested |
 | DeepSeek | untested | untested | untested | untested | untested | untested |
 | OpenClaw | untested | untested | untested | untested | untested | untested |

@@ -1,0 +1,371 @@
+{
+  "passed": false,
+  "case": "10",
+  "scope": "real Hermes normal restart with valid native session reuse",
+  "fixture_prefix": "recovery-1631-live-20261117",
+  "sources": {
+    "core": "2c90bccfedb563cbf94e3e1a932fd2effd7b5e23",
+    "hermes": "0b0892f3aad69c9e655a41a3a95902f8ea1e1185"
+  },
+  "failure": "The strict no-new-external-Matrix-input assertion failed: four native Leader home-channel setup notices arrived between Worker stop and final reply.",
+  "foreign_event_ids": [
+    "$lpi9AAQMEQ5lqiQGHnZuomMN_pjgqY1EZzQ0DmRyAKA",
+    "$7Ekx1YYfWWW5KJVhOGTXHfzTf2LVtaOBC4Y4LWeJpR0",
+    "$RrsC6a-3K4xlFYrhdvQoXrlkna_PN_MQw73_1m9onvU",
+    "$xzFbP8gcgXiZCmtedK6W08VIjtuC4DLoMS7Qnsgl1Bo"
+  ],
+  "before": {
+    "recorded_at": 1794850679.012195,
+    "task": {
+      "acknowledged_by_role": "worker",
+      "assigned_at": "2026-11-16T17:35:09Z",
+      "assigned_to": "@agent-a:recovery-1631.test",
+      "execution": {
+        "generation": 1,
+        "instance_id": "docker/70dc49e99cc128b70257f09ab9e5ac4bc0016f5367b541cc630f16a4f38dab79/2026-11-16T17:31:06.207836259Z",
+        "process_id": "1:1794850266365941043:6edcc38ae9f54cc8bfaf065532014fb9",
+        "runtime": "hermes",
+        "state": "active",
+        "checkpoint": {
+          "version": 4,
+          "completed_steps": [
+            "one"
+          ],
+          "remaining_steps": [
+            "two",
+            "three"
+          ],
+          "operation": {
+            "id": "fixture:live-hermes-hermes-10:one",
+            "state": "verified",
+            "evidence": "Persisted step output SHA256=2bf5fcb37ea959c1dc2ae9995805a691099e4448542ff4556e5fbcfab66af785; ledger count=1"
+          },
+          "artifacts": [
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-10/output/step-one.json",
+              "sha256": "2bf5fcb37ea959c1dc2ae9995805a691099e4448542ff4556e5fbcfab66af785",
+              "size": 104
+            }
+          ],
+          "result": {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-10/checkpoints/reply-b19f6e436f9d9aa70e3dc124bc294e11b78814fd60ad376d12771401b90388bf.txt",
+            "sha256": "b19f6e436f9d9aa70e3dc124bc294e11b78814fd60ad376d12771401b90388bf",
+            "size": 630
+          },
+          "delivery": "delivered",
+          "reply_txn": "task-reply:e19257435dfbd2be0b4ca1c9f9a4882aa9e2893fad10f86151b5a6e22d35054a",
+          "reply_event": "$wbnQotycRjgv8TIAg5qXaOnZZmwoHwyOVvQzRNx09Ok",
+          "saved_at": "2026-11-16T17:36:05.79289234Z"
+        }
+      },
+      "history": [
+        {
+          "action": "ack_task",
+          "actor": "worker:agent-a",
+          "from": "assigned",
+          "seq": 1,
+          "to": "in_progress",
+          "ts": "2026-11-16T17:35:09Z"
+        }
+      ],
+      "history_seq": 1,
+      "main_task_id": "live-main-10",
+      "notifyTxn": "live-assignment-10",
+      "parent_task_id": "live-main-10",
+      "project_id": "",
+      "room_id": "!IN9Jix6mbGhvVE2MPu:recovery-1631.test",
+      "spec_path": "",
+      "status": "in_progress",
+      "task_id": "live-hermes-hermes-10",
+      "task_kind": "subtask",
+      "task_title": "Run three stable steps across hermes to hermes",
+      "team_id": "recovery-team",
+      "title": "Run three stable steps across hermes to hermes"
+    },
+    "ledger": [
+      {
+        "step": "one",
+        "generation": 1,
+        "process_id": "1:1794850266365941043:6edcc38ae9f54cc8bfaf065532014fb9"
+      }
+    ],
+    "instances": [
+      {
+        "name": "recovery-1631-live-20261117-controller",
+        "id": "ca3c55e16097e5c73f939f5370df765f402f0f98caa96e1a2682d59916ac5d53",
+        "image": "recovery-1631/controller:local-20261117002500",
+        "running": true,
+        "pid": 3441390,
+        "started_at": "2026-11-16T17:24:35.525098042Z",
+        "finished_at": "0001-01-01T00:00:00Z"
+      },
+      {
+        "name": "recovery-1631-live-20261117-worker-agent-a",
+        "id": "70dc49e99cc128b70257f09ab9e5ac4bc0016f5367b541cc630f16a4f38dab79",
+        "image": "recovery-1631/hermes:local-20261117013200",
+        "running": true,
+        "pid": 3481352,
+        "started_at": "2026-11-16T17:31:06.207836259Z",
+        "finished_at": "0001-01-01T00:00:00Z"
+      },
+      {
+        "name": "recovery-1631-live-20261117-worker-leader",
+        "id": "a5e2442092d06143f05728c9ae7badd0c99ed9b185edb3d844109f83206ec57b",
+        "image": "recovery-1631/hermes:local-20261117013200",
+        "running": false,
+        "pid": 0,
+        "started_at": "2026-11-16T17:32:10.205575781Z",
+        "finished_at": "2026-11-16T17:37:58.43197489Z"
+      }
+    ],
+    "native_sessions": {
+      "hermes": [
+        {
+          "timestamp": "2026-11-16T17:34:58.317601+00:00",
+          "runtime": "hermes",
+          "role": "standalone",
+          "agent_name": "agent-a",
+          "boot_id": "6edcc38ae9f54cc8bfaf065532014fb9",
+          "event": "task.recovery.session",
+          "task_id": "live-hermes-hermes-10",
+          "team_id": "recovery-team",
+          "generation": 1,
+          "session_id": "20261116_173458_b4812216",
+          "checkpoint_version": 0,
+          "reused": false
+        }
+      ],
+      "hermes_cache": [
+        {
+          "timestamp": "2026-11-16T17:36:05.802270+00:00",
+          "runtime": "hermes",
+          "role": "standalone",
+          "agent_name": "agent-a",
+          "boot_id": "6edcc38ae9f54cc8bfaf065532014fb9",
+          "event": "task.recovery.cache",
+          "task_id": "live-hermes-hermes-10",
+          "team_id": "recovery-team",
+          "session_id": "20261116_173458_b4812216",
+          "expires_at": 1794936965.7964022,
+          "checkpoint_digest": "ba67e367b4233bed0594da28a3baba6e24bc69f40bda136556376ce1cc4e7e97"
+        }
+      ],
+      "codex": null
+    }
+  },
+  "after": {
+    "recorded_at": 1794850805.097997,
+    "task": {
+      "acknowledged_by_role": "worker",
+      "assigned_at": "2026-11-16T17:35:09Z",
+      "assigned_to": "@agent-a:recovery-1631.test",
+      "conclusions": [
+        "All three acceptance steps executed across two container generations with verified outputs",
+        "Step one completed in generation 1; steps two and three completed in generation 2 after container replacement",
+        "All output artifacts (step-one.json, step-two.json, step-three.json) persisted to MinIO and SHA256-verified"
+      ],
+      "continuation": {
+        "delivery_id": "ce23fed0ffeb66d996242a6d4a13b682bd0def8c8c4cf0276ef6dbbf30d97ce2",
+        "status": "pending"
+      },
+      "deliverables": [
+        "shared/tasks/live-hermes-hermes-10/output/step-one.json",
+        "shared/tasks/live-hermes-hermes-10/output/step-two.json",
+        "shared/tasks/live-hermes-hermes-10/output/step-three.json"
+      ],
+      "execution": {
+        "generation": 2,
+        "instance_id": "docker/70dc49e99cc128b70257f09ab9e5ac4bc0016f5367b541cc630f16a4f38dab79/2026-11-16T17:38:02.222619805Z",
+        "process_id": "1:1794850682411157938:8ea62216012d4a7fb253f1c3cd208e49",
+        "runtime": "hermes",
+        "state": "active",
+        "checkpoint": {
+          "version": 10,
+          "completed_steps": [
+            "one",
+            "two",
+            "three"
+          ],
+          "remaining_steps": [],
+          "operation": {
+            "id": "fixture:live-hermes-hermes-10:three",
+            "state": "verified",
+            "evidence": "Persisted step output SHA256=3375ad38d46ecad760c84621c74dd9c7e98fefd91139ee8986ea22c9ce215e2c; ledger count=1"
+          },
+          "artifacts": [
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-10/output/step-one.json",
+              "sha256": "2bf5fcb37ea959c1dc2ae9995805a691099e4448542ff4556e5fbcfab66af785",
+              "size": 104
+            },
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-10/output/step-two.json",
+              "sha256": "3c4b0fcb4be4c2041242f1a0ecfc71f0945f0ff5e97e0304dcc3a5d71ac529e8",
+              "size": 104
+            },
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-10/output/step-three.json",
+              "sha256": "3375ad38d46ecad760c84621c74dd9c7e98fefd91139ee8986ea22c9ce215e2c",
+              "size": 106
+            }
+          ],
+          "result": {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-10/result.md",
+            "sha256": "82624e11dd8887b22ad941a86e195a07875c70e5ff9f0453bea0f34a10c60310",
+            "size": 828
+          },
+          "delivery": "delivered",
+          "reply_txn": "task-reply:69b9172d932c0a6ed61cb574ae89bdd3b3a1b2bc4d3e5b4a38612bc60c5617b5",
+          "reply_event": "$higaidsa_Wu3fUAqszRAyaW02iUCKkVgCDgepm3Nadw",
+          "saved_at": "2026-11-16T17:38:55.422977802Z"
+        }
+      },
+      "history": [
+        {
+          "action": "ack_task",
+          "actor": "worker:agent-a",
+          "from": "assigned",
+          "seq": 1,
+          "to": "in_progress",
+          "ts": "2026-11-16T17:35:09Z"
+        },
+        {
+          "action": "submit_task",
+          "actor": "worker:agent-a",
+          "from": "in_progress",
+          "seq": 2,
+          "to": "submitted",
+          "ts": "2026-11-16T17:38:47Z"
+        }
+      ],
+      "history_seq": 2,
+      "main_task_id": "live-main-10",
+      "notifyTxn": "live-assignment-10",
+      "parent_task_id": "live-main-10",
+      "project_id": "",
+      "result_digest": "78481cdcf7c3a8e9fb0f24e1194aa516817e18d8e3c64198b9a6f18eaef8337c",
+      "result_path": "shared/tasks/live-hermes-hermes-10/result.md",
+      "result_status": "SUCCESS",
+      "room_id": "!IN9Jix6mbGhvVE2MPu:recovery-1631.test",
+      "spec_path": "",
+      "status": "submitted",
+      "submission_id": "1f8bc3cf04dc4b419747c884d54a3efb",
+      "submitted_at": "2026-11-16T17:38:47Z",
+      "submitted_by_role": "worker",
+      "summary": "Executed all three stable steps of the runtime-recovery acceptance task live-hermes-hermes-10. Generation 1 completed step one and paused at step boundary. Generation 2 recovered from checkpoint, executed steps two and three, and produced all verified output artifacts.",
+      "task_id": "live-hermes-hermes-10",
+      "task_kind": "subtask",
+      "task_title": "Run three stable steps across hermes to hermes",
+      "team_id": "recovery-team",
+      "title": "Run three stable steps across hermes to hermes"
+    },
+    "ledger": [
+      {
+        "step": "one",
+        "generation": 1,
+        "process_id": "1:1794850266365941043:6edcc38ae9f54cc8bfaf065532014fb9"
+      },
+      {
+        "step": "two",
+        "generation": 2,
+        "process_id": "1:1794850682411157938:8ea62216012d4a7fb253f1c3cd208e49"
+      },
+      {
+        "step": "three",
+        "generation": 2,
+        "process_id": "1:1794850682411157938:8ea62216012d4a7fb253f1c3cd208e49"
+      }
+    ],
+    "instances": [
+      {
+        "name": "recovery-1631-live-20261117-controller",
+        "id": "ca3c55e16097e5c73f939f5370df765f402f0f98caa96e1a2682d59916ac5d53",
+        "image": "recovery-1631/controller:local-20261117002500",
+        "running": true,
+        "pid": 3441390,
+        "started_at": "2026-11-16T17:24:35.525098042Z",
+        "finished_at": "0001-01-01T00:00:00Z"
+      },
+      {
+        "name": "recovery-1631-live-20261117-worker-agent-a",
+        "id": "70dc49e99cc128b70257f09ab9e5ac4bc0016f5367b541cc630f16a4f38dab79",
+        "image": "recovery-1631/hermes:local-20261117013200",
+        "running": true,
+        "pid": 3521383,
+        "started_at": "2026-11-16T17:38:02.222619805Z",
+        "finished_at": "2026-11-16T17:38:02.089229659Z"
+      },
+      {
+        "name": "recovery-1631-live-20261117-worker-leader",
+        "id": "a5e2442092d06143f05728c9ae7badd0c99ed9b185edb3d844109f83206ec57b",
+        "image": "recovery-1631/hermes:local-20261117013200",
+        "running": true,
+        "pid": 3526175,
+        "started_at": "2026-11-16T17:38:48.162855875Z",
+        "finished_at": "2026-11-16T17:37:58.43197489Z"
+      }
+    ],
+    "native_sessions": {
+      "hermes": [
+        {
+          "timestamp": "2026-11-16T17:34:58.317601+00:00",
+          "runtime": "hermes",
+          "role": "standalone",
+          "agent_name": "agent-a",
+          "boot_id": "6edcc38ae9f54cc8bfaf065532014fb9",
+          "event": "task.recovery.session",
+          "task_id": "live-hermes-hermes-10",
+          "team_id": "recovery-team",
+          "generation": 1,
+          "session_id": "20261116_173458_b4812216",
+          "checkpoint_version": 0,
+          "reused": false
+        },
+        {
+          "timestamp": "2026-11-16T17:38:05.604952+00:00",
+          "runtime": "hermes",
+          "role": "standalone",
+          "agent_name": "agent-a",
+          "boot_id": "8ea62216012d4a7fb253f1c3cd208e49",
+          "event": "task.recovery.session",
+          "task_id": "live-hermes-hermes-10",
+          "team_id": "recovery-team",
+          "generation": 2,
+          "session_id": "20261116_173458_b4812216",
+          "checkpoint_version": 4,
+          "reused": true
+        }
+      ],
+      "hermes_cache": [
+        {
+          "timestamp": "2026-11-16T17:36:05.802270+00:00",
+          "runtime": "hermes",
+          "role": "standalone",
+          "agent_name": "agent-a",
+          "boot_id": "6edcc38ae9f54cc8bfaf065532014fb9",
+          "event": "task.recovery.cache",
+          "task_id": "live-hermes-hermes-10",
+          "team_id": "recovery-team",
+          "session_id": "20261116_173458_b4812216",
+          "expires_at": 1794936965.7964022,
+          "checkpoint_digest": "ba67e367b4233bed0594da28a3baba6e24bc69f40bda136556376ce1cc4e7e97"
+        },
+        {
+          "timestamp": "2026-11-16T17:38:55.435001+00:00",
+          "runtime": "hermes",
+          "role": "standalone",
+          "agent_name": "agent-a",
+          "boot_id": "8ea62216012d4a7fb253f1c3cd208e49",
+          "event": "task.recovery.cache",
+          "task_id": "live-hermes-hermes-10",
+          "team_id": "recovery-team",
+          "session_id": "20261116_173458_b4812216",
+          "expires_at": 1794937135.4269333,
+          "checkpoint_digest": "04a1ca59904173d8b798be94871f57645a7023ae1124c39a2dbe4761c3d5822c"
+        }
+      ],
+      "codex": null
+    }
+  },
+  "accepted_boundary": "Not a complete no-new-message acceptance. Same native session was actually reused and all three ledger steps ran once. Earlier verification checked artifact and authoritative report bytes before failing the Matrix input assertion."
+}

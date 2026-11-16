@@ -1,0 +1,178 @@
+{
+  "task_id": "live-hermes-hermes-11",
+  "case": "11",
+  "scope": "one real hermes-to-hermes in-progress continuation",
+  "mode": "restart",
+  "fixture_prefix": "recovery-1631-live-20261117",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "2c90bccfedb563cbf94e3e1a932fd2effd7b5e23",
+    "hermes": "0b0892f3aad69c9e655a41a3a95902f8ea1e1185"
+  },
+  "native_recovery_sessions": {
+    "hermes": [
+      {
+        "timestamp": "2026-11-16T17:44:11.700354+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "0f1e178d3bd74cac95bf1f40ed362188",
+        "event": "task.recovery.session",
+        "task_id": "live-hermes-hermes-11",
+        "team_id": "recovery-team",
+        "generation": 1,
+        "session_id": "20261116_174411_c9c3228e",
+        "checkpoint_version": 0,
+        "reused": false
+      },
+      {
+        "timestamp": "2026-11-16T17:46:50.029575+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "5f9262e201f44f86b367187d32000992",
+        "event": "task.recovery.session",
+        "task_id": "live-hermes-hermes-11",
+        "team_id": "recovery-team",
+        "generation": 2,
+        "session_id": "20261116_174411_c9c3228e",
+        "checkpoint_version": 4,
+        "reused": true
+      }
+    ],
+    "hermes_cache": [
+      {
+        "timestamp": "2026-11-16T17:46:02.708967+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "0f1e178d3bd74cac95bf1f40ed362188",
+        "event": "task.recovery.cache",
+        "task_id": "live-hermes-hermes-11",
+        "team_id": "recovery-team",
+        "session_id": "20261116_174411_c9c3228e",
+        "expires_at": 1794937562.6996531,
+        "checkpoint_digest": "8ad968e641abc08bf875ac2c40ffb87a5abe88b1e8cb6b905870a980f295660c"
+      },
+      {
+        "timestamp": "2026-11-16T17:47:45.963523+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "5f9262e201f44f86b367187d32000992",
+        "event": "task.recovery.cache",
+        "task_id": "live-hermes-hermes-11",
+        "team_id": "recovery-team",
+        "session_id": "20261116_174411_c9c3228e",
+        "expires_at": 1794937665.938035,
+        "checkpoint_digest": "6c8e8ff9cbe9f8a9642a2ca14535acb5fd07fd9250a3df56992f2b076aa29bcf"
+      }
+    ],
+    "codex": null
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 4,
+  "checkpoint_after": 10,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/00e2d6cf0e512d368803f35ddfcbc34d102b556720a2745aa4892a23367c6f32/2026-11-16T17:46:46.542219949Z",
+    "process_id": "1:1794851206781286288:5f9262e201f44f86b367187d32000992",
+    "runtime": "hermes",
+    "state": "active",
+    "checkpoint": {
+      "version": 10,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-hermes-hermes-11:three",
+        "state": "verified",
+        "evidence": "Persisted step output SHA256=93eb4101cd359a5c5706b0e44e48b1f19de3853f5c88474f250eb9f582a067c6; ledger count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-11/output/step-one.json",
+          "sha256": "f716bac147f873c44c2f2e2908eb1d7febcd85bb8e5f7922c112458913f8a925",
+          "size": 104
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-11/output/step-two.json",
+          "sha256": "7f869dbe51b9e5435e606751dce5fc2a080008cda57965b4e547553c3cbd9dc4",
+          "size": 104
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-11/output/step-three.json",
+          "sha256": "93eb4101cd359a5c5706b0e44e48b1f19de3853f5c88474f250eb9f582a067c6",
+          "size": 106
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-11/result.md",
+        "sha256": "481673e695f34796eca1ca6c719e1a8bfac4b7033b8170d8adf0309ccc9e6fbe",
+        "size": 692
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:0b00ad99f3b38ed7b1defb586d36a450b8da8ccadd905272aa4621cfe95b440b",
+      "reply_event": "$TaAf6ES0ZAovtGALsLtbTDnTrFYNcKban6n49XE_TXE",
+      "saved_at": "2026-11-16T17:47:45.930440503Z"
+    }
+  },
+  "ledger": [
+    {
+      "step": "one",
+      "generation": 1,
+      "process_id": "1:1794850957694489372:0f1e178d3bd74cac95bf1f40ed362188"
+    },
+    {
+      "step": "two",
+      "generation": 2,
+      "process_id": "1:1794851206781286288:5f9262e201f44f86b367187d32000992"
+    },
+    {
+      "step": "three",
+      "generation": 2,
+      "process_id": "1:1794851206781286288:5f9262e201f44f86b367187d32000992"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-11/output/step-one.json",
+      "sha256": "f716bac147f873c44c2f2e2908eb1d7febcd85bb8e5f7922c112458913f8a925",
+      "size": 104
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-11/output/step-two.json",
+      "sha256": "7f869dbe51b9e5435e606751dce5fc2a080008cda57965b4e547553c3cbd9dc4",
+      "size": 104
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-11/output/step-three.json",
+      "sha256": "93eb4101cd359a5c5706b0e44e48b1f19de3853f5c88474f250eb9f582a067c6",
+      "size": 106
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-11/result.md",
+      "sha256": "481673e695f34796eca1ca6c719e1a8bfac4b7033b8170d8adf0309ccc9e6fbe",
+      "size": 692
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1794851206519750902,
+    "start": 1794851206718967093
+  },
+  "matrix": {
+    "reply_event": "$TaAf6ES0ZAovtGALsLtbTDnTrFYNcKban6n49XE_TXE",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$udEGyYLqM-vrOQt6A9IhTvsDDivtByuKLo7pNJcQ9CY"
+    ],
+    "read_receipt_events": [
+      "$9iRhau9iCmA5NZdD-v2vxnqpUPsvTNHT3kH89NEyYBU"
+    ]
+  }
+}

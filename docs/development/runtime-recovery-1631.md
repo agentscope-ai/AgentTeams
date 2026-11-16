@@ -21,7 +21,7 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 
 Candidate companion pins on this Draft branch: Codex `f1d28b5fdb6f44526787a9e17a03145ffb43fbc3`
 and Hermes `e6f9af9336b4acdecc332f0bee3f576bd95d5818`, plus DeepSeek
-`3edd9b0334423ecc366213975bbdf10044426c64`. All consume the shared
+`9eee22a70c965d13927a8078fb7f56062e0e1f67`. All consume the shared
 Core contract at `2c90bccfedb563cbf94e3e1a932fd2effd7b5e23`. These are review
 candidates, not accepted/released Harness versions.
 
@@ -113,7 +113,7 @@ candidates, not accepted/released Harness versions.
 | Codex existing suite | 29 passed | SDK/transport unit fixtures |
 | Codex recovery admission/session/delivery/reassignment | 9 passed; 38 total | mocked client; no native model |
 | Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; SDK cache/admission tests use mocked Task client; real normal restart and valid native-session reuse passed case 11; remaining scenario set open |
-| DeepSeek startup recovery | partial | 62 Python and 7 Node tests passed; Task client mocked; native missing-session/no-input, tool/read, resume/error and stop/steer smokes passed with a deterministic model; real-model Task continuation untested |
+| DeepSeek startup recovery | partial | 63 Python and 7 Node tests passed; Task client mocked; native missing-session/no-input, tool/read, resume/error and stop/steer smokes passed with a deterministic model; real-model Task continuation not accepted yet |
 | DeepSeek native MCP checkpoint scope | passed, HTTP fixture | actual SDK scrubber and stdio MCP tool preserve credential-file access, process fence and conditional Task HTTP; no model/real Task acceptance |
 | Task metadata storage authority | bounded probe and case 13 passed | full OSS unit suite 7.315s; live MinIO raw write/delete denied while reads, ordinary artifacts and Controller CAS remain functional; updated Controller completed one real Codex-to-Hermes continuation |
 | Independent receipt oracle | 3 unit tests and case 13 passed | separate per-invocation objects outside the Task directory; stale directory ledger overwrite and uncertain-effect verification covered by unit tests; receipts are not storage-enforced WORM |
@@ -224,6 +224,30 @@ storage secrets with `recovery-`; the production CLI parsing limitation remains
 open. The v3 setup used subnet `10.231.166.0/24` and separate storage. No old
 Matrix backlog or existing installation was reset.
 
+[Case 14](evidence/runtime-recovery-1631-case14-failed.json) is retained as a
+failed Hermes-to-DeepSeek run. Hermes selected a fresh native session with 33
+persisted messages and durably finished step one. The target overlay then
+exited with `ModuleNotFoundError: task_recovery` before claiming the Task or
+running another step: it retained the published image's old entrypoint rather
+than copying the checkout's shared-library path export. The driver did not
+count startup as continuation. That Task was cancelled with its checkpoint and
+receipt retained. A corrected overlay copies all checkout runtime scripts;
+the canonical source entrypoint already exported the path. A separate Task
+will exercise that package, keeping this failed run distinct.
+
+[Case 15](evidence/runtime-recovery-1631-case15-failed.json) then started the
+corrected package and claimed generation 2, but ran no target steps. The first
+limited Matrix timeline had no saved local cursor; gap filling raised before
+Task execution, which was still deferred until after Matrix sync. The Task
+was cancelled with only the original step-one receipt. DeepSeek `9eee22a`
+now resumes from the Task system before Matrix polling, and initial limited
+timelines page backwards from `prev_batch` without clearing pending events.
+Two focused regressions first failed, then passed; the final Python suite has
+63 tests after removing the unused claim-only mode, with 7 Node tests passing.
+The [Matrix pagination contract](https://spec.matrix.org/v1.19/client-server-api/#get_matrixclientv3roomsroomidmessages)
+defines `prev_batch`/`from` and backward direction. Empty intermediate pages
+with advancing tokens remain covered; repeated tokens still fail closed.
+
 The Core integration run on `3eadbca5` completed with 24 successful jobs and
 one failed Hermes LLM-interaction shard: `test-03-assign-task` found a README
 without the current Task marker. That run used Hermes `0b0892f`; the newer
@@ -232,7 +256,8 @@ marker assertion. Codex hosted validation passed on `f1d28b5`. Hermes hosted
 validation passed on `6bbd17d` (run `43935165345`, publish job skipped).
 The added installed-SDK test at `e6f9af9` uses actual persisted messages for
 valid-cache cases and verifies a fresh empty native session is rebuilt;
-it passed locally with a mocked Task client. Core `e3788c38` integration
+it passed locally with a mocked Task client, and its hosted test/image jobs
+passed at `e6f9af9` (run `43937762092`, publish skipped). Core `e3788c38` integration
 run `43935173141` was still running at this check.
 
 Live policy evidence: [bounded MinIO probe](evidence/runtime-recovery-1631-storage-policy.json).

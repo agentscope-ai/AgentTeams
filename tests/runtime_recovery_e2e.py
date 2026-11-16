@@ -25,7 +25,7 @@ PRIVATE_BOOTSTRAP = Path("/tmp/recovery-1631-bootstrap.private.json" if PREFIX =
 CORE_IMAGE = "recovery-1631/controller:local-20261117030800"
 HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117013200",
                   "hermes": "recovery-1631/hermes:local-20261117030800",
-                  "deepseek-harness": "recovery-1631/deepseek:local-20261117020200"}
+                  "deepseek-harness": "recovery-1631/deepseek:local-20261117032600"}
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
@@ -121,6 +121,10 @@ def prepare():
 
 def seed():
     task_id, main_id, team = TASK_ID, MAIN_ID, "recovery-team"
+    member = api("GET", "workers/agent-a")
+    actual = json.loads(docker("inspect", PREFIX + "-worker-agent-a"))[0]
+    if member.get("phase") != "Running" or member.get("runtime") != SOURCE or not actual["State"]["Running"] or actual["Config"]["Image"] != HARNESS_IMAGES[SOURCE]:
+        raise RuntimeError("Wait for the selected source Harness and image to be running before assignment")
     room = api("GET", "teams/" + team)["teamRoomID"]
     if subprocess.run(["docker", "exec", CONTROLLER, "mc", "stat",
             "agentteams/recovery-1631/teams/" + team + "/shared/tasks/" + task_id + "/meta.json"], capture_output=True).returncode == 0:

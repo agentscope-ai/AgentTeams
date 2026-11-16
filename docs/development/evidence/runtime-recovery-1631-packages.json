@@ -1,0 +1,67 @@
+{
+  "scope": "Critical overlay runtime file equivalence only; not a canonical full image build or Task acceptance",
+  "images": [
+    {
+      "runtime": "controller",
+      "image": "recovery-1631/controller:local-20261117030800",
+      "id": "sha256:300505522aefe29d168b41692cfeb57e5cd71a9570fdea988a6285dec4348f37",
+      "source_labels": {
+        "io.agentteams.recovery.base-image": "ae2e581a9d2eea4acaccb5de843abaa7abbd1edcb45021da498ffff4dcb29271",
+        "io.agentteams.recovery.core-sha": "e3788c38da670c5f1d26a0985df193d0a277f3be"
+      },
+      "files": [
+        {
+          "path": "/usr/local/bin/agentteams-controller",
+          "sha256": "94016b694567fc86f38e391d443763b20280a3d9ed4758bd45a7a4d56203eefa"
+        },
+        {
+          "path": "/opt/agentteams/scripts/lib/task_recovery.py",
+          "sha256": "40649b3e73969c7fb68a1b43e8f713af9f7c80b6bea3cc0b3237fa26ebbb1c3d"
+        }
+      ]
+    },
+    {
+      "runtime": "hermes",
+      "image": "recovery-1631/hermes:local-20261117030800",
+      "id": "sha256:cbb1c6223eeb6409199b36a800403567aaf35317094b8a7ace5024b61e08b3a0",
+      "source_labels": {
+        "io.agentteams.recovery.core-sha": "2c90bccfedb563cbf94e3e1a932fd2effd7b5e23",
+        "io.agentteams.recovery.harness-sha": "6bbd17d6fa5afc48a67d744a6270b5b0d174b3c9"
+      },
+      "files": [
+        {
+          "path": "/opt/agentteams/recovery-hermes/src/hermes_matrix/overlay_adapter.py",
+          "sha256": "8d1c842c206fa9dfdd4cfc076e09919dd935b47eebcd9de30a64d929869a9700"
+        }
+      ]
+    },
+    {
+      "runtime": "deepseek-harness",
+      "image": "recovery-1631/deepseek:local-20261117032600",
+      "id": "sha256:17759c836249fe14b7f0a024c444889ee84343c586dd855c27fd1f66829f136d",
+      "source_labels": {
+        "io.agentteams.recovery.core-sha": "2c90bccfedb563cbf94e3e1a932fd2effd7b5e23",
+        "io.agentteams.recovery.harness-sha": "9eee22a70c965d13927a8078fb7f56062e0e1f67"
+      },
+      "files": [
+        {
+          "path": "/opt/agentteams/scripts/deepseek-harness-worker-entrypoint.sh",
+          "sha256": "74c0cbcf7873a50327b11849047a1201ac566424138e6a326798359137bcfdc1"
+        },
+        {
+          "path": "/opt/agentteams/scripts/matrix_bridge.py",
+          "sha256": "fe53d369bf2ebfb66ff5a58d0800d99463c56205166ac662b09ec8b1b1f3f6e1"
+        },
+        {
+          "path": "/opt/agentteams/dsh-template/profiles/headless/node_modules/agentteams-teamharness-dsh/runner.js",
+          "sha256": "0d0bc34d05158afbf4fa0a35ee69db0b548d079d081dc572523c4ae5f065037f"
+        },
+        {
+          "path": "/opt/agentteams/dsh-template/profiles/headless/node_modules/agentteams-teamharness-dsh/cordis.patch.yml",
+          "sha256": "eec29ca9493efc125038b482ff6a6c84e5a4f1ef6be9634606e86a7b7875a95e"
+        }
+      ]
+    }
+  ],
+  "passed": true
+}

@@ -335,6 +335,15 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
     payload = _payload(arguments)
     role = _role(arguments)
     try:
+        if action == "checkpoint_task":
+            from task_recovery import Recovery
+            checkpoint = payload.get("checkpoint")
+            if not isinstance(checkpoint, dict):
+                raise ValueError("checkpoint_task requires payload.checkpoint")
+            task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            from mcp.common.config import _runtime_team_name
+            result = Recovery().checkpoint(task_id, _runtime_team_name(), checkpoint)
+            return {"ok": True, "tool": "taskflow", "action": action, "synced": True, **result}
         if action in {"start_task", "advance_task", "complete_task", "accept_task_result"}:
             from .plans import _main_task_action
             return _main_task_action(arguments, payload)

@@ -302,14 +302,18 @@ type ServiceBackend interface {
 
 // WorkerResult holds the result of a worker operation.
 type WorkerResult struct {
-	Name            string       `json:"name"`
-	Backend         string       `json:"backend"`
-	DeploymentMode  string       `json:"deployment_mode"`
-	Status          WorkerStatus `json:"status"`
-	ContainerID     string       `json:"container_id,omitempty"`
-	AppID           string       `json:"app_id,omitempty"`
-	RawStatus       string       `json:"raw_status,omitempty"`
-	ConsoleHostPort string       `json:"console_host_port,omitempty"`
+	Name           string       `json:"name"`
+	Backend        string       `json:"backend"`
+	DeploymentMode string       `json:"deployment_mode"`
+	Status         WorkerStatus `json:"status"`
+	ContainerID    string       `json:"container_id,omitempty"`
+	// InstanceID changes on every actual container start, including a restart
+	// of the same container/Pod. Recovery must not use CR generation or a
+	// notification delivery lease as an execution generation.
+	InstanceID      string `json:"instance_id,omitempty"`
+	AppID           string `json:"app_id,omitempty"`
+	RawStatus       string `json:"raw_status,omitempty"`
+	ConsoleHostPort string `json:"console_host_port,omitempty"`
 
 	// Message carries a human-readable status detail from the backend.
 	// Populated when Ready condition is False with a non-empty message

@@ -292,6 +292,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Projects (workflow inspection; read from object storage) ---
 	projh := NewProjectHandler(deps.Client, deps.Namespace, deps.OSS, deps.MatrixClient)
+	recovery := NewTaskRecoveryHandler(projh, deps)
+	projh.recovery = recovery
+	mux.Handle("GET /api/v1/tasks/recoverable", mw.Authenticate(http.HandlerFunc(recovery.ListRecoverableTasks)))
+	mux.Handle("POST /api/v1/tasks/{id}/execution", mw.Authenticate(http.HandlerFunc(recovery.UpdateExecution)))
 	projh.taskAssigned = s.coordination.wakeRunner
 	if deps.APIReader != nil {
 		projh.configReader = deps.APIReader

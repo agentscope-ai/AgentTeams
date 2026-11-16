@@ -716,19 +716,25 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 	var inspectResp struct {
 		ID    string `json:"Id"`
 		State struct {
-			Status string `json:"Status"`
+			Status    string `json:"Status"`
+			StartedAt string `json:"StartedAt"`
 		} `json:"State"`
 	}
 	if err := json.Unmarshal(body, &inspectResp); err != nil {
 		return nil, fmt.Errorf("parse inspect response: %w", err)
 	}
 
+	instanceID := ""
+	if inspectResp.ID != "" && inspectResp.State.StartedAt != "" {
+		instanceID = inspectResp.ID + "/" + inspectResp.State.StartedAt
+	}
 	return &WorkerResult{
 		Name:           name,
 		Backend:        "docker",
 		DeploymentMode: DeployLocal,
 		Status:         normalizeDockerStatus(inspectResp.State.Status),
 		ContainerID:    inspectResp.ID,
+		InstanceID:     instanceID,
 		RawStatus:      inspectResp.State.Status,
 	}, nil
 }

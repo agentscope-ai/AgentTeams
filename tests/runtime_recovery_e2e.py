@@ -24,8 +24,8 @@ STATE = Path("/tmp/recovery-1631-e2e-state.json" if PREFIX == "recovery-1631-liv
 PRIVATE_BOOTSTRAP = Path("/tmp/recovery-1631-bootstrap.private.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-bootstrap.private.json")
 CORE_IMAGE = "recovery-1631/controller:local-20261117030800"
 HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117013200",
-                  "hermes": "recovery-1631/hermes:local-20261117030800",
-                  "deepseek-harness": "recovery-1631/deepseek:local-20261117032600"}
+                  "hermes": "recovery-1631/hermes:local-20261117034200",
+                  "deepseek-harness": "recovery-1631/deepseek:local-20261117034200"}
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:

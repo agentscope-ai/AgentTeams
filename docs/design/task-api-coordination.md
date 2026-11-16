@@ -134,3 +134,10 @@ Automatic completion requires a supplied or previously saved final report
 before committing terminal state. A completion without a report must fail
 visibly in the tool call, rather than leave a completed plan whose requester
 notification cannot be delivered.
+
+`start_project.spec` can carry the shared original contract once. It is
+materialized with each leaf's own assignment in the persisted execution spec,
+so all runtimes receive the same full request through their existing task
+protocol. Leaf ownership, spec validation, dependency gates and retry-plan
+identity remain unchanged; no extra context fetch or runtime-specific path is
+introduced.

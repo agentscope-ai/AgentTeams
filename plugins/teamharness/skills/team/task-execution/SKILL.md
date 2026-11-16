@@ -90,7 +90,9 @@ response; do not immediately repeat filesync pull or a shell read of spec.md.
 For automatic plans it also pulls accepted prerequisite directories and returns
 their local paths, summaries and deliverables in `inputs`. Read those local
 files as read-only inputs rather than issuing another filesync pull for each
-prerequisite. `submit_task` already synchronizes and publishes your declared
+prerequisite. When `inputs[].previews` contains complete text for a file, use
+that content directly; read the local file only when the preview is missing,
+truncated or a fresh inspection is required. `submit_task` already synchronizes and publishes your declared
 deliverables; do not pre-push the same task directory.
 Use the ACK's existing `scratchDirectory` for test copies and temporary work,
 for example `mktemp -d <scratchDirectory>/run-XXXXXX`. Do not invent global

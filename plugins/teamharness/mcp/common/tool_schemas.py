@@ -455,6 +455,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "Stable external requester room/conversation id to persist with external project and task state.",
                 },
+                "spec": {
+                    "type": "string",
+                    "description": "For start_project, the shared original contract materialized into each execution leaf's spec; leaf specs still define their own assignments.",
+                },
                 "report": {
                     "type": "string",
                     "description": "Verified final user report for complete_project; saved before terminal state and delivery.",

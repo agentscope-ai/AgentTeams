@@ -690,6 +690,17 @@ def _start_project(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[s
     raw_tasks = payload.get("tasks")
     if not isinstance(raw_tasks, list) or not raw_tasks:
         raise ValueError("start_project requires a nonempty tasks plan")
+    common_spec = payload.get("spec", "")
+    if not isinstance(common_spec, str):
+        raise ValueError("start_project spec must be text")
+    if common_spec.strip():
+        parents = {t.get("parentTaskId") or t.get("parent_task_id") for t in raw_tasks if isinstance(t, dict)}
+        raw_tasks = [
+            {**t, "spec": "# Original request\n" + common_spec.strip() + "\n\n# Your assignment\n" + t["spec"]}
+            if isinstance(t, dict) and (t.get("taskId") or t.get("task_id")) not in parents
+            and isinstance(t.get("spec"), str) and t["spec"].strip() else t
+            for t in raw_tasks
+        ]
     tasks = _normalize_tasks(raw_tasks, {})
     _validate_task_graph(tasks)
     if payload.get("dispatchMode") == "automatic":
@@ -731,7 +742,7 @@ def _start_project(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[s
         if not room.get("ok"):
             return {**room, "action": "start_project"}
         room_id = room["roomId"]
-        created = _projectflow({**arguments, "action": "create_project", "payload": {**payload, "roomId": room_id}})
+        created = _projectflow({**arguments, "action": "create_project", "payload": {**payload, "tasks": raw_tasks, "roomId": room_id}})
         if not created.get("ok"):
             return {**created, "action": "start_project", "roomId": room_id}
         project = created["project"]

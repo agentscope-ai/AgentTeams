@@ -123,8 +123,12 @@ assignment messages or call `delegate_task` again. Submitted results do not
 unlock dependencies. Use normal manual planning when later specs require a new
 Human decision; do not invent those decisions to enable automatic dispatch.
 
-Keep each leaf spec concise: state the requested behavior, exact acceptance
-cases, required input paths and output paths. Reference accepted upstream
+Put the shared original request and acceptance criteria once in
+`start_project.payload.spec`. The tool materializes it in every execution
+leaf's stored spec; each Worker receives the full contract in its ACK without
+an extra context lookup. Keep each leaf's `spec` concise: its own assignment,
+required input paths and output paths. Do not repeat the shared contract in
+every leaf. Do not put role-specific requirements in the common request. Reference accepted upstream
 artifacts instead of copying their contents into every downstream spec. Do not
 repeat task protocol, status report templates or CLI instructions in specs;
 the runtime already supplies those. Scale the plan to the request rather than

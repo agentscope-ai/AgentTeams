@@ -167,3 +167,29 @@ def test_automatic_completion_requires_report_before_terminal_writes(stage):
     result = invoke(args)
     assert not result["ok"] and "final report" in result["error"]
     assert path.read_bytes() == before
+
+
+def test_shared_request_is_materialized_in_leaf_specs_and_retry_is_stable(stage):
+    args, calls = stage
+    args["payload"]["spec"] = "Original contract: preserve Unicode and do not alter inputs."
+    result = invoke(args)
+    assert result["ok"]
+    delegated = calls[-1][1]["payload"]["spec"]
+    assert "Original contract: preserve Unicode" in delegated
+    assert "Produce bounded requirements." in delegated
+    assert args["payload"]["tasks"][0]["spec"] == "Produce bounded requirements."
+    path = Path(args["workspaceDir"]) / "shared/projects/stage/meta.json"
+    project = json.loads(path.read_text())
+    assert "Original contract: preserve Unicode" in project["tasks"][0]["spec"]
+    project["tasks"][0]["status"] = "assigned"  # Emulate the fixture's stubbed delegate.
+    path.write_text(json.dumps(project))
+    calls.clear()
+    assert invoke(args)["reused"] and calls == []
+
+
+def test_shared_request_must_be_text_before_external_effects(stage):
+    args, calls = stage
+    args["payload"]["spec"] = {"invalid": "object"}
+    result = invoke(args)
+    assert not result["ok"] and "spec" in result["error"]
+    assert not calls

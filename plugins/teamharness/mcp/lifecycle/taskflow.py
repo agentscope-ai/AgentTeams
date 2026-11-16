@@ -770,6 +770,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             pulled = True
             _require_task_mutable(arguments, task, task_id, action, to_status="in_progress")
             inputs = []
+            preview_budget = 16384
             project_id = str(task.get("project_id") or "")
             if project_id and project_id != pid and not _pull_project(arguments, project_id):
                 return _pull_failed_response("taskflow", action)
@@ -783,9 +784,31 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     upstream = _load_authoritative_task(arguments, dependency)
                     if upstream.get("project_id") != project_id or upstream.get("status") != "completed":
                         raise ValueError(f"prerequisite {dependency} is not an accepted result in this project")
-                    inputs.append({"taskId": dependency, "directory": str(_task_dir(arguments, dependency).resolve()),
+                    directory = _task_dir(arguments, dependency).resolve()
+                    previews = []
+                    prefix = f"shared/tasks/{dependency}/"
+                    for source in dict.fromkeys([prefix + "result.md", *upstream.get("deliverables", [])]):
+                        if not preview_budget:
+                            break
+                        if not isinstance(source, str) or not source.startswith(prefix):
+                            continue
+                        file = (directory / source[len(prefix):]).resolve()
+                        if not file.is_relative_to(directory) or not file.is_file():
+                            continue
+                        limit = min(8192, preview_budget)
+                        try:
+                            with file.open("rb") as handle:
+                                data = handle.read(limit + 1)
+                            preview_budget -= min(len(data), limit)
+                            if b"\x00" in data:
+                                continue
+                            text = data[:limit].decode("utf-8", errors="ignore" if len(data) > limit else "strict")
+                        except (OSError, UnicodeDecodeError):
+                            continue
+                        previews.append({"path": source, "text": text, "truncated": len(data) > limit})
+                    inputs.append({"taskId": dependency, "directory": str(directory),
                         "readOnly": True, "summary": str(upstream.get("summary") or "")[:1024],
-                        "deliverables": upstream.get("deliverables", [])})
+                        "deliverables": upstream.get("deliverables", []), "previews": previews})
             scratch = _task_dir(arguments, task_id) / "workspace"
             if not scratch.resolve().is_relative_to(_task_dir(arguments, task_id).resolve()):
                 raise ValueError("task workspace escapes its task directory")
@@ -827,7 +850,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "taskDirectory": str(_task_dir(arguments, task_id).resolve()),
                 "scratchDirectory": str(scratch.resolve()),
                 "inputs": inputs,
-                "executionGuidance": "This ACK pulled your task and accepted prerequisite directories. Read the local files; submit_task synchronizes and publishes declared outputs. Do not repeat those filesync pulls or pushes. Create tests and temporary directories under scratchDirectory; do not invent a global /tmp path. Keep upstream inputs read-only.",
+                "executionGuidance": "This ACK pulled your task and accepted prerequisite directories. Complete text previews are supplied below; do not reread those unchanged files. Read local files when a preview is missing or truncated. submit_task synchronizes and publishes declared outputs. Do not repeat those filesync pulls or pushes. Create tests and temporary directories under scratchDirectory; do not invent a global /tmp path. Keep upstream inputs read-only.",
                 "pulled": pulled,
                 "synced": _sync_task(arguments, task_id, exclude=["spec.md", "base/"]),
             }

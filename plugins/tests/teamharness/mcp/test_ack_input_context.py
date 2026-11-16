@@ -44,7 +44,7 @@ def test_ack_pulls_inputs_and_returns_local_paths_in_one_receipt(assignment):
     assert Path(result["scratchDirectory"]).is_dir()
     assert Path(result["scratchDirectory"]).parent == upstream.parent / "current"
     assert "upstream" in pulled
-    assert result["inputs"][0] == {"taskId": "upstream", "directory": str(upstream.resolve()),
+    assert {k:v for k,v in result["inputs"][0].items() if k != "previews"} == {"taskId": "upstream", "directory": str(upstream.resolve()),
         "readOnly": True, "summary": "Implementation accepted", "deliverables": ["shared/tasks/upstream/solution.py"]}
 
 
@@ -78,3 +78,24 @@ def test_scratch_symlink_escape_does_not_commit_ack(assignment):
     (upstream.parent / "current/workspace").symlink_to(upstream, target_is_directory=True)
     assert not invoke(args)["ok"]
     assert json.loads((upstream.parent / "current/meta.json").read_text())["status"] == "assigned"
+
+
+def test_ack_embeds_small_accepted_text_and_marks_truncation(assignment):
+    args, _, upstream = assignment
+    (upstream / "solution.py").write_text("def answer(): return 42\n")
+    (upstream / "result.md").write_text("Verified " + "x" * 9000)
+    previews = invoke(args)["inputs"][0]["previews"]
+    by_path = {p["path"]:p for p in previews}
+    assert by_path["shared/tasks/upstream/solution.py"]["text"] == "def answer(): return 42\n"
+    assert not by_path["shared/tasks/upstream/solution.py"]["truncated"]
+    assert by_path["shared/tasks/upstream/result.md"]["truncated"]
+    assert len(by_path["shared/tasks/upstream/result.md"]["text"]) == 8192
+
+
+def test_ack_preview_never_reads_outside_prerequisite_or_binary_content(assignment, tmp_path):
+    args, _, upstream = assignment
+    private = tmp_path / "private"; private.write_text("must not appear")
+    (upstream / "solution.py").symlink_to(private)
+    (upstream / "result.md").write_bytes(b"binary\x00content")
+    previews = invoke(args)["inputs"][0]["previews"]
+    assert previews == []

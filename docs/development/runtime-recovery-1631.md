@@ -19,11 +19,15 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenClaw | `5e44ebecabf878eda499b668c9627208dbfa6049` | matched |
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
-Candidate companion pins on this Draft branch: Codex `f1d28b5fdb6f44526787a9e17a03145ffb43fbc3`
-and Hermes `e6f9af9336b4acdecc332f0bee3f576bd95d5818`, plus DeepSeek
-`9eee22a70c965d13927a8078fb7f56062e0e1f67`. All consume the shared
-Core contract at `2c90bccfedb563cbf94e3e1a932fd2effd7b5e23`. These are review
+Candidate companion pins on this Draft branch: Codex `b336e815217cb821f46dbe21b3d309c44c916a3c`
+and Hermes `9c82bf1f48fccb881baafe439263958156d04713`, plus DeepSeek
+`035da1839459d03c47a30cef9a17cfa210bb0196`. All consume the shared
+Core contract at `9bdbbe92c294d0dcca2aeed5478fcf29452f3a42`. These are review
 candidates, not accepted/released Harness versions.
+Core `ecb44a61` main and each companion's latest main were merged into the
+isolated work branches, preserving the runtime Skill fixes. The contract
+commit includes those shared helpers and the current-member role fix; older
+real-model evidence retains its original exact source pins.
 
 ## Implemented contract
 
@@ -49,6 +53,9 @@ candidates, not accepted/released Harness versions.
   writes require the current process fence. Cancellation/reassignment wins.
 - Shared `taskflow.checkpoint_task`, authoritative execution merge, and
   shared Python recovery client are present in both TeamHarness copies.
+- The Controller-written current member role takes precedence over a stale
+  container creation environment; legacy environments remain the fallback
+  when the member role is absent. Tool payloads cannot override that identity.
 - Codex companion work admits recovered Tasks before Matrix polling, checks
   session checkpoint digests, builds fresh sessions when stale, preserves the
   unrelated journal backlog/cursor, and separates saved-result delivery.
@@ -247,6 +254,24 @@ Two focused regressions first failed, then passed; the final Python suite has
 The [Matrix pagination contract](https://spec.matrix.org/v1.19/client-server-api/#get_matrixclientv3roomsroomidmessages)
 defines `prev_batch`/`from` and backward direction. Empty intermediate pages
 with advancing tokens remain covered; repeated tokens still fail closed.
+
+[Case 16](evidence/runtime-recovery-1631-case16-partial.json) progressed through
+real Hermes-to-DeepSeek execution: the stable Task reached generation 2 and
+all three steps were verified once, with receipts in generations 1/2/2.
+Final submission nevertheless failed repeatedly because MCP's container
+environment still said `standalone` while current Controller `runtime.yaml`
+said `worker`. The Task was retained `in_progress` at checkpoint 9, with the
+Worker stopped and all artifacts preserved; there is no accepted final reply.
+Core `9bdbbe92` fixes that precedence in both compatibility copies. The stale
+standalone/leader role regressions failed before the change; MCP 303 tests and
+protocol 80 tests passed afterward. This partial execution is not full
+DeepSeek continuation acceptance or a saved-result/no-model redelivery test.
+
+After the main merges, local validation passed: Codex 41, Hermes 32 with one
+skip, DeepSeek 63 Python plus 8 Node tests. Core server/controller/backend/OSS/
+modelhealth/service/app passed (29.484/0.489/2.353/8.202/1.123/10.048/2.126s).
+The shared role fix and refreshed dependency pins still need real-model and
+exact-head hosted reruns. No existing installation was updated.
 
 The Core integration run on `3eadbca5` completed with 24 successful jobs and
 one failed Hermes LLM-interaction shard: `test-03-assign-task` found a README

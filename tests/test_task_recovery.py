@@ -111,6 +111,21 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(saved["completed_steps"], ["one"])
         self.assertNotIn("delivery", saved)
 
+    def test_native_callback_reclaims_only_its_process_and_delivers_saved_submission(self):
+        self.task.update(status="submitted")
+        self.task["execution"]["state"] = "released"
+        claimed = {"task": self.task, "execution": {"checkpoint": {"delivery": "pending"}}, "saved_result": "Persisted report"}
+        with patch.object(self.recovery, "claim", return_value=claimed) as claim, patch.object(self.recovery, "save_reply") as upload:
+            saved, body = self.recovery.prepare_reply("stable-task", "team", "Local native final answer")
+            self.assertEqual(saved, claimed)
+            self.assertEqual(body, "Persisted report")
+            claim.assert_called_once()
+            upload.assert_not_called()
+        self.snapshot["instance_id"] = "replacement-start"
+        with patch.object(self.recovery, "claim") as claim, self.assertRaises(RecoveryConflict):
+            self.recovery.prepare_reply("stable-task", "team", "Stale answer")
+        claim.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -88,6 +88,25 @@ class Recovery:
                   delivery="pending", reply_txn="task-reply:" + hashlib.sha256(f"{team}/{task_id}/{version}/{digest}".encode()).hexdigest())
         return self.checkpoint(task_id, team, cp)
 
+    def prepare_reply(self, task_id, team, text):
+        """Fence a native final callback and prefer an already saved report.
+
+        A Task tool can release execution after submission. The same verified
+        process may reclaim it for delivery; a replaced process cannot.
+        """
+        snapshot = self.discover()
+        entry = next((e for e in snapshot["tasks"] if e["task"]["task_id"] == task_id and e["team_id"] == team), None)
+        execution = entry["task"].get("execution", {}) if entry else {}
+        if execution.get("process_id") != self.process or execution.get("instance_id") != snapshot["instance_id"]:
+            raise RecoveryConflict("Native reply execution was replaced or is no longer recoverable")
+        claimed = self.claim(snapshot, entry)
+        cp = claimed["execution"].get("checkpoint") or {}
+        if cp.get("delivery") == "pending":
+            return claimed, claimed["saved_result"]
+        if cp.get("delivery") == "delivered" and claimed["task"]["status"] == "submitted":
+            return claimed, ""
+        return self.save_reply(task_id, team, text), text
+
     def delivered(self, task_id, team, event_id):
         task = self.current(task_id, team)
         if task is None:

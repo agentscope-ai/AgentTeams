@@ -20,7 +20,7 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
 Candidate companion pins on this Draft branch: Codex `f1d28b5fdb6f44526787a9e17a03145ffb43fbc3`
-and Hermes `6bbd17d6fa5afc48a67d744a6270b5b0d174b3c9`, plus DeepSeek
+and Hermes `e6f9af9336b4acdecc332f0bee3f576bd95d5818`, plus DeepSeek
 `3edd9b0334423ecc366213975bbdf10044426c64`. All consume the shared
 Core contract at `2c90bccfedb563cbf94e3e1a932fd2effd7b5e23`. These are review
 candidates, not accepted/released Harness versions.
@@ -115,8 +115,8 @@ candidates, not accepted/released Harness versions.
 | Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; SDK cache/admission tests use mocked Task client; real normal restart and valid native-session reuse passed case 11; remaining scenario set open |
 | DeepSeek startup recovery | partial | 62 Python and 7 Node tests passed; Task client mocked; native missing-session/no-input, tool/read, resume/error and stop/steer smokes passed with a deterministic model; real-model Task continuation untested |
 | DeepSeek native MCP checkpoint scope | passed, HTTP fixture | actual SDK scrubber and stdio MCP tool preserve credential-file access, process fence and conditional Task HTTP; no model/real Task acceptance |
-| Task metadata storage authority | passed, bounded probe | full OSS unit suite 7.315s; live MinIO raw write/delete denied while reads, ordinary artifacts and Controller CAS remain functional; no new full Task continuation acceptance |
-| Append-only step oracle | 3 passed | fixture unit tests cover stale local ledger overwrite and uncertain-effect verification without rerun; updated oracle has no real-model acceptance yet |
+| Task metadata storage authority | bounded probe and case 13 passed | full OSS unit suite 7.315s; live MinIO raw write/delete denied while reads, ordinary artifacts and Controller CAS remain functional; updated Controller completed one real Codex-to-Hermes continuation |
+| Independent receipt oracle | 3 unit tests and case 13 passed | separate per-invocation objects outside the Task directory; stale directory ledger overwrite and uncertain-effect verification covered by unit tests; receipts are not storage-enforced WORM |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
 | Two real Harness continuation chain | cases 06/07 passed; full scenario sets incomplete | real Codex to Hermes and reverse replacements, same Task, generation 1 to 2, checkpoint 4 to 10, all steps once, no new input, one final report |
@@ -203,14 +203,37 @@ uncertain effects are verified without another effect; absent evidence waits
 for verification. The driver additionally checks that actual messages exist
 in the selected Hermes native session, and records Controller source
 separately from the shared adapter contract. These updated paths still need
-real-model reruns after the storage and warm-cache fixes.
+the complete real-model scenario set after the storage and warm-cache fixes.
+
+[Case 13](evidence/runtime-recovery-1631-case13.json) passed with Controller
+`e3788c38`, shared contract `2c90bccf`, Codex `1cbc9665` and Hermes `6bbd17d6`.
+It used the protected member storage policy and receipt oracle version 2 on
+the fresh, separately labelled `recovery-1631-live-20261117-v3` fixture.
+The Task stayed `in_progress` at checkpoint 4, then recovered without another
+Matrix input, generation 1 to 2 and checkpoint 4 to 10. Outside-directory
+receipts prove steps one/two/three ran in generations 1/2/2 exactly once;
+artifact bytes and the canonical 597-byte report were read back and checked.
+The source/read/final events and old die/destroy before new create are retained.
+The selected fresh Hermes native session contained 35 messages. This accepts
+one updated Codex-to-Hermes replacement, not every required scenario.
+
+The new v2 fixture did not start a Task: its random storage secret began with
+`-`, which the existing `mc alias set` invocation parsed as a CLI flag.
+It was stopped with data retained. The fixture generator now prefixes new
+storage secrets with `recovery-`; the production CLI parsing limitation remains
+open. The v3 setup used subnet `10.231.166.0/24` and separate storage. No old
+Matrix backlog or existing installation was reset.
 
 The Core integration run on `3eadbca5` completed with 24 successful jobs and
 one failed Hermes LLM-interaction shard: `test-03-assign-task` found a README
 without the current Task marker. That run used Hermes `0b0892f`; the newer
 warm-Agent fix is not yet verified by that hosted scenario. Do not relax its
-marker assertion. Codex hosted validation passed on `f1d28b5`; the manually
-dispatched Hermes `0b0892f` run remained queued at the last check.
+marker assertion. Codex hosted validation passed on `f1d28b5`. Hermes hosted
+validation passed on `6bbd17d` (run `43935165345`, publish job skipped).
+The added installed-SDK test at `e6f9af9` uses actual persisted messages for
+valid-cache cases and verifies a fresh empty native session is rebuilt;
+it passed locally with a mocked Task client. Core `e3788c38` integration
+run `43935173141` was still running at this check.
 
 Live policy evidence: [bounded MinIO probe](evidence/runtime-recovery-1631-storage-policy.json).
 
@@ -263,8 +286,9 @@ Controller was replaced. Its HTTP health and CLI authentication became ready,
 but Tuwunel stayed CPU-busy without listening on port 6167. An isolated copy
 of its 81 MB database and a process backtrace were retained for diagnosis;
 restarting that fixture's Matrix process did not immediately restore service.
-Case 09 has not been seeded and adds no real execution acceptance. No Matrix
-backlog or database was cleared.
+That failed database startup added no real execution acceptance. Case 09 later
+ran against the separate fresh fixture described below. No Matrix backlog or
+database was cleared.
 
 A second fixture, `recovery-1631-live-20261117`, has its own new data volume
 and non-overlapping network. Its Controller and Matrix health checks returned
@@ -307,8 +331,8 @@ The last command requires the independent Codex repository checked out at
   OpenHuman startup resume and delivery adapters. Audit same-process retry
   and revision handling, including uncertain Matrix HTTP acceptance across
   device/transport changes; stable transactions alone do not prove that case.
-- Rerun with the protected storage policy and warm-Agent eviction, validate
-  the stronger receipt oracle with a real model, and resolve the nested
+- Expand the case 13 protected-policy/warm-Agent/receipt-oracle real-model
+  acceptance across the remaining scenarios, and resolve the nested
   `meta.json` artifact compatibility and external-storage policy gaps.
 - Resolve Manager ordinary-message handoff/receipts from the original #1631
   reproduction. Worker Task fences do not resolve Manager cursor replay alone.
@@ -320,7 +344,7 @@ execution is labelled separately from acceptance:
 
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement case 06 passed; other scenarios incomplete | untested | untested | untested | untested |
+| Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement cases 06/09/13 passed; other scenarios incomplete | untested | untested | untested | untested |
 | Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | untested | untested | untested | untested |
 | QwenPaw | untested | untested | untested | untested | untested | untested |
 | DeepSeek | untested | untested | untested | untested | untested | untested |

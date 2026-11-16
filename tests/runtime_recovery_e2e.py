@@ -22,9 +22,9 @@ CONTROLLER = PREFIX + "-controller"
 NETWORK = PREFIX + "-net"
 STATE = Path("/tmp/recovery-1631-e2e-state.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-state.json")
 PRIVATE_BOOTSTRAP = Path("/tmp/recovery-1631-bootstrap.private.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-bootstrap.private.json")
-CORE_IMAGE = "recovery-1631/controller:local-20261117002500"
+CORE_IMAGE = "recovery-1631/controller:local-20261117030800"
 HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117013200",
-                  "hermes": "recovery-1631/hermes:local-20261117013200",
+                  "hermes": "recovery-1631/hermes:local-20261117030800",
                   "deepseek-harness": "recovery-1631/deepseek:local-20261117020200"}
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
@@ -402,7 +402,8 @@ def setup(*, restore=False):
         raise RuntimeError("The disposable container name already exists; refusing to replace it")
     password = previous["admin_password"] if restore else secrets.token_urlsafe(24)
     registration = secrets.token_urlsafe(24)
-    minio_secret = secrets.token_urlsafe(24)
+    # mc alias set currently treats a leading '-' credential as a flag.
+    minio_secret = "recovery-" + secrets.token_urlsafe(24)
     env = {
         "AGENTTEAMS_KUBE_MODE": "embedded", "AGENTTEAMS_RUNTIME": "docker",
         "AGENTTEAMS_WORKER_BACKEND": "docker", "AGENTTEAMS_DOCKER_NETWORK": NETWORK,

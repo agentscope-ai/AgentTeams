@@ -126,6 +126,15 @@ class RecoveryTests(unittest.TestCase):
             self.recovery.prepare_reply("stable-task", "team", "Stale answer")
         claim.assert_not_called()
 
+    def test_active_submitted_callback_saves_its_answer_before_delivery_claim(self):
+        self.task.update(status="submitted")
+        self.task["execution"]["state"] = "active"
+        with patch.object(self.recovery, "claim", side_effect=RecoveryConflict("no submitted report")) as claim, patch.object(self.recovery, "save_reply", return_value={"saved": True}) as save:
+            saved, body = self.recovery.prepare_reply("stable-task", "team", "Native final answer")
+        self.assertEqual((saved, body), ({"saved": True}, "Native final answer"))
+        save.assert_called_once_with("stable-task", "team", "Native final answer")
+        claim.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -99,6 +99,11 @@ class Recovery:
         execution = entry["task"].get("execution", {}) if entry else {}
         if execution.get("process_id") != self.process or execution.get("instance_id") != snapshot["instance_id"]:
             raise RecoveryConflict("Native reply execution was replaced or is no longer recoverable")
+        # submit_task permits a summary without a report file. While this
+        # process still owns active execution, persist its final answer before
+        # asking claim to recover an already persisted submitted report.
+        if execution.get("state") == "active" and not (execution.get("checkpoint") or {}).get("result"):
+            return self.save_reply(task_id, team, text), text
         claimed = self.claim(snapshot, entry)
         cp = claimed["execution"].get("checkpoint") or {}
         if cp.get("delivery") == "pending":

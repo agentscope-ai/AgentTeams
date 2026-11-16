@@ -17,8 +17,13 @@ PREFIX = "recovery-1631-live-20261116"
 CONTROLLER = PREFIX + "-controller"
 NETWORK = PREFIX + "-net"
 STATE = Path("/tmp/recovery-1631-e2e-state.json")
-CORE_IMAGE = "recovery-1631/controller:local-20261116205000"
-HARNESS_IMAGES = {runtime: "recovery-1631/" + runtime + ":local-20261116205000" for runtime in ("codex", "hermes")}
+CORE_IMAGE = "recovery-1631/controller:local-20261116220300"
+HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261116220300",
+                  "hermes": "recovery-1631/hermes:local-20261116220300"}
+CASE = os.getenv("RECOVERY_E2E_CASE", "01")
+if len(CASE) != 2 or not CASE.isdecimal():
+    raise ValueError("RECOVERY_E2E_CASE must be two decimal digits")
+TASK_ID, MAIN_ID = "live-codex-hermes-" + CASE, "live-main-" + CASE
 
 
 def docker(*args, text=None):
@@ -89,7 +94,7 @@ def tracing():
 
 
 def seed():
-    task_id, main_id, team = "live-codex-hermes-01", "live-main-01", "recovery-team"
+    task_id, main_id, team = TASK_ID, MAIN_ID, "recovery-team"
     room = api("GET", "teams/" + team)["teamRoomID"]
     if subprocess.run(["docker", "exec", CONTROLLER, "mc", "stat",
             "agentteams/recovery-1631/teams/" + team + "/shared/tasks/" + task_id + "/meta.json"], capture_output=True).returncode == 0:
@@ -99,14 +104,14 @@ def seed():
         "tasks": [{"task_id": task_id, "parent_task_id": main_id, "status": "assigned"}]}
     task = {"task_id": task_id, "main_task_id": main_id, "parent_task_id": main_id, "team_id": team,
         "task_kind": "subtask", "title": "Run three stable steps across Codex to Hermes", "status": "assigned",
-        "assigned_to": "@agent-a:recovery-1631.test", "room_id": room, "notifyTxn": "live-assignment-01"}
+        "assigned_to": "@agent-a:recovery-1631.test", "room_id": room, "notifyTxn": "live-assignment-" + CASE}
     spec = f"""You are executing a bounded real runtime-recovery acceptance task {task_id} in team {team}.
-ACK this task using taskflow.ack_task and confirm synced=true. Keep its stable task ID.
+Use your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.
 Pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/{team}/shared/tasks/{task_id}/acceptance.py into your task scratch directory using mc cp.
 Use your native terminal tool to run python3 acceptance.py {task_id} {team}. Each invocation executes ONE real persisted side effect and commits its checkpoint through the real Controller.
 Read the authoritative completed_steps. Never repeat a completed step or edit the fixture, ledger or checkpoint outside the helper.
 In execution generation 1, run only step one. Then call the helper once more to verify PAUSED_AT_STEP_BOUNDARY and end your turn with a short progress report. Leave task status in_progress. Do not submit, wait, poll or request a new message.
-When recovered in generation 2 or later, continue remaining steps two and three with the same helper, then submit this same task using taskflow.submit_task with status success, summary, 3 conclusions and the output/step-one.json, output/step-two.json, output/step-three.json deliverables.
+When recovered in generation 2 or later, continue remaining steps two and three with the same helper, then use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/{task_id}/output/step-one.json, shared/tasks/{task_id}/output/step-two.json, shared/tasks/{task_id}/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.
 Outputs are durable in the task's shared object-storage output/ directory; pull them to your task output/ directory before submission. Do not create a new task or send messages to other members.
 The external test driver will replace your container at a step boundary without sending any new Matrix message.
 """
@@ -157,7 +162,7 @@ def refresh_controller():
 
 
 def evidence():
-    task = api("GET", "tasks/live-codex-hermes-01/meta?team=recovery-team")
+    task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     instances = []
     for name in (CONTROLLER, PREFIX + "-worker-agent-a", PREFIX + "-worker-leader"):
         item = json.loads(docker("inspect", name))[0]
@@ -165,15 +170,17 @@ def evidence():
             "running": item["State"]["Running"], "pid": item["State"]["Pid"],
             "started_at": item["State"]["StartedAt"], "finished_at": item["State"]["FinishedAt"]})
     ledger = json.loads(docker("exec", CONTROLLER, "mc", "cat",
-        "agentteams/recovery-1631/teams/recovery-team/shared/tasks/live-codex-hermes-01/attempts.json"))
+        "agentteams/recovery-1631/teams/recovery-team/shared/tasks/" + TASK_ID + "/attempts.json"))
     result = {"recorded_at": time.time(), "task": task, "ledger": ledger, "instances": instances}
     path = Path("/tmp/1631-live-evidence.json")
     path.write_text(json.dumps(result, indent=2))
+    with Path("/tmp/1631-live-" + CASE + "-evidence.jsonl").open("a") as stream:
+        stream.write(json.dumps(result) + "\n")
     print(json.dumps(result))
 
 
 def cutover():
-    task = api("GET", "tasks/live-codex-hermes-01/meta?team=recovery-team")
+    task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     cp = task.get("execution", {}).get("checkpoint", {})
     if task["status"] != "in_progress" or cp.get("completed_steps") != ["one"] or cp.get("remaining_steps") != ["two", "three"]:
         raise RuntimeError("Requires an actual durable step-one checkpoint on the active Task")
@@ -196,7 +203,7 @@ def cutover():
         time.sleep(1)
     events = docker("events", "--since", str(started), "--until", str(int(time.time()) + 1),
         "--filter", "type=container", "--filter", "container=" + name, "--format", "{{json .}}")
-    path = Path("/tmp/1631-live-cutover-events.jsonl")
+    path = Path("/tmp/1631-live-" + CASE + "-cutover-events.jsonl")
     path.write_text(events + "\n")
     if replacement is None:
         raise RuntimeError("Replacement not observed; retained Docker event evidence")

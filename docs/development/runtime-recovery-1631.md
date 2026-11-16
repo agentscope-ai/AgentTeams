@@ -75,7 +75,7 @@ candidates, not accepted/released Harness versions.
 | Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; installed SDK fresh session IDs/admission smoke passed with mocked Task client; latest hosted checks tracked on PR #9 |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
-| Two real Harness continuation chain | incomplete; no clean passing run | cases 01-03 ran all steps once across Codex/Hermes, but required repairs or failed final delivery; case 04 stopped for verification; case 05 failed Harness preflight |
+| Two real Harness continuation chain | case 06 passed; full scenario set incomplete | real Codex to Hermes replacement, same Task, generation 1 to 2, checkpoint 4 to 10, all steps once, no new input, one final report; see versioned evidence below |
 | Result saved / reply unsent against real Matrix | passed, bounded case 01 | zero model calls, unchanged step ledger, one report body; event `$8KK7IrnddlsgCgKUTyJpzAzQZ8EPAxbDooNOOvwc7Hg` |
 | Return to retained old Codex session | passed for delivery-only case 02 | zero model calls, unchanged steps; execution continuation with stale session still open |
 
@@ -92,8 +92,16 @@ passing acceptance test. It uses only resources prefixed
 The three-step helper is executed only by the real Harness's native model tool;
 the driver does not execute steps on the Worker's behalf. Its persisted ledger
 counts executions, and immutable step artifacts are uploaded before checkpoints.
-Real cross-Harness replacement and step execution have been observed; the full
-execution-plus-final-delivery acceptance has no clean passing record yet.
+Case 06 completed execution plus final delivery without manual repair after
+cutover. Read-only verification rechecks artifact bytes, step counts, Docker
+stop/destroy/create order, the original Matrix source/read receipt, zero new
+external Matrix message inputs and exactly one final report body. The receipt
+is read from Matrix history; the new Harness's local receipt database is not
+treated as the authority for an old Harness's read.
+
+Versioned evidence: [case 06](evidence/runtime-recovery-1631-case06.json).
+This accepts one forced-container-replacement Codex-to-Hermes run, not the
+complete per-Harness scenario set, process-only restart or valid-session reuse.
 
 Recorded live failures and partial evidence:
 
@@ -112,8 +120,11 @@ Recorded live failures and partial evidence:
   explicitly owns its own operation/checkpoint writes.
 - Case 05: actual old Hermes image on wake while desired runtime was Codex.
   No step ran. The sleeping applied-hash/runtime-identity regression is fixed.
-- Cases 03-05 were cancelled after evidence capture. They are failed runs,
-  not accepted continuation evidence. Case 06 is a fresh run of the latest pins.
+- Cases 03-05 were cancelled after evidence capture. They remain failed runs.
+- Case 06 passed on Core `516f22a7`, Codex `49e8870`, Hermes `702c54f`.
+  The task remained `in_progress` at checkpoint 4 before replacement, then
+  reached `submitted` with delivered checkpoint 10. Matrix source/read/final
+  events and three verified artifact digests are recorded in the evidence file.
 
 Live setup exposed and source regressions now cover these issues:
 
@@ -173,7 +184,7 @@ execution is labelled separately from acceptance:
 
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex | untested | partial; failed full acceptance | untested | untested | untested | untested |
+| Codex | untested | replacement case 06 passed; other scenarios incomplete | untested | untested | untested | untested |
 | Hermes | delivery-only return; continuation untested | untested | untested | untested | untested | untested |
 | QwenPaw | untested | untested | untested | untested | untested | untested |
 | DeepSeek | untested | untested | untested | untested | untested | untested |

@@ -5,6 +5,7 @@ installation. Runtime/model execution evidence is separate from setup readiness.
 """
 import json
 import base64
+import hashlib
 import os
 from pathlib import Path
 import secrets
@@ -218,6 +219,80 @@ def cutover():
         "events": str(path), "external_matrix_inputs_sent": 0, "task_continuation": "not yet verified"}))
 
 
+def verify():
+    """Read back real task, storage, native receipt and Matrix evidence."""
+    task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
+    execution, before = task["execution"], json.loads(Path("/tmp/1631-live-" + CASE + "-before-cutover.json").read_text())
+    cp = execution["checkpoint"]
+    assert task["task_id"] == before["task"]["task_id"] == TASK_ID
+    assert before["task"]["status"] == "in_progress"
+    assert before["task"]["execution"]["checkpoint"]["completed_steps"] == ["one"]
+    assert task["status"] == "submitted" and cp["delivery"] == "delivered"
+    assert cp["completed_steps"] == ["one", "two", "three"] and not cp["remaining_steps"]
+
+    def stored(key):
+        return subprocess.run(["docker", "exec", CONTROLLER, "mc", "cat", "agentteams/recovery-1631/" + key],
+            check=True, capture_output=True).stdout
+
+    ledger = json.loads(stored("teams/recovery-team/shared/tasks/" + TASK_ID + "/attempts.json"))
+    assert [row["step"] for row in ledger] == ["one", "two", "three"]
+    assert [row["generation"] for row in ledger] == [1, 2, 2]
+    artifacts = cp["artifacts"] + [cp["result"]]
+    for artifact in artifacts:
+        data = stored(artifact["key"])
+        assert len(data) == artifact["size"] and hashlib.sha256(data).hexdigest() == artifact["sha256"]
+    events = [json.loads(row) for row in Path("/tmp/1631-live-" + CASE + "-cutover-events.jsonl").read_text().splitlines() if row]
+    old = before["instances"][1]["id"]
+    died = next(row["timeNano"] for row in events if row["Action"] == "die" and row["Actor"]["ID"] == old)
+    destroyed = next(row["timeNano"] for row in events if row["Action"] == "destroy" and row["Actor"]["ID"] == old)
+    created = next(row["timeNano"] for row in events if row["Action"] == "create" and row["Actor"]["ID"] != old)
+    assert died <= destroyed <= created
+    code = '''import hashlib,json,pathlib,sys,urllib.parse
+from agentteams_receipts import credentials,matrix_request,RECEIPT_TYPE
+p=json.load(sys.stdin); request=matrix_request(*credentials(pathlib.Path("/root/agentteams-fs/agents/agent-a")))
+room="/_matrix/client/v3/rooms/"+urllib.parse.quote(p["room"],safe="")
+event=request("GET",room+"/event/"+urllib.parse.quote(p["event"],safe=""))
+assert hashlib.sha256(event["content"]["body"].encode()).hexdigest()==p["sha256"]
+rows=[]; cursor=None
+while True:
+ page=request("GET",room+"/messages?dir=b&limit=100"+("&from="+urllib.parse.quote(cursor,safe="") if cursor else ""))
+ rows.extend(page["chunk"])
+ if not page["chunk"] or not page.get("end") or page["end"]==cursor: break
+ cursor=page["end"]
+matches=[r["event_id"] for r in rows if hashlib.sha256(r.get("content",{}).get("body","").encode()).hexdigest()==p["sha256"]]
+external=[r["event_id"] for r in rows if r.get("type")=="m.room.message" and r.get("origin_server_ts",0)>=p["stopped_ms"] and r.get("sender")!="@agent-a:recovery-1631.test"]
+assert matches==[p["event"]], matches
+assert not external, external
+receipts=[r for r in rows if r.get("type")==RECEIPT_TYPE and r.get("sender")=="@agent-a:recovery-1631.test" and r.get("content",{}).get("status")=="read"]
+receipts=[r for r in receipts if r.get("origin_server_ts",0)<p["stopped_ms"]]
+reads={r["content"]["m.relates_to"]["event_id"] for r in receipts}
+sources=[r["event_id"] for r in rows if r["event_id"] in reads and r.get("origin_server_ts",0)<p["stopped_ms"] and p["task_id"] in r.get("content",{}).get("body","")]
+assert sources, "source assignment has no delivered native read receipt"
+print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"external_matrix_inputs_after_stop":external,"native_read_sources":sources,
+    "read_receipt_events":[r["event_id"] for r in receipts if r["content"]["m.relates_to"]["event_id"] in sources]}))
+'''
+    matrix = json.loads(docker("exec", "-i", PREFIX + "-worker-agent-a", "python3", "-c", code,
+        text=json.dumps({"room": task["room_id"], "event": cp["reply_event"], "sha256": cp["result"]["sha256"],
+            "stopped_ms": died // 1000000, "task_id": TASK_ID})))
+    old_source = next(row["Actor"]["Attributes"] for row in events if row["Action"] == "die" and row["Actor"]["ID"] == old)
+    target = json.loads(docker("inspect", PREFIX + "-worker-agent-a"))[0]
+    labels = target["Config"]["Labels"]
+    native = json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c",
+        "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path('/var/log/agentteams/workers/agent-a/events.jsonl').read_text().splitlines()]; "
+        "print(json.dumps([r for r in rows if r.get('event')=='task.recovery.session']))"))
+    sources = {"core": labels["io.agentteams.recovery.core-sha"],
+        "codex": old_source["io.agentteams.recovery.harness-sha"], "hermes": labels["io.agentteams.recovery.harness-sha"]}
+    proof = {"task_id": TASK_ID, "case": CASE, "scope": "one real Codex-to-Hermes in-progress continuation",
+        "sources": sources, "native_recovery_sessions": native,
+        "generation_before": before["task"]["execution"]["generation"], "generation_after": execution["generation"],
+        "checkpoint_before": before["task"]["execution"]["checkpoint"]["version"], "checkpoint_after": cp["version"],
+        "execution": execution, "ledger": ledger, "artifacts_verified": artifacts,
+        "docker_order_ns": {"die": died, "destroy": destroyed, "create": created}, "matrix": matrix}
+    path = Path("/tmp/1631-live-" + CASE + "-verified.json")
+    path.write_text(json.dumps(proof, indent=2))
+    print(json.dumps({"passed": True, "evidence": str(path), **proof}))
+
+
 def setup(*, restore=False):
     if STATE.exists() and not restore:
         raise RuntimeError("This disposable setup already has a state file; inspect it instead of replacing it")
@@ -323,4 +398,4 @@ def members():
 
 if __name__ == "__main__":
     {"setup": setup, "restore": lambda: setup(restore=True), "status": status, "members": members, "tracing": tracing, "seed": seed,
-     "refresh-controller": refresh_controller, "evidence": evidence, "cutover": cutover}[sys.argv[1]]()
+     "refresh-controller": refresh_controller, "evidence": evidence, "cutover": cutover, "verify": verify}[sys.argv[1]]()

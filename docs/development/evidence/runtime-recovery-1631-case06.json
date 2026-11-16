@@ -1,0 +1,39 @@
+{
+  "status": "passed_bounded_case",
+  "scope": "one real Codex to Hermes in-progress task continuation after forced container replacement",
+  "task_id": "live-codex-hermes-06",
+  "model": "qwen3.6-plus",
+  "sources": {
+    "core": "516f22a7fa758d128141812f3ebff076d1004725",
+    "codex": "49e88704a920e4a6f03bab610e244c865dacd7f9",
+    "hermes": "702c54fcbbe6ba100bb3f305e2b14eb4c4a692f9"
+  },
+  "controller_binary_sha256": "b2ede92cbe51186f78190f57d5b7eca01227893dfc125c9a475da56e6877c3fc",
+  "task_status_before": "in_progress",
+  "task_status_after": "submitted",
+  "execution_generations": [1, 2],
+  "checkpoint_versions": [4, 10],
+  "step_executions": [
+    {"step": "one", "count": 1, "generation": 1, "sha256": "15b074939c3d0ffe5bd2945a3ad34175b96805fbb5335e92cc4e4f224a067849"},
+    {"step": "two", "count": 1, "generation": 2, "sha256": "e3f122585c4be518cc8063783c3ddc729739b0dd3a02c9f3ebe238d70d7d7364"},
+    {"step": "three", "count": 1, "generation": 2, "sha256": "72314495a2e4305cad536609f2b2e188bdaca762b907ef0530aca7cad2a89eea"}
+  ],
+  "old_process": "7:1794840165753346350:fedf02e89d624986aefb453b19d9ae69",
+  "new_process": "1:1794840441751073692:95405888537f4151b63276d2cd30a41e",
+  "new_native_session": "20261116_144729_ee4af88b",
+  "docker_order_ns": {
+    "old_die": 1794840439132071086,
+    "old_destroy": 1794840439160917049,
+    "target_create": 1794840441527586680
+  },
+  "matrix": {
+    "assignment_event": "$ru7ctD1rSuiGe0oW_jrHEXGNUDxzoZhaqonKNQmq_N8",
+    "read_receipt_event": "$b-Hf4ggyiPNTYu6ZRlCHuVgTvhUb1C73Opvacw21ljQ",
+    "reply_event": "$8I2MHejsvEFFIaAeOJMV7r5KNRRyv12Pl9mDnZ7FA4U",
+    "external_message_inputs_after_stop": 0,
+    "final_report_copies": 1,
+    "final_report_sha256": "ef700dcab112d6a68b6fc0618ad97cc3d2a5e8a84ee080dd6c081862ace59da1"
+  },
+  "reproduction": "RECOVERY_E2E_CASE=06 python3 tests/runtime_recovery_e2e.py verify",
+  "limits": ["one replacement run only", "normal restart and valid-session reuse not accepted", "six-Harness and 30-direction scenario matrix incomplete", "trace readback not accepted"]
+}

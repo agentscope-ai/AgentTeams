@@ -19,10 +19,10 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenClaw | `5e44ebecabf878eda499b668c9627208dbfa6049` | matched |
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
-Candidate companion pins on this Draft branch: Codex `692349083fa06fac0e8ffd0cd3761626829d6f2a`
-and Hermes `012eb7c1938c79ee9599d270aef0b5888df97c1f`, plus DeepSeek
-`0f07b3dd730e4ba124d82b14696f66dc5470f2fc`. All consume the shared
-Core contract at `45cbf4f5f6048fe4f6561462f90e1a9db6e3c15c`. These are review
+Candidate companion pins on this Draft branch: Codex `6962984217dfff5d2cc0782960b3cecf95a8e8f8`
+and Hermes `0234f38f8668d943da499d2106230e62c6226087`, plus DeepSeek
+`008dd4db04ed32786bb4c2d9eabd32eee3a49893`. All consume the shared
+Core contract at `eb52bf70d0a33c848fe6a4af72833ec553cc5ce8`. These are review
 candidates, not accepted/released Harness versions.
 Core `ecb44a61` main and each companion's latest main were merged into the
 isolated work branches, preserving the runtime Skill fixes. The contract

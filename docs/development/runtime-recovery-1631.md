@@ -20,7 +20,7 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
 Candidate companion pins on this Draft branch: Codex `4759ede928424af7d4d29c6ee0e22391ba3d5a16`
-and Hermes `3a1005d0be20c9eef5a034dff7c13ee3691cd32a`. Both consume the shared
+and Hermes `7038a26ef3880c229933e7768ad1421b7b9fd74f`. Both consume the shared
 Core contract at `3fe81174f391f7741f5f5471b110616742d1de91`. These are review
 candidates, not accepted/released Harness versions.
 
@@ -59,7 +59,7 @@ candidates, not accepted/released Harness versions.
 | Task metadata commit and transition validation + shared recovery | 29 passed | Python tests |
 | Codex existing suite | 29 passed | SDK/transport unit fixtures |
 | Codex recovery admission/session/delivery/reassignment | 4 passed | mocked client; no native model |
-| Hermes startup recovery | initial adapter implemented | 27 host unit tests passed, 1 skipped; installed SDK recovery/admission smokes passed at `2d27ef0` with mocked Task client; latest native upgrade CI pending |
+| Hermes startup recovery | initial adapter implemented | 28 host unit tests passed, 1 skipped; installed SDK recovery/admission smokes passed at `2d27ef0` with mocked Task client; latest native upgrade CI pending |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
 | Two real Harness continuation chain | not tested | no passing record |

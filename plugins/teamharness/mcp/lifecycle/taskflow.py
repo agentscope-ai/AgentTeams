@@ -1138,6 +1138,13 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             task_dir.mkdir(parents=True, exist_ok=True)
             submission_id = uuid.uuid4().hex
             submitted_at = _utc_timestamp()
+            if task.get("execution") and result_markdown is None and not report_file.is_file():
+                # Recovery must survive a stop between submission and the
+                # native final reply. Summary-only submissions still need a
+                # durable report, uploaded by _sync_task before metadata CAS.
+                result_markdown = "\n".join([f"# Task {task_id}", "", f"Result: {status}", "", summary, "",
+                    *[f"- {item}" for item in (conclusions or [])], "",
+                    *[f"- {item}" for item in deliverables], ""])
             if result_markdown is not None or report_file.is_file():
                 result_path_extra = {"result_path": report_source}
             else:

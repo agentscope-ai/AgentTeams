@@ -9,6 +9,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "teamharness" / "mc
 import server
 
 
+def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supplied(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
+    monkeypatch.setattr(server, "_pull_project", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_pull_task", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_update_project_task", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_publish_task_artifacts", lambda *a, **kw: [])
+    monkeypatch.setattr(server, "_task_completion_notification", lambda *a, **kw: {"sent": True})
+    task_path = tmp_path / "shared/tasks/p1-01/meta.json"
+    server._write_json(task_path, {"task_id": "p1-01", "project_id": "p1", "status": "in_progress",
+        "assigned_to": "alice", "execution": {"generation": 1}})
+
+    def sync(*a, **kw):
+        task = json.loads(task_path.read_text())
+        assert task["result_path"] == "shared/tasks/p1-01/result.md"
+        report = (tmp_path / task["result_path"]).read_text()
+        assert "Verified all three steps" in report
+        assert "SUCCESS" in report
+        assert "shared/tasks/p1-01/output/step-three.json" in report
+        return True
+
+    monkeypatch.setattr(server, "_sync_task", sync)
+    result = server.call_tool("taskflow", {"action": "submit_task", "workspaceDir": str(tmp_path),
+        "payload": {"taskId": "p1-01", "status": "SUCCESS", "summary": "Verified all three steps",
+            "deliverables": ["shared/tasks/p1-01/output/step-three.json"]}})
+    assert json.loads(result["content"][0]["text"])["ok"] is True
+
+
 @pytest.mark.parametrize("action", ["ack_task", "submit_task", "report_progress"])
 @pytest.mark.parametrize("assigned_to", ["alice", "@alice:example.test"])
 @pytest.mark.parametrize("actor,allowed", [("bob", False), ("alice", True)])

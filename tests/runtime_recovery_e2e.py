@@ -18,8 +18,8 @@ CONTROLLER = PREFIX + "-controller"
 NETWORK = PREFIX + "-net"
 STATE = Path("/tmp/recovery-1631-e2e-state.json")
 CORE_IMAGE = "recovery-1631/controller:local-20261116220300"
-HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261116220300",
-                  "hermes": "recovery-1631/hermes:local-20261116220300"}
+HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261116222700",
+                  "hermes": "recovery-1631/hermes:local-20261116222700"}
 CASE = os.getenv("RECOVERY_E2E_CASE", "01")
 if len(CASE) != 2 or not CASE.isdecimal():
     raise ValueError("RECOVERY_E2E_CASE must be two decimal digits")
@@ -108,6 +108,7 @@ def seed():
     spec = f"""You are executing a bounded real runtime-recovery acceptance task {task_id} in team {team}.
 Use your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.
 Pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/{team}/shared/tasks/{task_id}/acceptance.py into your task scratch directory using mc cp.
+The acceptance.py helper owns the fixture:* operation identities and records both started and verified checkpoints itself. Invoke it as one native terminal tool call; do not pre-register a checkpoint for the helper or duplicate its operation IDs.
 Use your native terminal tool to run python3 acceptance.py {task_id} {team}. Each invocation executes ONE real persisted side effect and commits its checkpoint through the real Controller.
 Read the authoritative completed_steps. Never repeat a completed step or edit the fixture, ledger or checkpoint outside the helper.
 In execution generation 1, run only step one. Then call the helper once more to verify PAUSED_AT_STEP_BOUNDARY and end your turn with a short progress report. Leave task status in_progress. Do not submit, wait, poll or request a new message.

@@ -264,7 +264,7 @@ spec:
 | `spec.peerMentions` | bool | 否 | 为 `true`（默认）时，团队 Worker 可在群房间中互相 @mention |
 | `spec.channelPolicy` | object | 否 | 团队级群聊/DM 允许与拒绝列表覆盖（字段形状与 Worker 的 `channelPolicy` 相同） |
 | `spec.admin` | object | 否 | 团队专属人类管理员（须含 `name`；可选 `matrixUserId`）。省略则使用全局 Admin |
-| `spec.humanMembers` | []object | 否 | 额外的 Team 真人成员。当前版本支持 `role: coordinator`，可进入 Team Room 并像 Team Admin 一样在其中分派任务 |
+| `spec.humanMembers` | []object | 否 | 额外的 Team 真人成员。`coordinator` 可分派任务，`member` 作为普通成员加入 Team Room |
 | `spec.workerMembers` | []object | 是 | 引用已存在的 Worker CR；必须且只能有一项的 `role` 为 `team_leader` |
 | `spec.workerMembers[].name` | string | 是 | 被引用的 Worker 资源名 |
 | `spec.workerMembers[].role` | string | 是 | `team_leader` 或 `worker` |
@@ -367,7 +367,7 @@ spec:
 
 ### Team Members
 
-使用 `spec.humanMembers` 添加属于 Team 的真人成员，这些成员不是 Worker。第一版支持的成员角色是 `coordinator`：成员会被邀请进入 Team Room，Leader/Worker 会把他们在 Team Room 中的 @mention 当作授权任务分派处理。Leader DM 仍只保留 Team Admin 和 Leader。
+使用 `spec.humanMembers` 添加属于 Team 的真人成员，这些成员不是 Worker。`coordinator`（默认）可在 Team Room 中通过 @mention 向 Leader/Worker 分派任务；`member` 是普通成员，可加入 Team Room，但不获得协调用户的任务分派权限。Leader DM 仍只保留 Team Admin 和 Leader。更新团队时，`admin: null` 可移除显式指定的管理员，省略 `admin` 则保留原值。
 
 ```yaml
 spec:

@@ -224,8 +224,7 @@ jobs:
 
       - name: Run DeepSeek Harness bridge tests
         run: |
-          python3 -m unittest discover -s deepseek-harness/tests -p 'test_*.py' -v
-          node --test deepseek-harness/tests/*.test.mjs
+          make -C deepseek-harness test
 
   mcp-setup-tests:
     runs-on: ubuntu-latest
@@ -922,6 +921,9 @@ jobs:
 
       - name: Run the LLM-smoke regression suite (stubbed docker/curl)
         run: bash install/tests/verify-llm-regressions.sh
+
+      - name: Wait for complete task content in object storage
+        run: bash tests/test-minio-wait.sh
 
       - name: Run the OpenClaw version-guard regression (stubbed fs/node)
         run: bash manager/tests/test-openclaw-version-guard.sh

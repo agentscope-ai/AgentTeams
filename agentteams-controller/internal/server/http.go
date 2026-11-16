@@ -288,6 +288,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/workers/{name}/sleep", mw.RequireAuthz(authpkg.ActionSleep, "worker", nameFn)(http.HandlerFunc(lh.Sleep)))
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
+	mux.Handle("POST /api/v1/workers/{name}/skill-warnings", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.ReportSkillWarnings)))
 	mux.Handle("GET /api/v1/workers/{name}/status", mw.RequireAuthz(authpkg.ActionStatus, "worker", nameFn)(http.HandlerFunc(lh.GetWorkerRuntimeStatus)))
 
 	// --- Projects (workflow inspection; read from object storage) ---

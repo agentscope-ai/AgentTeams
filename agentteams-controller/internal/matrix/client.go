@@ -1470,3 +1470,18 @@ func truncate(b []byte, max int) string {
 
 // txnCounter provides unique transaction IDs for Matrix event sends.
 var txnCounter atomic.Int64
+
+// SendNotice uses a persistent caller-owned transaction ID to make retries safe.
+func (c *TuwunelClient) SendNotice(ctx context.Context, room, token, txn, body string) error {
+	status, data, err := c.doJSON(ctx, http.MethodPut, fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s", encodeRoomID(room), url.PathEscape(txn)), token, map[string]string{"msgtype": "m.notice", "body": body}, nil)
+	if err != nil {
+		return fmt.Errorf("Matrix notice transport failed")
+	}
+	var result struct {
+		EventID string `json:"event_id"`
+	}
+	if (status != http.StatusOK && status != http.StatusCreated) || json.Unmarshal(data, &result) != nil || result.EventID == "" {
+		return fmt.Errorf("Matrix notice not acknowledged")
+	}
+	return nil
+}

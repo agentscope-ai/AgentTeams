@@ -45,18 +45,23 @@ minio_list_dir() {
 }
 
 # Wait for a file to appear in MinIO
-# Usage: minio_wait_for_file <path> [timeout_seconds]
+# Usage: minio_wait_for_file <path> [timeout_seconds] [expected_content]
 minio_wait_for_file() {
     local path="$1"
     local timeout="${2:-120}"
+    local expected="${3:-}"
     local elapsed=0
 
-    while ! minio_file_exists "${path}"; do
+    while true; do
+        if minio_file_exists "${path}"; then
+            if [ -z "${expected}" ] || [[ "$(minio_read_file "${path}")" == *"${expected}"* ]]; then
+                return 0
+            fi
+        fi
         sleep 5
         elapsed=$((elapsed + 5))
         if [ "${elapsed}" -ge "${timeout}" ]; then
             return 1
         fi
     done
-    return 0
 }

@@ -923,6 +923,9 @@ jobs:
       - name: Run the LLM-smoke regression suite (stubbed docker/curl)
         run: bash install/tests/verify-llm-regressions.sh
 
+      - name: Wait for complete task content in object storage
+        run: bash tests/test-minio-wait.sh
+
       - name: Run the OpenClaw version-guard regression (stubbed fs/node)
         run: bash manager/tests/test-openclaw-version-guard.sh
 

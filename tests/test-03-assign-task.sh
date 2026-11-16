@@ -54,7 +54,7 @@ minio_setup
 
 log_info "Waiting for this task's actual README in MinIO..."
 RESULT_PATH="shared/tasks/${TASK_ID}/README.md"
-if minio_wait_for_file "${RESULT_PATH}" 300; then
+if minio_wait_for_file "${RESULT_PATH}" 300 "${TASK_ID}"; then
     log_pass "Task README exists in shared storage"
     RESULT=$(minio_read_file "${RESULT_PATH}")
     assert_contains "${RESULT}" "${TASK_ID}" "Task README contains the current task marker"

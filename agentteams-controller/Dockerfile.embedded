@@ -16,7 +16,7 @@ ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
 ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: Tuwunel Matrix Server ============
-FROM ${HIGRESS_REGISTRY}/higress/tuwunel:202611161839 AS tuwunel
+FROM ${HIGRESS_REGISTRY}/higress/tuwunel:2.0.0-agentteams AS tuwunel
 
 # ============ Stage 2: MinIO Object Storage ============
 FROM ${HIGRESS_REGISTRY}/higress/minio:20260216 AS minio

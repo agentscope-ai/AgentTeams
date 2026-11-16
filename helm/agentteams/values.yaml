@@ -49,7 +49,7 @@ matrix:
   tuwunel:
     image:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/tuwunel
-      tag: "202611161839"
+      tag: "2.0.0-agentteams"
       pullPolicy: IfNotPresent
     newUserDisplayNameSuffix: ""  # empty disables Tuwunel's default "💕" suffix
     replicaCount: 1

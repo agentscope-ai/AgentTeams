@@ -19,6 +19,11 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenClaw | `5e44ebecabf878eda499b668c9627208dbfa6049` | matched |
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
+Candidate companion pins on this Draft branch: Codex `4759ede928424af7d4d29c6ee0e22391ba3d5a16`
+and Hermes `2d27ef0` (full SHA in the `hermes` gitlink). Both consume the shared
+Core contract at `3fe81174f391f7741f5f5471b110616742d1de91`. These are review
+candidates, not accepted/released Harness versions.
+
 ## Implemented contract
 
 - `GET /api/v1/tasks/recoverable`: authenticated team Worker/Leader self
@@ -54,7 +59,9 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | Task metadata commit and transition validation + shared recovery | 29 passed | Python tests |
 | Codex existing suite | 29 passed | SDK/transport unit fixtures |
 | Codex recovery admission/session/delivery/reassignment | 4 passed | mocked client; no native model |
-| Hermes startup recovery | not implemented | native SDK inspected only |
+| Hermes startup recovery | initial adapter implemented | 26 host unit tests passed, 1 skipped; installed SDK recovery/admission smokes passed with mocked Task client |
+| Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
+| Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
 | Two real Harness continuation chain | not tested | no passing record |
 | Result saved / reply unsent against real Matrix | not tested | distinct from execution continuation |
 
@@ -84,8 +91,9 @@ The last command requires the independent Codex repository checked out at
   Harnesses, including native tool interruption uncertainty. Normal subprocess
   restarts within one live container still fail closed on the process conflict;
   a verified process-tree handoff is required to make that path automatic.
-- Implement/validate Hermes, QwenPaw, DeepSeek, OpenClaw and OpenHuman startup
-  resume and delivery adapters. Audit same-process retry and revision handling.
+- Finish/validate Hermes native persistence/reuse and interruption handling;
+  implement/validate QwenPaw, DeepSeek, OpenClaw and OpenHuman startup resume
+  and delivery adapters. Audit same-process retry and revision handling.
 - Resolve Manager ordinary-message handoff/receipts from the original #1631
   reproduction. Worker Task fences do not resolve Manager cursor replay alone.
 - Verify all six same-Harness and 30 directed cross-Harness combinations,

@@ -1,3 +1,41 @@
+## Task-first execution boundary
+
+Ordinary single-team work uses `taskflow start_task`, not start_project.
+Create a Project only at an explicit user request. Do not infer Project creation
+from a request's complexity, number of Workers or a possible cross-team need;
+automatic cross-team Project creation is deferred.
+
+Both coordinating and executable work are Tasks in the existing task store:
+
+- `task_kind: main`: owns one request, `team_id`, its execution graph in `tasks`,
+  its task room, original reply routes and accepted final report.
+- `task_kind: execution`: independently executable Worker assignment. It records
+  its `team_id`, `main_task_id` and `parent_task_id`. Parentage is containment;
+  `depends_on` is execution ordering. Do not infer kind from a missing parent.
+- `project_id` is optional membership. An existing Project aggregates only the
+  main Task. Several main Tasks in one Project have independent task rooms,
+  completion fences and reports. Completing one never completes the Project.
+
+`start_task` stores all execution contracts and dispatches ready leaves;
+`taskflow accept_task_result` reuses the existing submission identity, digest,
+review and acceptance gates, then advances this main Task only. Workers update
+their own execution records; only the Leader writes the coordinating plan.
+Parent node updates merge against fresh Task metadata under strict conditional
+writes so concurrent reviews do not erase each other or reopen cancellation.
+
+Controller notifications carry `main_task_id`; `main_task_ready` and
+`main_task_completed` read the main Task rather than Project metadata. Final
+report delivery retains the original Manager/Human route, with no extra Manager
+model turn in Matrix mode. The task index reads Task-owned plans, including
+planned children which do not yet have execution records.
+
+Cross-main dependencies, cross-team Task references and their admission/dispatch
+contract are deferred. Future Project-level dispatch must use explicit Task kind
+and team-qualified Task references, and wait for accepted main Task completion;
+it must not treat a coordinating main Task as a Worker execution leaf. Current
+start_task rejects dependencies outside its own execution graph. Existing
+explicit Project DAG/Loop operations remain compatible.
+
 # Task API coordination (opt-in)
 
 Task/project records remain the authoritative business state. The Controller
@@ -6,8 +44,15 @@ the Agent API or the opt-in Matrix transport. Matrix also carries progress,
 artifacts, approval cards and final reports; progress projections do not start
 another Agent turn.
 
-The initial runtime adapter supports QwenPaw teams. Other runtimes retain their
-existing Matrix transport unless a compatible native adapter is implemented.
+Task notifications use the existing Matrix ingress of QwenPaw, OpenClaw, Hermes,
+DeepSeek Harness, OpenHuman and Codex. Other Harnesses do not gain a new HTTP
+notification server or a QwenPaw console API. The shared receipt validator reads
+canonical input and current task identity before native admission; progress
+projections do not start peer turns. Updated Harness images are required.
+QwenPaw retains its fixed ACK/review prefetch hooks; these are not requirements
+on other Harnesses. New deliveries, including Manager handoff, use Matrix.
+Existing HTTP outbox receipts retain their recovery path, without adding
+notification HTTP endpoints to any Harness.
 Enable this path only for a team whose participating runtimes support it:
 
 ```text
@@ -79,16 +124,17 @@ Agent execution. The receipt API exposes both failure and final-user event IDs.
 
 ## Current validation boundary
 
-The native end-to-end samples cover a finite plan with one coordinating main
-task and four execution subtasks per project, using QwenPaw. Task-level final
-notifications for several independent main tasks in a shared project, optional
-projects, cross-team projects and other runtime adapters still require their
-own contracts and end-to-end validation. Do not treat project completion as
-proof that these broader task models have been validated.
+Earlier real-model timing samples used QwenPaw Project plans and are not
+Task-first performance evidence. Main-task state/acceptance tests exercise a
+Project-free lifecycle and optional Project aggregation. Native ingress tests
+cover receipt validation, isolated sessions, self-addressed closure and progress
+echo suppression. These are not six full real-model development runs.
+Cross-main/cross-team dependency dispatch and native Loop notifications remain
+outside this change.
 
 ## Experimental Matrix coordination
 
-`AGENTTEAMS_COORDINATION_TRANSPORT=matrix` selects Controller-originated Matrix mentions for assignment, submission acceptance and whole-plan closure. The default HTTP transport remains available; the initial Manager-to-Leader handoff retains HTTP. The Controller relays the saved final report to the original Human conversation as the registered Manager after rechecking completed state, without a Manager execution request or another model call. This does not automatically accept submissions: the Leader still makes the acceptance decision from the supplied result and independent QA evidence.
+Registered managed Harnesses use Controller-originated Matrix mentions for handoff, assignment, submission acceptance and whole-plan closure. The legacy transport setting does not override a managed Harness's Matrix ingress. Old HTTP outbox entries retain their existing recovery semantics. The Controller relays the saved final report to the original Human conversation as the registered Manager after rechecking completed state, without a Manager execution request or another model call. This does not automatically accept submissions: the Leader still makes the acceptance decision from the supplied result and independent QA evidence.
 
 The Controller sends assignments as the registered Leader and acceptance notices as the actual submitting Worker, with the recipient in `m.mentions`, a fixed description, and a structured coordination packet. Closure is a self-addressed Leader notice. The packet retains the existing bounded spec, original requester route and per-delegation session. The Worker checks the current task fence and its own authenticated dispatch receipt; it does not need permission to list the team roster. Ordinary room history is not prepended to this control request.
 
@@ -98,7 +144,7 @@ Workers and Leaders use isolated control sessions and validate their own durable
 
 The Worker uses the normal Matrix streaming output path for visible tool calls, execution progress and results. Detailed model reasoning is suppressed for these structured control turns. Responses and edits carry `org.agentteams.progress_only` so visible feedback cannot reopen another Agent execution alongside the authoritative task callback.
 
-Validation scope remains QwenPaw finite task plans. Other Matrix runtime adapters and native Loop transport have not been validated by this experiment.
+Real-model latency evidence remains QwenPaw-only. Other Matrix adapters have ingress/contract regressions; no six-Harness real-model latency SLA is claimed. Native Loop transport is not validated.
 
 ## Task-room Human membership
 
@@ -154,3 +200,24 @@ boundary/failure checks; batching calls must not remove necessary work.
 Parallel analysis/implementation is appropriate only for a fixed original
 contract. A material ambiguity or contradictory result must be resolved before
 acceptance and downstream completion, rather than hidden to meet a timing target.
+
+## Managed Matrix adapters
+
+The Controller authenticates the actor, recipient, Team and main-task scope.
+`GET /api/v1/coordination/events/{id}` returns the canonical control packet only
+to its existing authorized readers. Each Matrix adapter keeps native room/event
+deduplication and checks the receipt before allowing a self-addressed closure.
+The common Python validator is shipped through the existing shared library
+build context, including for Node and Rust Harnesses. Each native bridge retains
+its own execution/session lifecycle; no second runtime scheduler is introduced.
+Main-task sessions include the stable team-scoped receipt identity so equal
+Task IDs in different teams cannot share execution/review/closure context.
+
+OpenHuman binds the shared server through its existing native MCP stdio client.
+Its Task workspace is inside the native sandbox, and the orchestrator exposes
+`mcp_list_tools`/`mcp_call_tool` with role-filtered skills. This is required for
+ACK/submission/acceptance; receiving a Matrix event alone is insufficient.
+
+Main Task creation by arbitrary Workers is not enabled by changing task kind.
+The current automatic planning tool remains a Leader operation; creator access
+and coordinating-plan write authority are separate admission concerns.

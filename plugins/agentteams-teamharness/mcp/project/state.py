@@ -235,7 +235,8 @@ refs.define("_write_project_plan", _write_project_plan)
 def _ready_nodes(project: dict[str, Any]) -> list[dict[str, Any]]:
     if project.get("plan_type") == "loop":
         raise ValueError(f"project plan is not a DAG: {project.get('project_id')}")
-    if str(project.get("status") or "active") != "active":
+    active = "in_progress" if project.get("task_kind") == "main" else "active"
+    if str(project.get("status") or active) != active:
         return []
     tasks = project.get("tasks", []) if isinstance(project.get("tasks"), list) else []
     status_by_id = {task.get("task_id"): task.get("status") for task in tasks}

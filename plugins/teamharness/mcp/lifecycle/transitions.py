@@ -95,6 +95,19 @@ def _require_task_mutable(
 
 
 def _update_project_task(arguments: dict[str, Any], project_id: str, task_id: str, **updates: Any) -> bool:
+    record = _read_json(_task_state_path(arguments, task_id))
+    main_id = record.get("main_task_id")
+    if main_id:
+        if _role(arguments) != "leader":
+            return True
+        from .plans import _load_main_plan, _sync_main_plan
+        main = _load_main_plan(arguments, main_id)
+        for node in main.get("tasks", []):
+            if node.get("task_id") == task_id:
+                node.update(updates)
+                _write_json(_task_state_path(arguments, main_id), main)
+                return _sync_main_plan(arguments, main_id, task_update=(task_id, updates))
+        return False
     path = _project_state_path(arguments, project_id)
     project = _read_json(path)
     if not project:

@@ -268,7 +268,7 @@ omit_memory_md = false
 inline = "You are the AgentTeams ${NATIVE_ROLE} named ${WORKER_NAME}. Follow your assigned role and credentials, and use your available tools to complete tasks."
 
 [tools]
-named = ["shell", "file_read", "file_write", "query_memory", "memory_store", "memory_forget"]
+named = ["shell", "file_read", "file_write", "query_memory", "memory_store", "memory_forget", "mcp_list_tools", "mcp_call_tool"]
 EOF
     cat >> "${WORKSPACE}/config.toml" <<'EOF'
 
@@ -279,6 +279,8 @@ EOF
         printf '\nlevel = "full"\nrequire_approval_for_medium_risk = false\n' >> "${WORKSPACE}/config.toml"
     fi
 fi
+
+python3 /opt/agentteams/scripts/configure-teamharness.py "${WORKSPACE}" /opt/agentteams/plugins/teamharness
 
 # --- LLM routing through AgentTeams AI gateway (Higress) ---
 # Use openhuman-core's CLI to register the AgentTeams gateway as an
@@ -322,6 +324,11 @@ export OPENHUMAN_CORE_TOKEN="${OPENHUMAN_CORE_TOKEN:-$(openssl rand -hex 32 2>/d
 # Step 4: Start file sync loops
 # ============================================================
 
+TASK_SYNC_EXCLUDES=()
+if [ -n "${TEAMHARNESS_COORDINATION_URL:-}" ]; then
+    TASK_SYNC_EXCLUDES=(--exclude "tasks/**" --exclude "projects/**")
+fi
+
 # Local → Remote: push changed files every 30 seconds
 (
     while true; do
@@ -338,7 +345,7 @@ export OPENHUMAN_CORE_TOKEN="${OPENHUMAN_CORE_TOKEN:-$(openssl rand -hex 32 2>/d
                 --overwrite 2>/dev/null || true
             mc mirror "${WORKSPACE}/shared/" \
                 "${AGENTTEAMS_STORAGE_PREFIX}/shared/" \
-                --overwrite --exclude "spec.md" --exclude "base/" 2>/dev/null || true
+                --overwrite --exclude "spec.md" --exclude "base/" "${TASK_SYNC_EXCLUDES[@]}" 2>/dev/null || true
             # Push SOUL.md/AGENTS.md only if agent modified them
             for _mf in SOUL.md AGENTS.md MEMORY.md; do
                 if [ -f "${WORKSPACE}/${_mf}" ] && [ "${WORKSPACE}/${_mf}" -nt "${PULL_MARKER}" ]; then
@@ -371,7 +378,7 @@ log "Local->Remote sync started (PID: ${SYNC_LOCAL_PID})"
             "${WORKSPACE}/skills/" --overwrite 2>/dev/null || true
         find "${WORKSPACE}/skills" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
         mc mirror "${AGENTTEAMS_STORAGE_PREFIX}/shared/" "${WORKSPACE}/shared/" \
-            --overwrite --newer-than "5m" 2>/dev/null || true
+            --overwrite --newer-than "5m" "${TASK_SYNC_EXCLUDES[@]}" 2>/dev/null || true
         touch "${PULL_MARKER}"
     done
 ) &

@@ -493,7 +493,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "taskflow": {
         "description": (
-            "Coordinate bounded TeamHarness tasks after a project node is ready: "
+            "Create ordinary team work with start_task (one main Task and executable subtasks); use complete_task for its final report. Project is optional existing membership, never created implicitly. "
             "leader delegates and checks tasks; worker or remote-member "
             "acknowledges and submits results; worker or leader raises in-flight "
             "attention (approval / decision / escalation) with request_attention. "
@@ -511,6 +511,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "action": {
                     "type": "string",
                     "enum": [
+                        "start_task",
+                        "advance_task",
+                        "accept_task_result",
+                        "complete_task",
                         "delegate_task",
                         "ack_task",
                         "submit_task",
@@ -568,7 +572,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "spec": {
                     "type": "string",
-                    "description": "Task execution contract for delegate_task.",
+                    "description": "Original request for start_task; execution contract for delegate_task.",
                 },
                 "summary": {
                     "type": "string",

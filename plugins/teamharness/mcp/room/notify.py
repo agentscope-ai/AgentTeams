@@ -51,9 +51,11 @@ def _send_requester_completion(arguments: dict[str, Any], project: dict[str, Any
         return {"sent": False, "skipped": True}
     if project.get("requesterCompletionEventId"):
         return {"sent": True, "reused": True, "eventId": project["requesterCompletionEventId"]}
-    report = _project_dir(arguments, project_id) / "result.md"
+    main_id = project_id if project.get("task_kind") == "main" else ""
+    report = (_task_state_path(arguments, main_id).parent if main_id else _project_dir(arguments, project_id)) / "result.md"
     text = report.read_text(encoding="utf-8") if report.is_file() else "All project tasks have been accepted; no project summary file was provided."
-    api_delivery = deliver_event("project_completed", project_id=project_id, recipient=route.get("target_user"),
+    api_delivery = deliver_event("main_task_completed" if main_id else "project_completed",
+        main_task_id=main_id, project_id=project.get("project_id", "") if main_id else project_id, recipient=route.get("target_user"),
         room_id=project.get("room_id") or project.get("source_room_id"), text=text)
     if api_delivery is not None and not api_delivery.get("external"):
         if api_delivery.get("sent"):
@@ -63,17 +65,17 @@ def _send_requester_completion(arguments: dict[str, Any], project: dict[str, Any
     message = refs.resolve("_message")({
         **arguments, "action": "send", "channel": "matrix",
         "target": "room:" + route["target_session"],
-        "message": f"{route.get('target_user', '')} PROJECT_COMPLETED: {project_id}\n{text}",
-        "workflowEvent": {"type": "PROJECT_COMPLETED", "project_id": project_id},
-        "transactionId": "project-final-" + project_id,
+        "message": f"{route.get('target_user', '')} {'MAIN_TASK_COMPLETED' if main_id else 'PROJECT_COMPLETED'}: {project_id}\n{text}",
+        "workflowEvent": ({"type": "MAIN_TASK_COMPLETED", "task_id": main_id} if main_id else {"type": "PROJECT_COMPLETED", "project_id": project_id}),
+        "transactionId": ("task-final-" if main_id else "project-final-") + project_id,
         "requesterReplyRoute": project.get("requester_reply_route") or {},
     })
     if not message.get("ok"):
         return {"sent": False, "error": message.get("error", "completion delivery failed")}
     project["requesterCompletionEventId"] = message.get("messageId")
     project["requester_report"] = {
-        "pending": False, "reason": "project_completed", "sent_at": _utc_timestamp(),
-        "report_path": f"shared/projects/{project_id}/result.md",
+        "pending": False, "reason": "main_task_completed" if main_id else "project_completed", "sent_at": _utc_timestamp(),
+        "report_path": (f"shared/tasks/{main_id}/result.md" if main_id else f"shared/projects/{project_id}/result.md"),
     }
     return {"sent": True, "eventId": message.get("messageId")}
 
@@ -156,7 +158,7 @@ def _send_delegate_notification(
     """
     if os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip():
         task = _read_json(_task_state_path(arguments, task_id), {})
-        api_delivery = deliver_event("task_assigned", project_id=task.get("project_id"), task_id=task_id,
+        api_delivery = deliver_event("task_assigned", project_id=task.get("project_id"), main_task_id=task.get("main_task_id", ""), task_id=task_id,
             recipient=assignee, delivery_id=txn, room_id=_canonical_room_id(room_id), text=spec)
         if api_delivery is not None:
             return {**api_delivery, "roomId": _canonical_room_id(room_id), "assignee": assignee}
@@ -627,7 +629,7 @@ def _task_completion_notification(
     result and never blocks the terminal submission.
     """
     room_id = str(task.get("room_id") or "").strip()
-    api_delivery = deliver_event("task_submitted", project_id=task.get("project_id"), task_id=task_id,
+    api_delivery = deliver_event("task_submitted", project_id=task.get("project_id"), main_task_id=task.get("main_task_id", ""), task_id=task_id,
         submission_id=task.get("submission_id"), room_id=_canonical_room_id(room_id), text=summary)
     if api_delivery is not None:
         return api_delivery

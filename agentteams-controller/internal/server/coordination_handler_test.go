@@ -36,6 +36,36 @@ func coordinationFixture(t *testing.T) (*CoordinationHandler, *ossfake.Memory) {
 	return NewCoordinationHandler(ServerDeps{Client: k, Namespace: "default", OSS: store, ContainerPrefix: "agentteams-worker-"}), store
 }
 
+func TestManagedHarnessesUseTheirRegisteredMatrixRecipient(t *testing.T) {
+	for _, runtime := range []string{"qwenpaw", "openclaw", "hermes", "deepseek-harness", "openhuman", "codex"} {
+		t.Run(runtime, func(t *testing.T) {
+			h, _ := coordinationFixture(t)
+			worker := workerCR("worker-cr", "worker-runtime")
+			worker.Spec.Runtime, worker.Status.MatrixUserID = runtime, "@worker:test"
+			var event coordinationEvent
+			if err := h.targetWorker(&event, worker); err != nil || event.Recipient != "@worker:test" || event.RecipientRuntime != runtime {
+				t.Fatalf("registered recipient missing: %+v %v", event, err)
+			}
+			t.Setenv("AGENTTEAMS_COORDINATION_TRANSPORT", "matrix")
+			if coordinationTransport("task_assigned", runtime) != "matrix" || coordinationTransport("main_task_ready", runtime) != "matrix" {
+				t.Fatal("managed Harness would receive a QwenPaw-specific HTTP notification")
+			}
+		})
+	}
+	if coordinationRuntimeSupported("unknown") || coordinationRuntimeSupported("copaw") {
+		t.Fatal("unadapted/EOL runtimes must not be advertised as supported")
+	}
+}
+
+func TestMainTaskSessionUsesItsTeamScopedReceipt(t *testing.T) {
+	a := coordinationEvent{Kind: "main_task_ready", MainTaskID: "same-task", ID: "team-a-receipt"}
+	b := a
+	b.ID = "team-b-receipt"
+	if coordinationSession(a) == coordinationSession(b) {
+		t.Fatal("different team receipts share a closure session")
+	}
+}
+
 func TestMatrixAssignmentCarriesMentionsAndCanonicalPrerequisites(t *testing.T) {
 	e := coordinationEvent{Kind: "task_assigned", TaskID: "dev", DeliveryID: "d1", Recipient: "@worker:test", Actor: "@lead:test", RoomID: "!task:test"}
 	p := map[string]any{"tasks": []any{map[string]any{"task_id": "analysis", "title": "需求分析"}, map[string]any{"task_id": "dev", "title": "开发 <CSV>", "depends_on": []any{"analysis"}}}}
@@ -420,6 +450,19 @@ func TestCoordinationDurableAdmissionRestartAndDuplicate(t *testing.T) {
 	if got := admit(event); got != 202 {
 		t.Fatalf("retry %d", got)
 	}
+	// Existing HTTP outbox records must resume their original admission path.
+	// Newly admitted managed-Harness events now use Matrix.
+	legacyEvent, resolveErr := h.resolve(context.Background(), event, caller)
+	if resolveErr != nil {
+		t.Fatal(resolveErr)
+	}
+	legacyKey := coordinationPending + legacyEvent.ID + ".json"
+	legacyBytes, _ := s.GetObject(context.Background(), legacyKey)
+	var legacy coordinationDelivery
+	_ = json.Unmarshal(legacyBytes, &legacy)
+	legacy.Transport = ""
+	legacyBytes, _ = json.Marshal(legacy)
+	_ = s.PutObject(context.Background(), legacyKey, legacyBytes)
 	h.drain(context.Background())
 	if calls != 1 {
 		t.Fatalf("admissions %d", calls)
@@ -614,5 +657,57 @@ func TestCoordinationPlanHintsUseCanonicalState(t *testing.T) {
 	input := coordinationPayload(e)["input"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
 	if !strings.Contains(input, "manual DAG or Loop") {
 		t.Fatal("Loop received automatic finite continuation instructions")
+	}
+}
+
+func TestMainTaskCoordinationDoesNotRequireProject(t *testing.T) {
+	h, store := coordinationFixture(t)
+	main := map[string]any{"task_id": "main1", "task_kind": "main", "team_id": "alpha", "status": "in_progress", "room_id": "!main1:test", "dispatch_mode": "automatic", "plan_type": "dag", "tasks": []any{map[string]any{"task_id": "leaf1", "parent_task_id": "main1", "status": "completed"}}, "reply_route": map[string]any{"target_user": "@manager:test"}, "requester_reply_route": map[string]any{"target_session": "!human:test", "target_user": "@human:test"}}
+	putProject(store, "teams/alpha/shared/tasks/main1/meta.json", main)
+	putProject(store, "teams/alpha/shared/tasks/leaf1/meta.json", map[string]any{"task_id": "leaf1", "main_task_id": "main1", "parent_task_id": "main1", "assigned_to": "@worker:test", "status": "completed", "notifyTxn": "d1", "submission_id": "s1", "summary": "Accepted leaf"})
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"}
+	ready, err := h.resolve(context.Background(), coordinationEvent{Kind: "main_task_ready", MainTaskID: "main1"}, caller)
+	if err != nil || ready.RoomID != "!main1:test" || ready.ProjectID != "" {
+		t.Fatalf("no-project main rejected: %+v %v", ready, err)
+	}
+	if coordinationSession(ready) != "coordination-close-task:main1:"+ready.ID {
+		t.Fatal("main task lost its independent closure session")
+	}
+	main["status"] = "completed"
+	putProject(store, "teams/alpha/shared/tasks/main1/meta.json", main)
+	_ = store.PutObject(context.Background(), "teams/alpha/shared/tasks/main1/result.md", []byte("Accepted final report"))
+	final, err := h.resolve(context.Background(), coordinationEvent{Kind: "main_task_completed", MainTaskID: "main1"}, caller)
+	if err != nil || final.FinalReport != "Accepted final report" || final.RequesterRoute["target_session"] != "!human:test" {
+		t.Fatalf("wrong final report scope: %+v %v", final, err)
+	}
+}
+
+func TestMainTasksInOneProjectCloseIndependently(t *testing.T) {
+	h, store := coordinationFixture(t)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"}
+	ids := []string{}
+	for _, id := range []string{"main-a", "main-b"} {
+		p := map[string]any{"task_id": id, "task_kind": "main", "team_id": "alpha", "project_id": "p1", "status": "in_progress", "room_id": "!" + id + ":test", "tasks": []any{map[string]any{"task_id": id + "-leaf", "status": "completed"}}}
+		putProject(store, "teams/alpha/shared/tasks/"+id+"/meta.json", p)
+		putProject(store, "teams/alpha/shared/tasks/"+id+"-leaf/meta.json", map[string]any{"task_id": id + "-leaf", "main_task_id": id, "status": "completed"})
+		e, err := h.resolve(context.Background(), coordinationEvent{Kind: "main_task_ready", MainTaskID: id}, caller)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, e.ID)
+	}
+	if ids[0] == ids[1] {
+		t.Fatal("independent main tasks share a closure fence")
+	}
+}
+
+func TestMainTaskRejectsCrossMainChildAndUnacceptedClosure(t *testing.T) {
+	h, store := coordinationFixture(t)
+	putProject(store, "teams/alpha/shared/tasks/main1/meta.json", map[string]any{"task_id": "main1", "task_kind": "main", "team_id": "alpha", "status": "in_progress", "room_id": "!main:test", "tasks": []any{map[string]any{"task_id": "t1", "status": "submitted"}}})
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"}
+	for _, e := range []coordinationEvent{{Kind: "task_assigned", MainTaskID: "main1", TaskID: "t1", DeliveryID: "delegate-1"}, {Kind: "main_task_ready", MainTaskID: "main1"}} {
+		if _, err := h.resolve(context.Background(), e, caller); err == nil {
+			t.Fatal("cross-main child or unaccepted closure admitted")
+		}
 	}
 }

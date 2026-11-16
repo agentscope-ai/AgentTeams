@@ -1,64 +1,53 @@
 ---
 name: teamharness-project-management
-description: "Use as Leader to start a complete task plan with start_project, accept checked submissions, and complete the plan with its final report. Also covers manual DAG and Loop lifecycle operations."
+description: "Use as Leader to start ordinary team work with taskflow start_task, accept subtasks and complete the main Task. Project creation is explicit-user-only; also covers existing Project DAG and Loop operations."
 ---
 
 # Project Management
 
-## Main tasks and subtasks
+## Default: one main Task, executable subtasks
 
-Keep Projects as optional organizational containers for larger work. You can
-plan multiple main tasks within one Project. A main task with subtasks represents
-the complete request you coordinate; a leaf task is an independently executable
-Worker assignment. Set `parentTaskId` on each subtask to its main task's ID.
-Keep `dependsOn` separate: it lists execution prerequisites, not parentage.
+For ordinary team work, use `taskflow start_task`. Do not create a Project,
+including a hidden or temporary one. Only create a Project when the user
+explicitly requests one. Automatic cross-team Project creation is future work;
+do not infer that authorization from task complexity or member count.
 
-Use `plan_dag` to persist the full plan, including the main tasks and subtasks.
-Delegate only ready leaf tasks. Do not delegate a coordinating parent to a
-Worker. Keep its status open while any subtask is unfinished. After all subtasks
-are accepted and you verify the overall deliverable, call `complete_project`
-with `projectId` and `report` (your final user report). That operation closes
-coordinating parents, saves result.md and notifies the requester. Completing one
-subtask never completes the main task. Do not create a Project for each subtask.
+A main Task owns the original request, execution plan, task room, source reply
+route and final report. Each subtask is independently executable by one Worker.
+`parent_task_id` records parentage; `dependsOn` records execution prerequisites.
+Project membership is optional: `projectId` on start_task may reference an
+existing Project. Only the main Task is linked into that Project. Never close
+or wait for unrelated main tasks in the same Project when finishing this one.
 
-Use this skill when maintaining durable project state.
+Call `taskflow` with role leader and an object payload:
 
-A project owns the plan, context, dependencies, and accepted progress. Keep the
-project plan separate from individual task execution logs.
+```json
+{"action":"start_task","payload":{"taskId":"delivery-001","title":"Bounded delivery","spec":"The complete original request and acceptance criteria.","sourceRoomId":"!source:matrix.local","requester":"@requester:matrix.local","tasks":[{"taskId":"delivery-001-analysis","assignedTo":"@analyst:matrix.local","spec":"Record the requested behavior and acceptance cases."},{"taskId":"delivery-001-implementation","assignedTo":"@developer:matrix.local","dependsOn":["delivery-001-analysis"],"spec":"Implement the accepted contract and submit actual verification evidence."}]}}
+```
 
-Keep each leaf spec within the original request. Preserve its acceptance
-criteria and input domain; do not introduce extra behavior or turn exploratory
-checks into requirements while planning or accepting results.
+This single call validates the plan, creates/reuses the main Task room, saves
+all execution specs and dispatches ready subtasks. End after successful dispatch;
+do not poll or send duplicate assignments. Exact retries preserve the room and
+accepted work. Later specs must have their actual owners and contracts; resolve
+material ambiguities with the user instead of inventing a plan.
 
-Only advance a dependency after you accept the submitted result as the trusted
-Leader runtime.
-When your runtime supplies a synchronized `check_task` receipt for the current
-submission, review its spec, report and validation directly instead of pulling
-or checking it again. That preparation never makes the acceptance decision for
-you. Continue the normal manual DAG or Loop protocol after your decision.
-Do not use this skill for ordinary direct replies or lightweight one-off
-actions.
+On `task_submitted`, use your runtime-prepared check_task receipt, review the
+exact submission, and call `taskflow accept_task_result` with
+`{mainTaskId, taskId, submissionId, resultStatus, accepted}`. Submission alone
+never unlocks dependencies. The task system dispatches newly ready subtasks
+only after your acceptance. Preserve independent QA and required boundary checks.
 
-## Scope
+With Controller coordination enabled, wait for `main_task_ready`. Without that
+transport, the final acceptance receipt returns `mainTaskReady` and `nextAction`;
+use that receipt directly instead of waiting for a callback. Then verify the whole original request using accepted results,
+then call `taskflow complete_task` with `{taskId, report}`. This saves the final
+report under `shared/tasks/{main-task-id}/result.md`, completes only that main
+Task and notifies its original source. Do not repeat testing or write accepted
+Worker outputs. Inspect requesterNotification; do not send a duplicate report.
 
-Use this skill when acting as Leader for:
-
-- `projectflow` calls
-- project creation
-- quick single-task project creation
-- DAG planning
-- Loop planning
-- ready-node resolution
-- Loop iteration recording
-- accepting checked Worker results into project progress
-- project-level status reports
-
-When owners and acceptance criteria are already known, use `start_project`
-from this skill directly: it creates the room, validates the plan and performs
-initial delegation, including its required decision classification. You do not
-need to load roomflow or individual-delegation instructions first. Use
-`teamharness-team-coordination` when task boundaries need analysis, and use
-individual room/delegation skills when you choose the manual workflow.
+For explicit Project work and existing manual DAG/Loop plans, use the legacy
+Project operations below. A Loop's iteration rules remain unchanged; do not
+replace an iterative plan with finite automatic completion.
 
 ## Project Files
 
@@ -113,7 +102,10 @@ safe.
 When calling `projectflow`, pass `payload` as a JSON object, not as a serialized
 JSON string.
 
-## Create Project
+## Explicit Project work only
+
+Use these creation operations only when the user explicitly requested a Project.
+Ordinary team tasks use start_task above, even when they have multiple members.
 
 When API coordination is enabled and every execution task can be specified up
 front, set `dispatchMode: "automatic"` on `start_project` and include `spec` and
@@ -149,7 +141,7 @@ both use the accepted implementation in parallel; only make documentation wait
 for QA when its requested content needs the QA result. Final acceptance still
 requires all required branches to finish.
 
-For a finite DAG whose initial owners and acceptance criteria are known, prefer
+For an explicitly requested Project whose initial owners and acceptance criteria are known, use
 `start_project` in the source session. It reuses the existing room creation,
 plan validation and delegation operations in one call; you do not send a
 `PROJECT_REQUESTED` self-trigger for this path. Supply the normal

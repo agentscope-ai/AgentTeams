@@ -10,7 +10,8 @@ Use this skill when executing assigned work as a Worker or remote member.
 Claim only tasks assigned to you. Read the task spec, keep deliverables in the
 task directory, ask focused blocker questions, and submit a structured result.
 
-Do not change project-level state or project result files.
+Do not change the main Task plan, its final report, or optional Project state.
+Only update your assigned execution task through taskflow.
 
 Do not use this skill or taskflow for readiness checks, direct questions, or
 explicit requests to reply with specific text. Answer those directly in the

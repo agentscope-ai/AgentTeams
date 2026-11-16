@@ -250,12 +250,35 @@ def _resolve_task_continuation(task: dict[str, Any], resolution: str) -> None:
     task["continuation"] = continuation
 
 
-def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any], *, main_task_id: str = "") -> dict[str, Any]:
     if _role(arguments) != "leader":
         raise ValueError("accept_task_result requires leader role")
-    project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
+    project_id = str(payload.get("projectId") or payload.get("project_id") or "")
+    if main_task_id:
+        from mcp.lifecycle.plans import _load_main_plan, _sync_main_plan
+        project = _load_main_plan(arguments, main_task_id)
+        if project.get("status") != "in_progress":
+            raise ValueError("acceptance requires an active main task")
+        project_id = str(project.get("project_id") or "")
+        state_path = _task_state_path(arguments, main_task_id)
+        plan_dir = _task_dir(arguments, main_task_id)
+        report_path = f"shared/tasks/{main_task_id}/result.md"
+        def sync_plan():
+            node = next(n for n in project["tasks"] if n["task_id"] == task_id)
+            return _sync_main_plan(arguments, main_task_id, task_update=(task_id, {"status": node["status"]}))
+        def write_plan():
+            pass  # The main Task's spec.md and tasks metadata are the plan.
+    else:
+        project_id = _safe_id(project_id, "projectId")
+        project = _read_json(_project_state_path(arguments, project_id))
+        state_path = _project_state_path(arguments, project_id)
+        plan_dir = _project_dir(arguments, project_id)
+        report_path = f"shared/projects/{project_id}/result.md"
+        def sync_plan():
+            return _sync_project(arguments, project_id)
+        def write_plan():
+            _write_project_plan(plan_dir, project)
     task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-    project = _read_json(_project_state_path(arguments, project_id))
     if not project:
         raise ValueError("project not found")
     task_meta = _read_json(_task_state_path(arguments, task_id))
@@ -278,6 +301,8 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             "protocol enforcement is enabled",
         )
     task_project_id = _first_text(task_meta.get("project_id"), task_meta.get("projectId"))
+    if main_task_id and task_meta.get("main_task_id") != main_task_id:
+        raise ValueError("task does not belong to this main task")
     if task_project_id and task_project_id != project_id:
         raise ValueError("task does not belong to project")
     if task_meta:
@@ -347,7 +372,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
         if current_node_status != node_status:
             raise ValueError(f"task result already decided as {current_node_status}")
         try:
-            _write_project_plan(_project_dir(arguments, project_id), project)
+            write_plan()
         except OSError as exc:
             return _persisted_state_failure_result(
                 tool="projectflow",
@@ -356,7 +381,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
                 task=task_meta or None,
                 project=project,
             )
-        if not _sync_project(arguments, project_id):
+        if not sync_plan():
             return _sync_failure_result({
                 "tool": "projectflow",
                 "action": "accept_task_result",
@@ -458,7 +483,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             "task_id": task_id,
             "result_status": result_status,
             "summary": str(payload.get("summary") or ""),
-            "report_path": f"shared/projects/{project_id}/result.md",
+            "report_path": report_path,
         }
     else:
         requester_report = project.get("requester_report") if isinstance(project.get("requester_report"), dict) else {}
@@ -467,7 +492,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             requester_report["reason"] = f"task_result_{node_status}"
             project["requester_report"] = requester_report
     try:
-        _write_json(_project_state_path(arguments, project_id), project)
+        _write_json(state_path, project)
     except OSError as exc:
         if legacy_identity_persisted:
             return _persisted_state_failure_result(
@@ -482,7 +507,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             error=exc,
         )
     try:
-        _write_project_plan(_project_dir(arguments, project_id), project)
+        write_plan()
     except OSError as exc:
         return _persisted_state_failure_result(
             tool="projectflow",
@@ -491,7 +516,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             task=task_meta or None,
             project=project,
         )
-    if not _sync_project(arguments, project_id):
+    if not sync_plan():
         return _sync_failure_result({
             "tool": "projectflow",
             "action": "accept_task_result",

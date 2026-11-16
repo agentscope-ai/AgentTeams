@@ -194,7 +194,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                         args["requesterReplyRoute"] = route
                     if coordinator:
                         args["coordinatorReplyRoute"] = coordinator
-                elif name == "projectflow" and args.get("action") in {"start_project", "create_project", "create_quick_project"}:
+                elif (name == "projectflow" and args.get("action") in {"start_project", "create_project", "create_quick_project"}) or (name == "taskflow" and args.get("action") == "start_task"):
                     if isinstance(args.get("payload"), dict):
                         if route:
                             args["payload"]["requesterReplyRoute"] = route
@@ -212,7 +212,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 yield ToolResponse(state="error", content=[{"type": "text", "text": _CLEANUP_GUIDANCE}])
                 return
             async for item in next_handler(**input_kwargs):
-                if name == "projectflow" and args.get("action") == "accept_task_result" and _review_task.get():
+                if name in {"projectflow", "taskflow"} and args.get("action") == "accept_task_result" and _review_task.get():
                     for block in getattr(item, "content", []):
                         text = block.get("text", "") if isinstance(block, dict) else getattr(block, "text", "")
                         try:
@@ -460,7 +460,7 @@ def _load_phase_skill(ctx: Any, name: str) -> None:
     if path.is_file():
         text = path.read_text(encoding="utf-8")
         if name == "project-management":
-            text = text.partition("## Manual and Loop reference")[0]
+            text = text.partition("## Project Files")[0]
             text += "\nFor manual planning or Loop iteration, read the complete skill at " + str(path) + ".\n"
         ctx.inject_context("The builtin " + name + " phase instructions are already loaded for this turn; do not reread them.\n" + text, source="teamharness_preloaded_skill")
 
@@ -483,26 +483,29 @@ async def _manager_report_context(ctx: Any) -> bool:
     api_event = meta.get("teamharness_coordination") or {}
     if meta.get("teamharness_matrix_coordination"):
         receipt = await asyncio.to_thread(_controller_json, "coordination/events/" + urllib.parse.quote(api_event.get("id", ""), safe=""))
-        if (api_event.get("kind") not in {"task_assigned", "task_submitted", "project_ready"}
+        if (api_event.get("kind") not in {"handoff", "task_assigned", "task_submitted", "project_ready", "main_task_ready"}
                 or receipt.get("actor") != meta.get("sender_id")
                 or receipt.get("recipient") != meta.get("agent_matrix_user_id")
                 or receipt.get("room_id", "") != meta.get("room_id", "")
                 or any(receipt.get(key, "") != api_event.get(key, "") for key in
-                       ("kind", "task_id", "project_id", "delivery_id", "submission_id"))):
+                       ("kind", "task_id", "main_task_id", "project_id", "delivery_id", "submission_id"))):
             return True
     automatic_plan = api_event.get("dispatch_mode") == "automatic" and api_event.get("plan_type") != "loop"
-    if api_event.get("kind") == "project_ready":
-        project = await asyncio.to_thread(_controller_json, "projects/" + urllib.parse.quote(api_event["project_id"], safe="") + "/meta")
+    if api_event.get("kind") in {"project_ready", "main_task_ready"}:
+        main_id = api_event.get("main_task_id", "")
+        project = await asyncio.to_thread(_controller_json,
+            ("tasks/" + urllib.parse.quote(main_id, safe="") if main_id else "projects/" + urllib.parse.quote(api_event["project_id"], safe="")) + "/meta")
         nodes = project.get("tasks", [])
         parents = {node.get("parent_task_id") for node in nodes}
         leaves = [node for node in nodes if node.get("task_id") not in parents]
         if (os.getenv("AGENTTEAMS_AGENT_ROLE") not in {"leader", "team_leader"}
-                or project.get("status") != "active" or project.get("plan_type") == "loop"
+                or project.get("status") not in ({"in_progress", "submitted"} if main_id else {"active"}) or project.get("plan_type") == "loop"
                 or not leaves or any(node.get("status") != "completed" for node in leaves)):
             return True
     if api_event.get("kind") in {"task_assigned", "task_submitted"}:
         task = await asyncio.to_thread(_controller_json, "tasks/" + urllib.parse.quote(api_event["task_id"], safe="") + "/meta")
-        if task.get("project_id") != api_event.get("project_id"):
+        if (task.get("project_id", "") != api_event.get("project_id", "")
+                or task.get("main_task_id", "") != api_event.get("main_task_id", "")):
             return True
         if api_event["kind"] == "task_assigned":
             if task.get("status") not in {"assigned", "in_progress"} or task.get("notifyTxn") != api_event.get("delivery_id"):
@@ -514,7 +517,7 @@ async def _manager_report_context(ctx: Any) -> bool:
             if prepared and prepared.get("synced") is True:
                 acknowledged = prepared.get("task") or {}
                 directory = Path(prepared.get("taskDirectory") or ".")
-                if (acknowledged.get("task_id") == api_event["task_id"] and acknowledged.get("project_id") == api_event["project_id"] and acknowledged.get("status") == "in_progress"
+                if (acknowledged.get("task_id") == api_event["task_id"] and acknowledged.get("project_id", "") == api_event.get("project_id", "") and acknowledged.get("main_task_id", "") == api_event.get("main_task_id", "") and acknowledged.get("status") == "in_progress"
                         and acknowledged.get("notifyTxn") == api_event.get("delivery_id")
                         and directory.is_absolute() and directory.name == api_event["task_id"] and directory.parent.name == "tasks"):
                     ctx.extras["ack_scope_token"] = _ack_scope.set((api_event["task_id"], directory.resolve(), acknowledged.get("assigned_to"), acknowledged["notifyTxn"]))
@@ -530,18 +533,20 @@ async def _manager_report_context(ctx: Any) -> bool:
             prepared = await _prepare_task_context(ctx, "check_task", api_event["task_id"])
             checked = (prepared or {}).get("task") or {}
             if (prepared and prepared.get("pulled") and checked.get("task_id") == api_event["task_id"]
-                    and checked.get("project_id") == api_event["project_id"] and checked.get("status") == "submitted"
+                    and checked.get("project_id", "") == api_event.get("project_id", "") and checked.get("main_task_id", "") == api_event.get("main_task_id", "") and checked.get("status") == "submitted"
                     and checked.get("submission_id") == api_event["submission_id"]):
                 context = {key: prepared.get(key) for key in ("result", "spec", "report", "validationErrors", "effective", "contextTruncated")}
                 ctx.extras["prepared_review"] = True
-                ctx.inject_context("check_task has already pulled and checked this exact submission. Do not call it or filesync again for the supplied evidence. Review this complete receipt, and accept or return it with projectflow action accept_task_result, role leader, payload {projectId, taskId, submissionId, resultStatus, accepted}. The tool still enforces current identity, digest and review gates. Read more only when this receipt is truncated or genuinely insufficient.\n" + json.dumps(context, ensure_ascii=False), source="teamharness_prepared_review")
-        ctx.inject_context("Authoritative task state was checked before execution: " + json.dumps({k:task.get(k) for k in ("task_id", "project_id", "status", "assigned_to", "spec_path", "result_path", "submission_id")}), source="teamharness_api_state")
+                ctx.inject_context("check_task has already pulled and checked this exact submission. Do not call it or filesync again for the supplied evidence. Review this complete receipt, and accept or return it with taskflow action accept_task_result and payload {mainTaskId, taskId, submissionId, resultStatus, accepted} for a main-task plan; use projectflow with projectId only for legacy Project plans. Keep role leader. The tool still enforces current identity, digest and review gates. Read more only when this receipt is truncated or genuinely insufficient.\n" + json.dumps(context, ensure_ascii=False), source="teamharness_prepared_review")
+        ctx.inject_context("Authoritative task state was checked before execution: " + json.dumps({k:task.get(k) for k in ("task_id", "main_task_id", "project_id", "status", "assigned_to", "spec_path", "result_path", "submission_id")}), source="teamharness_api_state")
     if os.getenv("AGENTTEAMS_AGENT_ROLE") != "manager":
         if api_event.get("kind") == "handoff":
             _load_phase_skill(ctx, "project-management")
+        if api_event.get("kind") == "main_task_ready":
+            ctx.inject_context("All execution subtasks of this main Task are accepted. Use the supplied summaries, verify the whole request, then call taskflow complete_task with role leader and payload {taskId: " + json.dumps(api_event["main_task_id"]) + ", report}. Do not complete an optional Project, wait for its unrelated tasks, or repeat accepted work.", source="teamharness_prepared_closure")
         if api_event.get("kind") == "project_ready":
             ctx.inject_context("You already accepted each execution result. Use the supplied accepted-result summaries as the reviewed evidence; do not pull or re-check unchanged reports. Prepare the final user report and call projectflow complete_project with role leader and payload {projectId, report}. Investigate only an actual missing or inconsistent requirement.", source="teamharness_prepared_closure")
-        if os.getenv("AGENTTEAMS_AGENT_ROLE") in {"leader", "team_leader"} and api_event.get("kind") in {"task_submitted", "project_ready"}:
+        if os.getenv("AGENTTEAMS_AGENT_ROLE") in {"leader", "team_leader"} and api_event.get("kind") in {"task_submitted", "project_ready", "main_task_ready"}:
             for tool in await ctx.agent.toolkit.get_tool_schemas():
                 name = tool["function"]["name"]
                 if name.split("__")[-1].lower() in {"execute_shell_command", "bash", "write_file", "edit_file", "edit", "write"}:
@@ -565,11 +570,11 @@ async def _manager_report_context(ctx: Any) -> bool:
                 return False
             ctx.inject_context(
                 "Your coordination events are delivered by the Controller. For a finite plan with known execution specs, "
-                "use projectflow start_project with dispatchMode automatic, all leaf specs, assignees and dependencies. "
+                "use taskflow start_task with taskId, original spec, and tasks containing execution specs, assignees and dependencies. Do not create a Project for ordinary team tasks. Create a Project only when the user explicitly asks; automatic cross-team Project creation is not supported yet. "
                 "Accept checked results; the task system dispatches newly ready leaves. Only scoped control notifications "
                 "wake Agents; progress messages do not. Do not send duplicate assignments or poll for progress. "
                 "For an automatic finite task_submitted, check and accept or return only this submission, then end this turn. "
-                "The Controller sends project_ready when all execution leaves are accepted. Only on project_ready, "
+                "For main-task plans the Controller sends main_task_ready after all subtasks are accepted; call taskflow complete_task with taskId and report then. For legacy Project plans it sends project_ready. Only on project_ready, "
                 "verify the whole request and call complete_project with projectId and report (your concise final "
                 "user report). This closes coordinating parents, saves the report and notifies the requester in one operation. "
                 "For manual DAG or Loop plans, continue your existing iteration/delegation protocol after acceptance; "
@@ -596,17 +601,18 @@ async def _manager_report_context(ctx: Any) -> bool:
             await _prepare_manager_roster(ctx)
             return False
         event = meta.get("teamharness_workflow") or {}
-        if event.get("type") != "PROJECT_COMPLETED" or not event.get("project_id"):
+        main_id = event.get("task_id") if event.get("type") == "MAIN_TASK_COMPLETED" else ""
+        if not main_id and (event.get("type") != "PROJECT_COMPLETED" or not event.get("project_id")):
             return True
-        project = await asyncio.to_thread(_controller_json, "projects/" + urllib.parse.quote(event["project_id"], safe="") + "/meta")
+        project = await asyncio.to_thread(_controller_json, ("tasks/" + urllib.parse.quote(main_id, safe="") if main_id else "projects/" + urllib.parse.quote(event["project_id"], safe="")) + "/meta")
         if project.get("status") != "completed":
             return True
         team = await asyncio.to_thread(_controller_json, "teams/" + urllib.parse.quote(project.get("team_id", ""), safe=""))
         if not any(m.get("role") == "team_leader" and m.get("matrixUserID") == sender for m in team.get("members", [])):
             return True
         report = meta.get("teamharness_final_report")
-        if (meta.get("api_projection") and api_event.get("kind") == "project_completed"
-                and api_event.get("project_id") == event["project_id"]
+        if (meta.get("api_projection") and api_event.get("kind") in {"project_completed", "main_task_completed"}
+                and (api_event.get("main_task_id") == main_id if main_id else api_event.get("project_id") == event["project_id"])
                 and isinstance(report, str) and report.strip()):
             ctx.extras["verified_final_report"] = report
             return True

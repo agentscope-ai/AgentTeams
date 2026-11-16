@@ -276,7 +276,8 @@ def test_planning_preload_keeps_start_contract_and_references_full_manual_skill(
     texts = []
     module._load_phase_skill(SimpleNamespace(inject_context=lambda text, **kw: texts.append(text)), "project-management")
     assert len(texts) == 1
-    assert "start_project" in texts[0] and "parentTaskId" in texts[0]
+    assert "start_task" in texts[0] and "parent_task_id" in texts[0]
+    assert "start_project" not in texts[0]
     assert "Manual and Loop reference" not in texts[0]
     assert "read the complete skill" in texts[0]
     assert len(texts[0]) < len((module.ASSET_DIR / "skills/team/project-management/SKILL.md").read_text()) / 2

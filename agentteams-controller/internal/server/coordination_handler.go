@@ -35,6 +35,7 @@ type coordinationEvent struct {
 	Kind              string         `json:"kind"`
 	Actor             string         `json:"actor"`
 	Recipient         string         `json:"recipient"`
+	MainTaskID        string         `json:"main_task_id,omitempty"`
 	ProjectID         string         `json:"project_id,omitempty"`
 	TaskID            string         `json:"task_id,omitempty"`
 	DeliveryID        string         `json:"delivery_id,omitempty"`
@@ -52,6 +53,7 @@ type coordinationEvent struct {
 	RecipientName     string         `json:"recipient_name"`
 	RecipientKind     string         `json:"recipient_kind"`
 	TargetURL         string         `json:"-"`
+	RecipientRuntime  string         `json:"-"`
 	External          bool           `json:"external,omitempty"`
 	EligibleAssignees []string       `json:"eligible_assignees,omitempty"`
 	FinalReport       string         `json:"final_report,omitempty"`
@@ -156,9 +158,10 @@ func (h *CoordinationHandler) memberTeam(ctx context.Context, worker, role, scop
 	return found, nil
 }
 func (h *CoordinationHandler) targetWorker(e *coordinationEvent, w *v1beta1.Worker) error {
-	if w.Spec.Runtime != "qwenpaw" || w.Status.MatrixUserID == "" {
+	if !coordinationRuntimeSupported(w.Spec.Runtime) || w.Status.MatrixUserID == "" {
 		return fmt.Errorf("coordination runtime adapter unavailable")
 	}
+	e.RecipientRuntime = w.Spec.Runtime
 	e.Recipient = w.Status.MatrixUserID
 	e.RecipientName = w.Name
 	e.RecipientKind = "worker"
@@ -206,17 +209,22 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			if err != nil {
 				return e, err
 			}
-			if w.Spec.Runtime == "qwenpaw" && w.Status.MatrixUserID != "" {
+			if coordinationRuntimeSupported(w.Spec.Runtime) && w.Status.MatrixUserID != "" {
 				e.EligibleAssignees = append(e.EligibleAssignees, w.Name)
 			}
 		}
-		e.RoomID = coordinationString(e.SourceRoute, "target_session")
+		if e.RoomID == "" {
+			e.RoomID = coordinationString(e.SourceRoute, "target_session")
+		}
+		if !strings.HasPrefix(e.RoomID, "!") {
+			return reject()
+		}
 		if err = h.targetWorker(&e, recipient); err != nil {
 			return e, err
 		}
 		fence = e.OriginEventID + "\x00" + e.Recipient
 	} else {
-		if caller.Role == authpkg.RoleManager || !coordinationSafeID.MatchString(e.ProjectID) || (e.TaskID != "" && !coordinationSafeID.MatchString(e.TaskID)) {
+		if caller.Role == authpkg.RoleManager || (e.ProjectID == "" && e.MainTaskID == "") || (e.ProjectID != "" && !coordinationSafeID.MatchString(e.ProjectID)) || (e.MainTaskID != "" && !coordinationSafeID.MatchString(e.MainTaskID)) || (e.TaskID != "" && !coordinationSafeID.MatchString(e.TaskID)) {
 			return reject()
 		}
 		actor, err := h.worker(ctx, caller.Username)
@@ -241,11 +249,19 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		if !coordinationSafeID.MatchString(e.StorageTeam) {
 			return reject()
 		}
-		project, err := h.read(ctx, path.Join("teams", e.StorageTeam, "shared/projects", e.ProjectID, "meta.json"))
+		project, err := h.read(ctx, coordinationPlanPath(e, "meta.json"))
 		if err != nil {
 			return e, err
 		}
-		if coordinationString(project, "project_id") != e.ProjectID || (coordinationString(project, "team_id") != tm.Name && coordinationString(project, "team_id") != e.StorageTeam) {
+		identityMatches := coordinationString(project, "project_id") == e.ProjectID
+		if e.MainTaskID != "" {
+			identityMatches = coordinationString(project, "task_id") == e.MainTaskID && coordinationString(project, "task_kind") == "main"
+			if e.ProjectID != "" && coordinationString(project, "project_id") != e.ProjectID {
+				return reject()
+			}
+			e.ProjectID = coordinationString(project, "project_id")
+		}
+		if !identityMatches || (coordinationString(project, "team_id") != tm.Name && coordinationString(project, "team_id") != e.StorageTeam) {
 			return reject()
 		}
 		e.RoomID = coordinationString(project, "room_id")
@@ -258,8 +274,22 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			if err != nil {
 				return e, err
 			}
-			if coordinationString(task, "task_id") != e.TaskID || coordinationString(task, "project_id") != e.ProjectID {
+			if coordinationString(task, "task_id") != e.TaskID || coordinationString(task, "project_id") != e.ProjectID || coordinationString(task, "main_task_id") != e.MainTaskID {
 				return reject()
+			}
+			if e.MainTaskID != "" {
+				nodes, _ := project["tasks"].([]any)
+				member := false
+				for _, item := range nodes {
+					n, _ := item.(map[string]any)
+					if coordinationString(n, "task_id") == e.TaskID {
+						member = true
+						break
+					}
+				}
+				if !member {
+					return reject()
+				}
 			}
 		}
 		switch e.Kind {
@@ -307,8 +337,8 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			}
 			fence = e.TaskID + "\x00" + e.SubmissionID
 
-		case "project_ready":
-			if caller.Role != authpkg.RoleTeamLeader || !coordinationReady(project) {
+		case "project_ready", "main_task_ready":
+			if caller.Role != authpkg.RoleTeamLeader || !coordinationReady(project) || (e.Kind == "main_task_ready") != (e.MainTaskID != "") {
 				return reject()
 			}
 			if err = h.targetWorker(&e, actor); err != nil {
@@ -336,14 +366,14 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 				}
 				context = append(context, map[string]any{"task_id": id, "title": node["title"], "assigned_to": node["assigned_to"], "status": node["status"], "spec": coordinationClip(coordinationString(node, "spec"), 2048), "summary": coordinationClip(coordinationString(result, "summary"), 1024), "deliverables": result["deliverables"]})
 			}
-			details, _ := json.Marshal(map[string]any{"project_id": e.ProjectID, "title": project["title"], "accepted_results": context})
+			details, _ := json.Marshal(map[string]any{"main_task_id": e.MainTaskID, "project_id": e.ProjectID, "title": project["title"], "accepted_results": context})
 			e.Text = string(details)
-			fence = e.ProjectID
-		case "project_completed":
-			if caller.Role != authpkg.RoleTeamLeader || coordinationString(project, "status") != "completed" {
+			fence = coordinationScopeID(e)
+		case "project_completed", "main_task_completed":
+			if caller.Role != authpkg.RoleTeamLeader || coordinationString(project, "status") != "completed" || (e.Kind == "main_task_completed") != (e.MainTaskID != "") {
 				return reject()
 			}
-			report, readErr := h.deps.OSS.GetObject(ctx, path.Join("teams", e.StorageTeam, "shared/projects", e.ProjectID, "result.md"))
+			report, readErr := h.deps.OSS.GetObject(ctx, coordinationPlanPath(e, "result.md"))
 			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 				return e, readErr
 			}
@@ -368,14 +398,15 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 				e.External = true
 				return e, nil
 			}
-			if recipient.Spec.Runtime != "qwenpaw" || !strings.HasPrefix(coordinationString(e.RequesterRoute, "target_session"), "!") {
+			if !coordinationRuntimeSupported(recipient.Spec.Runtime) || !strings.HasPrefix(coordinationString(e.RequesterRoute, "target_session"), "!") {
 				return reject()
 			}
+			e.RecipientRuntime = recipient.Spec.Runtime
 			e.Recipient = recipient.Status.MatrixUserID
 			e.RecipientKind = "manager"
 			e.RecipientName = recipient.Name
 			e.TargetURL = h.managerURL(recipient.Name)
-			fence = e.ProjectID
+			fence = coordinationScopeID(e)
 		default:
 			return reject()
 		}
@@ -383,13 +414,21 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 	if e.Actor == "" {
 		return reject()
 	}
+	if e.MainTaskID != "" {
+		fence = e.StorageTeam + "\x00" + fence
+	}
 	digest := sha256.Sum256([]byte(e.Kind + "\x00" + e.Actor + "\x00" + fence))
 	e.ID = hex.EncodeToString(digest[:16])
 	return e, nil
 }
 
 func coordinationReady(project map[string]any) bool {
-	if coordinationString(project, "status") != "active" || coordinationString(project, "plan_type") == "loop" {
+	active := "active"
+	if coordinationString(project, "task_kind") == "main" {
+		active = "in_progress"
+	}
+	status := coordinationString(project, "status")
+	if (status != active && !(active == "in_progress" && status == "submitted")) || coordinationString(project, "plan_type") == "loop" {
 		return false
 	}
 	nodes, _ := project["tasks"].([]any)
@@ -422,4 +461,14 @@ func coordinationClip(text string, limit int) string {
 		return string(r[:limit]) + "…"
 	}
 	return text
+}
+
+// Each managed Harness consumes authenticated Task notifications over Matrix.
+func coordinationRuntimeSupported(runtime string) bool {
+	switch runtime {
+	case "qwenpaw", "openclaw", "hermes", "deepseek-harness", "openhuman", "codex":
+		return true
+	default:
+		return false
+	}
 }

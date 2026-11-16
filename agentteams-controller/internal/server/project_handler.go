@@ -727,7 +727,7 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	h.listProjects(w, r, false)
 }
 
-// ListTasks lists graph tasks using the same authoritative project scope.
+// ListTasks lists Task-owned plans and legacy Project graphs in the same team scope.
 func (h *ProjectHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	h.listProjects(w, r, true)
 }
@@ -883,6 +883,11 @@ func (h *ProjectHandler) listProjects(w http.ResponseWriter, r *http.Request, ta
 	// Deterministic ordering across prefixes.
 	sort.Slice(projects, func(i, j int) bool { return projects[i].ProjectID < projects[j].ProjectID })
 	if tasksOnly {
+		tasks, err = h.appendMainTasks(r.Context(), tasks, prefixes, accessible, teamFilter)
+		if err != nil {
+			writeError(w, 503, "task index unavailable")
+			return
+		}
 		sort.Slice(tasks, func(i, j int) bool {
 			return tasks[i].TeamID+"/"+tasks[i].ProjectID+"/"+tasks[i].TaskID < tasks[j].TeamID+"/"+tasks[j].ProjectID+"/"+tasks[j].TaskID
 		})

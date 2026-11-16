@@ -74,11 +74,15 @@ class StagePacketTest(unittest.TestCase):
         self.assertEqual(channel.get_to_handle_from_request(request), "!room:test")
 
     def test_acceptance_and_self_closure_use_isolated_sessions(self):
-        for kind, session in (("task_submitted", "coordination-review:t:s1"), ("project_ready", "coordination-close:p")):
+        for kind, session in (("task_submitted", "coordination-review:t:s1"), ("project_ready", "coordination-close:p"), ("main_task_ready", "coordination-close-task:m")):
             control = self.assignment()
             control["session_id"] = session
             control["channel_meta"]["teamharness_coordination"].update(kind=kind, submission_id="s1")
-            sender = "@receiver:test" if kind == "project_ready" else "@leader:test"
+            if kind == "main_task_ready":
+                control["channel_meta"]["teamharness_coordination"]["main_task_id"] = "m"
+                if control["channel_meta"]["teamharness_coordination"].get("id"):
+                    control["session_id"] += ":" + control["channel_meta"]["teamharness_coordination"]["id"]
+            sender = "@receiver:test" if kind in {"project_ready", "main_task_ready"} else "@leader:test"
             control["channel_meta"]["sender_id"] = sender
             packet = self.receive("", "Please verify and continue", {"org.agentteams.coordination": control}, sender=sender)
             self.assertIsNotNone(packet)

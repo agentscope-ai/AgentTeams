@@ -852,7 +852,7 @@ func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
 			view.MatrixUserID = worker.Status.MatrixUserID
 			view.Runtime, view.Phase, view.State = worker.Spec.Runtime, worker.Status.Phase, worker.Spec.DesiredState()
 			view.Skills = worker.Spec.Skills
-			view.NativeCoordinationSupported = worker.Spec.Runtime == "qwenpaw"
+			view.NativeCoordinationSupported = coordinationRuntimeSupported(worker.Spec.Runtime)
 		}
 		response.Members = append(response.Members, view)
 	}

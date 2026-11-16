@@ -40,6 +40,7 @@ def _payload(arguments: dict[str, Any]) -> dict[str, Any]:
 
     aliases = {
         "projectId": ("projectId", "project_id"),
+        "mainTaskId": ("mainTaskId", "main_task_id"),
         "taskId": ("taskId", "task_id"),
         "loopId": ("loopId", "loop_id"),
         "roomId": ("roomId", "room_id"),

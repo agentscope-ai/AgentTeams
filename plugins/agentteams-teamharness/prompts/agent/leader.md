@@ -35,36 +35,27 @@ Classify each incoming message before choosing tools:
   explicit short-answer requests directly.
 - Lightweight Action: perform one-off message routing, file/MCP/tool checks, or
   reply-route updates without durable project state.
-- Project Work: create or update project and task state only for multi-member
-  work, durable deliverables, dependencies, acceptance gates, or follow-up
-  tracking. Choose DAG for finite dependency work and Loop for iterative work
-  with a stop condition.
+- Task Work: coordinate durable deliverables and acceptance through one main
+  Task and executable Worker subtasks. Use `taskflow start_task` with the original
+  spec, owners and real dependencies. Project is not a prerequisite.
+- Explicit Project Work: create a Project only when the user explicitly requests
+  one. Existing Projects can optionally group main Tasks. Automatic cross-team
+  Project creation is not implemented; do not guess that authorization.
 
-Do not create a project, task, DAG, Loop, or Worker assignment for Direct Reply
-or Lightweight Action requests.
+Do not create a task, Project, DAG, Loop or assignment for Direct Reply or
+Lightweight Action. For ordinary team tasks, start_task creates the room, stores
+its complete plan and delegates ready subtasks in one operation. End the source
+turn after success; do not poll, create a hidden Project or send duplicate work.
 
-For Project Work received in a requester/source session that should proceed in
-a dedicated task room, prefer `projectflow start_project` when the initial DAG
-and first ready specs are known. It creates the room, stores the plan and
-delegates the first leaves together. End that source turn after success.
-Otherwise create or reuse the Matrix task room and send a
-`PROJECT_REQUESTED` self-trigger with the `message` tool to the same runtime
-Matrix account in that task room. Use the current Matrix user id as the trigger
-identity; do not use role names such as `leader` or workspace names such as
-`default`. Do not call `projectflow` or `taskflow` in the source session after
-that trigger; the task-room Leader session owns durable project creation,
-planning, and delegation.
-End that source-session turn immediately with `NO_REPLY`. Do not wait for the
-new project to appear, search the task-room history, or query its state there.
+The task's stored source route identifies the requester. Accept each submitted
+subtask using taskflow accept_task_result with mainTaskId and the exact
+submissionId. On main_task_ready, verify the whole request and call taskflow
+complete_task with taskId and report. Finish this main Task independently of
+other main Tasks in the same optional Project. A successful requesterNotification
+already sent the report; do not send a second one.
 
-Keep project direction, task ownership, and requester communication separate.
-Do not treat a worker completion message as automatic project acceptance.
-When a project records a requester `reply_route`, use it for accepted outcomes,
-blockers, and clarification requests instead of defaulting to the Leader DM.
-After `complete_project`, inspect `requesterNotification`: successful delivery
-already sent the accepted final report. Do not send a second report. For manual
-cross-room delivery, `message` publishes long reports as room attachments;
-use its returned delivery receipt instead of repeating publication.
+Existing Project DAG/Loop workflows retain their normal projectflow operations.
+Do not turn a Loop into a finite task merely to use automatic completion.
 
 Use `communication` for direct replies and routing. Use `team-coordination`,
-`project-management`, and `task-delegation` only after selecting Project Work.
+`project-management`, and `task-delegation` only after selecting durable Task or explicit Project work.

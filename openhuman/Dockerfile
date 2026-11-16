@@ -103,6 +103,9 @@ RUN git -C /build/openhuman-src apply /tmp/direct-control.patch
 COPY openhuman/patches/session-receipts.patch /tmp/session-receipts.patch
 COPY openhuman/patches/session_receipts.rs /build/openhuman-src/src/openhuman/channels/session_receipts.rs
 RUN git -C /build/openhuman-src apply /tmp/session-receipts.patch
+COPY openhuman/patches/task-coordination.patch /tmp/task-coordination.patch
+COPY openhuman/patches/task_coordination.rs /build/openhuman-src/src/openhuman/channels/task_coordination.rs
+RUN git -C /build/openhuman-src apply /tmp/task-coordination.patch
 
 WORKDIR /build/openhuman-src
 
@@ -133,6 +136,7 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
     apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     python3 \
+    python3-yaml \
     libssl3 \
     libasound2 \
     libxdo3 \
@@ -175,6 +179,8 @@ RUN cp /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc \
 
 # Copy OpenHuman worker entrypoint
 COPY openhuman/scripts/openhuman-worker-entrypoint.sh /usr/local/bin/
+COPY openhuman/scripts/configure-teamharness.py /opt/agentteams/scripts/configure-teamharness.py
+COPY plugins/teamharness/ /opt/agentteams/plugins/teamharness/
 RUN chmod +x /usr/local/bin/openhuman-worker-entrypoint.sh
 
 # Copy OpenHuman worker agent template (AGENTS.md + skills)

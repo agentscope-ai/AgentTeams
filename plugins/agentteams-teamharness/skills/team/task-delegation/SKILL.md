@@ -24,29 +24,22 @@ Use this skill for:
 - checking a submitted Worker result
 - routing task assignment and completion messages
 
-Use `teamharness-project-management` to create projects, plan DAG or Loop work,
-resolve ready nodes, record Loop iteration decisions, and accept results into
-project progress.
+Use `teamharness-project-management` for the combined taskflow start_task
+operation, main-task acceptance and final reporting. Create a Project only when
+the user explicitly requests one; ordinary team tasks never require a Project.
 
-## Delegate Only Ready Nodes
+## Delegate Only Ready Execution Tasks
 
-Use `delegate_task` only for Project Work nodes that are ready in project
-state. Do not create bare tasks directly from a user request. First create or
-update a project DAG, then delegate a ready project node returned by
-`projectflow` `readyNodes`, or create/update a Loop and delegate a ready
-project node returned by `readyLoopNodes`.
-
-For Quick Task, `projectflow` `create_quick_project` is used instead. It
-already writes `shared/tasks/{task-id}/meta.json`,
-`shared/tasks/{task-id}/spec.md`, and marks the task `assigned`; do not call
-`delegate_task` again for that task. `create_quick_project` does not
-auto-notify, so after it returns `ok: true`, send the assignment message
-described in the Assignment Message section below.
+Normally start_task and acceptance dispatch ready execution specs for you.
+Do not send duplicate assignments. For a main-task plan, delegate_task carries
+mainTaskId and taskId; a coordinating parent is never executable. Dependencies
+must be accepted, not merely submitted. Existing Project DAG and Loop plans
+retain their projectId, readyNodes and readyLoopNodes operations.
 
 Before delegation:
 
 1. Resolve the Worker Matrix ID or stable member name from the team roster.
-2. Confirm the node came from `readyNodes` or `readyLoopNodes`.
+2. Confirm the subtask belongs to the main Task and its prerequisites are accepted; legacy Project plans use readyNodes or readyLoopNodes.
 3. Write a bounded task spec through `taskflow`. The spec must include the
    completion report instruction below.
 4. Keep Worker deliverables under `shared/tasks/{task-id}/...`. Do not ask a

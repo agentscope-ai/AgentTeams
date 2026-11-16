@@ -50,11 +50,29 @@ func (h *CoordinationHandler) native(ctx context.Context, method, target string,
 	err = json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&result)
 	return result, err
 }
+func coordinationScopeID(e coordinationEvent) string {
+	if e.MainTaskID != "" {
+		return e.MainTaskID
+	}
+	return e.ProjectID
+}
+func coordinationPlanPath(e coordinationEvent, file string) string {
+	if e.MainTaskID != "" {
+		return path.Join("teams", e.StorageTeam, "shared/tasks", e.MainTaskID, file)
+	}
+	return path.Join("teams", e.StorageTeam, "shared/projects", e.ProjectID, file)
+}
+func coordinationClosing(kind string) bool {
+	return kind == "project_ready" || kind == "main_task_ready"
+}
+func coordinationCompleted(kind string) bool {
+	return kind == "project_completed" || kind == "main_task_completed"
+}
 func (h *CoordinationHandler) state(ctx context.Context, e coordinationEvent) (map[string]any, map[string]any, error) {
 	if e.Kind == "handoff" {
 		return map[string]any{}, map[string]any{}, nil
 	}
-	p, err := h.read(ctx, path.Join("teams", e.StorageTeam, "shared/projects", e.ProjectID, "meta.json"))
+	p, err := h.read(ctx, coordinationPlanPath(e, "meta.json"))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -65,17 +83,23 @@ func (h *CoordinationHandler) state(ctx context.Context, e coordinationEvent) (m
 	return p, t, err
 }
 func coordinationSession(e coordinationEvent) string {
+	suffix := ""
+	if e.MainTaskID != "" && e.ID != "" {
+		suffix = ":" + e.ID
+	}
 	switch e.Kind {
 	case "handoff":
 		return "coordination-handoff:" + e.ID
 	case "task_assigned":
-		return "coordination-task:" + e.TaskID + ":" + e.DeliveryID
+		return "coordination-task:" + e.TaskID + ":" + e.DeliveryID + suffix
 	case "project_ready":
 		return "coordination-close:" + e.ProjectID
+	case "main_task_ready":
+		return "coordination-close-task:" + e.MainTaskID + suffix
 	case "task_submitted":
-		return "coordination-review:" + e.TaskID + ":" + e.SubmissionID
+		return "coordination-review:" + e.TaskID + ":" + e.SubmissionID + suffix
 	default:
-		return "coordination-result:" + e.ProjectID
+		return "coordination-result:" + coordinationScopeID(e)
 	}
 }
 func coordinationPayload(e coordinationEvent) map[string]any {
@@ -83,13 +107,13 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 	if e.Kind == "handoff" {
 		original = e.SourceRoute
 	}
-	meta := map[string]any{"room_id": e.RoomID, "sender_id": e.Actor, "agent_matrix_user_id": e.Recipient, "event_id": e.ID, "api_projection": true, "task_id": e.TaskID, "project_id": e.ProjectID, "teamharness_requester_route": original,
-		"teamharness_coordination": map[string]any{"id": e.ID, "kind": e.Kind, "task_id": e.TaskID, "project_id": e.ProjectID, "delivery_id": e.DeliveryID, "submission_id": e.SubmissionID, "plan_type": e.PlanType, "dispatch_mode": e.DispatchMode}}
+	meta := map[string]any{"room_id": e.RoomID, "sender_id": e.Actor, "agent_matrix_user_id": e.Recipient, "event_id": e.ID, "api_projection": true, "task_id": e.TaskID, "main_task_id": e.MainTaskID, "project_id": e.ProjectID, "teamharness_requester_route": original,
+		"teamharness_coordination": map[string]any{"id": e.ID, "kind": e.Kind, "task_id": e.TaskID, "main_task_id": e.MainTaskID, "project_id": e.ProjectID, "delivery_id": e.DeliveryID, "submission_id": e.SubmissionID, "plan_type": e.PlanType, "dispatch_mode": e.DispatchMode}}
 	text := e.Text
 	switch e.Kind {
 	case "handoff":
 		meta["teamharness_coordinator_route"] = map[string]any{"channel": "matrix", "target_user": e.Actor, "target_session": e.RoomID}
-		text += "\nUse one bounded start_project plan with complete leaf specs, owners and dependencies, and dispatchMode automatic when the finite plan is known. End after dispatch; do not poll or send duplicate assignments."
+		text += "\nUse taskflow start_task to create one main Task with complete execution subtasks, owners and dependencies. Do not create a Project unless the user explicitly requested a Project. A task may optionally join an existing Project; do not invent one. End after dispatch; do not poll or send duplicate assignments."
 		roster, _ := json.Marshal(e.EligibleAssignees)
 		text += "\nRegistered assignees with native notification support: " + string(roster) + ". Select execution owners from this list; other team members cannot receive this transport yet."
 	case "task_assigned":
@@ -100,8 +124,14 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 			guidance = "After acceptance, the task system dispatches stored downstream specs. Do not redelegate or poll."
 		}
 		text = "TASK_COMPLETED: " + e.TaskID + "\nCandidate result only. Validate the current submission with check_task or its synchronized runtime-prepared receipt before accepting. " + guidance + "\n" + text
+	case "main_task_ready":
+		text = "MAIN_TASK_READY_TO_CLOSE: " + e.MainTaskID + "\nEvery execution subtask is accepted. Verify the whole request and call taskflow complete_task with taskId and report. Do not complete an optional Project or wait for its other main tasks.\n" + text
 	case "project_ready":
 		text = "PROJECT_READY_TO_CLOSE: " + e.ProjectID + "\nEvery execution leaf has been accepted. Verify the complete request from these accepted results, then call projectflow complete_project with projectId and report (your concise final user report). That single operation closes coordinating parents, saves the report, completes the project and notifies the original coordinator. Do not modify accepted artifacts, repeat QA or end with a pending parent.\n" + text
+	case "main_task_completed":
+		meta["teamharness_workflow"] = map[string]any{"type": "MAIN_TASK_COMPLETED", "task_id": e.MainTaskID}
+		meta["teamharness_final_report"] = e.FinalReport
+		text = "MAIN_TASK_COMPLETED: " + e.MainTaskID + "\nReturn the saved accepted final report to the original conversation. Do not poll the optional Project.\n" + text
 	case "project_completed":
 		meta["teamharness_workflow"] = map[string]any{"type": "PROJECT_COMPLETED", "project_id": e.ProjectID}
 		meta["teamharness_final_report"] = e.FinalReport
@@ -114,7 +144,7 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 	return map[string]any{"user_id": user, "session_id": coordinationSession(e), "input": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": text}}}}, "channel_meta": meta, "request_context": map[string]any{"teamharness_coordination": meta}}
 }
 func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelivery, persist func() error) {
-	if d.NativeID != "" && d.Event.Kind == "project_ready" {
+	if d.NativeID != "" && coordinationClosing(d.Event.Kind) {
 		p, _, err := h.state(ctx, d.Event)
 		if err != nil {
 			d.Error = "closure state unavailable"
@@ -166,7 +196,7 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 			return
 		}
 		if d.Transport == "matrix" {
-			if e.Kind == "project_completed" {
+			if coordinationCompleted(e.Kind) {
 				// The canonical completed state/report was re-read by resolve above.
 				// Relay as the registered Manager without opening another Agent turn.
 				if strings.TrimSpace(e.FinalReport) == "" {
@@ -236,6 +266,9 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 					d.Status = "completed"
 				}
 			}
+		case "handoff":
+			// The authenticated Matrix notification is the handoff receipt.
+			d.Status, d.Error = "completed", ""
 		case "task_submitted":
 			if coordinationString(t, "status") == "submitted" {
 				return
@@ -252,7 +285,7 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 	}
 
 	if d.MatrixEventID == "" {
-		label := map[string]string{"handoff": "已交接", "task_assigned": "已派发", "task_submitted": "已提交，待验收", "project_ready": "执行任务已验收，开始汇总", "project_completed": "已完成，正在回报"}[e.Kind]
+		label := map[string]string{"handoff": "已交接", "task_assigned": "已派发", "task_submitted": "已提交，待验收", "main_task_ready": "子任务已验收，开始汇总", "main_task_completed": "主任务已完成，正在回报", "project_ready": "执行任务已验收，开始汇总", "project_completed": "已完成，正在回报"}[e.Kind]
 		id, err := h.projectEvent(ctx, e, e.ActorRole, e.ActorName, e.RoomID, e.ID, label+" · "+coordinationLabel(e))
 		if err == nil {
 			d.MatrixEventID = id
@@ -305,12 +338,12 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 		d.Error = "review ended without acceptance decision"
 		return
 	}
-	if e.Kind == "project_ready" && coordinationString(latestProject, "status") != "completed" {
+	if coordinationClosing(e.Kind) && coordinationString(latestProject, "status") != "completed" {
 		d.Status = "failed"
 		d.Error = "closure turn ended without completing the project"
 		return
 	}
-	if e.Kind == "project_completed" && d.UserEventID == "" {
+	if coordinationCompleted(e.Kind) && d.UserEventID == "" {
 		text := coordinationAssistantText(outcome)
 		if text == "" || text == "NO_REPLY" {
 			d.Status = "failed"
@@ -343,7 +376,10 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 	d.Status = "completed"
 	d.Error = ""
 }
-func coordinationTransport(kind string) string {
+func coordinationTransport(kind string, runtime ...string) string {
+	if len(runtime) > 0 && coordinationRuntimeSupported(runtime[0]) {
+		return "matrix"
+	}
 	if os.Getenv("AGENTTEAMS_COORDINATION_TRANSPORT") == "matrix" && kind != "handoff" {
 		return "matrix"
 	}
@@ -354,7 +390,11 @@ func (h *CoordinationHandler) queueClosure(ctx context.Context, e coordinationEv
 	if !coordinationReady(p) {
 		return nil
 	}
-	ready, err := h.resolve(ctx, coordinationEvent{Kind: "project_ready", ProjectID: e.ProjectID}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: e.RecipientName, Team: e.Team})
+	kind := "project_ready"
+	if e.MainTaskID != "" {
+		kind = "main_task_ready"
+	}
+	ready, err := h.resolve(ctx, coordinationEvent{Kind: kind, ProjectID: e.ProjectID, MainTaskID: e.MainTaskID}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: e.RecipientName, Team: e.Team})
 	if err != nil {
 		return fmt.Errorf("closure recipient unavailable")
 	}
@@ -363,7 +403,7 @@ func (h *CoordinationHandler) queueClosure(ctx context.Context, e coordinationEv
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("closure receipt unavailable")
 	}
-	next := coordinationDelivery{Event: ready, Transport: coordinationTransport(ready.Kind), Status: "queued", Created: time.Now().UTC()}
+	next := coordinationDelivery{Event: ready, Transport: coordinationTransport(ready.Kind, ready.RecipientRuntime), Status: "queued", Created: time.Now().UTC()}
 	body, _ := json.Marshal(next)
 	if err = h.deps.OSS.PutObjectIfAbsent(ctx, coordinationPending+ready.ID+".json", body); err != nil && !errors.Is(err, oss.ErrPreconditionFailed) {
 		return fmt.Errorf("closure notification not durable")
@@ -424,9 +464,11 @@ func coordinationMatrixNotification(e coordinationEvent, p map[string]any) map[s
 	content := coordinationMatrixAssignment(e, p)
 	caption := ""
 	switch e.Kind {
+	case "handoff":
+		caption = "请接收这项需求，创建主任务并安排执行。"
 	case "task_submitted":
 		caption = "「" + coordinationTaskTitle(e, p) + "」已提交结果，请检查本次提交并验收。"
-	case "project_ready":
+	case "project_ready", "main_task_ready":
 		caption = "所有执行环节已验收，请汇总最终结果并完成本次任务。"
 	}
 	if caption != "" {
@@ -501,6 +543,9 @@ func (h *CoordinationHandler) sendMatrixContent(ctx context.Context, kind, name,
 }
 
 func (h *CoordinationHandler) projectApprovals(ctx context.Context, e coordinationEvent, d *coordinationDelivery) {
+	if e.RecipientRuntime != "qwenpaw" {
+		return
+	}
 	data, err := h.native(ctx, "GET", e.TargetURL+"/api/teamharness/coordination/approvals", nil)
 	if err != nil {
 		return

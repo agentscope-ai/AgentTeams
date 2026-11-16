@@ -2549,10 +2549,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
             if not isinstance(control_text, str):
                 return
             expected_session = {
+                "handoff": "coordination-handoff:" + str(assignment.get("id", "")),
                 "task_assigned": "coordination-task:" + str(assignment.get("task_id", "")) + ":" + str(assignment.get("delivery_id", "")),
                 "task_submitted": "coordination-review:" + str(assignment.get("task_id", "")) + ":" + str(assignment.get("submission_id", "")),
                 "project_ready": "coordination-close:" + str(assignment.get("project_id", "")),
+                "main_task_ready": "coordination-close-task:" + str(assignment.get("main_task_id", "")),
             }.get(assignment.get("kind"))
+            if expected_session and assignment.get("main_task_id") and assignment.get("id"):
+                expected_session += ":" + str(assignment["id"])
             if (expected_session is None
                     or control_meta.get("sender_id") != event.sender
                     or control_meta.get("agent_matrix_user_id") != self._user_id
@@ -2564,7 +2568,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         teamharness_self_trigger = None
         if sender_id == self._user_id:
             teamharness_self_trigger = self._teamharness_self_trigger(room_id, event)
-            if control is not None and assignment.get("kind") == "project_ready":
+            if control is not None and assignment.get("kind") in {"project_ready", "main_task_ready"}:
                 # The runtime hook verifies this self-addressed closure against
                 # the Controller receipt and accepted leaf state before inference.
                 teamharness_self_trigger = {"type": "project_ready", "kind": "coordination"}
@@ -2761,7 +2765,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             },
         }
         if control is not None:
-            for key in ("task_id", "project_id", "teamharness_coordination", "teamharness_requester_route", "teamharness_coordinator_route"):
+            for key in ("task_id", "main_task_id", "project_id", "teamharness_coordination", "teamharness_requester_route", "teamharness_coordinator_route"):
                 if key in control_meta:
                     payload["meta"][key] = control_meta[key]
             payload["meta"]["teamharness_matrix_coordination"] = True

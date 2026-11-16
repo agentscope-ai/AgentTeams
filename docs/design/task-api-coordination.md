@@ -99,3 +99,16 @@ Workers and Leaders use isolated control sessions and validate their own durable
 The Worker uses the normal Matrix streaming output path for visible tool calls, execution progress and results. Detailed model reasoning is suppressed for these structured control turns. Responses and edits carry `org.agentteams.progress_only` so visible feedback cannot reopen another Agent execution alongside the authoritative task callback.
 
 Validation scope remains QwenPaw finite task plans. Other Matrix runtime adapters and native Loop transport have not been validated by this experiment.
+
+## Task-room Human membership
+
+After creating or reusing a task room, the shared `roomflow` calls the
+Controller to accept existing invitations for registered team Humans. The
+Controller verifies the authenticated Leader's canonical team, the room's
+`room.meta` task kind/team/Leader, and current invited membership. Only the
+configured team admin, Human members and Humans with access to that team are
+eligible; no caller-supplied user list or Human token is accepted. Ordinary
+invites outside that scope remain unchanged. Joining uses the existing identity
+protocol without registering users, resetting passwords or changing room access.
+The operation is idempotent. Older Controllers retain the invite workflow and
+return a compatibility marker rather than preventing room creation.

@@ -27,6 +27,7 @@ from mcp.common.payload import _payload, _safe_id, _string_list
 from mcp.common.paths import _optional_workspace_dir
 from mcp.roomflow_tool import RoomDescribeDeps, describe_room as _describe_room_impl
 from .matrix import (
+    _auto_join_task_humans,
     _ensure_matrix_room_members,
     _matrix_env,
     _matrix_invite_to_room,
@@ -253,6 +254,7 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
             _ensure_matrix_room_members(existing_room_id, invite)
             _write_matrix_room_meta(existing_room_id, room_meta)
             base["accountable"] = _verify_accountable_in_room(existing_room_id, accountable)
+            base["membership"] = _auto_join_task_humans(existing_room_id, str(room_meta.get("teamName") or ""))
         except ValueError as exc:
             return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": str(exc)}
         except urllib.error.HTTPError as exc:
@@ -305,6 +307,7 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
     _write_roomflow_project_room_binding(binding, room_id, base)
     try:
         base["accountable"] = _verify_accountable_in_room(room_id, accountable)
+        base["membership"] = _auto_join_task_humans(room_id, str(room_meta.get("teamName") or ""))
     except urllib.error.HTTPError as exc:
         error = exc.read().decode("utf-8", errors="replace")[:200]
         return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": f"Matrix API error: HTTP {exc.code}: {error}"}

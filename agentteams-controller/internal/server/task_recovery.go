@@ -108,7 +108,10 @@ func (h *TaskRecoveryHandler) currentInstance(ctx context.Context, caller *authp
 	if status == nil || status.InstanceID == "" || (status.Status != backend.StatusRunning && status.Status != backend.StatusStarting && status.Status != backend.StatusReady) {
 		return "", "", fmt.Errorf("current worker start cannot be verified")
 	}
-	return b.Name() + "/" + status.InstanceID, backend.ResolveRuntime(w.Spec.Runtime, h.deps.DefaultWorkerRuntime), nil
+	if status.Runtime == "" || !backend.ValidRuntime(status.Runtime) {
+		return "", "", fmt.Errorf("current worker Harness cannot be verified; recreate the instance with runtime identity")
+	}
+	return b.Name() + "/" + status.InstanceID, status.Runtime, nil
 }
 
 func (h *TaskRecoveryHandler) owns(ctx context.Context, caller *authpkg.CallerIdentity, task map[string]json.RawMessage) bool {
@@ -406,7 +409,17 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 			writeError(w, 409, "verify the submitted operation and result before delivery")
 			return
 		}
-		resultKey := path.Dir(key) + "/result.md"
+		var reportPath string
+		_ = json.Unmarshal(task["result_path"], &reportPath)
+		prefix := "shared/tasks/" + taskID + "/"
+		if reportPath == "" {
+			reportPath = prefix + "result.md"
+		}
+		if path.Clean(reportPath) != reportPath || !strings.HasPrefix(reportPath, prefix) {
+			writeError(w, 409, "submitted report must belong to the same Task")
+			return
+		}
+		resultKey := path.Dir(key) + "/" + strings.TrimPrefix(reportPath, prefix)
 		result, err := h.project.oss.GetObject(r.Context(), resultKey)
 		if err != nil || len(result) == 0 {
 			writeError(w, 409, "persisted submitted result is unavailable; verification required")

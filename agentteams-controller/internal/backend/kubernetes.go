@@ -491,6 +491,7 @@ func (k *K8sBackend) Status(ctx context.Context, name string) (*WorkerResult, er
 		DeploymentMode: DeployCloud,
 		Status:         status,
 		InstanceID:     podInstanceID(pod),
+		Runtime:        pod.Labels[v1beta1.LabelRuntime],
 		Message:        message,
 		RawStatus:      rawStatus,
 	}, nil

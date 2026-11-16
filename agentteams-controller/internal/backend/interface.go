@@ -311,6 +311,7 @@ type WorkerResult struct {
 	// of the same container/Pod. Recovery must not use CR generation or a
 	// notification delivery lease as an execution generation.
 	InstanceID      string `json:"instance_id,omitempty"`
+	Runtime         string `json:"runtime,omitempty"` // Runtime recorded on the actual backend instance.
 	AppID           string `json:"app_id,omitempty"`
 	RawStatus       string `json:"raw_status,omitempty"`
 	ConsoleHostPort string `json:"console_host_port,omitempty"`

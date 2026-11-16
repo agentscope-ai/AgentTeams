@@ -15,7 +15,8 @@ import (
 func TestDockerRecoveryIdentityChangesOnSameContainerRestart(t *testing.T) {
 	started := "2026-11-16T10:00:00Z"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"Id": "same-container", "State": map[string]any{"Status": "running", "StartedAt": started}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"Id": "same-container", "State": map[string]any{"Status": "running", "StartedAt": started},
+			"Config": map[string]any{"Labels": map[string]string{"agentteams.io/runtime": "hermes"}}})
 	}))
 	defer srv.Close()
 	b := newTestDockerBackend(t, srv.URL)
@@ -31,10 +32,21 @@ func TestDockerRecoveryIdentityChangesOnSameContainerRestart(t *testing.T) {
 	if first.InstanceID == "" || first.InstanceID == second.InstanceID || first.ContainerID != second.ContainerID {
 		t.Fatalf("restart identity did not change: %+v %+v", first, second)
 	}
+	if first.Runtime != "hermes" || second.Runtime != "hermes" {
+		t.Fatal("actual container runtime label was not preserved")
+	}
 	started = ""
 	unknown, err := b.Status(context.Background(), "alice")
 	if err != nil || unknown.InstanceID != "" {
 		t.Fatalf("missing start proof: %+v %v", unknown, err)
+	}
+}
+
+func TestDockerRecoveryRuntimeLabelUsesCreationRuntime(t *testing.T) {
+	b := &DockerBackend{}
+	payload := b.buildCreatePayload(CreateRequest{RuntimeFallback: "hermes"}, "", 0)
+	if payload.Labels["agentteams.io/runtime"] != "hermes" {
+		t.Fatal("creation runtime was not recorded")
 	}
 }
 

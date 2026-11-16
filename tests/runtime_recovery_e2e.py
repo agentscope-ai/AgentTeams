@@ -130,6 +130,11 @@ def refresh_controller():
     original = json.loads(docker("inspect", CONTROLLER))[0]
     if original["Config"]["Labels"].get("io.agentteams.recovery.owner") != "1631":
         raise RuntimeError("Only this fixture's labelled disposable Controller may be replaced")
+    # Preserve the exact private bootstrap environment before stopping. A disk
+    # or runtime error during replacement must remain safely retryable.
+    backup = Path("/tmp/recovery-1631-controller-inspect.private.json")
+    with os.fdopen(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as stream:
+        json.dump(original, stream)
     args = ["run", "-d", "--name", CONTROLLER, "--network", NETWORK,
             "--label", "io.agentteams.recovery.owner=1631"]
     for port, bindings in original["NetworkSettings"]["Ports"].items():
@@ -148,14 +153,71 @@ def refresh_controller():
     print(json.dumps({"controller_image": CORE_IMAGE, "replaced_only_owned_fixture": True}))
 
 
-def setup():
-    if STATE.exists():
+def evidence():
+    task = api("GET", "tasks/live-codex-hermes-01/meta?team=recovery-team")
+    instances = []
+    for name in (CONTROLLER, PREFIX + "-worker-agent-a", PREFIX + "-worker-leader"):
+        item = json.loads(docker("inspect", name))[0]
+        instances.append({"name": name, "id": item["Id"], "image": item["Config"]["Image"],
+            "running": item["State"]["Running"], "pid": item["State"]["Pid"],
+            "started_at": item["State"]["StartedAt"], "finished_at": item["State"]["FinishedAt"]})
+    ledger = json.loads(docker("exec", CONTROLLER, "mc", "cat",
+        "agentteams/recovery-1631/teams/recovery-team/shared/tasks/live-codex-hermes-01/attempts.json"))
+    result = {"recorded_at": time.time(), "task": task, "ledger": ledger, "instances": instances}
+    path = Path("/tmp/1631-live-evidence.json")
+    path.write_text(json.dumps(result, indent=2))
+    print(json.dumps(result))
+
+
+def cutover():
+    task = api("GET", "tasks/live-codex-hermes-01/meta?team=recovery-team")
+    cp = task.get("execution", {}).get("checkpoint", {})
+    if task["status"] != "in_progress" or cp.get("completed_steps") != ["one"] or cp.get("remaining_steps") != ["two", "three"]:
+        raise RuntimeError("Requires an actual durable step-one checkpoint on the active Task")
+    name = PREFIX + "-worker-agent-a"
+    old = json.loads(docker("inspect", name))[0]
+    if old["Config"]["Image"] != HARNESS_IMAGES["codex"]:
+        raise RuntimeError("The bounded first cutover requires this fixture's Codex image")
+    started = int(time.time())
+    api("PUT", "workers/agent-a", {"runtime": "hermes", "image": HARNESS_IMAGES["hermes"]})
+    # No Matrix input is sent. Observe the Controller's actual replacement.
+    deadline = time.monotonic() + 45
+    replacement = None
+    while time.monotonic() < deadline:
+        result = subprocess.run(["docker", "inspect", name], capture_output=True, text=True)
+        if result.returncode == 0:
+            candidate = json.loads(result.stdout)[0]
+            if candidate["Id"] != old["Id"] and candidate["State"]["Running"]:
+                replacement = candidate
+                break
+        time.sleep(1)
+    events = docker("events", "--since", str(started), "--until", str(int(time.time()) + 1),
+        "--filter", "type=container", "--filter", "container=" + name, "--format", "{{json .}}")
+    path = Path("/tmp/1631-live-cutover-events.jsonl")
+    path.write_text(events + "\n")
+    if replacement is None:
+        raise RuntimeError("Replacement not observed; retained Docker event evidence")
+    rows = [json.loads(row) for row in events.splitlines() if row]
+    died = [row["timeNano"] for row in rows if row["Actor"]["ID"] == old["Id"] and row["Action"] == "die"]
+    removed = [row["timeNano"] for row in rows if row["Actor"]["ID"] == old["Id"] and row["Action"] == "destroy"]
+    created = [row["timeNano"] for row in rows if row["Actor"]["ID"] == replacement["Id"] and row["Action"] == "create"]
+    if not died or not removed or not created or not died[-1] <= removed[-1] <= created[0]:
+        raise RuntimeError("Old process/container stop before replacement creation is not proved; inspect retained events")
+    print(json.dumps({"old_container": old["Id"], "new_container": replacement["Id"],
+        "events": str(path), "external_matrix_inputs_sent": 0, "task_continuation": "not yet verified"}))
+
+
+def setup(*, restore=False):
+    if STATE.exists() and not restore:
         raise RuntimeError("This disposable setup already has a state file; inspect it instead of replacing it")
+    previous = state() if restore else None
+    if restore and previous["prefix"] != PREFIX:
+        raise RuntimeError("Only this fixture's preserved volume may be restored")
     if not os.getenv("AGENTTEAMS_LLM_API_KEY"):
         raise RuntimeError("A real AGENTTEAMS_LLM_API_KEY is required")
     if subprocess.run(["docker", "inspect", CONTROLLER], capture_output=True).returncode == 0:
         raise RuntimeError("The disposable container name already exists; refusing to replace it")
-    password = secrets.token_urlsafe(24)
+    password = previous["admin_password"] if restore else secrets.token_urlsafe(24)
     registration = secrets.token_urlsafe(24)
     minio_secret = secrets.token_urlsafe(24)
     env = {
@@ -177,10 +239,19 @@ def setup():
         "AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN": secrets.token_urlsafe(32),
         "AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN": secrets.token_urlsafe(32),
     }
+    private = Path("/tmp/recovery-1631-bootstrap.private.json")
+    if restore and private.exists():
+        env = json.loads(private.read_text())
+    with os.fdopen(os.open(private, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as stream:
+        json.dump(env, stream)
     # This Mac's default Docker pools are exhausted by existing installations.
     # Use the separately inspected, non-overlapping disposable test subnet.
-    docker("network", "create", "--subnet", "10.231.163.0/24", NETWORK)
-    docker("volume", "create", PREFIX + "-data")
+    if not restore:
+        docker("network", "create", "--subnet", "10.231.163.0/24", NETWORK)
+        docker("volume", "create", PREFIX + "-data")
+    else:
+        docker("volume", "inspect", PREFIX + "-data")
+        docker("network", "inspect", NETWORK)
     args = ["run", "-d", "--name", CONTROLLER, "--network", NETWORK,
             "--label", "io.agentteams.recovery.owner=1631", "-p", "127.0.0.1::8090",
             "-p", "127.0.0.1::6167", "-p", "127.0.0.1::8080",
@@ -196,7 +267,8 @@ def setup():
     data = {"prefix": PREFIX, "core_image": CORE_IMAGE, "ports": ports,
             "admin_user": "recovery-admin", "admin_password": password,
             "started_at": time.time(), "real_model_configured": True}
-    with os.fdopen(os.open(STATE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as stream:
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if restore else os.O_EXCL)
+    with os.fdopen(os.open(STATE, flags, 0o600), "w") as stream:
         json.dump(data, stream, indent=2)
     print(json.dumps({"container": CONTROLLER, "ports": ports, "state": str(STATE)}))
 
@@ -206,7 +278,9 @@ def status():
     result = {}
     for name, path in {"controller": "/healthz", "matrix": "/_matrix/client/versions"}.items():
         try:
-            with urllib.request.urlopen(data["ports"][name] + path, timeout=5) as response:
+            port = {"controller": 8090, "matrix": 6167}[name]
+            host_port = docker("port", CONTROLLER, str(port) + "/tcp").rsplit(":", 1)[1]
+            with urllib.request.urlopen("http://127.0.0.1:" + host_port + path, timeout=5) as response:
                 result[name] = response.status
         except OSError as error:
             result[name] = type(error).__name__
@@ -237,5 +311,5 @@ def members():
 
 
 if __name__ == "__main__":
-    {"setup": setup, "status": status, "members": members, "tracing": tracing, "seed": seed,
-     "refresh-controller": refresh_controller}[sys.argv[1]]()
+    {"setup": setup, "restore": lambda: setup(restore=True), "status": status, "members": members, "tracing": tracing, "seed": seed,
+     "refresh-controller": refresh_controller, "evidence": evidence, "cutover": cutover}[sys.argv[1]]()

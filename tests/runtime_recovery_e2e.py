@@ -18,9 +18,9 @@ PREFIX = "recovery-1631-live-20261116"
 CONTROLLER = PREFIX + "-controller"
 NETWORK = PREFIX + "-net"
 STATE = Path("/tmp/recovery-1631-e2e-state.json")
-CORE_IMAGE = "recovery-1631/controller:local-20261116224200"
-HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261116224200",
-                  "hermes": "recovery-1631/hermes:local-20261116225900"}
+CORE_IMAGE = "recovery-1631/controller:local-20261117002500"
+HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117002500",
+                  "hermes": "recovery-1631/hermes:local-20261117011500"}
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
@@ -267,6 +267,8 @@ def verify():
     for artifact in artifacts:
         data = stored(artifact["key"])
         assert len(data) == artifact["size"] and hashlib.sha256(data).hexdigest() == artifact["sha256"]
+    report = stored("teams/recovery-team/" + task["result_path"])
+    assert stored(cp["result"]["key"]) == report, "final reply differs from the authoritative submitted report"
     events = [json.loads(row) for row in Path("/tmp/1631-live-" + CASE + "-cutover-events.jsonl").read_text().splitlines() if row]
     old = before["instances"][1]["id"]
     died = next(row["timeNano"] for row in events if row["Action"] == "die" and row["Actor"]["ID"] == old)

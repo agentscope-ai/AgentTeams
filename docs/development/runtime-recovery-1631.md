@@ -20,7 +20,7 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
 Candidate companion pins on this Draft branch: Codex `1cbc9665d0d69ef18b467ce2cdaca284596e73ed`
-and Hermes `0dcbee79eb8c38c31f15197e3363fc98f7ee91d8`. Both consume the shared
+and Hermes `fe1c61efa6f6261ebbb213d6f72c7d93760f488e`. Both consume the shared
 Core contract at `2c90bccfedb563cbf94e3e1a932fd2effd7b5e23`. These are review
 candidates, not accepted/released Harness versions.
 
@@ -53,7 +53,11 @@ candidates, not accepted/released Harness versions.
   unrelated journal backlog/cursor, and separates saved-result delivery.
 - Hermes uses the SDK's actual session transition API for fresh recovery
   sessions. Changing only the adapter queue key did not isolate SDK history.
-  Valid-session reuse remains incomplete.
+  Its SDK-owned session metadata now binds Task identity, Harness, source
+  routing, expiration and shared checkpoint digest. Native reuse requires a
+  live persisted SDK row; otherwise recovery creates a new conversation.
+  Concurrent recovery admission is serialized. Installed SDK tests cover
+  these paths with a mocked Task client; real Hermes reuse remains untested.
 - Verified incoming Hermes assignments retain their actual Matrix event ID in
   the native input, allowing its native commit to produce a real read receipt.
   Startup-only recovery does not manufacture a Matrix source/read. The wake
@@ -82,7 +86,7 @@ candidates, not accepted/released Harness versions.
 | Controller integration envtest with race | passed | 68.402 seconds; source at runtime-identity change |
 | Codex existing suite | 29 passed | SDK/transport unit fixtures |
 | Codex recovery admission/session/delivery/reassignment | 9 passed; 38 total | mocked client; no native model |
-| Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; installed SDK fresh session IDs/admission smoke passed with mocked Task client; latest hosted checks tracked on PR #9 |
+| Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; installed SDK tests cover concurrent admission and persisted valid/expired/missing/stale/foreign session selection with a mocked Task client; real Hermes session reuse untested |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
 | Two real Harness continuation chain | cases 06/07 passed; full scenario sets incomplete | real Codex to Hermes and reverse replacements, same Task, generation 1 to 2, checkpoint 4 to 10, all steps once, no new input, one final report |
@@ -168,6 +172,16 @@ connectivity evidence, not native Task execution. Codex tracing bootstrap lacks
 `opentelemetry` in this image; trace ingestion/readback remains open. Only the
 new fixture's Collector/Controller joined the existing tracing network; existing
 service configuration and volumes were not changed.
+
+The November 17 rerun built Core `2c90bccf` (Controller binary SHA256
+`e1dc3478fe26d520efd05a3080d65814677fa3696e2a03866ce46bce5fe3e4e7`)
+and updated Codex/Hermes overlay images. Only the labelled disposable
+Controller was replaced. Its HTTP health and CLI authentication became ready,
+but Tuwunel stayed CPU-busy without listening on port 6167. An isolated copy
+of its 81 MB database and a process backtrace were retained for diagnosis;
+restarting that fixture's Matrix process did not immediately restore service.
+Case 09 has not been seeded and adds no real execution acceptance. No Matrix
+backlog or database was cleared.
 
 Reproduce the focused checks from Core:
 

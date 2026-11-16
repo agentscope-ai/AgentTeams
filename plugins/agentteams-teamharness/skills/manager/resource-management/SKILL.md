@@ -5,6 +5,18 @@ description: Manage AgentTeams resources through the Controller as Manager.
 
 # Resource Management
 
+## Task room archive
+
+When asked to archive finished tasks, verify acceptance and workspace artifact
+uploads. Get the room ID from the accepted Task, check
+`agt task-room status <room-id>`, then use `agt task-room archive <room-id>`.
+Use `agt task-room list` to review already archived rooms.
+Restore with `agt task-room unarchive <room-id>`
+before further collaboration. Use `agt task-room delete <room-id>` only when the
+user requests permanent deletion of an already archived task room. Your Manager
+identity is authorized by Controller; private chats, ordinary groups and Team
+rooms are never eligible for these lifecycle operations.
+
 You manage resources with the `agt` CLI. Your Controller token is already
 configured; never extract credentials to call the API manually.
 Use the commands documented in the relevant Skill before exploring the CLI.

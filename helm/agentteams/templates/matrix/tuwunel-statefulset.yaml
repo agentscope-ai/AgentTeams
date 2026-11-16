@@ -44,6 +44,9 @@ spec:
               value: "true"
             - name: CONDUWUIT_DB_POOL_WORKERS_LIMIT
               value: "32"
+            # Preserve the room version supported by existing AgentTeams clients.
+            - name: CONDUWUIT_DEFAULT_ROOM_VERSION
+              value: '"10"'
             # Keep Matrix profile display names equal to AgentTeams identities by
             # default; Tuwunel otherwise appends its built-in "💕" suffix.
             - name: CONDUWUIT_NEW_USER_DISPLAYNAME_SUFFIX
@@ -74,6 +77,11 @@ spec:
             {{- end }}
           resources:
             {{- toYaml .Values.matrix.tuwunel.resources | nindent 12 }}
+          startupProbe:
+            tcpSocket:
+              port: matrix
+            periodSeconds: 10
+            failureThreshold: 180
           readinessProbe:
             tcpSocket:
               port: matrix

@@ -16,6 +16,9 @@ _last_warnings: tuple[str, ...] | None = None
 
 def check_skill(directory: Path) -> None:
     import yaml
+    for path in directory.rglob("*"):
+        if path.is_symlink() and not path.resolve().is_relative_to(directory.resolve()):
+            raise ValueError("skill file escapes skill directory")
     content = (directory / "SKILL.md").read_text(encoding="utf-8")
     if not content.strip():
         raise ValueError("empty SKILL.md")

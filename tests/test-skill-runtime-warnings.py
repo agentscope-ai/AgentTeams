@@ -48,3 +48,17 @@ def test_warning_report_failure_does_not_fail_validation(tmp_path):
     write_skill(tmp_path / "skills", "healthy", "# Ready\n")
     with patch.object(skills, "_request", side_effect=OSError("offline")):
         assert skills.inspect_skills(tmp_path / "skills", ["healthy"]) == []
+
+
+def test_skill_file_symlink_cannot_read_external_prompt_content(tmp_path):
+    root = tmp_path / "skills"
+    write_skill(root, "linked", "# Placeholder\n")
+    outside = tmp_path / "private.txt"
+    outside.write_text("private content")
+    prompt = root / "linked/SKILL.md"
+    prompt.unlink()
+    prompt.symlink_to(outside)
+    with patch.object(skills, "_request", return_value=None):
+        assert len(skills.inspect_skills(root, ["linked"])) == 1
+    assert outside.read_text() == "private content"
+    assert not (root / "linked").exists()

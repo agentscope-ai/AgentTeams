@@ -1,0 +1,13 @@
+{
+  "session_id": "20261116_174411_c9c3228e",
+  "stop": 1794851206.5197508,
+  "task_id": "live-hermes-hermes-11",
+  "sources": {
+    "core": "2c90bccfedb563cbf94e3e1a932fd2effd7b5e23",
+    "hermes": "0b0892f3aad69c9e655a41a3a95902f8ea1e1185"
+  },
+  "messages_persisted_before_stop": 42,
+  "first_at": 1794851051.663416,
+  "last_at": 1794851162.4139602,
+  "scope": "read-only native SQLite audit after case11; selected native session already had actual messages before restart"
+}

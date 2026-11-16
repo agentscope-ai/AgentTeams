@@ -16,7 +16,7 @@ import time
 import urllib.request
 
 PREFIX = os.getenv("RECOVERY_E2E_PREFIX", "recovery-1631-live-20261116")
-if not re.fullmatch(r"recovery-1631-live-\d{8}", PREFIX):
+if not re.fullmatch(r"recovery-1631-live-\d{8}(?:-[a-z0-9]+)?", PREFIX):
     raise ValueError("Use a dated, disposable recovery-1631-live-YYYYMMDD prefix")
 CONTROLLER = PREFIX + "-controller"
 NETWORK = PREFIX + "-net"
@@ -130,7 +130,8 @@ def seed():
         "tasks": [{"task_id": task_id, "parent_task_id": main_id, "status": "assigned"}]}
     task = {"task_id": task_id, "main_task_id": main_id, "parent_task_id": main_id, "team_id": team,
         "task_kind": "subtask", "title": f"Run three stable steps across {SOURCE} to {TARGET}", "status": "assigned",
-        "assigned_to": "@agent-a:recovery-1631.test", "room_id": room, "notifyTxn": "live-assignment-" + CASE}
+        "assigned_to": "@agent-a:recovery-1631.test", "room_id": room, "notifyTxn": "live-assignment-" + CASE,
+        "recovery_fixture": {"oracle_version": 2}}
     spec = f"""You are executing a bounded real runtime-recovery acceptance task {task_id} in team {team}.
 Use your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.
 Pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/{team}/shared/tasks/{task_id}/acceptance.py into your task scratch directory using mc cp.
@@ -146,6 +147,8 @@ The external test driver will replace your container at a step boundary without 
         task_id + "/acceptance.py": (Path(__file__).parent / "fixtures/runtime_recovery_step.py").read_text()}
     for suffix, value in objects.items():
         docker("exec", "-i", CONTROLLER, "mc", "pipe", "agentteams/recovery-1631/teams/" + team + "/shared/tasks/" + suffix, text=value)
+    docker("exec", "-i", CONTROLLER, "mc", "pipe", "agentteams/recovery-1631/teams/" + team
+        + "/shared/recovery-fixtures/" + task_id + "/effects/.keep", text="")
     # Use the real conditional Task creation contract. mc pipe uses a multipart
     # ETag even for small input; it is not a substitute for Task metadata CAS.
     for meta in (main, task):
@@ -189,16 +192,37 @@ def refresh_controller():
 
 
 def native_sessions():
-    code = '''import json,pathlib,sys
+    code = '''import json,pathlib,sys,sqlite3
 task_id=sys.argv[1]; home=pathlib.Path("/root/agentteams-fs/agents/agent-a")
 events=pathlib.Path("/var/log/agentteams/workers/agent-a/events.jsonl")
 rows=[json.loads(x) for x in events.read_text().splitlines()] if events.exists() else []
 journal=home/"runtime/codex-bridge-state.json"
 cache=json.loads(journal.read_text()).get("task_sessions",{}).get("recovery-team/"+task_id) if journal.exists() else None
-print(json.dumps({"hermes":[r for r in rows if r.get("event")=="task.recovery.session" and r.get("task_id")==task_id],
+hermes=[r for r in rows if r.get("event")=="task.recovery.session" and r.get("task_id")==task_id]
+counts={}; db=home/".hermes/state.db"
+if db.exists():
+ with sqlite3.connect('file:'+str(db)+'?mode=ro',uri=True) as connection:
+  for r in hermes:
+   counts[r['session_id']]=connection.execute('select count(*) from messages where session_id=?',(r['session_id'],)).fetchone()[0]
+print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,
     "hermes_cache":[r for r in rows if r.get("event")=="task.recovery.cache" and r.get("task_id")==task_id],"codex":cache}))
 '''
     return json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
+
+
+def step_ledger(task):
+    if task.get("recovery_fixture", {}).get("oracle_version") != 2:
+        return json.loads(docker("exec", CONTROLLER, "mc", "cat",
+            "agentteams/recovery-1631/teams/recovery-team/shared/tasks/" + TASK_ID + "/attempts.json"))
+    prefix = "agentteams/recovery-1631/teams/recovery-team/shared/recovery-fixtures/" + TASK_ID + "/effects/"
+    listing = docker("exec", CONTROLLER, "mc", "ls", "--json", prefix)
+    records = []
+    for line in listing.splitlines():
+        row = json.loads(line)
+        if row.get("type") == "file" and row.get("key", "").endswith(".json"):
+            records.append(json.loads(docker("exec", CONTROLLER, "mc", "cat", prefix + row["key"].rsplit("/", 1)[-1])))
+    assert all(record["task_id"] == TASK_ID for record in records)
+    return sorted(records, key=lambda record: record["checkpoint_version"])
 
 
 def evidence():
@@ -209,8 +233,7 @@ def evidence():
         instances.append({"name": name, "id": item["Id"], "image": item["Config"]["Image"],
             "running": item["State"]["Running"], "pid": item["State"]["Pid"],
             "started_at": item["State"]["StartedAt"], "finished_at": item["State"]["FinishedAt"]})
-    ledger = json.loads(docker("exec", CONTROLLER, "mc", "cat",
-        "agentteams/recovery-1631/teams/recovery-team/shared/tasks/" + TASK_ID + "/attempts.json"))
+    ledger = step_ledger(task)
     result = {"recorded_at": time.time(), "task": task, "ledger": ledger, "instances": instances, "native_sessions": native_sessions()}
     path = Path("/tmp/1631-live-evidence.json")
     path.write_text(json.dumps(result, indent=2))
@@ -280,7 +303,7 @@ def verify():
         return subprocess.run(["docker", "exec", CONTROLLER, "mc", "cat", "agentteams/recovery-1631/" + key],
             check=True, capture_output=True).stdout
 
-    ledger = json.loads(stored("teams/recovery-team/shared/tasks/" + TASK_ID + "/attempts.json"))
+    ledger = step_ledger(task)
     assert [row["step"] for row in ledger] == ["one", "two", "three"]
     assert [row["generation"] for row in ledger] == [1, 2, 2]
     artifacts = cp["artifacts"] + [cp["result"]]
@@ -332,6 +355,12 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     labels = next(row["Actor"]["Attributes"] for row in events if row["Action"] == ("create" if MODE == "replace" else "start") and
         ((row["Actor"]["ID"] != old) if MODE == "replace" else (row["Actor"]["ID"] == old)))
     native = native_sessions()
+    if SOURCE == "hermes":
+        selected = before["native_sessions"]["hermes"][-1]["session_id"]
+        assert before["native_sessions"]["hermes_message_counts"].get(selected, 0) > 0, "new route still used a different warm native Agent"
+    if TARGET == "hermes":
+        selected = native["hermes"][-1]["session_id"]
+        assert native["hermes_message_counts"].get(selected, 0) > 0, "recovered input was not persisted in the selected native session"
     if MODE == "restart" and SOURCE == "codex":
         cache = before["native_sessions"]["codex"]
         assert cache["runtime"] == "codex" and cache["expires_at"] > before["recorded_at"]
@@ -345,7 +374,9 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         assert cache["checkpoint_digest"] == digest
         resumed = native["hermes"][-1]
         assert resumed["session_id"] == cache["session_id"] and resumed["reused"] is True
-    sources = {"core": labels["io.agentteams.recovery.core-sha"],
+    controller = json.loads(docker("inspect", CONTROLLER))[0]
+    sources = {"core": controller["Config"]["Labels"]["io.agentteams.recovery.core-sha"],
+        "shared_contract": labels["io.agentteams.recovery.core-sha"],
         SOURCE: old_source["io.agentteams.recovery.harness-sha"], TARGET: labels["io.agentteams.recovery.harness-sha"]}
     proof = {"task_id": TASK_ID, "case": CASE, "scope": f"one real {SOURCE}-to-{TARGET} in-progress continuation", "mode": MODE,
         "fixture_prefix": PREFIX, "authoritative_report_verified": True,

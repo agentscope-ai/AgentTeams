@@ -20,7 +20,7 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
 Candidate companion pins on this Draft branch: Codex `f1d28b5fdb6f44526787a9e17a03145ffb43fbc3`
-and Hermes `0b0892f3aad69c9e655a41a3a95902f8ea1e1185`, plus DeepSeek
+and Hermes `6bbd17d6fa5afc48a67d744a6270b5b0d174b3c9`, plus DeepSeek
 `3edd9b0334423ecc366213975bbdf10044426c64`. All consume the shared
 Core contract at `2c90bccfedb563cbf94e3e1a932fd2effd7b5e23`. These are review
 candidates, not accepted/released Harness versions.
@@ -71,6 +71,19 @@ candidates, not accepted/released Harness versions.
   reproduced the connection closing, then verified supervisor process headers,
   authorization and conditional checkpoint HTTP after the fix. Its Task HTTP
   server is a fixture; this is not real-model Task continuation.
+- Member MinIO policies deny direct put/delete of Task `meta.json`, including
+  Manager identities, so a directory sync cannot bypass Controller CAS. Live
+  MinIO probes verified denial through the raw binary, preserved reads and
+  ordinary artifact writes, and successful Controller conditional writes.
+  That probe restored the old fixture's policy; the new Controller has not
+  completed a real continuation run. The wildcard also reserves nested files
+  named `meta.json` under Task directories; compatibility with such artifact
+  names remains open. External storage issuers still need equivalent policy.
+- A fresh Hermes SessionStore route now also evicts the old warm SDK Agent.
+  Case 12 showed that changing only the route could still execute/write in the
+  previous conversation. The installed SDK warm-cache regression failed
+  before the fix and passed afterward; real continuation on this newer pin is
+  still required.
 - Verified incoming Hermes assignments retain their actual Matrix event ID in
   the native input, allowing its native commit to produce a real read receipt.
   Startup-only recovery does not manufacture a Matrix source/read. The wake
@@ -102,6 +115,8 @@ candidates, not accepted/released Harness versions.
 | Hermes startup recovery | partial | 30 host unit tests passed, 1 skipped; SDK cache/admission tests use mocked Task client; real normal restart and valid native-session reuse passed case 11; remaining scenario set open |
 | DeepSeek startup recovery | partial | 62 Python and 7 Node tests passed; Task client mocked; native missing-session/no-input, tool/read, resume/error and stop/steer smokes passed with a deterministic model; real-model Task continuation untested |
 | DeepSeek native MCP checkpoint scope | passed, HTTP fixture | actual SDK scrubber and stdio MCP tool preserve credential-file access, process fence and conditional Task HTTP; no model/real Task acceptance |
+| Task metadata storage authority | passed, bounded probe | full OSS unit suite 7.315s; live MinIO raw write/delete denied while reads, ordinary artifacts and Controller CAS remain functional; no new full Task continuation acceptance |
+| Append-only step oracle | 3 passed | fixture unit tests cover stale local ledger overwrite and uncertain-effect verification without rerun; updated oracle has no real-model acceptance yet |
 | Codex packaged image | built; 33 tests passed | `agentteams/recovery-codex:1631-4759ede`, image ID `8d71656edacc34ad82006eb5ea91f46eba1a83855588d073c71a69fa06b567b0` |
 | Codex native stop/steer | passed | actual App Server/tools, deterministic Responses fixture; not Task continuation E2E |
 | Two real Harness continuation chain | cases 06/07 passed; full scenario sets incomplete | real Codex to Hermes and reverse replacements, same Task, generation 1 to 2, checkpoint 4 to 10, all steps once, no new input, one final report |
@@ -170,6 +185,34 @@ restart plus actual valid native-session reuse, including an unexpired cache
 whose digest matched checkpoint 4, stable native session
 `20261116_174411_c9c3228e`, generation 1 to 2, three once-only steps, unique
 canonical report bytes, original read receipt, and zero new external inputs.
+The [native SQLite audit](evidence/runtime-recovery-1631-case11-session-audit.json)
+also found 42 messages in the selected native session before its recorded
+stop, confirming the reuse was not just a SessionStore ID comparison.
+
+[Case 12](evidence/runtime-recovery-1631-case12-failed.json) failed before
+Hermes-to-DeepSeek cutover. The native helper executed step one, then a direct
+Task-directory mirror uploaded stale `meta.json` and `attempts.json`, losing
+the shared checkpoint and step ledger. Native messages also landed in the
+previous warm Agent's session despite a newly selected SDK route. The driver
+refused cutover; DeepSeek never started. Evidence was preserved and only that
+fixture Task was cancelled. These failures are not accepted continuation.
+
+New fixtures use separate per-invocation effect-receipt objects outside the Task
+directory instead of trusting a mutable `attempts.json` file. Receipt-backed
+uncertain effects are verified without another effect; absent evidence waits
+for verification. The driver additionally checks that actual messages exist
+in the selected Hermes native session, and records Controller source
+separately from the shared adapter contract. These updated paths still need
+real-model reruns after the storage and warm-cache fixes.
+
+The Core integration run on `3eadbca5` completed with 24 successful jobs and
+one failed Hermes LLM-interaction shard: `test-03-assign-task` found a README
+without the current Task marker. That run used Hermes `0b0892f`; the newer
+warm-Agent fix is not yet verified by that hosted scenario. Do not relax its
+marker assertion. Codex hosted validation passed on `f1d28b5`; the manually
+dispatched Hermes `0b0892f` run remained queued at the last check.
+
+Live policy evidence: [bounded MinIO probe](evidence/runtime-recovery-1631-storage-policy.json).
 
 Recorded live failures and partial evidence:
 
@@ -264,6 +307,9 @@ The last command requires the independent Codex repository checked out at
   OpenHuman startup resume and delivery adapters. Audit same-process retry
   and revision handling, including uncertain Matrix HTTP acceptance across
   device/transport changes; stable transactions alone do not prove that case.
+- Rerun with the protected storage policy and warm-Agent eviction, validate
+  the stronger receipt oracle with a real model, and resolve the nested
+  `meta.json` artifact compatibility and external-storage policy gaps.
 - Resolve Manager ordinary-message handoff/receipts from the original #1631
   reproduction. Worker Task fences do not resolve Manager cursor replay alone.
 - Verify all six same-Harness and 30 directed cross-Harness combinations,

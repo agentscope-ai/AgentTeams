@@ -5,6 +5,18 @@ description: "Use as Leader to start ordinary team work with taskflow start_task
 
 # Project Management
 
+## Archive accepted task rooms
+
+When asked to archive finished work, verify task acceptance and workspace artifact
+uploads first. Get the room ID from the accepted Task, check
+`agt task-room status <room-id>`, then use `agt task-room archive <room-id>`.
+Use `agt task-room list` to review already archived rooms.
+You can restore your team's task rooms with
+`agt task-room unarchive <room-id>` before further edits or follow-up work.
+These commands use your Controller identity. You cannot archive private chats,
+ordinary groups or Team rooms, and your Leader role cannot delete task rooms.
+Keep historical messages available through the existing conversation history.
+
 ## Default: one main Task, executable subtasks
 
 Answer ordinary direct replies without creating durable Task or Project state.

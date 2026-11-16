@@ -461,11 +461,23 @@ separate private proof credential that is never projected into Workers.
 Duplicate POST execution is rejected and recorded. A replacement with an
 unknown result can GET/verify an existing effect without executing it again;
 an absent result remains unproved. The ledger fsyncs before returning a result.
-Eleven local fixture/oracle/boundary tests pass, including HTTP credential
+Twelve local fixture/oracle/boundary tests pass, including HTTP credential
 forwarding/proof isolation, cancellation/reassignment/ownership rejection,
 restart readback and forged Worker receipt rejection. Task HTTP in those unit
 tests is mocked; fresh real-model acceptance is still required. Historical
 oracle-v2 evidence is retained with its trust limitation.
+
+[Case 18](evidence/runtime-recovery-1631-case18-failed.json) failed before
+its first effect: the fixture wrongly assumed execution remains `active`
+after an operation-start checkpoint. The Controller intentionally sets
+`needs_verification` for unresolved operations, including a newly registered
+start. The updated mock first reproduced the failure. The helper now registers
+a private-ledger intent before the Task start checkpoint; execution requires
+that exact process, generation and expected checkpoint version. Replacement
+processes can verify existing effects but cannot execute the previous
+process's unproved start. Twelve tests pass with the actual Controller state
+transition represented. No production state rule was relaxed. Both Workers
+were stopped and the failed Task and empty effect ledger were preserved.
 
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |

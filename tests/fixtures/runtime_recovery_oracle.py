@@ -21,7 +21,7 @@ class Ledger:
     def __init__(self, path):
         self.path = Path(path)
         self.lock = threading.Lock()
-        self.data = json.loads(self.path.read_text()) if self.path.exists() else {"effects": [], "calls": []}
+        self.data = json.loads(self.path.read_text()) if self.path.exists() else {"effects": [], "calls": [], "intents": []}
 
     def save(self):
         temporary = self.path.with_suffix(".tmp")
@@ -57,22 +57,35 @@ class Ledger:
                         or execution.get("instance_id") != snapshot["instance_id"]
                         or execution.get("state") not in {"active", "needs_verification"}):
                     raise ValueError("Task is not owned by this current process")
-                if step not in STEPS or operation.get("id") != f"fixture:{task_id}:{step}":
-                    raise ValueError("Register this step operation before executing or verifying it")
                 done = cp.get("completed_steps", [])
-                if done != STEPS[:STEPS.index(step)] or operation.get("state") not in {"started", "unknown"}:
+                if step not in STEPS or done != STEPS[:STEPS.index(step)]:
                     raise ValueError("Task checkpoint is not at this step boundary")
                 effects = [row for row in self.data["effects"] if row["team_id"] == team and row["task_id"] == task_id]
                 existing = next((row for row in effects if row["step"] == step), None)
-                if method == "GET":
+                identity = {"team_id": team, "task_id": task_id, "step": step,
+                            "process_id": process, "instance_id": execution["instance_id"],
+                            "generation": execution["generation"]}
+                if method == "REGISTER":
+                    if execution["state"] != "active" or operation.get("state") not in {None, "verified"} or existing:
+                        raise ValueError("Register intent before the durable operation start")
+                    if [row["step"] for row in effects] != done:
+                        raise ValueError("Task disagrees with independent completed prefix")
+                    result = {**identity, "checkpoint_version": cp.get("version", 0) + 1}
+                    self.data["intents"].append(result)
+                elif operation.get("id") != f"fixture:{task_id}:{step}" or operation.get("state") not in {"started", "unknown"}:
+                    raise ValueError("Register this step operation before executing or verifying it")
+                elif method == "GET":
                     if existing is None:
                         raise ValueError("Needs verification: no verified external result; no rerun")
                     result = existing
                 elif method == "POST":
                     if existing:
                         raise ValueError("Side effect already executed; verify its result instead")
-                    if execution["state"] != "active" or operation["state"] != "started":
+                    if operation["state"] != "started":
                         raise ValueError("Unknown side effects require verification, not execution")
+                    intent = {**identity, "checkpoint_version": cp["version"]}
+                    if intent not in self.data["intents"]:
+                        raise ValueError("No pre-start intent from this process; verify instead")
                     if [row["step"] for row in effects] != done:
                         raise ValueError("Task disagrees with independent completed prefix")
                     result = {"team_id": team, "task_id": task_id, "step": step,
@@ -115,7 +128,7 @@ def server(address, controller, ledger, proof_key):
                 if not hmac.compare_digest(token, "Bearer " + proof_key):
                     return self.respond(403, {"error": "Driver proof credential required"})
                 return self.respond(200, ledger.proof(team, task_id))
-            if path.path != "/effect":
+            if path.path not in {"/effect", "/intent"} or (path.path == "/intent" and self.command != "POST"):
                 return self.respond(404, {"error": "Unknown endpoint"})
             if not token.startswith("Bearer ") or token == "Bearer " + proof_key:
                 return self.respond(403, {"error": "Worker credential required"})
@@ -125,7 +138,8 @@ def server(address, controller, ledger, proof_key):
             try:
                 with urllib.request.urlopen(request, timeout=15) as response:
                     snapshot = json.load(response)
-                result = ledger.effect(snapshot, team, task_id, params.get("step", [""])[0], process, self.command)
+                result = ledger.effect(snapshot, team, task_id, params.get("step", [""])[0], process,
+                    "REGISTER" if path.path == "/intent" else self.command)
             except ValueError as error:
                 return self.respond(409, {"error": str(error)})
             except (OSError, urllib.error.URLError):

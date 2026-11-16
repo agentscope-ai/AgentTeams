@@ -46,6 +46,7 @@ class EffectReceiptTests(unittest.TestCase):
                     data = owner.store[artifact["key"]]
                     owner.assertEqual(hashlib.sha256(data).hexdigest(), artifact["sha256"])
                 owner.task["execution"]["checkpoint"] = copy.deepcopy(checkpoint)
+                owner.task["execution"]["state"] = "needs_verification" if checkpoint["operation"]["state"] != "verified" else "active"
         self.client = Client()
 
     def http(self, request, **kwargs):
@@ -53,7 +54,8 @@ class EffectReceiptTests(unittest.TestCase):
         self.task["execution"].update(process_id=self.process, instance_id="docker/" + self.process)
         snapshot = {"instance_id": "docker/" + self.process, "tasks": [{"team_id": "team", "task": self.task}]}
         try:
-            entry = self.ledger.effect(snapshot, "team", "stable", params["step"][0], self.process, request.method)
+            method = "REGISTER" if urllib.parse.urlsplit(request.full_url).path == "/intent" else request.method
+            entry = self.ledger.effect(snapshot, "team", "stable", params["step"][0], self.process, method)
         except ValueError as error:
             raise urllib.error.HTTPError(request.full_url, 409, str(error), {}, None) from error
         return contextlib.closing(io.BytesIO(json.dumps(entry, sort_keys=True).encode()))

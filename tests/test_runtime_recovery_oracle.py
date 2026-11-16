@@ -22,9 +22,11 @@ class IndependentLedgerTests(unittest.TestCase):
         self.ledger = Ledger(self.path)
         self.task = {"task_id": "stable", "status": "in_progress", "execution": {
             "instance_id": "docker/first", "process_id": "first-process", "generation": 1,
-            "state": "active", "checkpoint": {"version": 1, "completed_steps": [],
-                "operation": {"id": "fixture:stable:one", "state": "started"}}}}
+            "state": "active", "checkpoint": {"version": 0, "completed_steps": []}}}
         self.snapshot = {"instance_id": "docker/first", "tasks": [{"team_id": "team", "task": self.task}]}
+        self.call(method="REGISTER")
+        self.task["execution"].update(state="needs_verification")
+        self.task["execution"]["checkpoint"].update(version=1, operation={"id": "fixture:stable:one", "state": "started"})
 
     def call(self, step="one", method="POST", process="first-process"):
         return self.ledger.effect(self.snapshot, "team", "stable", step, process, method)
@@ -39,7 +41,14 @@ class IndependentLedgerTests(unittest.TestCase):
         self.assertEqual(self.call(method="GET", process="new-process"), first)
         proof = self.ledger.proof("team", "stable")
         self.assertEqual(len(proof["effects"]), 1)
-        self.assertEqual([row["method"] for row in proof["calls"]], ["POST", "GET"])
+        self.assertEqual([row["method"] for row in proof["calls"]], ["REGISTER", "POST", "GET"])
+
+    def test_replacement_cannot_execute_the_previous_process_unproved_start(self):
+        self.snapshot["instance_id"] = "docker/replacement"
+        self.task["execution"].update(instance_id="docker/replacement", process_id="new-process", generation=2)
+        with self.assertRaisesRegex(ValueError, "pre-start intent"):
+            self.call(process="new-process")
+        self.assertEqual(self.ledger.proof("team", "stable")["effects"], [])
 
     def test_duplicate_execution_is_rejected_and_recorded(self):
         self.call()
@@ -70,10 +79,11 @@ class IndependentLedgerTests(unittest.TestCase):
             self.assertEqual(self.ledger.proof("team", "stable")["effects"], [])
 
     def test_completed_prefix_must_match_independent_ledger(self):
+        self.task["execution"]["state"] = "active"
         self.task["execution"]["checkpoint"].update(version=3, completed_steps=["one"],
-            operation={"id": "fixture:stable:two", "state": "started"})
+            operation={"id": "fixture:stable:one", "state": "verified"})
         with self.assertRaisesRegex(ValueError, "independent completed prefix"):
-            self.call(step="two")
+            self.call(step="two", method="REGISTER")
         self.assertEqual(json.loads(self.path.read_text())["effects"], [])
 
     def test_http_uses_worker_discovery_and_keeps_proof_private(self):

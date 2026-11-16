@@ -44,8 +44,10 @@ operation = {"id": f"fixture:{task_id}:{step}", "state": "started"}
 def effect(method):
     token = Path(os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE") or "/var/run/secrets/agentteams/token").read_text().strip()
     query = urllib.parse.urlencode({"team": team, "task": task_id, "step": step})
-    request = urllib.request.Request(task["recovery_fixture"]["oracle_url"] + "/effect?" + query,
-        method=method, data=b"" if method == "POST" else None,
+    endpoint = "/intent?" if method == "REGISTER" else "/effect?"
+    http_method = "POST" if method == "REGISTER" else method
+    request = urllib.request.Request(task["recovery_fixture"]["oracle_url"] + endpoint + query,
+        method=http_method, data=b"" if http_method == "POST" else None,
         headers={"Authorization": "Bearer " + token, "X-AgentTeams-Process-ID": recovery.process})
     with urllib.request.urlopen(request, timeout=20) as response:
         return response.read()
@@ -56,6 +58,7 @@ if cp.get("operation", {}).get("state") in {"started", "unknown"}:
         raise RuntimeError("Needs verification: operation outcome cannot be proved; no rerun")
     data = effect("GET")
 else:
+    effect("REGISTER")
     for field in ("result", "delivery", "reply_txn", "reply_event"):
         cp.pop(field, None)
     cp.update(version=cp.get("version", 0) + 1, completed_steps=done, remaining_steps=steps[len(done):], operation=operation)

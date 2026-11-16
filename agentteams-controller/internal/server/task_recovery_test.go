@@ -135,3 +135,55 @@ func TestStandaloneWorkerDiscoveryIsEmptyWithoutInspectingStorageOrBackend(t *te
 		t.Fatalf("standalone discovery: %d %s", w.Code, w.Body)
 	}
 }
+
+func TestSubmittedTaskRecoversPersistedReportWithoutReexecuting(t *testing.T) {
+	store := ossfake.NewMemory()
+	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-dev", "status": "submitted", "submission_id": "submission-one",
+		"execution": taskExecution{Generation: 1, InstanceID: "old-instance", ProcessID: "old-process", Runtime: "codex", State: "released",
+			Checkpoint: &taskCheckpoint{Version: 3, CompletedSteps: []string{"one", "two", "three"}, RemainingSteps: []string{}}}}))
+	project := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+	h := NewTaskRecoveryHandler(project, ServerDeps{})
+	h.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
+		return "new-instance", "hermes", nil
+	}
+	claim := func() *httptest.ResponseRecorder {
+		r := withCaller(httptest.NewRequest("POST", "/api/v1/tasks/t1/execution?team=alpha-team", strings.NewReader(`{"action":"claim","instance_id":"new-instance","process_id":"new-process"}`)), &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"})
+		r.SetPathValue("id", "t1")
+		r.Header.Set("If-Match", taskMetaETag(t, store, taskMetaKey))
+		w := httptest.NewRecorder()
+		h.UpdateExecution(w, r)
+		return w
+	}
+	if missing := claim(); missing.Code != 409 {
+		t.Fatalf("missing report must fail closed: %d %s", missing.Code, missing.Body)
+	}
+	report := []byte("All steps completed once. Saved before the Worker stopped.")
+	if err := store.PutObject(t.Context(), "teams/alpha-team/shared/tasks/t1/result.md", report); err != nil {
+		t.Fatal(err)
+	}
+	w := claim()
+	var result struct {
+		Execution   taskExecution `json:"execution"`
+		SavedResult string        `json:"saved_result"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil {
+		t.Fatalf("recover saved report: %d %s", w.Code, w.Body)
+	}
+	cp := result.Execution.Checkpoint
+	if result.SavedResult != string(report) || cp == nil || cp.Version != 4 || len(cp.CompletedSteps) != 3 || cp.Delivery != "pending" || cp.ReplyTxn == "" || cp.Result == nil {
+		t.Fatalf("saved submission lost delivery: %s", w.Body)
+	}
+	repeated := claim()
+	var retry struct {
+		Execution taskExecution `json:"execution"`
+	}
+	if repeated.Code != 200 || json.Unmarshal(repeated.Body.Bytes(), &retry) != nil || retry.Execution.Checkpoint.ReplyTxn != cp.ReplyTxn || retry.Execution.Checkpoint.Version != cp.Version {
+		t.Fatalf("delivery retry changed its identity: %d %s", repeated.Code, repeated.Body)
+	}
+	if err := store.PutObject(t.Context(), cp.Result.Key, []byte("changed after submission")); err != nil {
+		t.Fatal(err)
+	}
+	if changed := claim(); changed.Code != 409 {
+		t.Fatalf("changed persisted result must fail closed: %d %s", changed.Code, changed.Body)
+	}
+}

@@ -395,6 +395,39 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		writeError(w, 400, "unsupported execution action")
 		return
 	}
+	// submit_task saves result.md before publishing submitted metadata. A
+	// process may stop before its native final-text hook saves delivery.
+	var status, submissionID string
+	_ = json.Unmarshal(task["status"], &status)
+	_ = json.Unmarshal(task["submission_id"], &submissionID)
+	if input.Action == "claim" && status == "submitted" && (execution.Checkpoint == nil || execution.Checkpoint.Result == nil) {
+		old := execution.Checkpoint
+		if unresolvedOperation(old) || submissionID == "" {
+			writeError(w, 409, "verify the submitted operation and result before delivery")
+			return
+		}
+		resultKey := path.Dir(key) + "/result.md"
+		result, err := h.project.oss.GetObject(r.Context(), resultKey)
+		if err != nil || len(result) == 0 {
+			writeError(w, 409, "persisted submitted result is unavailable; verification required")
+			return
+		}
+		cp := taskCheckpoint{Version: 1}
+		if old != nil {
+			cp = *old
+			cp.Version++
+		}
+		sum := sha256.Sum256(result)
+		cp.Result = &taskArtifact{Key: resultKey, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(result))}
+		txn := sha256.Sum256([]byte(key + "/" + submissionID + "/" + cp.Result.SHA256))
+		cp.Delivery, cp.ReplyTxn, cp.ReplyEvent = "pending", "task-reply:"+hex.EncodeToString(txn[:]), ""
+		if err := h.validateCheckpoint(r.Context(), key, old, &cp); err != nil {
+			writeError(w, 409, err.Error())
+			return
+		}
+		execution.Checkpoint = &cp
+		savedResult = string(result)
+	}
 	task["execution"], _ = json.Marshal(execution)
 	body, _ := json.Marshal(task)
 	strict, ok := h.project.oss.(conditionalWriter)

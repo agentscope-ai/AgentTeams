@@ -45,5 +45,19 @@
     "same-process error retry and absent-cursor room handoff remain incomplete",
     "no six-Harness/30-direction or additional real continuation acceptance",
     "old-source broad container run had environment failures; matched source native coordination rerun passed"
-  ]
+  ],
+  "verification_follow_up": {
+    "core_source": "12e95d8312263d321fea81da5a421946f4610a32",
+    "change": "Allow process-fenced needs_verification reasoning, matching the Controller claim state; three tests failed before this fix",
+    "passed": 248,
+    "warnings": 7,
+    "files": {
+      "plugins/agentteams-matrix-channel/agentteams_matrix/channel.py": "84e8a8276e0a3847352312d6a2aecbf2a06b25bfd2131dc2a1044badf8d41489",
+      "plugins/agentteams-matrix-channel/agentteams_matrix/task_execution.py": "9eaa2fa3fdc7d499478cb76639f306f47caa4096a3b2e31a932e4f321ef6db54",
+      "plugins/teamharness/adapters/qwenpaw/plugin.py": "179ac93cee98440a10dfbaeebd95b5980c81b47b68504af49008fea97d895d01",
+      "plugins/tests/agentteams-matrix/test_qwenpaw_task_recovery.py": "4490ed1ea5f563a1662b9a838321b4d1ed27c185f9b042343f419718a71c07c5"
+    },
+    "log_sha256": "63853d3ad10a3c02cae3826a00f63edf0fdcb862b6fcf9752ae228abe93beda8",
+    "real_unknown_side_effect_verification": false
+  }
 }

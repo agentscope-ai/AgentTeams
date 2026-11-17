@@ -16,7 +16,7 @@ the SDK's sessions directory, not an authoritative Task record.
 Task queue keys prevent different Tasks in one room from being merged. Actual
 execution remains serialized per room, including overlapping SDK reloads.
 Admissions are shared with the SDK TaskTracker across reloads. Both the native
-stream and TeamHarness PRE_EXECUTE hook check process/generation ownership;
+stream and TeamHarness PRE_EXECUTE hook check process/generation ownership (including Controller `needs_verification` admission);
 ownership loss cancels the captured native stream. Interruption is recorded
 after stream cleanup. A connection failure is not proof of replacement.
 

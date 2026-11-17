@@ -111,7 +111,7 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 	if op.TargetImage != "codex:fixture" {
 		t.Fatal("source image reused by target")
 	}
-	mctx := MemberContext{Name: "worker", RuntimeName: "stable", Spec: v1beta1.WorkerSpec{Runtime: "codex", Image: op.TargetImage}}
+	mctx := MemberContext{Name: "worker", RuntimeName: "stable", AppliedSpecHash: "targethash", Spec: v1beta1.WorkerSpec{Runtime: "codex", Image: op.TargetImage}}
 	deps := MemberDeps{Backend: reg, Provisioner: mocks.NewMockProvisioner(), EnvBuilder: mocks.NewMockEnvBuilder()}
 	status := backend.WorkerResult{Status: backend.StatusNotFound}
 	b.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) { return &status, nil }
@@ -120,7 +120,7 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 		t.Fatal(err)
 	}
 	req, ok := b.LastCreateReq()
-	if !ok || req.Name != "worker" || req.Image != "codex:fixture" || req.Runtime != "codex" || req.Labels[backend.RuntimeHandoffLabel] != op.TargetLabel() {
+	if !ok || req.Name != "worker" || req.Image != "codex:fixture" || req.Runtime != "codex" || req.Labels[backend.RuntimeHandoffLabel] != op.TargetLabel() || req.Labels[backend.RuntimeHandoffSpecLabel] != "targethash" {
 		t.Fatalf("target create %+v", req)
 	}
 	status = backend.WorkerResult{Status: backend.StatusRunning, InstanceID: "new-boot", Runtime: "codex", HandoffLabel: "foreign"}
@@ -128,6 +128,7 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 		t.Fatal("adopted foreign container")
 	}
 	status.HandoffLabel = op.TargetLabel()
+	status.HandoffSpecHash = "targethash"
 	if _, err = r.reconcileHandoffTarget(t.Context(), w, deps, mctx, member, op, etag); err != nil {
 		t.Fatal(err)
 	}
@@ -139,6 +140,13 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 	}
 	// Simulate a new controller after Create succeeded but its response was lost.
 	r = &WorkerReconciler{RuntimeStore: store, Backend: reg}
+	if _, err = r.reconcileHandoffTarget(t.Context(), w, deps, mctx, member, op, etag); err != nil {
+		t.Fatal(err)
+	}
+	phase("creating")
+	if w.Status.SpecHash != "targethash" {
+		t.Fatal("target became active before its creation hash was durable")
+	}
 	if _, err = r.reconcileHandoffTarget(t.Context(), w, deps, mctx, member, op, etag); err != nil {
 		t.Fatal(err)
 	}

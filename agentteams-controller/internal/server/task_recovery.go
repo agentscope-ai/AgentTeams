@@ -153,7 +153,12 @@ func recoveryStatus(task map[string]json.RawMessage) bool {
 		return true
 	}
 	var execution taskExecution
-	return status == "submitted" && json.Unmarshal(task["execution"], &execution) == nil && execution.Generation > 0
+	if json.Unmarshal(task["execution"], &execution) != nil || execution.Generation == 0 {
+		return false
+	}
+	// Acceptance may race a crash between saving the answer and sending
+	// its Matrix reply. A completed Task is eligible for delivery only.
+	return status == "submitted" || (status == "completed" && execution.Checkpoint != nil && execution.Checkpoint.Delivery == "pending" && execution.Checkpoint.Result != nil)
 }
 
 // ListRecoverableTasks grants only self discovery; Project list stays closed.
@@ -338,7 +343,7 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 	start := service.WorkerStart{InstanceID: instance, ProcessID: input.ProcessID, Runtime: runtime}
 	op, err := executionHandoff(r.Context(), h.project.oss, name, start)
 	if err != nil {
-		writeError(w, 503, "Worker handoff state unavailable")
+		writeHandoffAdmissionError(w, err)
 		return
 	}
 	if err := checkHandoffExecution(op, start, input.Action, execution.Checkpoint, input.Checkpoint); err != nil {
@@ -379,6 +384,10 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 	case "checkpoint", "release":
 		if !sameProcess || execution.State == "released" {
 			writeError(w, 409, "execution ownership changed")
+			return
+		}
+		if cp := execution.Checkpoint; cp != nil && cp.Delivery == "pending" && (input.Action != "checkpoint" || !messageDeliveryAckOnly(cp, input.Checkpoint)) {
+			writeError(w, 409, "a saved Task result permits only acknowledgement of its reply")
 			return
 		}
 		if err := h.validateCheckpoint(r.Context(), key, execution.Checkpoint, input.Checkpoint); err != nil {

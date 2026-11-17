@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
@@ -29,22 +30,33 @@ type WorkerRuntimeState struct {
 }
 
 type WorkerHandoff struct {
-	ID             string                `json:"id"`
-	Phase          string                `json:"phase"`
-	Source         WorkerStart           `json:"source"`
-	TargetRuntime  string                `json:"target_runtime"`
-	Target         *WorkerStart          `json:"target,omitempty"`
-	TargetImage    string                `json:"target_image,omitempty"`
-	CheckpointRefs []WorkerCheckpointRef `json:"checkpoint_refs,omitempty"`
+	ID                   string                `json:"id"`
+	Phase                string                `json:"phase"`
+	Source               WorkerStart           `json:"source"`
+	TargetRuntime        string                `json:"target_runtime"`
+	PriorTargets         []WorkerStart         `json:"prior_targets,omitempty"`
+	Target               *WorkerStart          `json:"target,omitempty"`
+	SourceStopObservedAt string                `json:"source_stop_observed_at,omitempty"`
+	TargetRegisteredAt   string                `json:"target_registered_at,omitempty"`
+	CompletedAt          string                `json:"completed_at,omitempty"`
+	TargetImage          string                `json:"target_image,omitempty"`
+	CheckpointRefs       []WorkerCheckpointRef `json:"checkpoint_refs,omitempty"`
 }
 
 type WorkerCheckpointRef struct {
-	Kind              string `json:"kind"`
-	TeamID            string `json:"team_id,omitempty"`
-	TaskID            string `json:"task_id,omitempty"`
-	EventKey          string `json:"event_key,omitempty"`
-	Generation        uint64 `json:"generation"`
-	CheckpointVersion uint64 `json:"checkpoint_version"`
+	Kind                    string `json:"kind"`
+	TeamID                  string `json:"team_id,omitempty"`
+	TaskID                  string `json:"task_id,omitempty"`
+	EventKey                string `json:"event_key,omitempty"`
+	Generation              uint64 `json:"generation"`
+	CheckpointVersion       uint64 `json:"checkpoint_version"`
+	CompletedStepCount      *int   `json:"completed_step_count,omitempty"`
+	PendingReplyTxn         string `json:"pending_reply_txn,omitempty"`
+	VerifiedOperation       string `json:"verified_operation,omitempty"`
+	Outcome                 string `json:"outcome,omitempty"`
+	TargetGeneration        uint64 `json:"target_generation,omitempty"`
+	TargetCheckpointVersion uint64 `json:"target_checkpoint_version,omitempty"`
+	ReplyEvent              string `json:"reply_event,omitempty"`
 }
 
 type WorkerRuntimeStore struct{ Storage oss.StorageClient }
@@ -75,8 +87,8 @@ func (s WorkerRuntimeStore) Load(ctx context.Context, name string) (*WorkerRunti
 		switch op.Phase {
 		case "preflight", "draining", "checkpointed", "stopping", "stopped", "creating":
 			valid = valid && op.Source == *state.ActiveStart && op.Target == nil
-		case "recovering":
-			valid = valid && op.Target != nil && validRuntimeStart(*op.Target) && *op.Target == *state.ActiveStart && op.Target.Runtime == op.TargetRuntime && op.Target.InstanceID != op.Source.InstanceID
+		case "recovering", "completed":
+			valid = valid && op.Target != nil && validRuntimeStart(*op.Target) && (op.Phase == "completed" || *op.Target == *state.ActiveStart) && op.Target.Runtime == op.TargetRuntime && op.Target.InstanceID != op.Source.InstanceID
 		default:
 			valid = false
 		}
@@ -85,6 +97,37 @@ func (s WorkerRuntimeStore) Load(ctx context.Context, name string) (*WorkerRunti
 		}
 	}
 	return &state, workerMatrixETag(data), nil
+}
+
+// SyncRegisteredStart publishes every actual Worker start, including initial
+// boot and ordinary restarts with no operator handoff. The backend identity is
+// supplied by the Controller; Matrix registration supplies its process ID.
+func (s WorkerRuntimeStore) SyncRegisteredStart(ctx context.Context, name, instance, runtime string) (*WorkerRuntimeState, string, error) {
+	state, etag, err := s.Load(ctx, name)
+	if err != nil {
+		return nil, "", err
+	}
+	if op := state.Handoff; op != nil && op.Phase != "completed" {
+		return state, etag, nil
+	}
+	if current := state.ActiveStart; current != nil && current.InstanceID == instance && current.Runtime == runtime {
+		return state, etag, nil
+	}
+	matrix := WorkerMatrixStore{Storage: s.Storage}
+	observed, _, err := matrix.Load(ctx, name)
+	if err != nil {
+		return nil, "", err
+	}
+	start := observed.ActiveStart
+	if start.InstanceID != instance || start.Runtime != runtime || !validRuntimeStart(start) {
+		return state, etag, nil
+	}
+	state.ActiveStart = &start
+	state, etag, err = s.save(ctx, state, etag)
+	if errors.Is(err, ErrWorkerStateConflict) {
+		return s.Load(ctx, name)
+	}
+	return state, etag, err
 }
 
 func ValidWorkerHandoffRequest(id, target string) bool {
@@ -114,7 +157,9 @@ func (s WorkerRuntimeStore) Preflight(ctx context.Context, name, id, target, ima
 		if h.ID == id && h.Source == source && h.TargetRuntime == target {
 			return state, etag, nil
 		}
-		return nil, "", fmt.Errorf("%w: another handoff is already in progress", ErrWorkerStateConflict)
+		if h.Phase != "completed" || h.ID == id {
+			return nil, "", fmt.Errorf("%w: another handoff is already in progress", ErrWorkerStateConflict)
+		}
 	}
 	if expected != etag {
 		return nil, "", ErrWorkerStateConflict
@@ -181,8 +226,14 @@ func (s WorkerRuntimeStore) AdvanceLifecycle(ctx context.Context, name, id, from
 	switch {
 	case from == "checkpointed" && to == "stopping" && image != "":
 		op.TargetImage = image
-	case from == "stopping" && to == "stopped", from == "stopped" && to == "creating":
+	case from == "stopping" && to == "stopped":
+		op.SourceStopObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	case from == "stopped" && to == "creating":
 	case (from == "creating" || from == "recovering") && to == "recovering" && target != nil && validRuntimeStart(*target) && target.Runtime == op.TargetRuntime && target.InstanceID != op.Source.InstanceID:
+		if op.Target != nil && *op.Target != *target {
+			op.PriorTargets = append(op.PriorTargets, *op.Target)
+		}
+		op.TargetRegisteredAt = time.Now().UTC().Format(time.RFC3339Nano)
 		op.Target = target
 		state.ActiveStart = target
 	default:
@@ -190,6 +241,16 @@ func (s WorkerRuntimeStore) AdvanceLifecycle(ctx context.Context, name, id, from
 	}
 	op.Phase = to
 	return s.save(ctx, state, etag)
+}
+
+// Complete records the observed target evidence alongside the source references.
+func (s WorkerRuntimeStore) Complete(ctx context.Context, state *WorkerRuntimeState, expected string) (*WorkerRuntimeState, string, error) {
+	if state.Handoff == nil || state.Handoff.Phase != "recovering" || state.Handoff.Target == nil {
+		return nil, "", ErrWorkerStateConflict
+	}
+	state.Handoff.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	state.Handoff.Phase = "completed"
+	return s.save(ctx, state, expected)
 }
 
 func (s WorkerRuntimeStore) save(ctx context.Context, state *WorkerRuntimeState, etag string) (*WorkerRuntimeState, string, error) {

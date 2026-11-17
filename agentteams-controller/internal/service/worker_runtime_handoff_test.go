@@ -68,3 +68,35 @@ func TestHandoffPreflightPreservesUnreadableFutureOrForeignState(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeHandoffPublishesRegisteredBootAndRepairsAfterWriterRestart(t *testing.T) {
+	storage := ossfake.NewMemory()
+	store := WorkerRuntimeStore{Storage: storage}
+	matrix := WorkerMatrixStore{Storage: storage}
+	ctx := t.Context()
+	start := WorkerStart{InstanceID: "docker/first", ProcessID: "process1", Runtime: "hermes"}
+	if state, _, err := store.SyncRegisteredStart(ctx, "alice", start.InstanceID, start.Runtime); err != nil || state.ActiveStart != nil {
+		t.Fatalf("unregistered process published: %+v %v", state, err)
+	}
+	_, matrixETag, err := matrix.Start(ctx, "alice", start, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, etag, err := store.SyncRegisteredStart(ctx, "alice", start.InstanceID, start.Runtime)
+	if err != nil || state.Handoff != nil || *state.ActiveStart != start || etag == "" {
+		t.Fatalf("initial boot: %+v %v", state, err)
+	}
+	next := WorkerStart{InstanceID: "docker/second", ProcessID: "process2", Runtime: "hermes"}
+	if _, _, err := matrix.Start(ctx, "alice", next, matrixETag); err != nil {
+		t.Fatal(err)
+	}
+	fresh := WorkerRuntimeStore{Storage: storage}
+	state, _, err = fresh.SyncRegisteredStart(ctx, "alice", next.InstanceID, next.Runtime)
+	if err != nil || *state.ActiveStart != next {
+		t.Fatalf("unplanned restart: %+v %v", state, err)
+	}
+	state, _, err = fresh.SyncRegisteredStart(ctx, "alice", start.InstanceID, start.Runtime)
+	if err != nil || *state.ActiveStart != next {
+		t.Fatalf("late source replaced current registration: %+v %v", state, err)
+	}
+}

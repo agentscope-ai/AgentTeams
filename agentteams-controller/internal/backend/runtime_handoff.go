@@ -18,6 +18,7 @@ import (
 )
 
 const RuntimeHandoffLabel = "agentteams.io/runtime-handoff-id"
+const RuntimeHandoffSpecLabel = "agentteams.io/runtime-handoff-spec"
 const runtimeStopFinalizer = "agentteams.io/confirm-runtime-stop"
 
 // RuntimeHandoffSource stops the original backend resource and observes its

@@ -742,15 +742,16 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 		instanceID = inspectResp.ID + "/" + inspectResp.State.StartedAt
 	}
 	return &WorkerResult{
-		Name:           name,
-		Backend:        "docker",
-		DeploymentMode: DeployLocal,
-		Status:         normalizeDockerStatus(inspectResp.State.Status),
-		ContainerID:    inspectResp.ID,
-		InstanceID:     instanceID,
-		Runtime:        inspectResp.Config.Labels[v1beta1.LabelRuntime],
-		HandoffLabel:   inspectResp.Config.Labels[RuntimeHandoffLabel],
-		RawStatus:      inspectResp.State.Status,
+		Name:            name,
+		Backend:         "docker",
+		DeploymentMode:  DeployLocal,
+		Status:          normalizeDockerStatus(inspectResp.State.Status),
+		ContainerID:     inspectResp.ID,
+		InstanceID:      instanceID,
+		Runtime:         inspectResp.Config.Labels[v1beta1.LabelRuntime],
+		HandoffLabel:    inspectResp.Config.Labels[RuntimeHandoffLabel],
+		HandoffSpecHash: inspectResp.Config.Labels[RuntimeHandoffSpecLabel],
+		RawStatus:       inspectResp.State.Status,
 	}, nil
 }
 
@@ -893,6 +894,7 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 
 	if handoff := req.Labels[RuntimeHandoffLabel]; handoff != "" {
 		p.Labels[RuntimeHandoffLabel] = handoff
+		p.Labels[RuntimeHandoffSpecLabel] = req.Labels[RuntimeHandoffSpecLabel]
 	}
 	hc := &dockerHostConfig{
 		NetworkMode: req.Network,

@@ -1,0 +1,650 @@
+{
+  "scope": "real same-process saved-result-only send retry; interrupted native-session cache reuse is not accepted",
+  "task_id": "live-hermes-qwenpaw-31",
+  "case": "31",
+  "source_shared_sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+  "target_shared_sha": "67dba0595ca7a18c56130456f7cb7762950474c5",
+  "source_harness_sha": "965b612a82c3bee074c1c3b77d41dddea0fd75d7",
+  "target_harness_sha": "e0bc7bb5643750606f0e79e455ed6b54bac6f0b3",
+  "controller_binary_sha": "774d628568c227ea041f90c14a56138ae2c91493",
+  "test_only_fault": {
+    "image": "recovery-1631/qwenpaw-delivery-fault:local-20261117180300",
+    "image_id": "sha256:fed17c431604c35ca90dd5666c4563b41352a550c6dec4231368542a54ecbe6b",
+    "source_sha256": "f87070a27137ee3cfd49d884b4331199f0775afa88d2a7a71020f1e78a7d5548",
+    "patch": "--- normal/channel.py\n+++ test-only/channel.py\n@@ -687,6 +687,20 @@\n         self._enqueue(payload)\n \n     async def send_task_reply(self, room_id, text, txn):\n+        # Test-only delivery fault; never committed to a product source tree.\n+        if not getattr(self, \"_fixture_delivery_failed\", False):\n+            self._fixture_delivery_failed = True\n+            task = await asyncio.to_thread(self._task_execution.recovery.current,\n+                                           \"live-hermes-qwenpaw-31\", \"recovery-team\")\n+            assert task[\"status\"] == \"submitted\"\n+            checkpoint = task[\"execution\"][\"checkpoint\"]\n+            assert checkpoint[\"delivery\"] == \"pending\" and checkpoint[\"reply_txn\"] == txn\n+            proof = {\"event\": \"before_send_fault\", \"at\": time.time(), \"task\": task,\n+                     \"txn\": txn, \"process\": self._task_execution.recovery.process}\n+            Path(\"/tmp/1631-delivery-fault-proof.json\").write_text(json.dumps(proof))\n+            logger.warning(\"RECOVERY_FIXTURE: saved result withheld before first Matrix send\")\n+            await asyncio.sleep(12)\n+            raise RuntimeError(\"Test-only first saved-reply send failure\")\n         response = await self._room_send_with_retry(room_id, \"m.room.message\", {\n             \"msgtype\": \"m.text\", \"body\": text, \"org.agentteams.progress_only\": True,\n         }, tx_id=txn)\n"
+  },
+  "pending_observation": {
+    "fault": {
+      "event": "before_send_fault",
+      "at": 1794910071.3234456,
+      "task": {
+        "acknowledged_by_role": "worker",
+        "assigned_at": "2026-11-17T10:03:13Z",
+        "assigned_to": "@agent-a:recovery-1631.test",
+        "conclusions": [
+          "Step one output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-one.json (SHA256=4e7b3dcf).",
+          "Step two output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-two.json (SHA256=dc6c671a).",
+          "Step three output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-three.json (SHA256=7a1e6832). All three steps verified via independent effect ledger."
+        ],
+        "continuation": {
+          "delivery_id": "b572ddaa21b815049db3bd24665085ef6e54f384c1bc1e41474be106c778d431",
+          "status": "pending"
+        },
+        "deliverables": [
+          "shared/tasks/live-hermes-qwenpaw-31/output/step-one.json",
+          "shared/tasks/live-hermes-qwenpaw-31/output/step-two.json",
+          "shared/tasks/live-hermes-qwenpaw-31/output/step-three.json"
+        ],
+        "execution": {
+          "generation": 2,
+          "instance_id": "docker/86bfb9b2d996036d57c83080fd2e920719d50b29c29f7fff99da5b4d580b1db9/2026-11-17T10:06:36.939810315Z",
+          "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+          "runtime": "qwenpaw",
+          "state": "active",
+          "checkpoint": {
+            "version": 9,
+            "completed_steps": [
+              "one",
+              "two",
+              "three"
+            ],
+            "remaining_steps": [],
+            "operation": {
+              "id": "fixture:live-hermes-qwenpaw-31:three",
+              "state": "verified",
+              "evidence": "Independent effect ledger; persisted output SHA256=7a1e68325b74d0553dd6c1c8c654c631a0e5d03f79d981bb3706a037b8054477; step=three; count=1"
+            },
+            "artifacts": [
+              {
+                "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-one.json",
+                "sha256": "4e7b3dcfcc8dbe4c8c0ee085f9dc99df0aefac082868e9014e43d7cca6e6b04d",
+                "size": 354
+              },
+              {
+                "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-two.json",
+                "sha256": "dc6c671aaf5e65d964c95f454b33fdfbced5d413eb15c98453ab0a9617724bbc",
+                "size": 354
+              },
+              {
+                "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-three.json",
+                "sha256": "7a1e68325b74d0553dd6c1c8c654c631a0e5d03f79d981bb3706a037b8054477",
+                "size": 356
+              }
+            ],
+            "result": {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/result.md",
+              "sha256": "e3eb94b37cf4eb9bd79f71aa26c7c5e1adb14e8773feb67f5ebb2b1ab0ea528e",
+              "size": 762
+            },
+            "delivery": "pending",
+            "reply_txn": "task-reply:5317ef5bda1c7b360192002ef7fae9f9e8242e75571344e39c401769def4a4fc",
+            "saved_at": "2026-11-17T10:07:51.298691628Z"
+          }
+        },
+        "history": [
+          {
+            "action": "ack_task",
+            "actor": "worker:agent-a",
+            "from": "assigned",
+            "seq": 1,
+            "to": "in_progress",
+            "ts": "2026-11-17T10:03:13Z"
+          },
+          {
+            "action": "submit_task",
+            "actor": "worker:agent-a",
+            "from": "in_progress",
+            "seq": 2,
+            "to": "submitted",
+            "ts": "2026-11-17T10:07:50Z"
+          }
+        ],
+        "history_seq": 2,
+        "main_task_id": "live-main-31",
+        "notifyTxn": "live-assignment-31",
+        "parent_task_id": "live-main-31",
+        "project_id": "",
+        "recovery_fixture": {
+          "oracle_url": "http://recovery-1631-live-20261117-v14-oracle:8091",
+          "oracle_version": 3
+        },
+        "result_digest": "a02b2979bdbb846497c00ee381590ce3aedc2a1be3cffd8c9344ac8e35cb019e",
+        "result_path": "shared/tasks/live-hermes-qwenpaw-31/result.md",
+        "result_status": "SUCCESS",
+        "room_id": "!CUIhu9JSvEz7ALCl4M:recovery-1631.test",
+        "spec_path": "",
+        "status": "submitted",
+        "submission_id": "e722416d0ff7453f973ce6bdab3e871b",
+        "submitted_at": "2026-11-17T10:07:50Z",
+        "submitted_by_role": "worker",
+        "summary": "Completed all three stable steps across hermes to qwenpaw. Steps one, two, and three executed with persisted checkpoints and verified output artifacts.",
+        "task_id": "live-hermes-qwenpaw-31",
+        "task_kind": "subtask",
+        "task_title": "Run three stable steps across hermes to qwenpaw",
+        "team_id": "recovery-team",
+        "title": "Run three stable steps across hermes to qwenpaw"
+      },
+      "txn": "task-reply:5317ef5bda1c7b360192002ef7fae9f9e8242e75571344e39c401769def4a4fc",
+      "process": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de"
+    },
+    "pending_task": {
+      "acknowledged_by_role": "worker",
+      "assigned_at": "2026-11-17T10:03:13Z",
+      "assigned_to": "@agent-a:recovery-1631.test",
+      "conclusions": [
+        "Step one output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-one.json (SHA256=4e7b3dcf).",
+        "Step two output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-two.json (SHA256=dc6c671a).",
+        "Step three output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-three.json (SHA256=7a1e6832). All three steps verified via independent effect ledger."
+      ],
+      "continuation": {
+        "delivery_id": "b572ddaa21b815049db3bd24665085ef6e54f384c1bc1e41474be106c778d431",
+        "status": "pending"
+      },
+      "deliverables": [
+        "shared/tasks/live-hermes-qwenpaw-31/output/step-one.json",
+        "shared/tasks/live-hermes-qwenpaw-31/output/step-two.json",
+        "shared/tasks/live-hermes-qwenpaw-31/output/step-three.json"
+      ],
+      "execution": {
+        "generation": 2,
+        "instance_id": "docker/86bfb9b2d996036d57c83080fd2e920719d50b29c29f7fff99da5b4d580b1db9/2026-11-17T10:06:36.939810315Z",
+        "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+        "runtime": "qwenpaw",
+        "state": "active",
+        "checkpoint": {
+          "version": 9,
+          "completed_steps": [
+            "one",
+            "two",
+            "three"
+          ],
+          "remaining_steps": [],
+          "operation": {
+            "id": "fixture:live-hermes-qwenpaw-31:three",
+            "state": "verified",
+            "evidence": "Independent effect ledger; persisted output SHA256=7a1e68325b74d0553dd6c1c8c654c631a0e5d03f79d981bb3706a037b8054477; step=three; count=1"
+          },
+          "artifacts": [
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-one.json",
+              "sha256": "4e7b3dcfcc8dbe4c8c0ee085f9dc99df0aefac082868e9014e43d7cca6e6b04d",
+              "size": 354
+            },
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-two.json",
+              "sha256": "dc6c671aaf5e65d964c95f454b33fdfbced5d413eb15c98453ab0a9617724bbc",
+              "size": 354
+            },
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-three.json",
+              "sha256": "7a1e68325b74d0553dd6c1c8c654c631a0e5d03f79d981bb3706a037b8054477",
+              "size": 356
+            }
+          ],
+          "result": {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/result.md",
+            "sha256": "e3eb94b37cf4eb9bd79f71aa26c7c5e1adb14e8773feb67f5ebb2b1ab0ea528e",
+            "size": 762
+          },
+          "delivery": "pending",
+          "reply_txn": "task-reply:5317ef5bda1c7b360192002ef7fae9f9e8242e75571344e39c401769def4a4fc",
+          "saved_at": "2026-11-17T10:07:51.298691628Z"
+        }
+      },
+      "history": [
+        {
+          "action": "ack_task",
+          "actor": "worker:agent-a",
+          "from": "assigned",
+          "seq": 1,
+          "to": "in_progress",
+          "ts": "2026-11-17T10:03:13Z"
+        },
+        {
+          "action": "submit_task",
+          "actor": "worker:agent-a",
+          "from": "in_progress",
+          "seq": 2,
+          "to": "submitted",
+          "ts": "2026-11-17T10:07:50Z"
+        }
+      ],
+      "history_seq": 2,
+      "main_task_id": "live-main-31",
+      "notifyTxn": "live-assignment-31",
+      "parent_task_id": "live-main-31",
+      "project_id": "",
+      "recovery_fixture": {
+        "oracle_url": "http://recovery-1631-live-20261117-v14-oracle:8091",
+        "oracle_version": 3
+      },
+      "result_digest": "a02b2979bdbb846497c00ee381590ce3aedc2a1be3cffd8c9344ac8e35cb019e",
+      "result_path": "shared/tasks/live-hermes-qwenpaw-31/result.md",
+      "result_status": "SUCCESS",
+      "room_id": "!CUIhu9JSvEz7ALCl4M:recovery-1631.test",
+      "spec_path": "",
+      "status": "submitted",
+      "submission_id": "e722416d0ff7453f973ce6bdab3e871b",
+      "submitted_at": "2026-11-17T10:07:50Z",
+      "submitted_by_role": "worker",
+      "summary": "Completed all three stable steps across hermes to qwenpaw. Steps one, two, and three executed with persisted checkpoints and verified output artifacts.",
+      "task_id": "live-hermes-qwenpaw-31",
+      "task_kind": "subtask",
+      "task_title": "Run three stable steps across hermes to qwenpaw",
+      "team_id": "recovery-team",
+      "title": "Run three stable steps across hermes to qwenpaw"
+    },
+    "observed_pending_at": 1794910073.038982,
+    "saved_result_bytes_verified": true,
+    "report_copies_before_retry": 0,
+    "final_task": {
+      "acknowledged_by_role": "worker",
+      "assigned_at": "2026-11-17T10:03:13Z",
+      "assigned_to": "@agent-a:recovery-1631.test",
+      "conclusions": [
+        "Step one output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-one.json (SHA256=4e7b3dcf).",
+        "Step two output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-two.json (SHA256=dc6c671a).",
+        "Step three output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-three.json (SHA256=7a1e6832). All three steps verified via independent effect ledger."
+      ],
+      "continuation": {
+        "delivery_id": "b572ddaa21b815049db3bd24665085ef6e54f384c1bc1e41474be106c778d431",
+        "status": "pending"
+      },
+      "deliverables": [
+        "shared/tasks/live-hermes-qwenpaw-31/output/step-one.json",
+        "shared/tasks/live-hermes-qwenpaw-31/output/step-two.json",
+        "shared/tasks/live-hermes-qwenpaw-31/output/step-three.json"
+      ],
+      "execution": {
+        "generation": 2,
+        "instance_id": "docker/86bfb9b2d996036d57c83080fd2e920719d50b29c29f7fff99da5b4d580b1db9/2026-11-17T10:06:36.939810315Z",
+        "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+        "runtime": "qwenpaw",
+        "state": "active",
+        "checkpoint": {
+          "version": 10,
+          "completed_steps": [
+            "one",
+            "two",
+            "three"
+          ],
+          "remaining_steps": [],
+          "operation": {
+            "id": "fixture:live-hermes-qwenpaw-31:three",
+            "state": "verified",
+            "evidence": "Independent effect ledger; persisted output SHA256=7a1e68325b74d0553dd6c1c8c654c631a0e5d03f79d981bb3706a037b8054477; step=three; count=1"
+          },
+          "artifacts": [
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-one.json",
+              "sha256": "4e7b3dcfcc8dbe4c8c0ee085f9dc99df0aefac082868e9014e43d7cca6e6b04d",
+              "size": 354
+            },
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-two.json",
+              "sha256": "dc6c671aaf5e65d964c95f454b33fdfbced5d413eb15c98453ab0a9617724bbc",
+              "size": 354
+            },
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-three.json",
+              "sha256": "7a1e68325b74d0553dd6c1c8c654c631a0e5d03f79d981bb3706a037b8054477",
+              "size": 356
+            }
+          ],
+          "result": {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/result.md",
+            "sha256": "e3eb94b37cf4eb9bd79f71aa26c7c5e1adb14e8773feb67f5ebb2b1ab0ea528e",
+            "size": 762
+          },
+          "delivery": "delivered",
+          "reply_txn": "task-reply:5317ef5bda1c7b360192002ef7fae9f9e8242e75571344e39c401769def4a4fc",
+          "reply_event": "$Xoi-dvuVjhplBm6SdZkUUWKk1iMyUBC4InRsTmFE9js",
+          "saved_at": "2026-11-17T10:08:09.998048021Z"
+        }
+      },
+      "history": [
+        {
+          "action": "ack_task",
+          "actor": "worker:agent-a",
+          "from": "assigned",
+          "seq": 1,
+          "to": "in_progress",
+          "ts": "2026-11-17T10:03:13Z"
+        },
+        {
+          "action": "submit_task",
+          "actor": "worker:agent-a",
+          "from": "in_progress",
+          "seq": 2,
+          "to": "submitted",
+          "ts": "2026-11-17T10:07:50Z"
+        }
+      ],
+      "history_seq": 2,
+      "main_task_id": "live-main-31",
+      "notifyTxn": "live-assignment-31",
+      "parent_task_id": "live-main-31",
+      "project_id": "",
+      "recovery_fixture": {
+        "oracle_url": "http://recovery-1631-live-20261117-v14-oracle:8091",
+        "oracle_version": 3
+      },
+      "result_digest": "a02b2979bdbb846497c00ee381590ce3aedc2a1be3cffd8c9344ac8e35cb019e",
+      "result_path": "shared/tasks/live-hermes-qwenpaw-31/result.md",
+      "result_status": "SUCCESS",
+      "room_id": "!CUIhu9JSvEz7ALCl4M:recovery-1631.test",
+      "spec_path": "",
+      "status": "submitted",
+      "submission_id": "e722416d0ff7453f973ce6bdab3e871b",
+      "submitted_at": "2026-11-17T10:07:50Z",
+      "submitted_by_role": "worker",
+      "summary": "Completed all three stable steps across hermes to qwenpaw. Steps one, two, and three executed with persisted checkpoints and verified output artifacts.",
+      "task_id": "live-hermes-qwenpaw-31",
+      "task_kind": "subtask",
+      "task_title": "Run three stable steps across hermes to qwenpaw",
+      "team_id": "recovery-team",
+      "title": "Run three stable steps across hermes to qwenpaw"
+    },
+    "ledger": {
+      "calls": [
+        {
+          "accepted": true,
+          "at_ns": 1794909808663993379,
+          "method": "REGISTER",
+          "process_id": "1:1794909674706560199:14f621897ca44733938a145ba46a34ef",
+          "step": "one",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        },
+        {
+          "accepted": true,
+          "at_ns": 1794909808686116562,
+          "method": "POST",
+          "process_id": "1:1794909674706560199:14f621897ca44733938a145ba46a34ef",
+          "step": "one",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        },
+        {
+          "accepted": true,
+          "at_ns": 1794910033252676563,
+          "method": "REGISTER",
+          "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+          "step": "two",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        },
+        {
+          "accepted": true,
+          "at_ns": 1794910033305704483,
+          "method": "POST",
+          "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+          "step": "two",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        },
+        {
+          "accepted": true,
+          "at_ns": 1794910040703120418,
+          "method": "REGISTER",
+          "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+          "step": "three",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        },
+        {
+          "accepted": true,
+          "at_ns": 1794910040741507694,
+          "method": "POST",
+          "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+          "step": "three",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        }
+      ],
+      "effects": [
+        {
+          "checkpoint_version": 1,
+          "executed_at_ns": 1794909808686128354,
+          "generation": 1,
+          "instance_id": "docker/2e62dc47cc758fc7a320dae8407db0492bc49611d458cc92c19c0bbd89cb89c6/2026-11-17T10:01:14.574005726Z",
+          "process_id": "1:1794909674706560199:14f621897ca44733938a145ba46a34ef",
+          "step": "one",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        },
+        {
+          "checkpoint_version": 5,
+          "executed_at_ns": 1794910033305713357,
+          "generation": 2,
+          "instance_id": "docker/86bfb9b2d996036d57c83080fd2e920719d50b29c29f7fff99da5b4d580b1db9/2026-11-17T10:06:36.939810315Z",
+          "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+          "step": "two",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        },
+        {
+          "checkpoint_version": 7,
+          "executed_at_ns": 1794910040741516942,
+          "generation": 2,
+          "instance_id": "docker/86bfb9b2d996036d57c83080fd2e920719d50b29c29f7fff99da5b4d580b1db9/2026-11-17T10:06:36.939810315Z",
+          "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+          "step": "three",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        }
+      ],
+      "intents": [
+        {
+          "checkpoint_version": 1,
+          "generation": 1,
+          "instance_id": "docker/2e62dc47cc758fc7a320dae8407db0492bc49611d458cc92c19c0bbd89cb89c6/2026-11-17T10:01:14.574005726Z",
+          "process_id": "1:1794909674706560199:14f621897ca44733938a145ba46a34ef",
+          "step": "one",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        },
+        {
+          "checkpoint_version": 5,
+          "generation": 2,
+          "instance_id": "docker/86bfb9b2d996036d57c83080fd2e920719d50b29c29f7fff99da5b4d580b1db9/2026-11-17T10:06:36.939810315Z",
+          "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+          "step": "two",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        },
+        {
+          "checkpoint_version": 7,
+          "generation": 2,
+          "instance_id": "docker/86bfb9b2d996036d57c83080fd2e920719d50b29c29f7fff99da5b4d580b1db9/2026-11-17T10:06:36.939810315Z",
+          "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+          "step": "three",
+          "task_id": "live-hermes-qwenpaw-31",
+          "team_id": "recovery-team"
+        }
+      ]
+    },
+    "no_model_after_fault": true,
+    "report_copies_after_retry": 1,
+    "process_and_generation_unchanged": true,
+    "original_transaction_reused": true,
+    "verified_at": 1794910091.279756
+  },
+  "final_task": {
+    "acknowledged_by_role": "worker",
+    "assigned_at": "2026-11-17T10:03:13Z",
+    "assigned_to": "@agent-a:recovery-1631.test",
+    "conclusions": [
+      "Step one output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-one.json (SHA256=4e7b3dcf).",
+      "Step two output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-two.json (SHA256=dc6c671a).",
+      "Step three output persisted at shared/tasks/live-hermes-qwenpaw-31/output/step-three.json (SHA256=7a1e6832). All three steps verified via independent effect ledger."
+    ],
+    "continuation": {
+      "delivery_id": "b572ddaa21b815049db3bd24665085ef6e54f384c1bc1e41474be106c778d431",
+      "status": "pending"
+    },
+    "deliverables": [
+      "shared/tasks/live-hermes-qwenpaw-31/output/step-one.json",
+      "shared/tasks/live-hermes-qwenpaw-31/output/step-two.json",
+      "shared/tasks/live-hermes-qwenpaw-31/output/step-three.json"
+    ],
+    "execution": {
+      "generation": 2,
+      "instance_id": "docker/86bfb9b2d996036d57c83080fd2e920719d50b29c29f7fff99da5b4d580b1db9/2026-11-17T10:06:36.939810315Z",
+      "process_id": "1:1794909997087416364:a6c041a76ed44787b1dae34f6b3cb5de",
+      "runtime": "qwenpaw",
+      "state": "active",
+      "checkpoint": {
+        "version": 10,
+        "completed_steps": [
+          "one",
+          "two",
+          "three"
+        ],
+        "remaining_steps": [],
+        "operation": {
+          "id": "fixture:live-hermes-qwenpaw-31:three",
+          "state": "verified",
+          "evidence": "Independent effect ledger; persisted output SHA256=7a1e68325b74d0553dd6c1c8c654c631a0e5d03f79d981bb3706a037b8054477; step=three; count=1"
+        },
+        "artifacts": [
+          {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-one.json",
+            "sha256": "4e7b3dcfcc8dbe4c8c0ee085f9dc99df0aefac082868e9014e43d7cca6e6b04d",
+            "size": 354
+          },
+          {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-two.json",
+            "sha256": "dc6c671aaf5e65d964c95f454b33fdfbced5d413eb15c98453ab0a9617724bbc",
+            "size": 354
+          },
+          {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/output/step-three.json",
+            "sha256": "7a1e68325b74d0553dd6c1c8c654c631a0e5d03f79d981bb3706a037b8054477",
+            "size": 356
+          }
+        ],
+        "result": {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-31/result.md",
+          "sha256": "e3eb94b37cf4eb9bd79f71aa26c7c5e1adb14e8773feb67f5ebb2b1ab0ea528e",
+          "size": 762
+        },
+        "delivery": "delivered",
+        "reply_txn": "task-reply:5317ef5bda1c7b360192002ef7fae9f9e8242e75571344e39c401769def4a4fc",
+        "reply_event": "$Xoi-dvuVjhplBm6SdZkUUWKk1iMyUBC4InRsTmFE9js",
+        "saved_at": "2026-11-17T10:08:09.998048021Z"
+      }
+    },
+    "history": [
+      {
+        "action": "ack_task",
+        "actor": "worker:agent-a",
+        "from": "assigned",
+        "seq": 1,
+        "to": "in_progress",
+        "ts": "2026-11-17T10:03:13Z"
+      },
+      {
+        "action": "submit_task",
+        "actor": "worker:agent-a",
+        "from": "in_progress",
+        "seq": 2,
+        "to": "submitted",
+        "ts": "2026-11-17T10:07:50Z"
+      }
+    ],
+    "history_seq": 2,
+    "main_task_id": "live-main-31",
+    "notifyTxn": "live-assignment-31",
+    "parent_task_id": "live-main-31",
+    "project_id": "",
+    "recovery_fixture": {
+      "oracle_url": "http://recovery-1631-live-20261117-v14-oracle:8091",
+      "oracle_version": 3
+    },
+    "result_digest": "a02b2979bdbb846497c00ee381590ce3aedc2a1be3cffd8c9344ac8e35cb019e",
+    "result_path": "shared/tasks/live-hermes-qwenpaw-31/result.md",
+    "result_status": "SUCCESS",
+    "room_id": "!CUIhu9JSvEz7ALCl4M:recovery-1631.test",
+    "spec_path": "",
+    "status": "submitted",
+    "submission_id": "e722416d0ff7453f973ce6bdab3e871b",
+    "submitted_at": "2026-11-17T10:07:50Z",
+    "submitted_by_role": "worker",
+    "summary": "Completed all three stable steps across hermes to qwenpaw. Steps one, two, and three executed with persisted checkpoints and verified output artifacts.",
+    "task_id": "live-hermes-qwenpaw-31",
+    "task_kind": "subtask",
+    "task_title": "Run three stable steps across hermes to qwenpaw",
+    "team_id": "recovery-team",
+    "title": "Run three stable steps across hermes to qwenpaw"
+  },
+  "matrix": {
+    "reply_event": "$Xoi-dvuVjhplBm6SdZkUUWKk1iMyUBC4InRsTmFE9js",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$laHWclwrKqCvP3IJQKBDjbQ0y7MMbD6TJQVK1Lyx5wE"
+    ],
+    "read_receipt_events": [
+      "$heSGGt9fC3OQC-gsA1XRHCgdOvEPKyBT9v7_i7Ryob0"
+    ]
+  },
+  "artifact_bytes_verified": true,
+  "same_actual_container_start_verified": true,
+  "docker_order_ns": {
+    "die": 1794909994353503463,
+    "destroy": 1794909994514272923,
+    "create": 1794909996860633630
+  },
+  "native_cache": null,
+  "full_normal_lane_verifier": {
+    "passed": false,
+    "error": "target native Task cache is absent after the injected native-stream failure; original cache assertion retained"
+  },
+  "coverage_limits": [
+    "plaintext Matrix",
+    "local source overlay and test-only before-send fault",
+    "does not prove response-loss/ack-loss E2E",
+    "does not prove interrupted native-session reuse",
+    "does not add a directed lane",
+    "Dashboard trace UI not tested"
+  ],
+  "traces": [
+    {
+      "trace_id": "6821fb22519c9ce966257686aa9a1d75",
+      "controller_readback": true,
+      "langfuse_readback": true,
+      "metadata": {
+        "agentteams.task.id": "live-hermes-qwenpaw-31",
+        "agentteams.team.id": "recovery-team",
+        "agentteams.execution.generation": 2,
+        "agentteams.runtime.session_id": "matrix:task:39a814f83aa612eda42e7a36a8fbdb79b9160149453bffaff38b29d7e8ebfd4d:91aef7223b684672891aacb610c9d072",
+        "agentteams.event.id": "recovery:recovery-team/live-hermes-qwenpaw-31:2"
+      },
+      "dashboard_ui": "not tested"
+    }
+  ],
+  "fixture_stop_after_evidence": {
+    "order": [
+      {
+        "name": "recovery-1631-live-20261117-v14-controller",
+        "id": "845f34275d13532397c252b8e35b1592d4b0e8aeffc7c8f0aebe29c4840028df",
+        "running": false,
+        "finished_at": "2026-11-17T11:00:12.649180804Z"
+      },
+      {
+        "name": "recovery-1631-live-20261117-v14-worker-agent-a",
+        "id": "86bfb9b2d996036d57c83080fd2e920719d50b29c29f7fff99da5b4d580b1db9",
+        "running": false,
+        "finished_at": "2026-11-17T11:00:38.724672934Z"
+      },
+      {
+        "name": "recovery-1631-live-20261117-v14-worker-leader",
+        "id": "37a96aea865a6fe4878ee457b2258cb37dfe1d5cdbf2e528eca41b82b76f7c2d",
+        "running": false,
+        "finished_at": "2026-11-17T11:00:42.081181872Z"
+      }
+    ],
+    "volumes_retained": true
+  }
+}

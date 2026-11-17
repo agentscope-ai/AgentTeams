@@ -600,7 +600,7 @@ not reset the Task/effect count or be called a clean two-generation acceptance.
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement cases 06/09/13 passed; other scenarios incomplete | untested | untested | untested | untested |
 | Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | strict replacement case28 passed; case25 failed,26 partial retained | replacement case 20 passed; other scenarios incomplete | untested | untested |
-| QwenPaw | untested | case24 failed; generation3 repair passed separately; case27 partial (extra Leader messages) | normal restart + valid session case29 passed; other scenarios incomplete | untested | untested | untested |
+| QwenPaw | untested | strict replacement case30 passed; case24 failed and case27 partial retained | normal restart + valid session case29 passed; other scenarios incomplete | untested | untested | untested |
 | DeepSeek | untested | replacement case 21 passed; other scenarios incomplete | untested | untested | untested | untested |
 | OpenClaw | untested | untested | untested | untested | untested | untested |
 | OpenHuman | untested | untested | untested | untested | untested | untested |
@@ -743,7 +743,7 @@ steps two/three. The independent ledger proves steps once at generations1/2/2.
 Checkpoint10 is submitted/delivered, all artifact/report bytes match and the
 canonical final report has exactly one Matrix event. The final native session
 digest and latest shared checkpoint both match the cache. This accepts one
-new direction, bringing the strict count to3/30; cases25/26/27 remain failed or
+new direction; cases25/26/27 remain failed or
 partial at their original revisions.
 
 ### Case29: QwenPaw normal restart and valid session reuse passed
@@ -817,5 +817,36 @@ Controller and direct Langfuse readback both verified traces
 `74acad0de8d6cef9a6ecbd2ff1e9461d` and
 `64e484a76834eca50ef1032442769af1`, including Task/team/generation2,
 room/event and native session`20261117_095017_66399845`. Dashboard UI was not
-tested on this fixture. This accepts the fourth directed lane (4/30), not the
-full Harness scenario set. Real saved-result delivery fault testing is separate.
+tested on this fixture. Including the earlier Codex↔Hermes cases, six directed
+lanes have bounded real continuation evidence. These results apply to their
+recorded source SHAs, not a fresh six-lane regression on one latest candidate.
+The full Harness scenario set remains open. Saved-result testing is separate.
+
+### Case31: real saved-result retry passed; native-cache acceptance failed
+
+[Case31 proof](evidence/runtime-recovery-1631-case31-delivery.json) records a
+test-only QwenPaw first-send fault after submission. An independent read-only
+observer saw checkpoint9 with the verified saved report, three completed steps
+and zero canonical Matrix replies. Without a restart or new external message,
+the same actual process/generation2 retried the original transaction, reached
+checkpoint10/delivered and sent exactly one canonical report. No new Task model
+turn occurred after the fault; the independent step/effect ledger stayed once
+per step. Controller and Langfuse readback verified trace
+`6821fb22519c9ce966257686aa9a1d75` with Task/team/generation/session correlation.
+Dashboard UI was not tested. Exact source pins, image digests and the injected
+patch are archived in the proof. The fault is before sending, not response loss.
+
+The normal continuation verifier still failed its native Task cache assertion:
+the interrupted stream left no accepted QwenPaw cache. The assertion was not
+relaxed, and this saved-delivery result adds neither a direction nor a complete
+restart/continuation acceptance. The original fixture and failures are retained.
+
+### Native recovery JSON bridge
+
+`shared/lib/task_recovery_rpc.py` exposes the existing shared recovery client to
+native non-Python adapters over JSON stdin/stdout. Discovery and conditional
+claims keep the existing scoped Worker API; reply mutations recheck Task/team,
+process, instance and generation and delegate to the common implementation.
+It does not widen Project listing or create a second execution lease. Empty
+native finals require an already submitted durable result. Six host boundary
+tests pass; they mock authority and are not Task continuation E2E.

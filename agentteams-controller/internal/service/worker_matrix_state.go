@@ -284,11 +284,33 @@ func sameWorkerMatrixInput(a, b WorkerMatrixInput) bool {
 	return err == nil && otherErr == nil && bytes.Equal(x, y)
 }
 
+func (input *WorkerMatrixInput) needsPending() (bool, error) {
+	if input.Intent == "context" && input.Work == nil {
+		return input.InputState != "native_committed" || input.NativeCommit == nil, nil
+	}
+	if input.Intent != "message" || (input.Work != nil && input.Work.Kind != "message") || len(input.Execution) == 0 {
+		return true, nil
+	}
+	// Match message execution retirement. A native receipt alone does not
+	// settle ordinary work, including verification and delivery-only recovery.
+	var execution struct {
+		State      string `json:"state"`
+		Checkpoint struct {
+			Delivery string `json:"delivery"`
+		} `json:"checkpoint"`
+	}
+	if err := json.Unmarshal(input.Execution, &execution); err != nil {
+		return false, fmt.Errorf("%w: unreadable Matrix execution: %v", ErrWorkerStateInvalid, err)
+	}
+	return execution.State != "cancelled" && execution.Checkpoint.Delivery != "delivered", nil
+}
+
 // persistInputs is shared by incremental sync and backwards pagination. Both
 // publish their index/cursor only after immutable inputs are durable and readable.
+// An empty key marks an input retained for coverage with no pending work.
 func (s *WorkerMatrixStore) persistInputs(ctx context.Context, name string, state *WorkerMatrixState, inputs []WorkerMatrixInput) ([]string, error) {
-	keys := []string{}
-	for _, input := range inputs {
+	keys := make([]string, len(inputs))
+	for i, input := range inputs {
 		if !strings.HasPrefix(input.RoomID, "!") || !strings.HasPrefix(input.EventID, "$") || !strings.HasPrefix(input.Input.Sender, "@") || input.Input.Type == "" || input.Input.Content == nil || !slices.Contains([]string{"context", "message", "task_notification", "control"}, input.Intent) {
 			return nil, fmt.Errorf("%w: complete accepted Matrix input required", ErrWorkerStateInvalid)
 		}
@@ -316,7 +338,13 @@ func (s *WorkerMatrixStore) persistInputs(ctx context.Context, name string, stat
 		if !sameWorkerMatrixInput(*stored, input) {
 			return nil, fmt.Errorf("%w: immutable Matrix input changed", ErrWorkerStateConflict)
 		}
-		keys = append(keys, eventKey)
+		pending, err := stored.needsPending()
+		if err != nil {
+			return nil, err
+		}
+		if pending {
+			keys[i] = eventKey
+		}
 	}
 	return keys, nil
 }
@@ -343,7 +371,7 @@ func (s *WorkerMatrixStore) Ingest(ctx context.Context, name string, start Worke
 		return nil, "", err
 	}
 	for i, key := range keys {
-		if !slices.Contains(state.Pending, key) {
+		if key != "" && !slices.Contains(state.Pending, key) {
 			// A filtered limited window has no right-hand queue anchor until
 			// the next accepted input arrives in its room.
 			room := state.Rooms[inputs[i].RoomID]
@@ -370,13 +398,18 @@ func (s *WorkerMatrixStore) Ingest(ctx context.Context, name string, start Worke
 		// reports only a new gap, including consecutive filtered windows.
 		room.Gaps = slices.Clone(previous.Gaps)
 		first := ""
+		hasInput := false
 		for i, input := range inputs {
 			if input.RoomID == roomID {
+				hasInput = true
+				if keys[i] == "" {
+					continue
+				}
 				first = keys[i]
 				break
 			}
 		}
-		filtered := hasCursor && first == "" && room.Through == previous.Through && len(requestedGaps) > 0 && strings.HasPrefix(roomID, "!")
+		filtered := hasCursor && !hasInput && room.Through == previous.Through && len(requestedGaps) > 0 && strings.HasPrefix(roomID, "!")
 		if !filtered {
 			input, err := s.Input(ctx, name, WorkerMatrixEventKey(roomID, room.Through))
 			if err != nil {
@@ -399,7 +432,7 @@ func (s *WorkerMatrixStore) Ingest(ctx context.Context, name string, start Worke
 			if overlaps {
 				continue // This actual timeline already reconnects the old anchor.
 			}
-			if first == "" && !filtered {
+			if !hasInput && !filtered {
 				return nil, "", fmt.Errorf("%w: limited timeline inputs required", ErrWorkerStateInvalid)
 			}
 			room.Backfill[id] = WorkerMatrixGap{FromToken: id, Until: previous.Through, Before: first}

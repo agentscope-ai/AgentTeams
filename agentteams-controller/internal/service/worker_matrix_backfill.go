@@ -50,11 +50,14 @@ func (s *WorkerMatrixStore) Backfill(ctx context.Context, name string, start Wor
 	}
 	insert := []string{}
 	for _, key := range keys {
-		if key != WorkerMatrixEventKey(page.RoomID, gap.Until) && !slices.Contains(state.Pending, key) && !slices.Contains(insert, key) {
+		if key != "" && key != WorkerMatrixEventKey(page.RoomID, gap.Until) && !slices.Contains(state.Pending, key) && !slices.Contains(insert, key) {
 			insert = append(insert, key)
 		}
 	}
 	state.Pending = slices.Insert(state.Pending, before, insert...)
+	if len(inputs) > 0 && gap.Before == "" && room.Gaps[len(room.Gaps)-1] == page.GapID && room.Through == gap.Until {
+		room.Through = inputs[len(inputs)-1].EventID
+	}
 	if len(insert) > 0 {
 		// Consecutive filtered windows can share a right-hand anchor.
 		// Older pages belong before this page, whichever gap is filled first.
@@ -63,9 +66,6 @@ func (s *WorkerMatrixStore) Backfill(ctx context.Context, name string, start Wor
 				older.Before = insert[0]
 				room.Backfill[id] = older
 			}
-		}
-		if gap.Before == "" && room.Gaps[len(room.Gaps)-1] == page.GapID && room.Through == gap.Until {
-			room.Through = inputs[len(inputs)-1].EventID
 		}
 		gap.Before = insert[0]
 	}

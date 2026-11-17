@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
@@ -232,6 +233,97 @@ func TestWorkerMatrixNativeInputCanPersistBeforeItsBatchCursor(t *testing.T) {
 	state, _, err := s.Ingest(t.Context(), "worker", start, etag, WorkerMatrixConsumer{}, []WorkerMatrixInput{matrixInput("$one")}, nil)
 	if err != nil || len(state.Pending) != 1 || len(state.Consumers) != 0 {
 		t.Fatalf("native callback must not invent a sync token: %+v %v", state, err)
+	}
+}
+
+func TestWorkerMatrixOverlapRespectsDurableWorkState(t *testing.T) {
+	cases := []struct {
+		event     string
+		intent    string
+		work      *WorkerMatrixWork
+		native    bool
+		execution string
+		pending   bool
+	}{
+		{"$delivered", "message", nil, true, `{"state":"active","checkpoint":{"delivery":"delivered"}}`, false},
+		{"$native-only", "message", nil, true, "", true},
+		{"$cancelled", "message", nil, false, `{"state":"cancelled"}`, false},
+		{"$verify", "message", nil, true, `{"state":"needs_verification"}`, true},
+		{"$reply", "message", nil, true, `{"checkpoint":{"delivery":"pending"}}`, true},
+		{"$context", "context", nil, false, "", true},
+		{"$control", "control", nil, true, "", true},
+		{"$task", "task_notification", &WorkerMatrixWork{Kind: "task", TeamID: "team", TaskID: "T"}, true, "", true},
+		{"$handled-context", "context", nil, true, "", false},
+	}
+	for _, mode := range []string{"sync", "backfill"} {
+		t.Run(mode, func(t *testing.T) {
+			storage := ossfake.NewMemory()
+			s, source, etag := startMatrixStore(t, storage)
+			const room = "!room:test"
+			var inputs []WorkerMatrixInput
+			var want []string
+			for _, tc := range cases {
+				input := matrixInput(tc.event)
+				input.Intent, input.Work = tc.intent, tc.work
+				inputs = append(inputs, input)
+				key := WorkerMatrixEventKey(room, tc.event)
+				if tc.pending {
+					want = append(want, key)
+				}
+				// Seed durable inputs without a pending index. A previously processed
+				// event and an unpublished input can both be absent from that index.
+				input.SchemaVersion, input.Kind, input.MemberPrefix, input.InputState = 1, "WorkerMatrixEvent", "agents/worker", "received"
+				if tc.native {
+					input.InputState = "native_committed"
+					input.NativeCommit = &WorkerMatrixNativeCommit{Runtime: source.Runtime, Start: source, NativeRef: "session", NativeDigest: "row-digest"}
+				}
+				input.Execution = json.RawMessage(tc.execution)
+				data, err := json.Marshal(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := storage.PutObject(t.Context(), "agents/worker/runtime/matrix/events/"+key+".json", data); err != nil {
+					t.Fatal(err)
+				}
+			}
+			target := WorkerStart{InstanceID: "replacement", ProcessID: "target", Runtime: "qwenpaw"}
+			_, etag, err := s.Start(t.Context(), "worker", target, etag)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var state *WorkerMatrixState
+			if mode == "sync" {
+				state, _, err = s.Ingest(t.Context(), "worker", target, etag, matrixConsumer(target.Runtime, "next"), inputs,
+					map[string]WorkerMatrixRoom{room: {Through: cases[len(cases)-1].event, Gaps: []string{"gap"}}})
+				if err == nil && state.Rooms[room].Backfill["gap"].Before != want[0] {
+					t.Errorf("gap anchored to retired input: %+v", state.Rooms[room].Backfill["gap"])
+				}
+			} else {
+				_, etag, err = s.Ingest(t.Context(), "worker", target, etag, matrixConsumer(target.Runtime, "next"), nil,
+					map[string]WorkerMatrixRoom{room: {Gaps: []string{"gap"}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				slices.Reverse(inputs)
+				// The newest history page has only a previously handled context.
+				state, etag, err = s.Backfill(t.Context(), "worker", target, etag, WorkerMatrixBackfill{RoomID: room,
+					GapID: "gap", FromToken: "gap", NextToken: "more", Inputs: inputs[:1]})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if state.Rooms[room].Through != inputs[0].EventID || len(state.Pending) != 0 {
+					t.Errorf("retired history must advance coverage without creating work: %+v", state)
+				}
+				state, _, err = s.Backfill(t.Context(), "worker", target, etag, WorkerMatrixBackfill{RoomID: room,
+					GapID: "gap", FromToken: "more", Inputs: inputs[1:]})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(state.Pending, want) {
+				t.Errorf("pending order got %v, want %v", state.Pending, want)
+			}
+		})
 	}
 }
 

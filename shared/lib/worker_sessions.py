@@ -3,12 +3,11 @@
 Remember only after final SDK serialization, using the checkpoint/config snapshot
 represented by that session and the digest of persisted content.
 """
-import hashlib
-import json
 import time
 from urllib.parse import urlencode
 
 from task_recovery import Recovery, RecoveryConflict
+from worker_matrix_state import matrix_event_key
 
 
 class WorkerSessions:
@@ -39,8 +38,7 @@ class WorkerSessions:
             return False
         if work["kind"] == "task":
             return scope["team_id"] == work["team_id"] and scope["task_id"] == work["task_id"]
-        event_key = hashlib.sha256(json.dumps([scope["room_id"], scope["event_id"]],
-                                             ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+        event_key = matrix_event_key(scope["room_id"], scope["event_id"])
         return event_key == work["event_key"]
 
     def usable(self, view, native_ref, native_digest, *, now=None):

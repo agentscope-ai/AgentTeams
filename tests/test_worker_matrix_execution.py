@@ -55,7 +55,7 @@ def test_late_native_text_cannot_replace_an_already_saved_result():
     assert recovery.request.call_args.args[2]["action"] == "claim"
 
 
-@pytest.mark.parametrize("state,mode", [("needs_verification", "verify"), ("active", "deliver"), ("cancelled", "done"), ("released", "resume")])
+@pytest.mark.parametrize("state,mode", [("needs_verification", "verify"), ("active", "deliver"), ("cancelled", "done"), ("released", "resume"), ("active", "backfill")])
 def test_non_execution_modes_cannot_admit_native_inference(state, mode):
     source = entry()
     source["execution"]["state"], source["recovery"] = state, mode

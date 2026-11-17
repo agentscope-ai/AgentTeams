@@ -147,6 +147,14 @@ func TestWorkerMatrixHTTPRoutesKeepProjectListClosed(t *testing.T) {
 	if r := call(http.MethodGet, "/api/v1/runtime/matrix/events/"+service.WorkerMatrixEventKey("!room:test", "$one"), "", ""); r.Code != 200 || !strings.Contains(r.Body.String(), `"event_id":"$one"`) {
 		t.Fatalf("registered input route: %d %s", r.Code, r.Body)
 	}
+	nativePath := "/api/v1/runtime/matrix/events/" + service.WorkerMatrixEventKey("!room:test", "$one") + "/native"
+	r = call(http.MethodGet, nativePath, "", "")
+	if r.Code != 200 {
+		t.Fatalf("native evidence self route: %d %s", r.Code, r.Body)
+	}
+	if r := call(http.MethodPost, nativePath, `{"instance_id":"mock/actual-start","process_id":"actual-process","native_ref":"session/row","native_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`, r.Header().Get("ETag")); r.Code != 200 {
+		t.Fatalf("native evidence commit route: %d %s", r.Code, r.Body)
+	}
 	if r := call(http.MethodGet, "/api/v1/projects", "", ""); r.Code != 403 {
 		t.Fatalf("self persistence widened Project list: %d %s", r.Code, r.Body)
 	}

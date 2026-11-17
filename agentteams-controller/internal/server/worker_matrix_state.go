@@ -88,6 +88,7 @@ func (h *WorkerMatrixHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Consumer   *service.WorkerMatrixConsumer       `json:"consumer,omitempty"`
 		Inputs     []service.WorkerMatrixInput         `json:"inputs,omitempty"`
 		Rooms      map[string]service.WorkerMatrixRoom `json:"rooms,omitempty"`
+		Backfill   *service.WorkerMatrixBackfill       `json:"backfill,omitempty"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, taskMetaCommitMaxBytes))
 	decoder.DisallowUnknownFields()
@@ -117,12 +118,16 @@ func (h *WorkerMatrixHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch input.Action {
 	case "start":
-		if input.Consumer != nil || len(input.Inputs) != 0 || len(input.Rooms) != 0 {
+		if input.Consumer != nil || len(input.Inputs) != 0 || len(input.Rooms) != 0 || input.Backfill != nil {
 			writeError(w, 400, "start cannot commit a Matrix batch")
 			return
 		}
 		state, etag, err = h.store.Start(r.Context(), name, start, expected)
 	case "ingest":
+		if input.Backfill != nil {
+			writeError(w, 400, "use the explicit backfill action for history pages")
+			return
+		}
 		if create != "" {
 			writeError(w, 400, "ingest requires a registered start and native consumer")
 			return
@@ -140,6 +145,12 @@ func (h *WorkerMatrixHandler) Update(w http.ResponseWriter, r *http.Request) {
 			consumer = *input.Consumer
 		}
 		state, etag, err = h.store.Ingest(r.Context(), name, start, expected, consumer, input.Inputs, input.Rooms)
+	case "backfill":
+		if create != "" || input.Backfill == nil || input.Consumer != nil || len(input.Inputs) != 0 || len(input.Rooms) != 0 {
+			writeError(w, 400, "registered start and one explicit history page required")
+			return
+		}
+		state, etag, err = h.store.Backfill(r.Context(), name, start, expected, *input.Backfill)
 	default:
 		writeError(w, 400, "unsupported Matrix state action")
 		return

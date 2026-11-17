@@ -44,6 +44,14 @@ def execute(request):
             return matrix.ingest(request['snapshot'], request.get('consumer'), request['inputs'], request.get('rooms'))
         if action == 'matrix.pending':
             return matrix.pending(request['snapshot'])
+        if action == 'matrix.backfill':
+            return matrix.backfill(request['snapshot'], request['page'])
+        if action == 'matrix.native.get':
+            return matrix.native_input(request['event_key'])
+        if action == 'matrix.native.commit':
+            return matrix.native_committed(request['event_key'], request['snapshot'], request['native_ref'], request['native_digest'])
+        if action == 'matrix.native.current':
+            return matrix.native_current(request['snapshot'], request.get('native_ref'), request.get('native_digest'))
         if action == 'matrix.message.get':
             return matrix.message(request['event_key'])
         if action == 'matrix.message.claim':

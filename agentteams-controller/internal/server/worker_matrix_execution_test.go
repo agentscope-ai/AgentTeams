@@ -259,3 +259,45 @@ func TestMatrixMessageSavedResultCannotHideNewWorkInDeliveryAck(t *testing.T) {
 	cp.CompletedSteps = []string{"one"}
 	f.expect("checkpoint", cp, 200)
 }
+
+func TestMatrixMessageGapBlocksInferenceButAllowsSavedResultDelivery(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		f := newMatrixExecutionFixture(t, nil)
+		if saved {
+			f.expect("claim", nil, 200)
+			result := f.artifact("reply.txt", "already executed answer")
+			f.expect("checkpoint", &taskCheckpoint{Version: 1, Result: &result, Delivery: "pending", ReplyTxn: "same-txn"}, 200)
+		}
+		_, etag, err := f.h.store.Load(t.Context(), "runtime-alice")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, etag, err = f.h.store.Ingest(t.Context(), "runtime-alice", f.start, etag, service.WorkerMatrixConsumer{}, nil,
+			map[string]service.WorkerMatrixRoom{"!room:test": {Through: "$input"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		newInput := service.WorkerMatrixInput{RoomID: "!room:test", EventID: "$new", Intent: "context",
+			Input: service.WorkerMatrixContent{Sender: "@human:test", Type: "m.room.message", Content: map[string]any{"body": "later context"}}}
+		_, _, err = f.h.store.Ingest(t.Context(), "runtime-alice", f.start, etag, service.WorkerMatrixConsumer{}, []service.WorkerMatrixInput{newInput},
+			map[string]service.WorkerMatrixRoom{"!room:test": {Through: "$new", Gaps: []string{"limited-gap"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !saved {
+			f.expect("claim", nil, 409)
+		} else if response := f.expect("claim", nil, 200); string(response["recovery"]) != `"deliver"` {
+			t.Fatal("history gap forced already saved work into normal inference")
+		}
+		r := withCaller(httptest.NewRequest("GET", "/unused", nil), &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alice"})
+		r.SetPathValue("key", f.key)
+		w := httptest.NewRecorder()
+		f.h.GetExecution(w, r)
+		var response struct {
+			Recovery string `json:"recovery"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || (!saved && response.Recovery != "backfill") || (saved && response.Recovery != "deliver") {
+			t.Fatalf("room-aware admission: %d %s", w.Code, w.Body)
+		}
+	}
+}

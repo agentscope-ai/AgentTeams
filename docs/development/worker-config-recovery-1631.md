@@ -110,10 +110,32 @@ tests cover the descriptor/authority boundary, stale writers, assignment and
 cancellation, restart/old-Harness return, missing config/invalid records and
 Python-compatible digest values. The common Python suite passed49 tests plus6
 subtests; build-workflow contracts passed14. These checks do not prove native
-serialization or real continuation. Native input-commit evidence is still open.
+serialization or real continuation.
 
-No new real Harness lane is accepted. H/Q adapter hooks, explicit gap
-completion, native input-commit transitions and durable lifecycle
+The following increment adds `GET/POST events/{key}/native` and
+`matrix.native.*` facade/RPC actions. A final native-input reference/digest is
+conditionally recorded with the registered actual startup identity. A source
+receipt cannot prove target persistence, including when replacement races with
+the write. The receipt does not change execution/checkpoints, retire Task work,
+or imply tool execution/completion. Adapters must verify the actual persisted
+input row content; an earlier read ACK or a session ID alone is insufficient.
+
+Explicit `matrix.backfill` persists backwards `/messages` pages before a CAS
+advances a limited timeline's gap. The Controller records the old coverage
+event, current pagination token and pending insertion anchor. Pages are
+reversed from server backwards order into their queue position, without sorting
+by timestamps/hashes or replaying history older than the old coverage anchor.
+Empty pages with continuation tokens remain incomplete. A missing end token
+before a known old anchor retains a boundary requiring verification, rather
+than erasing the hole. Legacy gaps without recorded bounds are preserved;
+initial/legacy import is still required, not guessed from read receipts.
+An overlapping timeline can itself prove connection to its old anchor.
+Ordinary new inference is blocked while room gaps remain, but an already saved
+result can still be delivered. Native hooks and actual Matrix pagination remain
+to be exercised against the new common interface.
+
+No new real Harness lane is accepted. H/Q adapter hooks, initial/legacy
+consumption import, common startup scheduling and durable lifecycle
 handoff remain implementation work. Native snapshot evidence
 must not be inferred from these object-store/HTTP/client tests. Historical
 normal-restart and directed-lane counts remain3/6 and7/30 at their recorded SHAs.

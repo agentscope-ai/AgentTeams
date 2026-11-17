@@ -39,6 +39,14 @@ func matrixRecoveryMode(execution taskExecution) string {
 	return "resume"
 }
 
+func matrixRoomRecoveryMode(state *service.WorkerMatrixState, input *service.WorkerMatrixInput, execution taskExecution) string {
+	mode := matrixRecoveryMode(execution)
+	if mode == "resume" && len(state.Rooms[input.RoomID].Gaps) > 0 {
+		return "backfill"
+	}
+	return mode
+}
+
 func (h *WorkerMatrixHandler) GetExecution(w http.ResponseWriter, r *http.Request) {
 	name, instance, runtime, _, ok := h.identity(w, r)
 	if !ok {
@@ -54,8 +62,13 @@ func (h *WorkerMatrixHandler) GetExecution(w http.ResponseWriter, r *http.Reques
 		writeError(w, 503, "message execution unavailable")
 		return
 	}
+	state, _, err := h.store.Load(r.Context(), name)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
 	w.Header().Set("ETag", etag)
-	httputil.WriteJSON(w, 200, map[string]any{"input": input, "execution": execution, "etag": etag, "instance_id": instance, "runtime": runtime, "recovery": matrixRecoveryMode(execution)})
+	httputil.WriteJSON(w, 200, map[string]any{"input": input, "execution": execution, "etag": etag, "instance_id": instance, "runtime": runtime, "recovery": matrixRoomRecoveryMode(state, input, execution)})
 }
 
 func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +138,10 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 	}
 	switch request.Action {
 	case "claim":
+		if matrixRoomRecoveryMode(state, input, execution) == "backfill" {
+			writeError(w, 409, "backfill or verify the room's missing history before new inference")
+			return
+		}
 		if !sameProcess {
 			if execution.InstanceID == instance {
 				writeError(w, 409, "another process owns this message execution")
@@ -210,5 +227,5 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		_ = h.store.Retire(r.Context(), name, start, r.PathValue("key"))
 	}
 	w.Header().Set("ETag", contentETag(body))
-	httputil.WriteJSON(w, 200, map[string]any{"input": input, "execution": execution, "etag": contentETag(body), "recovery": matrixRecoveryMode(execution), "saved_result": savedResult})
+	httputil.WriteJSON(w, 200, map[string]any{"input": input, "execution": execution, "etag": contentETag(body), "recovery": matrixRoomRecoveryMode(state, input, execution), "saved_result": savedResult})
 }

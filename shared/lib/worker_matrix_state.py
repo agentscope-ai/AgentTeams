@@ -11,6 +11,11 @@ import subprocess
 from task_recovery import Recovery, RecoveryConflict
 
 
+def matrix_event_key(room_id, event_id):
+    return hashlib.sha256(json.dumps([room_id, event_id], ensure_ascii=False,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
 class WorkerMatrix:
     def __init__(self, runtime, *, recovery=None):
         self.runtime = runtime
@@ -46,6 +51,38 @@ class WorkerMatrix:
         # Native adapters cannot supply another Worker's storage path.
         return [self.recovery.request("GET", "runtime/matrix/events/" + key)
                 for key in snapshot["state"]["pending"]]
+
+    def backfill(self, snapshot, page):
+        start = snapshot["state"]["active_start"]
+        if start["process_id"] != self.recovery.process or start["runtime"] != self.runtime:
+            raise RecoveryConflict("History page belongs to another native start")
+        saved = self.recovery.request("POST", "runtime/matrix", {
+            "action": "backfill", "instance_id": start["instance_id"],
+            "process_id": self.recovery.process, "backfill": page,
+        }, snapshot["etag"])
+        return {**snapshot, **saved}
+
+    def native_input(self, key):
+        return self.recovery.request("GET", "runtime/matrix/events/" + key + "/native")
+
+    def native_committed(self, key, snapshot, native_ref, native_digest):
+        input_ = snapshot["input"]
+        if snapshot["runtime"] != self.runtime or matrix_event_key(input_["room_id"], input_["event_id"]) != key:
+            raise RecoveryConflict("Native persistence facts belong to another input or Harness")
+        return self.recovery.request("POST", "runtime/matrix/events/" + key + "/native", {
+            "instance_id": snapshot["instance_id"], "process_id": self.recovery.process,
+            "native_ref": native_ref, "native_digest": native_digest,
+        }, snapshot["etag"])
+
+    def native_current(self, snapshot, native_ref, native_digest):
+        # Verify a persisted input row, not just a session ID or read ACK.
+        receipt = snapshot["input"].get("native_commit") or {}
+        start = receipt.get("start") or {}
+        return bool(snapshot.get("current") and native_ref and native_digest
+                    and snapshot["runtime"] == receipt.get("runtime") == start.get("runtime") == self.runtime
+                    and start.get("instance_id") == snapshot["instance_id"]
+                    and start.get("process_id") == self.recovery.process
+                    and receipt.get("native_ref") == native_ref and receipt.get("native_digest") == native_digest)
 
     @staticmethod
     def _message_path(key):

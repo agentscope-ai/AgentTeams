@@ -743,11 +743,15 @@ reads={r["content"]["m.relates_to"]["event_id"] for r in receipts}
 sources=[r["event_id"] for r in rows if r["event_id"] in reads and r.get("origin_server_ts",0)<p["stopped_ms"] and p["task_id"] in r.get("content",{}).get("body","")]
 assert sources, "source assignment has no delivered native read receipt"
 print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"external_matrix_inputs_after_stop":external,"native_read_sources":sources,
-    "read_receipt_events":[r["event_id"] for r in receipts if r["content"]["m.relates_to"]["event_id"] in sources]}))
+    "read_receipt_events":[r["event_id"] for r in receipts if r["content"]["m.relates_to"]["event_id"] in sources],
+    "first_source_read_ms":min(r["origin_server_ts"] for r in receipts if r["content"]["m.relates_to"]["event_id"] in sources)}))
 '''
     matrix = json.loads(docker("exec", "-i", "-e", "PYTHONPATH=/opt/agentteams/scripts/lib", PREFIX + "-worker-agent-a", "python3", "-c", code,
         text=json.dumps({"room": task["room_id"], "event": cp["reply_event"], "sha256": cp["result"]["sha256"],
             "stopped_ms": order["die"] // 1000000, "task_id": TASK_ID})))
+    if middle:
+        first_registration = next(row for row in calls if row["method"] == "REGISTER" and row["step"] == "one")
+        assert matrix["first_source_read_ms"] <= first_registration["at_ns"] // 1000000, "the initial source must be read before step one"
     old_ref = before["native_sessions"]["qwenpaw_shared"]["cache"]["native_ref"] if middle else ""
     native = native_sessions(old_ref)
     if SOURCE == "openhuman":

@@ -80,3 +80,15 @@ def test_ordinary_chat_and_progress_are_not_execution(packet):
     packet[0]["org.agentteams.progress_only"] = True
     with pytest.raises(protocol.IgnoredNotification):
         receive(packet)
+
+
+@pytest.mark.parametrize("error,expected", [
+    (TimeoutError(), protocol.NotificationUnavailable),
+    (protocol.urllib.error.HTTPError("fixture", 503, "unavailable", {}, None), protocol.NotificationUnavailable),
+    (protocol.urllib.error.HTTPError("fixture", 404, "missing", {}, None), protocol.IgnoredNotification),
+])
+def test_receipt_read_failure_keeps_unverified_input_retryable(packet, error, expected):
+    def fail(_path):
+        raise error
+    with pytest.raises(expected):
+        receive((*packet[:-1], fail))

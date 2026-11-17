@@ -54,8 +54,13 @@ class WorkerMatrix:
         Per-event callbacks have no sync-batch cursor to commit.
         """
         snapshot = self.start()
-        key = matrix_event_key(room, event_id)
-        previous = self.input(key)
+        item = self.prepare_input(room, event_id, source, intent, task_id=task_id)
+        self.ingest(snapshot, None, [item])
+        return matrix_event_key(room, event_id)
+
+    def prepare_input(self, room, event_id, source, intent, *, task_id=None):
+        """Prepare one accepted input for an atomic batch or history-page commit."""
+        previous = self.input(matrix_event_key(room, event_id))
         input_ = {"room_id": room, "event_id": event_id, "intent": intent, "input": source}
         if previous:
             # Reassignment/mention policy changes cannot reclassify an input
@@ -72,8 +77,7 @@ class WorkerMatrix:
             input_["work"] = {"kind": "task", "team_id": matches[0]["team_id"], "task_id": task_id}
         elif intent == "message":
             input_["work"] = {"kind": "message"}
-        self.ingest(snapshot, None, [input_])
-        return key
+        return input_
 
     def consumer(self, snapshot, *, account, format, device=""):
         """Restore only this native account/device/format's shared cursor."""

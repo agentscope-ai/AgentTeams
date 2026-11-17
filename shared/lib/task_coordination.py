@@ -9,12 +9,17 @@ import json
 import os
 from pathlib import Path
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 
 
 class IgnoredNotification(ValueError):
     """A malformed, stale or misrouted control packet must not start a turn."""
+
+
+class NotificationUnavailable(RuntimeError):
+    """The receipt could not be verified yet. Keep the source event pending."""
 
 
 def controller_json(path):
@@ -37,6 +42,16 @@ def notification(content, room, sender, own, *, fetch=controller_json):
         raise IgnoredNotification("progress is not a control notification")
     if "org.agentteams.coordination" not in content:
         return None
+    def verified_get(path):
+        try:
+            return fetch(path)
+        except urllib.error.HTTPError as exc:
+            if exc.code in {403, 404}:
+                raise IgnoredNotification("receipt absent or outside recipient scope") from exc
+            raise NotificationUnavailable("Controller lookup failed") from exc
+        except (OSError, json.JSONDecodeError) as exc:
+            raise NotificationUnavailable("Controller lookup unavailable") from exc
+
     try:
         wire = content["org.agentteams.coordination"]
         meta = wire["channel_meta"]
@@ -44,7 +59,7 @@ def notification(content, room, sender, own, *, fetch=controller_json):
         identity = event["id"]
         if not isinstance(identity, str) or len(identity) != 32 or any(c not in "0123456789abcdef" for c in identity):
             raise IgnoredNotification("invalid receipt identity")
-        receipt = fetch("coordination/events/" + identity)
+        receipt = verified_get("coordination/events/" + identity)
         packet = receipt["control"]
         canonical = packet["channel_meta"]["teamharness_coordination"]
         if (receipt.get("status") not in ({"queued", "dispatching", "running", "completed"} if event.get("kind") == "handoff" else {"queued", "dispatching", "running"})
@@ -57,7 +72,7 @@ def notification(content, room, sender, own, *, fetch=controller_json):
             raise IgnoredNotification("notification scope changed")
         kind = canonical["kind"]
         if kind in {"task_assigned", "task_submitted"}:
-            task = fetch("tasks/" + urllib.parse.quote(canonical["task_id"], safe="") + "/meta")
+            task = verified_get("tasks/" + urllib.parse.quote(canonical["task_id"], safe="") + "/meta")
             if any(task.get(k, "") != canonical.get(k, "") for k in ("main_task_id", "project_id")):
                 raise IgnoredNotification("task membership changed")
             if kind == "task_assigned":
@@ -71,7 +86,7 @@ def notification(content, room, sender, own, *, fetch=controller_json):
         elif kind in {"main_task_ready", "project_ready"}:
             main = canonical.get("main_task_id")
             path = ("tasks/" + urllib.parse.quote(main, safe="") if main else "projects/" + urllib.parse.quote(canonical["project_id"], safe="")) + "/meta"
-            plan = fetch(path)
+            plan = verified_get(path)
             nodes = plan.get("tasks", [])
             parents = {n.get("parent_task_id") for n in nodes}
             leaves = [n for n in nodes if n.get("task_id") not in parents]

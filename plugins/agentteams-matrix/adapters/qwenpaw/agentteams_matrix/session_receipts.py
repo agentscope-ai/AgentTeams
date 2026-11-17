@@ -101,6 +101,36 @@ class SessionReceiptMiddleware(MiddlewareBase):
     def __init__(self, ctx):
         self.ctx = ctx
 
+    async def _message_turn(self):
+        identity = (getattr(self.ctx.request, "channel_meta", None) or {}).get("message_execution")
+        if not identity:
+            return None
+        from task_recovery import RecoveryConflict
+        channel = await self.ctx.workspace.channel_manager.get_channel("agentteams_matrix")
+        messages = channel._task_execution.messages
+        turn = messages.turns.get(identity["event_key"])
+        if not turn or turn["identity"] != identity:
+            raise RecoveryConflict("Native Matrix message was replaced before model or tool admission")
+        return messages.matrix, turn
+
+    async def on_reasoning(self, agent, input_kwargs, next_handler):
+        managed = await self._message_turn()
+        if managed:
+            matrix, turn = managed
+            await asyncio.to_thread(matrix.message_current, turn["identity"])
+        async for item in next_handler(**input_kwargs):
+            yield item
+
+    async def on_acting(self, agent, input_kwargs, next_handler):
+        managed = await self._message_turn()
+        if managed:
+            from qwenpaw_message_execution import guarded_tool
+            stream = guarded_tool(*managed, input_kwargs["tool_call"], next_handler, input_kwargs)
+        else:
+            stream = next_handler(**input_kwargs)
+        async for item in stream:
+            yield item
+
     async def on_reply(self, agent, input_kwargs, next_handler):
         checkpointed = False
         async for event in next_handler(**input_kwargs):

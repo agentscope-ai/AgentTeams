@@ -9,6 +9,7 @@ from uuid import uuid4
 from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
 from worker_matrix_state import WorkerMatrix, matrix_event_key
 from worker_sessions import WorkerSessions
+from qwenpaw_message_execution import MessageExecution
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class TaskExecution:
         self.lock = tracker._agentteams_task_admission_lock
         self.sessions = WorkerSessions("qwenpaw", recovery=self.recovery)
         self.matrix = WorkerMatrix("qwenpaw", recovery=self.recovery)
+        self.messages = MessageExecution(channel, self)
 
     async def accept_input(self, room, event, intent, *, task_id=None):
         """Persist an accepted native callback without inventing a batch token."""

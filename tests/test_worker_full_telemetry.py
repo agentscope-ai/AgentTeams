@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,35 @@ def test_qwenpaw_api_turn_uses_coordination_metadata(monkeypatch):
     assert captured[0]['agentteams.room.id'] == '!task:test'
     assert captured[0]['agentteams.project.id'] == 'request-1'
     assert captured[0]['agentteams.execution.generation'] == 2
+
+
+@pytest.mark.parametrize('event_id,expected', [
+    ('recovery:team-a/task-1:3', ('team-a', 'task-1', 3)),
+    ('$matrix-event:server', None),
+    ('recovery:team-a/task-1:0', None),
+    ('recovery:team-a/task-1:not-a-generation', None),
+    (None, None),
+])
+def test_hermes_recovery_trace_retains_task_and_execution_generation(monkeypatch, event_id, expected):
+    from types import SimpleNamespace
+    import at_runtime_adapters as adapters
+    callbacks, captured = [], []
+    monkeypatch.setattr(adapters.wrapt, 'wrap_function_wrapper', lambda module, name, callback: callbacks.append(callback))
+    monkeypatch.setattr(adapters, 'start_turn', lambda fields, request: captured.append(fields) or trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT))
+    monkeypatch.setattr(adapters, 'enrich_task', lambda fields, workspace: fields)
+    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(remember_reply=lambda *args: None))
+    adapters.hermes_turn(object())
+    result = callbacks[0](lambda *args, **kwargs: {'ok': True},
+                          SimpleNamespace(session_id='native-session', _chat_id='!task:server'),
+                          ('resume',), {'persist_user_platform_id': event_id})
+    assert result == {'ok': True}
+    fields = captured[0]
+    assert fields['agentteams.runtime.session_id'] == 'native-session'
+    if expected:
+        assert (fields['agentteams.team.id'], fields['agentteams.task.id'], fields['agentteams.execution.generation']) == expected
+    else:
+        assert 'agentteams.task.id' not in fields
+        assert 'agentteams.execution.generation' not in fields
 
 
 def test_local_runtime_events_keep_model_tool_failures_without_content(tmp_path, monkeypatch):

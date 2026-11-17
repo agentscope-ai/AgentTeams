@@ -128,6 +128,7 @@ jobs:
         run: |
           python -m pytest qwenpaw/tests -q
           python -m pytest plugins/tests/agentteams-matrix/test_qwenpaw_reload_delivery.py -q
+          PYTHONPATH=shared/lib python -m pytest plugins/tests/agentteams-matrix/test_qwenpaw_task_recovery.py -q
 
   teamharness:
     runs-on: ubuntu-latest

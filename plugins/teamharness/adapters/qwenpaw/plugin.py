@@ -470,6 +470,22 @@ async def _manager_report_context(ctx: Any) -> bool:
         return False
     request = ctx.request.model_dump() if hasattr(ctx.request, "model_dump") else vars(ctx.request)
     meta = _request_meta(ctx.request)
+    if meta.get("task_execution"):
+        # Startup admissions carry a process-fenced Task, not a new Matrix
+        # assignment or a request to recreate its legacy Project context.
+        from task_recovery import Recovery, RecoveryConflict
+        identity = meta["task_execution"]
+        recovery = Recovery()
+        task = await asyncio.to_thread(recovery.current, identity["task_id"], identity["team_id"])
+        execution = task.get("execution", {}) if task else {}
+        if (execution.get("process_id") != recovery.process
+                or execution.get("instance_id") != identity["instance_id"]
+                or execution.get("generation") != identity["generation"]
+                or execution.get("state") != "active"):
+            raise RecoveryConflict("Task execution changed before native reasoning")
+        ctx.extras["execution_task_token"] = _execution_task.set(identity["task_id"])
+        _load_phase_skill(ctx, "task-execution")
+        return False
     if meta.get("event_id"):
         ctx.extras["source_event_token"] = _source_event.set(str(meta["event_id"]))
     route = meta.get("teamharness_requester_route")

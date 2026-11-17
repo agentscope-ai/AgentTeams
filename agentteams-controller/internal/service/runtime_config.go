@@ -10,6 +10,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"sigs.k8s.io/yaml"
 )
 
@@ -117,6 +118,12 @@ type memberRuntimeConfigDesired struct {
 	Channels           *memberRuntimeConfigChannels      `json:"channels,omitempty"`
 	Skills             []string                          `json:"skills,omitempty"`
 	State              string                            `json:"state"`
+	Heartbeat          *memberRuntimeConfigHeartbeat     `json:"heartbeat,omitempty"`
+}
+
+type memberRuntimeConfigHeartbeat struct {
+	Enabled bool   `json:"enabled"`
+	Every   string `json:"every"`
 }
 
 type memberRuntimeConfigModel struct {
@@ -363,6 +370,10 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		CredentialBindings: copyCredentialBindings(req.Spec.CredentialBindings),
 		Skills:             runtimeSkillNames(req.Spec),
 		State:              req.Spec.DesiredState(),
+	}
+	if role != "manager" {
+		heartbeat := agentconfig.ResolveLLMHeartbeat(req.Spec.LlmHeartbeatEnabled, req.Heartbeat)
+		desired.Heartbeat = &memberRuntimeConfigHeartbeat{Enabled: heartbeat.Enabled, Every: heartbeat.Every}
 	}
 	if req.Spec.Model != "" && !isNativeConfigModel(req.Spec.Model) {
 		gatewayURL := strings.TrimSpace(req.AIGatewayURL)

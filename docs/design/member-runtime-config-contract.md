@@ -226,6 +226,12 @@ desired:
 
   state: Running
 
+  # Resolved Worker override/Team Leader cadence; adapters must not replace
+  # an explicit policy with their own implicit LLM wake-up default.
+  heartbeat:
+    enabled: false
+    every: 0m
+
 # Object storage location facts. This section has remote storage coordinates
 # only. It does not contain access keys or local runtime paths.
 storage:

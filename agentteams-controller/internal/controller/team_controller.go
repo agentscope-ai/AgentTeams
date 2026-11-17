@@ -715,6 +715,9 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			TeamAdminMatrixID: teamAdminMatrixID(t),
 			TeamMembers:       roster,
 		}
+		if role == RoleTeamLeader {
+			req.Heartbeat = &agentconfig.HeartbeatConfig{Enabled: t.Spec.HeartbeatEvery != "" && t.Spec.HeartbeatEvery != "0m", Every: t.Spec.HeartbeatEvery}
+		}
 		if deployMode == v1beta1.DeployModeEdge {
 			req.Runtime = runtimeRemoteManagedLocal
 			if err := r.Deployer.MergeMemberRuntimeTeamContext(ctx, req); err != nil {

@@ -501,6 +501,7 @@ func deployMemberRuntimeConfig(ctx context.Context, d MemberDeps, m MemberContex
 		Generation:            m.Generation,
 		Spec:                  m.Spec,
 		SubagentModel:         resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
+		Heartbeat:             m.TeamHeartbeat,
 		MatrixUserID:          state.MatrixUserID,
 		PersonalRoomID:        state.RoomID,
 		MatrixAccessToken:     matrixAccessToken,

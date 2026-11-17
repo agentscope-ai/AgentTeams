@@ -104,6 +104,7 @@ type MemberRuntimeConfigDeployRequest struct {
 	// the merged result). Empty means no subagent override is declared and
 	// the runtime keeps its current/unset setting.
 	SubagentModel string
+	Heartbeat     *agentconfig.HeartbeatConfig
 
 	MatrixUserID   string
 	PersonalRoomID string

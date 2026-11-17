@@ -8,6 +8,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
+	"sigs.k8s.io/yaml"
 )
 
 func TestWorkerHeartbeatSurvivesConfigRegeneration(t *testing.T) {
@@ -37,5 +38,42 @@ func TestWorkerHeartbeatSurvivesConfigRegeneration(t *testing.T) {
 				t.Fatalf("regenerated heartbeat=%v want %s", hb, want)
 			}
 		}
+	}
+}
+
+func TestStandardWorkerHeartbeatPreservesOverrideAndInheritedCadence(t *testing.T) {
+	enabled, disabled := true, false
+	for _, tc := range []struct {
+		name      string
+		override  *bool
+		inherited *agentconfig.HeartbeatConfig
+		want      string
+	}{
+		{name: "ordinary", want: "0m"},
+		{name: "enabled", override: &enabled, want: "30m"},
+		{name: "leader", inherited: &agentconfig.HeartbeatConfig{Enabled: true, Every: "7m"}, want: "7m"},
+		{name: "disabled leader", override: &disabled, inherited: &agentconfig.HeartbeatConfig{Enabled: true, Every: "7m"}, want: "0m"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			d := NewDeployer(DeployerConfig{OSS: store})
+			if err := d.DeployMemberRuntimeConfig(context.Background(), MemberRuntimeConfigDeployRequest{
+				Name: "worker", Runtime: "openclaw", Spec: v1beta1.WorkerSpec{LlmHeartbeatEnabled: tc.override}, Heartbeat: tc.inherited,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			body, err := store.GetObject(context.Background(), "agents/worker/runtime/runtime.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var record map[string]any
+			if err := yaml.Unmarshal(body, &record); err != nil {
+				t.Fatal(err)
+			}
+			heartbeat, ok := record["desired"].(map[string]any)["heartbeat"].(map[string]any)
+			if !ok || heartbeat["every"] != tc.want || heartbeat["enabled"] != (tc.want != "0m") {
+				t.Fatalf("standard heartbeat=%v, want every=%s", heartbeat, tc.want)
+			}
+		})
 	}
 }

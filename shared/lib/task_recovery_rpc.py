@@ -20,6 +20,8 @@ def execute(request):
         raise RecoveryConflict('Worker process recovery is not configured')
     recovery = Recovery()
     action = request['action']
+    if not isinstance(action, str):
+        raise ValueError('Recovery action must be a string')
     if action.startswith('matrix.'):
         from worker_matrix_state import WorkerMatrix
         matrix = WorkerMatrix(request['runtime'], recovery=recovery)
@@ -31,6 +33,20 @@ def execute(request):
             return matrix.ingest(request['snapshot'], request.get('consumer'), request['inputs'], request.get('rooms'))
         if action == 'matrix.pending':
             return matrix.pending(request['snapshot'])
+        if action == 'matrix.message.get':
+            return matrix.message(request['event_key'])
+        if action == 'matrix.message.claim':
+            return matrix.message_claim(request['event_key'])
+        if action == 'matrix.message.current':
+            return matrix.message_current(request['identity'])
+        if action == 'matrix.message.checkpoint':
+            return matrix.message_checkpoint(request['identity'], request['checkpoint'], release=request.get('release', False))
+        if action == 'matrix.message.save_reply':
+            return matrix.message_save_reply(request['identity'], request['text'])
+        if action == 'matrix.message.delivered':
+            return matrix.message_delivered(request['identity'], request['event_id'])
+        if action == 'matrix.message.cancel':
+            return matrix.message_cancel(request['identity'])
         raise ValueError('Unsupported Matrix state action')
     if action == 'discover':
         return recovery.discover()

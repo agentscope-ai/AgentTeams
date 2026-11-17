@@ -307,6 +307,8 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/runtime/matrix", mw.Authenticate(http.HandlerFunc(workerMatrix.Get)))
 	mux.Handle("POST /api/v1/runtime/matrix", mw.Authenticate(http.HandlerFunc(workerMatrix.Update)))
 	mux.Handle("GET /api/v1/runtime/matrix/events/{key}", mw.Authenticate(http.HandlerFunc(workerMatrix.GetInput)))
+	mux.Handle("GET /api/v1/runtime/matrix/events/{key}/execution", mw.Authenticate(http.HandlerFunc(workerMatrix.GetExecution)))
+	mux.Handle("POST /api/v1/runtime/matrix/events/{key}/execution", mw.Authenticate(http.HandlerFunc(workerMatrix.UpdateExecution)))
 	projh.taskAssigned = s.coordination.wakeRunner
 	if deps.APIReader != nil {
 		projh.configReader = deps.APIReader

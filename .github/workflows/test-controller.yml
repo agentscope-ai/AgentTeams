@@ -9,7 +9,7 @@ on:
       - 'shared/lib/agentteams_skill_warnings.py'
       - 'shared/lib/task_recovery*.py'
       - 'shared/lib/worker_matrix_state.py'
-      - 'tests/test_worker_matrix_state.py'
+      - 'tests/test_worker_matrix*.py'
       - 'tests/test_task_recovery*.py'
       - 'tests/test-skill-runtime-warnings.py'
       - 'tests/test_harness_session_receipts.py'
@@ -41,7 +41,7 @@ on:
       - 'shared/lib/agentteams_skill_warnings.py'
       - 'shared/lib/task_recovery*.py'
       - 'shared/lib/worker_matrix_state.py'
-      - 'tests/test_worker_matrix_state.py'
+      - 'tests/test_worker_matrix*.py'
       - 'tests/test_task_recovery*.py'
       - 'tests/test-skill-runtime-warnings.py'
       - 'tests/test_harness_session_receipts.py'
@@ -168,7 +168,7 @@ jobs:
           ruby plugins/tests/teamharness/test-contracts.rb
           python -m pytest tests/test_task_coordination.py -q
           python -m pytest tests/test_task_recovery.py -q
-          python -m pytest tests/test_worker_matrix_state.py -q
+          python -m pytest tests/test_worker_matrix_state.py tests/test_worker_matrix_execution.py -q
           python -m unittest discover -s tests -p 'test_task_recovery_rpc.py' -v
           python -m unittest discover -s tests -p 'test_runtime_recovery_*.py' -v
           python -m pytest plugins/tests/teamharness/mcp/test_continuation.py -q

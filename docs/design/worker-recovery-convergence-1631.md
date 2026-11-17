@@ -151,7 +151,18 @@ runtime／账户／设备／格式共同确定消费者，`from_token`
 同事件再次接收时只比较不可变输入和工作身份，保留较新的执行／native-commit
 证据。输入持久化、未知格式拒绝、严格 CAS、同实例竞争进程、替换后的晚到提交、
 并发批次与旧 Harness 游标回归已有确定性测试；不代表真实 Harness 续跑验收。
-H/Q 原生接入、普通消息执行／回复更新、session 描述与完整交接仍在后续实施范围。
+普通消息已有 `GET/POST events/{key}/execution` 的领取、检查点、补发及取消入口，
+复用 Task 检查点验证规则；Task 引用消息不在这里创建平行执行记录。公共 facade
+返回 resume／deliver／verify／done、执行身份、检查点摘要和恢复上下文，只有
+resume 能进入正常模型／工具执行。投递确认不允许夹带新步骤；取消后晚到回调被拒绝。
+这些是公共接口实现与确定性测试，不是原生会话／真实续跑验收。
+
+pending 保留原生接收批次顺序，不能按 event ID 摘要或发送时间重新排序。
+原生适配须在调度前提交有序输入；补页完成前不能将缺口误报为完整覆盖。
+分页补齐应保留原覆盖锚点，明确区分“接回已知锚点”和“当前账户无更多可见历史”，
+不能因为分页没有 end 就丢弃仍有已知未恢复锚点的缺口，参见
+[Matrix messages API](https://spec.matrix.org/v1.17/client-server-api/#get_matrixclientv3roomsroomidmessages)。
+显式补页完成、H/Q 原生接入、native-commit／session 描述与完整交接仍在后续实施范围。
 
 ## 三、统一恢复与切换机制
 

@@ -57,9 +57,35 @@ Local validation for this change:
   environment. Product behavior and assertions were not changed for that.
 - Rename contract and whitespace checks passed.
 
-No new real Harness lane is accepted. H/Q adapter hooks, message execution/
-reply transitions, explicit gap completion, unified session metadata and
-durable lifecycle handoff remain implementation work. Native snapshot evidence
+The next Phase A change adds ordinary-message execution at
+`GET/POST /api/v1/runtime/matrix/events/{key}/execution`. Claims bind the actual
+registered start; conditional checkpoints reuse the Task checkpoint validator
+with a Worker-message artifact namespace. Task-linked inputs are rejected by
+this endpoint: their execution remains solely in the Task system. Saved result
+bytes are verified on claim, unknown operations return verification-only mode,
+and cancelled/delivered work cannot enter inference again. Pending saved
+results permit delivery acknowledgement or cancellation, not additional work.
+Terminal execution remains authoritative even if pending-index cleanup needs
+a retry. Late process/generation callbacks and an in-flight write racing with
+cancellation are rejected.
+
+The common Python/native facade now supplies message ownership checks, shared
+checkpoint digests and fresh-session recovery context. Result upload precedes
+checkpoint publication, and a late native answer cannot replace an existing
+saved result. Accepted batch order is retained in the pending index; redelivery
+does not reorder messages by their opaque event hashes. This ordering
+regression failed before removing the hash sort and passed afterward.
+
+Local validation for the message change: the same five Go packages passed;
+targeted race tests include the Task checkpoint regressions and23 Matrix
+store/API cases; common Matrix/Task client/RPC41 passed plus6 subtests;
+build-workflow14, rename and whitespace checks passed. Controller CI for the
+previous642bba4f head passed in run44115181152; its integration run44115191717
+was still running at the last refresh. Those runs do not validate later code.
+
+No new real Harness lane is accepted. H/Q adapter hooks, explicit gap
+completion, native input-commit/session metadata and durable lifecycle
+handoff remain implementation work. Native snapshot evidence
 must not be inferred from these object-store/HTTP/client tests. Historical
 normal-restart and directed-lane counts remain3/6 and7/30 at their recorded SHAs.
 

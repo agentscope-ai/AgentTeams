@@ -3,6 +3,11 @@
 Adapters persist decoded accepted inputs before advancing their native cursor.
 This ledger records pending work, not proof of inference or Task completion.
 """
+import hashlib
+import json
+import os
+import subprocess
+
 from task_recovery import Recovery, RecoveryConflict
 
 
@@ -41,3 +46,96 @@ class WorkerMatrix:
         # Native adapters cannot supply another Worker's storage path.
         return [self.recovery.request("GET", "runtime/matrix/events/" + key)
                 for key in snapshot["state"]["pending"]]
+
+    @staticmethod
+    def _message_path(key):
+        return "runtime/matrix/events/" + key + "/execution"
+
+    def message(self, key):
+        return self.recovery.request("GET", self._message_path(key))
+
+    def _message_update(self, key, snapshot, action, checkpoint=None):
+        if snapshot["runtime"] != self.runtime:
+            raise RecoveryConflict("Actual Worker Harness differs from this native adapter")
+        return self.recovery.request("POST", self._message_path(key), {
+            "action": action, "instance_id": snapshot["instance_id"],
+            "process_id": self.recovery.process,
+            "generation": snapshot["execution"].get("generation", 0), "checkpoint": checkpoint,
+        }, snapshot["etag"])
+
+    def message_claim(self, key):
+        claimed = self._message_update(key, self.message(key), "claim")
+        return self._message_view(key, claimed)
+
+    @staticmethod
+    def _message_view(key, entry):
+        execution = entry["execution"]
+        checkpoint = execution.get("checkpoint")
+        view = {**entry, "identity": {"event_key": key, "generation": execution["generation"],
+            "instance_id": execution["instance_id"], "process_id": execution["process_id"]},
+            "checkpoint_digest": Recovery.digest(checkpoint)}
+        if entry["recovery"] == "resume":
+            view["resume_text"] = (
+                "Continue this existing Matrix work from the shared checkpoint. "
+                "Do not repeat completed steps. Use verified artifacts and necessary room history. "
+                "Before a side effect, persist its operation identity; unknown operations require "
+                "verification before further execution. Save result bytes before publishing their reference.\n"
+                + json.dumps({"room_id": entry["input"]["room_id"], "event_id": entry["input"]["event_id"],
+                    "input": entry["input"].get("input"), "generation": execution["generation"],
+                    "checkpoint": checkpoint}, ensure_ascii=False))
+        return view
+
+    def _message_owned(self, identity):
+        entry = self.message(identity["event_key"])
+        execution = entry["execution"]
+        if (entry["runtime"] != self.runtime or entry["instance_id"] != execution.get("instance_id")
+                or execution.get("runtime") != self.runtime
+                or execution.get("process_id") != self.recovery.process
+                or identity["process_id"] != self.recovery.process
+                or execution.get("instance_id") != identity["instance_id"]
+                or execution.get("generation") != identity["generation"]):
+            raise RecoveryConflict("Message execution was replaced")
+        return entry
+
+    def message_current(self, identity):
+        entry = self._message_owned(identity)
+        if entry["execution"]["state"] != "active" or entry["recovery"] != "resume":
+            raise RecoveryConflict("Message is not admitted for normal inference or tools")
+        return self._message_view(identity["event_key"], entry)
+
+    def message_checkpoint(self, identity, checkpoint, *, release=False):
+        entry = self._message_owned(identity)
+        return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "release" if release else "checkpoint", checkpoint))
+
+    def message_save_reply(self, identity, text):
+        entry = self._message_owned(identity)
+        if entry["recovery"] == "deliver":
+            # Claim verifies stored bytes; never replace them with late native text.
+            return self.message_claim(identity["event_key"])
+        if entry["recovery"] != "resume" or entry["execution"]["state"] != "active" or not text:
+            raise RecoveryConflict("A verified active message and a result are required")
+        data = text.encode()
+        digest = hashlib.sha256(data).hexdigest()
+        key = entry["input"]["member_prefix"] + "/runtime/matrix/results/" + digest + ".txt"
+        subprocess.run(["mc", "pipe", os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/" + key],
+                       input=data, capture_output=True, check=True, timeout=30)
+        cp = dict(entry["execution"].get("checkpoint") or {})
+        cp.update(version=cp.get("version", 0)+1, result={"key": key, "sha256": digest, "size": len(data)},
+                  delivery="pending", reply_txn="matrix-reply:" + Recovery.digest([
+                      entry["input"]["member_prefix"], entry["input"]["room_id"],
+                      entry["input"]["event_id"], cp.get("version", 0)+1, digest]))
+        cp.pop("reply_event", None)
+        return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "checkpoint", cp))
+
+    def message_delivered(self, identity, event_id):
+        entry = self._message_owned(identity)
+        cp = dict(entry["execution"].get("checkpoint") or {})
+        if cp.get("delivery") == "delivered":
+            return self._message_view(identity["event_key"], entry)
+        if entry["recovery"] != "deliver" or entry["execution"]["state"] == "cancelled":
+            raise RecoveryConflict("Message has no pending saved reply")
+        cp.update(version=cp["version"]+1, delivery="delivered", reply_event=event_id)
+        return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "checkpoint", cp))
+
+    def message_cancel(self, identity):
+        return self._message_view(identity["event_key"], self._message_update(identity["event_key"], self._message_owned(identity), "cancel"))

@@ -215,25 +215,30 @@ func (s *WorkerMatrixStore) Start(ctx context.Context, name string, start Worker
 }
 
 func (s *WorkerMatrixStore) Input(ctx context.Context, name, eventKey string) (*WorkerMatrixInput, error) {
+	input, _, err := s.InputSnapshot(ctx, name, eventKey)
+	return input, err
+}
+
+func (s *WorkerMatrixStore) InputSnapshot(ctx context.Context, name, eventKey string) (*WorkerMatrixInput, string, error) {
 	prefix, err := workerMatrixPrefix(name)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	keyBytes, err := hex.DecodeString(eventKey)
 	if err != nil || len(keyBytes) != sha256.Size || eventKey != strings.ToLower(eventKey) {
-		return nil, fmt.Errorf("%w: event identity", ErrWorkerStateInvalid)
+		return nil, "", fmt.Errorf("%w: event identity", ErrWorkerStateInvalid)
 	}
 	data, err := s.Storage.GetObject(ctx, prefix+"/runtime/matrix/events/"+eventKey+".json")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var input WorkerMatrixInput
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	if !json.Valid(data) || decoder.Decode(&input) != nil || input.SchemaVersion != 1 || input.Kind != "WorkerMatrixEvent" || input.MemberPrefix != prefix || WorkerMatrixEventKey(input.RoomID, input.EventID) != eventKey {
-		return nil, fmt.Errorf("%w: unsupported or foreign Matrix input", ErrWorkerStateInvalid)
+		return nil, "", fmt.Errorf("%w: unsupported or foreign Matrix input", ErrWorkerStateInvalid)
 	}
-	return &input, nil
+	return &input, workerMatrixETag(data), nil
 }
 
 func sameWorkerMatrixInput(a, b WorkerMatrixInput) bool {
@@ -314,11 +319,30 @@ func (s *WorkerMatrixStore) Ingest(ctx context.Context, name string, start Worke
 		}
 		state.Rooms[roomID] = room
 	}
-	slices.Sort(state.Pending)
+	// Preserve the native batch's accepted order. Event hashes are identities,
+	// not a conversation ordering; redelivery must not reshuffle queued work.
 	if hasCursor {
 		state.Consumers[consumerKey] = consumer
 	}
 	// Start() changes this same object, fencing commits already in flight from
 	// an old start. No cross-object check-then-put is used for the cursor.
 	return s.commit(ctx, state, etag)
+}
+
+// Retire is called by the Controller only after authoritative execution is
+// terminal. A failed index cleanup cannot undo a persisted result/receipt.
+func (s *WorkerMatrixStore) Retire(ctx context.Context, name string, start WorkerStart, eventKey string) error {
+	state, etag, err := s.Load(ctx, name)
+	if err != nil {
+		return err
+	}
+	if state.ActiveStart != start {
+		return ErrWorkerStateConflict
+	}
+	if !slices.Contains(state.Pending, eventKey) {
+		return nil
+	}
+	state.Pending = slices.DeleteFunc(state.Pending, func(key string) bool { return key == eventKey })
+	_, _, err = s.commit(ctx, state, etag)
+	return err
 }

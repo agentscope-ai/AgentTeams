@@ -87,6 +87,7 @@ def test_saved_result_is_only_resent_with_its_durable_transaction(adapter):
 def test_unknown_operation_enters_resume_context_without_running_a_tool(adapter):
     recovery, authority, task, channel = adapter
     task["execution"]["checkpoint"]["operation"] = {"id": "effect-one", "state": "unknown"}
+    task["execution"]["state"] = "needs_verification"
     asyncio.run(recovery.recover())
     text = channel.enqueue_recovered_task.call_args.args[0]["recovery_text"]
     assert "verify its external outcome" in text
@@ -307,9 +308,11 @@ def test_final_callback_prefers_authoritative_saved_result(adapter):
 
 
 @pytest.mark.parametrize("bundle", ["teamharness", "agentteams-teamharness"])
-def test_recovered_native_reasoning_is_fenced_before_task_tools(adapter, monkeypatch, bundle):
+@pytest.mark.parametrize("state", ["active", "needs_verification"])
+def test_recovered_native_reasoning_is_fenced_before_task_tools(adapter, monkeypatch, bundle, state):
     import task_recovery
     recovery, authority, task, channel = adapter
+    task["execution"]["state"] = state
     path = ROOT / "plugins" / bundle / "adapters/qwenpaw/plugin.py"
     spec = importlib.util.spec_from_file_location("_recovery_teamharness", path)
     plugin = importlib.util.module_from_spec(spec)

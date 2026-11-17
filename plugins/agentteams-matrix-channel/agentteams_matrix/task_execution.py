@@ -44,7 +44,7 @@ class TaskExecution:
         if (execution.get("process_id") != self.recovery.process
                 or execution.get("generation") != identity["generation"]
                 or identity.get("instance_id", execution.get("instance_id")) != execution.get("instance_id")
-                or (not finished and execution.get("state") != "active")):
+                or (not finished and execution.get("state") not in {"active", "needs_verification"})):
             raise RecoveryConflict("Task was cancelled, reassigned or replaced before native execution")
         return task
 

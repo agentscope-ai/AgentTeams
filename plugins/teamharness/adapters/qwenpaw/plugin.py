@@ -481,7 +481,7 @@ async def _manager_report_context(ctx: Any) -> bool:
         if (execution.get("process_id") != recovery.process
                 or execution.get("instance_id") != identity["instance_id"]
                 or execution.get("generation") != identity["generation"]
-                or execution.get("state") != "active"):
+                or execution.get("state") not in {"active", "needs_verification"}):
             raise RecoveryConflict("Task execution changed before native reasoning")
         ctx.extras["execution_task_token"] = _execution_task.set(identity["task_id"])
         _load_phase_skill(ctx, "task-execution")

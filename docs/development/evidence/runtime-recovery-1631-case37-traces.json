@@ -1,0 +1,93 @@
+[
+  {
+    "trace_id": "eab8068313c38da95184cfe7acbed464",
+    "task_id": "live-hermes-hermes-37",
+    "controller_readback": true,
+    "direct_langfuse_readback": true,
+    "metadata": {
+      "agentteams.room.id": "!noQFCLvofgMuQxUcw8:recovery-1631.test",
+      "agentteams.event.id": "recovery:recovery-team/live-hermes-hermes-37:2",
+      "agentteams.message.received_at_ns": 1794940206013229800,
+      "agentteams.session.id": "agent-a:8b5e98269b56a3a8836ae1c3",
+      "agentteams.runtime.session_id": "20261117_182827_58677490",
+      "agentteams.turn.id": "2e87c2b62f6241f4a3c54e7bfc35ffce",
+      "agentteams.task.id": "live-hermes-hermes-37",
+      "agentteams.execution.generation": 2,
+      "agentteams.message.dispatch_delay_ms": 60585.505763,
+      "agentteams.runtime.task_id": "20261117_182827_58677490",
+      "agentteams.task.correlation": "explicit request context",
+      "agentteams.runtime.parent_session_id": "20261117_182827_58677490",
+      "agentteams.team.id": "recovery-team",
+      "agentteams.worker.name": "agent-a",
+      "agentteams.runtime": "hermes",
+      "agentteams.telemetry.schema": 1,
+      "agentteams.telemetry.adapter": "hermes",
+      "agentteams.telemetry.versions": "{'hermes-agent': '0.0.0', 'openai': '2.54.0'}",
+      "agentteams.telemetry.capture_content": false,
+      "agentteams.telemetry.field_limit_bytes": 262144,
+      "agentteams.telemetry.adapter_errors": [],
+      "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+      "agentteams.outcome": "ok"
+    },
+    "observations": 33,
+    "model_observations": 10,
+    "tool_observations": 9,
+    "dashboard_ui": "unaccepted",
+    "usage": {
+      "input": 424696,
+      "output": 5073,
+      "total": 429769
+    },
+    "timings_present": true,
+    "native_origin": "background_review",
+    "coverage_limits": [
+      "Native background skill review inherits recovered Task trace context; it is not another Task execution or accepted Task side effect.",
+      "Dashboard tracing UI remains unaccepted."
+    ]
+  },
+  {
+    "trace_id": "70e3cbfbcba21d40c79c167ffc468894",
+    "task_id": "live-hermes-hermes-37",
+    "controller_readback": true,
+    "direct_langfuse_readback": true,
+    "metadata": {
+      "agentteams.room.id": "!noQFCLvofgMuQxUcw8:recovery-1631.test",
+      "agentteams.event.id": "recovery:recovery-team/live-hermes-hermes-37:2",
+      "agentteams.message.received_at_ns": 1794940206013229800,
+      "agentteams.session.id": "agent-a:8b5e98269b56a3a8836ae1c3",
+      "agentteams.runtime.session_id": "20261117_182827_58677490",
+      "agentteams.turn.id": "466fcdefc4c349979d17818fa557a44d",
+      "agentteams.task.id": "live-hermes-hermes-37",
+      "agentteams.execution.generation": 2,
+      "agentteams.message.dispatch_delay_ms": 295.193524,
+      "agentteams.runtime.task_id": "20261117_182827_58677490",
+      "agentteams.team.id": "recovery-team",
+      "agentteams.task.correlation": "explicit request context",
+      "agentteams.worker.name": "agent-a",
+      "agentteams.runtime": "hermes",
+      "agentteams.telemetry.schema": 1,
+      "agentteams.telemetry.adapter": "hermes",
+      "agentteams.telemetry.versions": "{'hermes-agent': '0.0.0', 'openai': '2.54.0'}",
+      "agentteams.telemetry.capture_content": false,
+      "agentteams.telemetry.field_limit_bytes": 262144,
+      "agentteams.telemetry.adapter_errors": [],
+      "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+      "agentteams.outcome": "ok"
+    },
+    "observations": 55,
+    "model_observations": 10,
+    "tool_observations": 12,
+    "dashboard_ui": "unaccepted",
+    "usage": {
+      "input": 308870,
+      "output": 2467,
+      "total": 311337
+    },
+    "timings_present": true,
+    "native_origin": "recovered_task",
+    "coverage_limits": [
+      "Native background skill review inherits recovered Task trace context; it is not another Task execution or accepted Task side effect.",
+      "Dashboard tracing UI remains unaccepted."
+    ]
+  }
+]

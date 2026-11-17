@@ -913,3 +913,39 @@ native session. Do not relabel this as a dedicated stale-session acceptance or
 count a fourth normal-restart/valid-session Harness. The original assertion and
 failure are preserved. Tracing and Dashboard login also remain unaccepted.
 Controller and Workers were stopped after evidence capture, with volumes kept.
+
+### Cases36–37: common-contract Hermes restart and valid-session reuse
+
+[Case36 partial evidence](evidence/runtime-recovery-1631-case36-partial.json)
+uses Core19eb30c6, Hermes59b756d and native SDK2bd378ed. Without new Matrix
+input after normal restart, the same Task continued from checkpoint4 to10,
+generation1 to2; all three effects occurred once and the canonical final reply
+was delivered. Valid-session reuse failed: the restart materialized the default
+Worker state and advanced the CR generation, which incorrectly advanced the
+effective configuration version5 to6. The target correctly rejected that
+descriptor and rebuilt. The partial case and original failure remain retained.
+
+[Case37 verified evidence](evidence/runtime-recovery-1631-case37-verified.json)
+uses the fixed Core262ecb13 server, the same Hermes59b756d/native SDK2bd378ed
+and shared client19eb30c6. A fresh v19 fixture exercises the first implicit
+Worker-state to explicit Running restart, rather than repeating a restart
+after that default has already been saved. Effective configuration remains
+version3. Before stopping, the shared descriptor matches actual persisted SDK
+rows and checkpoint4. After the old process dies, the new actual start claims
+generation2 and reuses native session `20261117_182827_58677490`. With zero new
+external Matrix input, steps two/three finish at checkpoint10. The independent
+oracle records each step once at generations1/2/2; artifacts and the submitted
+report match their hashes, with one final Matrix report and native source read
+receipt. The strict verifier passes without changing its reuse assertion.
+
+[Trace readback](evidence/runtime-recovery-1631-case37-traces.json) records
+Controller and direct Langfuse retrieval. The owned Langfuse/ClickHouse services
+had been OOM-stopped; they were restarted with their existing data before this
+fixture's Workers were created. Dashboard UI trace acceptance remains open.
+The SDK also ran its background skill-library review after the recovered Task
+turn, inheriting the Task trace context. That separate model/tool activity is
+identified in the evidence and is not another accepted Task execution. Generic
+background/tool ownership fencing and accurate origin labeling remain open.
+Case37 establishes one normal Hermes restart with valid-session reuse under
+the new common contract; it does not add a fourth Harness to the historical
+3/6 count or prove the remaining restart faults or 30-direction matrix.

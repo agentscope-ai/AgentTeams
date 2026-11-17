@@ -23,6 +23,13 @@ accepted-event 状态仍在 `WORKING_DIR`，其他 Harness 也有各自消费存
 公共消费记录、统一启动判断、持久交接操作、Dashboard／CLI 配套仍需补齐。
 OpenClaw34 完成了剩余步骤，但有效 session 复用失败，不能增加重启通过数。
 
+新公共契约的 Hermes 正常重启已在 case37 通过：Core262ecb13、Hermes59b756d、
+共享客户端19eb30c6、SDK2bd378ed。首次重启保持有效配置版本3并复用实际原生会话，
+无新 Matrix 输入完成剩余步骤，产物／最终回复无重复；见
+[case37 证据](../development/evidence/runtime-recovery-1631-case37-verified.json)。
+前一 case36 的配置版本误增／会话未复用保留为 partial。历史覆盖数仍为3/6、7/30，
+不把本次同 Harness 重跑算成新 Harness 或跨 Harness 方向；完整故障集和 UI 仍未验收。
+
 方案选择：只搬私有目录不能解决消费语义；另建执行数据库会重复现有 Task
 权威。推荐补足 Worker 公共消息记录，并复用现有 Task 执行协议。
 

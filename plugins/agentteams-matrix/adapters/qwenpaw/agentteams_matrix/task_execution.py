@@ -131,6 +131,8 @@ class TaskExecution:
                 await self.channel.enqueue_recovered_task({
                     "recovery_text": Recovery.resume_text({**task, "team_id": team, "spec": claimed["spec"]}),
                     "meta": {"task_execution": identity, "task_session_id": session_id,
+                             "task_id": task_id, "team_id": team,
+                             "execution_generation": identity["generation"],
                              "room_id": task["room_id"], "sender_id": self.channel.matrix_user_id,
                              "event_id": f"recovery:{team}/{task_id}:{identity['generation']}",
                              "session_source_event_ids": [source_event.event_id] if source_event else [],

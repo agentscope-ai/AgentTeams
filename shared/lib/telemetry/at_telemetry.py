@@ -223,6 +223,8 @@ def turn_fields(session_id, *, user_id="", metadata=None):
     for key, value in (metadata or {}).items():
         if key == "otel_received_at_ns" and isinstance(value, int):
             fields["agentteams.message.received_at_ns"] = value
+        if key == "execution_generation" and isinstance(value, int):
+            fields["agentteams.execution.generation"] = value
         if key in ("room_id", "task_id", "team_id", "project_id", "event_id") and value:
             fields[f"agentteams.{key[:-3] if key.endswith('_id') else key}.id"] = str(value)
     received = fields.get("agentteams.message.received_at_ns")

@@ -29,7 +29,7 @@ def test_qwenpaw_api_turn_uses_coordination_metadata(monkeypatch):
             yield item
     monkeypatch.setattr(telemetry, 'trace_stream', stream)
     adapters.qwenpaw_runtime(object())
-    meta = {'room_id': '!task:test', 'task_id': 'atomic-1', 'project_id': 'request-1'}
+    meta = {'room_id': '!task:test', 'task_id': 'atomic-1', 'project_id': 'request-1', 'execution_generation': 2}
     request = SimpleNamespace(session_id='coordination-task:atomic-1:dispatch-1', user_id='@requester:test',
         channel_meta={}, request_context={'teamharness_coordination': meta})
     runtime = SimpleNamespace(_normalize=lambda value: value, workspace=SimpleNamespace(workspace_dir=None))
@@ -41,6 +41,7 @@ def test_qwenpaw_api_turn_uses_coordination_metadata(monkeypatch):
     assert captured[0]['agentteams.task.id'] == 'atomic-1'
     assert captured[0]['agentteams.room.id'] == '!task:test'
     assert captured[0]['agentteams.project.id'] == 'request-1'
+    assert captured[0]['agentteams.execution.generation'] == 2
 
 
 def test_local_runtime_events_keep_model_tool_failures_without_content(tmp_path, monkeypatch):

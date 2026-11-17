@@ -48,6 +48,9 @@ def test_startup_claims_and_resumes_without_an_external_message(adapter):
     async def enqueue(payload):
         order.append("native")
         assert payload["meta"]["task_execution"]["task_id"] == "T"
+        assert payload["meta"]["task_id"] == "T"
+        assert payload["meta"]["team_id"] == "team"
+        assert payload["meta"]["execution_generation"] == 2
         assert payload["meta"]["session_source_event_ids"] == []
         assert payload["meta"]["room_id"] == "!task:hs"
         assert '"completed_steps": ["one"]' in payload["recovery_text"]

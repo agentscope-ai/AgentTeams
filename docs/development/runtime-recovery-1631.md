@@ -949,3 +949,33 @@ background/tool ownership fencing and accurate origin labeling remain open.
 Case37 establishes one normal Hermes restart with valid-session reuse under
 the new common contract; it does not add a fourth Harness to the historical
 3/6 count or prove the remaining restart faults or 30-direction matrix.
+
+### Case38: common-contract Hermes→QwenPaw reached all steps; submission cancelled
+
+[Case38 partial evidence](evidence/runtime-recovery-1631-case38-partial.json)
+uses Core262ecb13, Hermes59b756d/shared19eb30c6 and QwenPawe88ebe8/sharedf6afb507
+with native SDK2.2.2.post1. The source checkpoint4 matches its common descriptor
+and actual Hermes content. Old die/destroy precede target creation/start. With
+no new driver Matrix message, QwenPaw discovers/claims generation2 and executes
+steps two/three. The independent oracle records exactly one effect per step at
+generations1/2/2; all three persisted artifacts match. Native SDK readback and
+the recovered Task's Trace route identify the real target session/tool history.
+
+This case fails the strict final-submission assertion. The ownership monitor
+used the same state restriction as a new inference/final-cache admission.
+The Controller deliberately marks a durable `started` checkpoint as needing
+verification while its existing native tool is still running. A monitor poll
+of that same owner cancelled the stream before submission and then recorded
+an unknown native turn at checkpoint9. Task38 remains in_progress and
+needs_verification; its original state is retained, not cleared or completed.
+
+The fix separates ongoing ownership monitoring from admission/final-cache
+permissions. Only monitoring the same process/instance/generation may retain
+its still-started operation. Unknown effects, cancelled Tasks, changed runtime,
+reassignment and replaced execution still fail; a new inference or cache
+commit cannot use that exception. Both Matrix compatibility copies are fixed.
+The actual native-stream regression failed for both copies before the fix.
+The focused native-SDK suite now passes119 tests, including delayed tool
+completion plus unknown/cancelled/replaced-owner rejection. These tests mock
+Controller/model authority and do not retroactively accept case38. A new
+real Task/image must verify the fix before counting a passing direction.

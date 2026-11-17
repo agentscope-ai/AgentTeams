@@ -630,10 +630,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 while True:
                     await asyncio.sleep(TASK_OWNERSHIP_POLL_S)
                     try:
-                        await asyncio.to_thread(self._task_execution.verify, identity, finished=True)
+                        await asyncio.to_thread(self._task_execution.verify, identity, monitoring=True)
                     except RecoveryUnavailable:
                         continue  # Connection failure does not prove replacement.
-                    except RecoveryConflict:
+                    except RecoveryConflict as exc:
+                        logger.warning("Native Task execution stopped: %s", exc)
                         producer.cancel("Task ownership changed")
                         return
 

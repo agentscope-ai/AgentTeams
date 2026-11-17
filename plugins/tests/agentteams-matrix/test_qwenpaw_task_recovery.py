@@ -657,3 +657,52 @@ def test_optional_cache_failure_preserves_the_saved_checkpoint(adapter, failure)
     asyncio.run(recovery.remember(identity, "native"))
     assert authority.cache is None
     assert task == before
+
+
+def test_ownership_monitor_does_not_cancel_its_current_started_operation(adapter, native_channel, monkeypatch):
+    recovery, authority, task, _ = adapter
+    monkeypatch.setattr(native_channel, "TASK_OWNERSHIP_POLL_S", 0.005)
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None)
+    channel._task_execution = recovery
+    recovery.remember = AsyncMock()
+    identity = {"task_id": "T", "team_id": "team", **task["execution"]}
+    calls = []
+    async def stream(self, payload):
+        task["execution"]["state"] = "needs_verification"
+        task["execution"]["checkpoint"]["operation"] = {"id": "current-tool", "state": "started"}
+        # A durable started checkpoint exists while the same admitted native
+        # tool runs. It is not evidence that this process lost execution.
+        await asyncio.sleep(0.04)
+        calls.append("effect verified")
+        task["execution"]["checkpoint"]["operation"]["state"] = "verified"
+        task["execution"]["state"] = "active"
+        yield "completed"
+    monkeypatch.setattr(native_channel.BaseChannel, "_stream_with_tracker", stream)
+    async def scenario():
+        async for _ in channel._stream_recovered_task({"meta": {
+                "task_execution": identity, "task_session_id": "native"}}):
+            pass
+    asyncio.run(scenario())
+    assert calls == ["effect verified"]
+    recovery.remember.assert_awaited_once()
+
+
+@pytest.mark.parametrize("changed", ["unknown", "generation", "instance_id", "process_id", "runtime", "cancelled"])
+def test_started_operation_monitor_still_rejects_uncertainty_or_changed_authority(adapter, changed):
+    recovery, authority, task, _ = adapter
+    identity = {"task_id": "T", "team_id": "team", **task["execution"]}
+    task["execution"]["state"] = "needs_verification"
+    task["execution"]["checkpoint"]["operation"] = {"id": "inflight", "state": "started"}
+    recovery.verify(identity, monitoring=True)
+    with pytest.raises(RecoveryConflict):
+        recovery.verify(identity)  # No new inference admission.
+    with pytest.raises(RecoveryConflict):
+        recovery.verify(identity, finished=True)  # No cache/final permission.
+    if changed == "unknown":
+        task["execution"]["checkpoint"]["operation"]["state"] = "unknown"
+    elif changed == "cancelled":
+        task["status"] = "cancelled"
+    else:
+        task["execution"][changed] = 3 if changed == "generation" else "successor"
+    with pytest.raises(RecoveryConflict):
+        recovery.verify(identity, monitoring=True)

@@ -33,15 +33,25 @@ class TaskExecution:
     def key(team, task_id):
         return Recovery.digest([team, task_id])
 
-    def verify(self, identity, *, finished=False):
+    def verify(self, identity, *, finished=False, monitoring=False):
         task = self.recovery.current(identity["task_id"], identity["team_id"])
         execution = task.get("execution", {}) if task else {}
+        operation_state = (((execution.get("checkpoint") or {}).get("operation")) or {}).get("state")
+        states = {"active", "released"} if finished or monitoring else {"active"}
+        # The Controller marks a durable started operation as needing
+        # verification while its admitted native tool is still running.
+        # Monitoring that owner must not cancel the tool before it can verify
+        # its result. This never authorizes a new admission or unknown effect.
+        if monitoring and operation_state == "started":
+            states.add("needs_verification")
         if (execution.get("process_id") != self.recovery.process
                 or execution.get("generation") != identity["generation"]
                 or identity.get("instance_id", execution.get("instance_id")) != execution.get("instance_id")
                 or execution.get("runtime") != "qwenpaw"
-                or execution.get("state") not in ({"active", "released"} if finished else {"active"})):
-            raise RecoveryConflict("Task was cancelled, reassigned or replaced before native execution")
+                or not task or task.get("status") not in {"assigned", "in_progress", "submitted"}
+                or execution.get("state") not in states):
+            raise RecoveryConflict("Task was cancelled, reassigned or replaced before native execution "
+                f"(state={execution.get('state')}, operation={operation_state})")
         return task
 
     async def select_session(self, team, task):

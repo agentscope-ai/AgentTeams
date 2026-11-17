@@ -1,0 +1,282 @@
+{
+  "timestamp": "2026-11-17T23:34:09.684615+00:00",
+  "fixture": "recovery-1631-live-20261118-v26",
+  "task_id": "live-qwenpaw-hermes-46",
+  "source": {
+    "controller": "0752e518e95571ebf0d7298849de3e64a5d75a8d",
+    "hermes": "a235d84e2652e7c9299da08080aa02ab6aa47f6e",
+    "qwenpaw": "b5104fb8b5bafcd762a6f4d204b5acbf875b6683",
+    "embedded_common_core": "cff9393cc1c9e191d24121ec11771d3fbe96f168",
+    "harness_pins": {
+      "hermes_pinned_core": "cff9393cc1c9e191d24121ec11771d3fbe96f168",
+      "qwenpaw_pinned_core": "cff9393cc1c9e191d24121ec11771d3fbe96f168"
+    }
+  },
+  "harness_sdk": {
+    "hermes": "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19",
+    "mautrix": "0.21.1",
+    "qwenpaw": "2.2.2.post1",
+    "matrix-nio": "0.26.0"
+  },
+  "installed_sync_adapter_sha256": {
+    "hermes": "5e1624ad12d720cc6ab8470fac3e4aff608847ed5665173fa31191d1a6f578f0",
+    "qwenpaw": "50ef6b08deb9bae757ea083b7d108226c0c71a2b400aaefbb1de2ccae7385401"
+  },
+  "fixture_driver_sha256": "e14363c8dd4622619429218e8bc414c434f348adecb780169adf8e1c51272dfd",
+  "images": {
+    "controller": {
+      "ref": "recovery-1631/v25-controller:0752e518",
+      "id": "sha256:8e71072a13fcd2710785f920025beb5c5c5d065faa315d2ef15e4c1d4880f504"
+    },
+    "hermes": {
+      "ref": "recovery-1631/v25-hermes:a235d84",
+      "id": "sha256:5f8c0c1ac19238665d84be779f989f49e8de2b4a801cdd29f85d0a8872a4512c"
+    },
+    "qwenpaw": {
+      "ref": "recovery-1631/v25-qwenpaw:b5104fb",
+      "id": "sha256:61a24278058cfea10635969099662b7199fccc0d463e284b291d6fb70c72e882"
+    }
+  },
+  "recipe_sha256": {
+    "controller": "6ef1d684b99da03841e4c65dda140635d37426a6f6f8ecd621db1241239f4db9",
+    "qwenpaw": "4f5173decba2f47b01bce4b459693e39c343a8d83bb8a10d5177bfa47466da9f",
+    "final": "fc82b6a7f84f098602c7c89630b50758c44018495cd27ddea9f06954f2154f72",
+    "hermes": "085a40bbac86f6557e264da59ef43e382a38b9e60c535f12acbd88fe17d4e696"
+  },
+  "image_provenance": "Reusing the exact v25 image IDs verified in T45",
+  "verified_at": "2026-11-17T23:48:01.691165+00:00",
+  "outcome": "Blocked before the requested operator switch. Source Task discovery started the real generation before its Matrix assignment was attached to the native session.",
+  "room": "!NXNXg7ZxqHDAqjQ4vd:recovery-1631.test",
+  "source_status": {
+    "status": "in_progress",
+    "runtime": "qwenpaw",
+    "worker_started_at": "2026-11-17T23:44:35.005279365Z",
+    "generation": 1,
+    "execution_state": "active",
+    "version": 4,
+    "completed_steps": [
+      "one"
+    ],
+    "remaining_steps": [
+      "two",
+      "three"
+    ],
+    "delivery": "delivered",
+    "history_actions": [
+      "ack_task",
+      "progress"
+    ],
+    "process_id": "1:1794959075213650518:324fd67bf38d4adfbdf784d7b4a4439c"
+  },
+  "source_task_event": {
+    "event_id": "$guG1QlT9BsXib__tQdPTaz8-S-eaF1_sEq7hh6Hrrg8",
+    "intent": "task_notification",
+    "work": {
+      "kind": "task",
+      "team_id": "recovery-team",
+      "task_id": "live-qwenpaw-hermes-46"
+    },
+    "native_commit": null
+  },
+  "native_read_receipt_ids": [],
+  "assignment_outbox": {
+    "accepted": true,
+    "event_id": "fd62485a53df93e60d02f09dc57dea38"
+  },
+  "source_task_cache": {
+    "native_ref": "matrix:task:e135f2eadecf9927f78940693e0100b7149891cc3ce0406a4b2fe9da37b407a3:08b67d4be7c547298293716c990e0b53",
+    "native_digest": "ac53ced43b60e3c6ae1154fb5d818f20a9c0f6bdda51d44d1cc40656845345b7",
+    "checkpoint_digest": "e402e286c27df26b8e6cbe638fa2fde480e6665e15d32d27d94781bb4d7b0af4",
+    "checkpoint_version": 4
+  },
+  "source_sdk_readback": [
+    {
+      "session_id": "matrix:task:e135f2eadecf9927f78940693e0100b7149891cc3ce0406a4b2fe9da37b407a3:08b67d4be7c547298293716c990e0b53",
+      "native_digest": "ac53ced43b60e3c6ae1154fb5d818f20a9c0f6bdda51d44d1cc40656845345b7",
+      "agent_state_present": true,
+      "task_mentioned": true,
+      "message_count": 3,
+      "tool_count": 9
+    }
+  ],
+  "source_trace_query": "Readback unavailable (Controller 502 / Langfuse 500) during measurement. SDK cache evidence read directly.",
+  "matrix": {
+    "room_through": "$guG1QlT9BsXib__tQdPTaz8-S-eaF1_sEq7hh6Hrrg8",
+    "open_gaps": [],
+    "source_still_pending": true
+  },
+  "oracle": {
+    "calls": [
+      {
+        "accepted": true,
+        "at_ns": 1794959123205724121,
+        "method": "REGISTER",
+        "process_id": "1:1794959075213650518:324fd67bf38d4adfbdf784d7b4a4439c",
+        "step": "one",
+        "task_id": "live-qwenpaw-hermes-46",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1794959130406551133,
+        "method": "POST",
+        "process_id": "1:1794959075213650518:324fd67bf38d4adfbdf784d7b4a4439c",
+        "step": "one",
+        "task_id": "live-qwenpaw-hermes-46",
+        "team_id": "recovery-team"
+      }
+    ],
+    "effects": [
+      {
+        "checkpoint_version": 1,
+        "executed_at_ns": 1794959130406570843,
+        "generation": 1,
+        "instance_id": "docker/b532c11b3f73434b5a1a269519629c4a44525ba435040a87e9f71ecdcdcd863f/2026-11-17T23:44:35.005279365Z",
+        "process_id": "1:1794959075213650518:324fd67bf38d4adfbdf784d7b4a4439c",
+        "step": "one",
+        "task_id": "live-qwenpaw-hermes-46",
+        "team_id": "recovery-team"
+      }
+    ],
+    "intents": [
+      {
+        "checkpoint_version": 1,
+        "generation": 1,
+        "instance_id": "docker/b532c11b3f73434b5a1a269519629c4a44525ba435040a87e9f71ecdcdcd863f/2026-11-17T23:44:35.005279365Z",
+        "process_id": "1:1794959075213650518:324fd67bf38d4adfbdf784d7b4a4439c",
+        "step": "one",
+        "task_id": "live-qwenpaw-hermes-46",
+        "team_id": "recovery-team"
+      }
+    ]
+  },
+  "operator_request_sent": false,
+  "target_recovery_tested": false,
+  "external_inputs_sent_after_assignment": 0,
+  "progress_samples": [
+    {
+      "observed_at": "2026-11-17T23:44:54.346696+00:00",
+      "status": "assigned",
+      "checkpoint_version": null,
+      "delivery": null,
+      "accepted_source_count": 0,
+      "native_read_count": 0,
+      "open_gap_count": 0
+    },
+    {
+      "observed_at": "2026-11-17T23:44:59.139927+00:00",
+      "status": "assigned",
+      "checkpoint_version": null,
+      "delivery": null,
+      "accepted_source_count": 0,
+      "native_read_count": 0,
+      "open_gap_count": 1
+    },
+    {
+      "observed_at": "2026-11-17T23:45:07.531616+00:00",
+      "status": "in_progress",
+      "checkpoint_version": null,
+      "delivery": null,
+      "accepted_source_count": 0,
+      "native_read_count": 0,
+      "open_gap_count": 1
+    },
+    {
+      "observed_at": "2026-11-17T23:45:20.425930+00:00",
+      "status": "in_progress",
+      "checkpoint_version": null,
+      "delivery": null,
+      "accepted_source_count": 1,
+      "native_read_count": 0,
+      "open_gap_count": 1
+    },
+    {
+      "observed_at": "2026-11-17T23:45:28.957497+00:00",
+      "status": "in_progress",
+      "checkpoint_version": 1,
+      "delivery": null,
+      "accepted_source_count": 1,
+      "native_read_count": 0,
+      "open_gap_count": 1
+    },
+    {
+      "observed_at": "2026-11-17T23:45:37.418603+00:00",
+      "status": "in_progress",
+      "checkpoint_version": 2,
+      "delivery": null,
+      "accepted_source_count": 1,
+      "native_read_count": 0,
+      "open_gap_count": 2
+    },
+    {
+      "observed_at": "2026-11-17T23:45:58.601219+00:00",
+      "status": "in_progress",
+      "checkpoint_version": 2,
+      "delivery": null,
+      "accepted_source_count": 1,
+      "native_read_count": 0,
+      "open_gap_count": 3
+    },
+    {
+      "observed_at": "2026-11-17T23:46:02.821379+00:00",
+      "status": "in_progress",
+      "checkpoint_version": 2,
+      "delivery": null,
+      "accepted_source_count": 1,
+      "native_read_count": 0,
+      "open_gap_count": 2
+    },
+    {
+      "observed_at": "2026-11-17T23:46:11.329639+00:00",
+      "status": "in_progress",
+      "checkpoint_version": 2,
+      "delivery": null,
+      "accepted_source_count": 1,
+      "native_read_count": 0,
+      "open_gap_count": 1
+    },
+    {
+      "observed_at": "2026-11-17T23:46:19.779914+00:00",
+      "status": "in_progress",
+      "checkpoint_version": 3,
+      "delivery": "pending",
+      "accepted_source_count": 1,
+      "native_read_count": 0,
+      "open_gap_count": 1
+    },
+    {
+      "observed_at": "2026-11-17T23:46:23.989368+00:00",
+      "status": "in_progress",
+      "checkpoint_version": 4,
+      "delivery": "delivered",
+      "accepted_source_count": 1,
+      "native_read_count": 0,
+      "open_gap_count": 1
+    },
+    {
+      "observed_at": "2026-11-17T23:46:56.123656+00:00",
+      "status": "in_progress",
+      "checkpoint_version": 4,
+      "delivery": "delivered",
+      "accepted_source_count": 1,
+      "native_read_count": 0,
+      "open_gap_count": 0
+    }
+  ],
+  "supervisor": {
+    "argv": [
+      "python3",
+      "/opt/agentteams/scripts/lib/runtime_supervisor.py",
+      "--runtime",
+      "qwenpaw"
+    ],
+    "hashes": {
+      "runtime_supervisor.py": "529f1b3727a4949cb10e43d1af23ab6f871acef855f700662631173b9eba7b91",
+      "worker_handoff.py": "62d58045d54385bde250149a973b39ee46f15a06519e2f2305496b97aaabfe4b"
+    },
+    "instance": "b532c11b3f73434b5a1a269519629c4a44525ba435040a87e9f71ecdcdcd863f",
+    "started_at": "2026-11-17T23:44:35.005279365Z",
+    "runtime": "qwenpaw",
+    "core_sha": "cff9393cc1c9e191d24121ec11771d3fbe96f168"
+  }
+}

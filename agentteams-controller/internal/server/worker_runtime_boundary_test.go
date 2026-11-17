@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"net/http"
 	"net/http/httptest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"testing"
 
 	"context"
@@ -320,5 +322,41 @@ func TestRuntimeHandoffRegisteredWorkerRejectsForgedTaskProcess(t *testing.T) {
 	}
 	if op, err := executionHandoff(ctx, f.storage, "runtime-alice", f.start); err != nil || op != nil {
 		t.Fatalf("registered process refused: %+v %v", op, err)
+	}
+}
+
+func TestRuntimeHandoffLostSourceClassifiesOnlyItsOwnAuthoritativeWork(t *testing.T) {
+	f := newMatrixExecutionFixture(t, nil)
+	ctx := t.Context()
+	tm := teamWithRoster("alpha-team")
+	tm.Spec.WorkerMembers = []v1beta1.TeamWorkerRef{{Name: "alice"}}
+	if err := f.h.deps.Client.Create(ctx, tm); err != nil {
+		t.Fatal(err)
+	}
+	var worker v1beta1.Worker
+	if err := f.h.deps.Client.Get(ctx, client.ObjectKey{Name: "alice", Namespace: "default"}, &worker); err != nil {
+		t.Fatal(err)
+	}
+	deps := f.h.deps
+	deps.OSS = &mcLikeOSS{Memory: f.storage}
+	inspector := NewLostHandoffInspector(deps)
+	op := service.WorkerHandoff{ID: "switch", Phase: "source_lost", Source: f.start}
+	// A verified old step remains uncertain if native execution had not released it.
+	execution := taskExecution{Generation: 2, InstanceID: f.start.InstanceID, ProcessID: f.start.ProcessID, Runtime: f.start.Runtime, State: "active", Checkpoint: &taskCheckpoint{Version: 3, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two"}, Operation: &taskOperation{ID: "one", State: "verified", Evidence: "receipt"}}}
+	putTask(f.storage, taskMetaKey, taskMeta(map[string]any{"status": "in_progress", "assigned_to": "runtime-alice", "execution": execution}))
+	refs, err := inspector(ctx, &worker, &op)
+	if err != nil || len(refs) != 2 || refs[0].Kind != "message" || refs[0].RequiresVerification || refs[1].Kind != "task" || !refs[1].RequiresVerification || refs[1].Generation != 2 || refs[1].CheckpointVersion != 3 {
+		t.Fatalf("orphan classification %+v %v", refs, err)
+	}
+	execution.State = "released"
+	putTask(f.storage, taskMetaKey, taskMeta(map[string]any{"status": "in_progress", "assigned_to": "runtime-alice", "execution": execution}))
+	refs, err = inspector(ctx, &worker, &op)
+	if err != nil || refs[1].RequiresVerification || refs[1].CompletedStepCount == nil || *refs[1].CompletedStepCount != 1 {
+		t.Fatalf("explicit release lost %+v %v", refs, err)
+	}
+	putTask(f.storage, taskMetaKey, taskMeta(map[string]any{"status": "in_progress", "assigned_to": "another-worker", "execution": execution}))
+	refs, err = inspector(ctx, &worker, &op)
+	if err != nil || len(refs) != 1 || refs[0].Kind != "message" {
+		t.Fatalf("reassigned task remained in recovery scope %+v %v", refs, err)
 	}
 }

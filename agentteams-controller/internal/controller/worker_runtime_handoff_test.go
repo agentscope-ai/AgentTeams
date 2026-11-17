@@ -196,3 +196,67 @@ func TestRuntimeHandoffDeclarativeWorkerUpdateEntersDrainBeforeRecreate(t *testi
 		t.Fatalf("source was not protected before common reconciliation %+v %v", op, err)
 	}
 }
+
+type observedHandoffBackend struct {
+	*runtimeHandoffBackend
+	exit backend.RuntimeExitObservation
+}
+
+func (b *observedHandoffBackend) ObserveRuntimeExit(context.Context, string, string) (backend.RuntimeExitObservation, error) {
+	return b.exit, nil
+}
+
+func TestRuntimeHandoffSourceLostWaitsForIndependentExitAndVerifiedWork(t *testing.T) {
+	ctx := t.Context()
+	store := &service.WorkerRuntimeStore{Storage: ossfake.NewMemory()}
+	start := service.WorkerStart{InstanceID: "mock/source-boot", ProcessID: "source-process", Runtime: "hermes"}
+	if _, _, err := store.Preflight(ctx, "stable", "op", "codex", "codex:fixture", start, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.BeginDrain(ctx, "stable"); err != nil {
+		t.Fatal(err)
+	}
+	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "test"}, Spec: v1beta1.WorkerSpec{WorkerName: "stable"}}
+	b := &observedHandoffBackend{runtimeHandoffBackend: &runtimeHandoffBackend{MockWorkerBackend: mocks.NewMockWorkerBackend()}}
+	scans := 0
+	refs := []service.WorkerCheckpointRef{{Kind: "task", TeamID: "team", TaskID: "t", Generation: 1, CheckpointVersion: 2, RequiresVerification: true}}
+	r := WorkerReconciler{RuntimeStore: store, Backend: backend.NewRegistry([]backend.WorkerBackend{b}), InspectLostHandoff: func(context.Context, *v1beta1.Worker, *service.WorkerHandoff) ([]service.WorkerCheckpointRef, error) {
+		scans++
+		return refs, nil
+	}}
+	tick := func(want, reason string) *service.WorkerRuntimeState {
+		t.Helper()
+		curr, etag, err := store.Load(ctx, "stable")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.reconcileHandoffSource(ctx, w, curr.Handoff, etag, &MemberState{}); err != nil {
+			t.Fatal(err)
+		}
+		curr, _, err = store.Load(ctx, "stable")
+		if err != nil || curr.Handoff.Phase != want || curr.Handoff.SourceLossReason != reason {
+			t.Fatalf("expected %s/%s got %+v %v", want, reason, curr.Handoff, err)
+		}
+		return curr
+	}
+	tick("draining", "") // A live source can still finish its current turn.
+	b.exit.Unconfirmed = true
+	tick("source_lost", "source_exit_unconfirmed")
+	if scans != 0 {
+		t.Fatal("unconfirmed source removal triggered a work scan")
+	}
+	b.exit = backend.RuntimeExitObservation{Exited: true}
+	state := tick("source_lost", "execution_requires_verification")
+	if state.Handoff.SourceStopObservedAt == "" || !state.Handoff.CheckpointRefs[0].RequiresVerification || b.stops != 0 || b.removes != 0 {
+		t.Fatal("unverified orphan was restarted")
+	}
+	// The authoritative task was then cancelled/reassigned. An independent
+	// controller can auto-resume and prepare the target without new Matrix input.
+	refs = nil
+	state = tick("stopped", "")
+	b.removed, b.stopped = true, true
+	tick("creating", "")
+	if scans != 2 || state.Handoff.TargetImage != "codex:fixture" {
+		t.Fatalf("wrong source proof %+v scans=%d", state.Handoff, scans)
+	}
+}

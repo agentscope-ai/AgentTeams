@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"io"
 	"net/http"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sort"
 	"strings"
 
@@ -90,60 +93,16 @@ func (h *WorkerMatrixHandler) ConfirmHandoffBoundary(w http.ResponseWriter, r *h
 			writeError(w, 409, "handoff phase or ETag changed")
 			return
 		}
-		refs := []service.WorkerCheckpointRef{}
-		caller := authpkg.CallerFromContext(r.Context())
-		if caller.Team != "" {
-			tasks, err := h.recovery.discoverRecoverableTasks(r.Context(), caller)
-			if err != nil {
-				writeError(w, 503, "owned tasks unavailable")
-				return
-			}
-			for _, row := range tasks {
-				var taskID string
-				if json.Unmarshal(row.Task["task_id"], &taskID) != nil {
-					writeError(w, 503, "task identity unavailable")
-					return
-				}
-				ref := service.WorkerCheckpointRef{Kind: "task", TeamID: row.Team, TaskID: taskID}
-				if err := collectBoundary(&refs, ref, row.Task["execution"], op); err != nil {
-					h.writeError(w, err)
-					return
-				}
-			}
+		refs, err := h.handoffRefs(r.Context(), authpkg.CallerFromContext(r.Context()), ack.name, ack.matrix, op, false)
+		if err != nil {
+			h.writeError(w, err)
+			return
 		}
-		for _, key := range ack.matrix.Pending {
-			input, err := h.store.Input(r.Context(), ack.name, key)
-			if err != nil {
-				h.writeError(w, err)
-				return
-			}
-			if input.Intent == "message" && (input.Work == nil || input.Work.Kind == "message") {
-				ref := service.WorkerCheckpointRef{Kind: "message", EventKey: key}
-				if err := collectBoundary(&refs, ref, input.Execution, op); err != nil {
-					h.writeError(w, err)
-					return
-				}
-			}
-		}
-		sort.Slice(refs, func(i, j int) bool {
-			a, b := refs[i], refs[j]
-			if a.Kind != b.Kind {
-				return a.Kind < b.Kind
-			}
-			if a.TeamID != b.TeamID {
-				return a.TeamID < b.TeamID
-			}
-			if a.TaskID != b.TaskID {
-				return a.TaskID < b.TaskID
-			}
-			return a.EventKey < b.EventKey
-		})
 		if r.URL.Query().Get("probe") == "true" {
 			w.Header().Set("ETag", `"`+etag+`"`)
 			httputil.WriteJSON(w, 200, state)
 			return
 		}
-		var err error
 		state, etag, err = (service.WorkerRuntimeStore{Storage: h.deps.OSS}).ConfirmCheckpoint(r.Context(), ack.name, op.ID, ack.start, etag, refs)
 		if err != nil {
 			h.writeError(w, err)
@@ -152,6 +111,106 @@ func (h *WorkerMatrixHandler) ConfirmHandoffBoundary(w http.ResponseWriter, r *h
 	}
 	w.Header().Set("ETag", `"`+etag+`"`)
 	httputil.WriteJSON(w, 200, state)
+}
+
+func (h *WorkerMatrixHandler) handoffRefs(ctx context.Context, caller *authpkg.CallerIdentity, name string, matrix *service.WorkerMatrixState, op *service.WorkerHandoff, lost bool) ([]service.WorkerCheckpointRef, error) {
+	refs := []service.WorkerCheckpointRef{}
+	collect := func(ref service.WorkerCheckpointRef, raw json.RawMessage) error {
+		err := collectBoundary(&refs, ref, raw, op)
+		if lost && errors.Is(err, service.ErrWorkerStateConflict) {
+			var execution taskExecution
+			if json.Unmarshal(raw, &execution) != nil {
+				return errors.New("invalid orphaned execution")
+			}
+			ref.Generation = execution.Generation
+			if cp := execution.Checkpoint; cp != nil {
+				ref.CheckpointVersion = cp.Version
+			}
+			ref.RequiresVerification = true
+			refs = append(refs, ref)
+			return nil
+		}
+		return err
+	}
+	if caller.Team != "" {
+		tasks, err := h.recovery.discoverRecoverableTasks(ctx, caller)
+		if err != nil {
+			return nil, errors.New("owned tasks unavailable")
+		}
+		for _, row := range tasks {
+			var taskID string
+			if json.Unmarshal(row.Task["task_id"], &taskID) != nil {
+				return nil, errors.New("task identity unavailable")
+			}
+			ref := service.WorkerCheckpointRef{Kind: "task", TeamID: row.Team, TaskID: taskID}
+			if err := collect(ref, row.Task["execution"]); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, key := range matrix.Pending {
+		input, err := h.store.Input(ctx, name, key)
+		if err != nil {
+			return nil, err
+		}
+		if input.Intent == "message" && (input.Work == nil || input.Work.Kind == "message") {
+			ref := service.WorkerCheckpointRef{Kind: "message", EventKey: key}
+			if err := collect(ref, input.Execution); err != nil {
+				return nil, err
+			}
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		a, b := refs[i], refs[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.TeamID != b.TeamID {
+			return a.TeamID < b.TeamID
+		}
+		if a.TaskID != b.TaskID {
+			return a.TaskID < b.TaskID
+		}
+		return a.EventKey < b.EventKey
+	})
+	return refs, nil
+}
+
+// NewLostHandoffInspector uses the same scoped task/event snapshots as a live
+// source confirmation. It is called only after an independent backend exit
+// observation and never treats an old active checkpoint as an explicit release.
+func NewLostHandoffInspector(deps ServerDeps) func(context.Context, *v1beta1.Worker, *service.WorkerHandoff) ([]service.WorkerCheckpointRef, error) {
+	project := NewProjectHandler(deps.Client, deps.Namespace, deps.OSS)
+	if deps.APIReader != nil {
+		project.configReader = deps.APIReader
+	}
+	h := NewWorkerMatrixHandler(deps, NewTaskRecoveryHandler(project, deps))
+	return func(ctx context.Context, w *v1beta1.Worker, op *service.WorkerHandoff) ([]service.WorkerCheckpointRef, error) {
+		reader := deps.APIReader
+		if reader == nil {
+			reader = deps.Client
+		}
+		var teams v1beta1.TeamList
+		if err := reader.List(ctx, &teams, client.InNamespace(w.Namespace)); err != nil {
+			return nil, err
+		}
+		owner := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: w.Name, WorkerName: w.Spec.EffectiveWorkerName(w.Name), MatrixUserID: w.Status.MatrixUserID}
+		for _, team := range teams.Items {
+			for _, member := range team.Spec.WorkerMembers {
+				if member.Name == w.Name {
+					if owner.Team != "" && owner.Team != team.Name {
+						return nil, errors.New("ambiguous Worker team membership")
+					}
+					owner.Team = team.Name
+				}
+			}
+		}
+		matrix, _, err := h.store.Load(ctx, owner.WorkerName)
+		if err != nil {
+			return nil, err
+		}
+		return h.handoffRefs(ctx, owner, owner.WorkerName, matrix, op, true)
+	}
 }
 
 func collectBoundary(refs *[]service.WorkerCheckpointRef, ref service.WorkerCheckpointRef, raw json.RawMessage, op *service.WorkerHandoff) error {

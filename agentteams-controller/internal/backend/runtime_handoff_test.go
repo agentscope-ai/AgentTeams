@@ -117,6 +117,22 @@ func TestRuntimeHandoffLiveDockerStopsToolChildBeforeNameReuse(t *testing.T) {
 	if err != nil || after.ContainerID != second || after.Runtime != "codex" || after.Status != StatusRunning {
 		t.Fatalf("target %v %v", after, err)
 	}
+	run("kill", "--signal", "KILL", second)
+	crash, err := b.ObserveRuntimeExit(ctx, name, after.InstanceID)
+	if err != nil || !crash.Exited || crash.Successor != "" {
+		t.Fatalf("unexpected crash observation %+v %v", crash, err)
+	}
+	run("start", second)
+	restarted, err := b.Status(ctx, name)
+	if err != nil || restarted.InstanceID == after.InstanceID {
+		t.Fatalf("container did not get another boot %+v %v", restarted, err)
+	}
+	crash, err = b.ObserveRuntimeExit(ctx, name, after.InstanceID)
+	if err != nil || !crash.Exited || crash.Successor != restarted.InstanceID {
+		t.Fatalf("same-container restart was not distinguished %+v %v", crash, err)
+	}
+	t.Logf("crashed=%s successor=%s", after.InstanceID, restarted.InstanceID)
+
 	t.Logf("source=%s source_pid_after_stop=0 target=%s target_runtime=%s", before.InstanceID, after.InstanceID, after.Runtime)
 }
 
@@ -220,4 +236,33 @@ func TestRuntimeHandoffDockerRejectsAmbiguousDeadSource(t *testing.T) {
 			t.Fatalf("%s permitted removal", variant)
 		}
 	}
+}
+
+func TestRuntimeHandoffK8sOrphanRequiresOriginalKubeletTermination(t *testing.T) {
+	b, fake := newTestK8sBackendWithFake(K8sConfig{})
+	first := metav1.NewTime(time.Now().UTC().Add(-time.Minute).Truncate(time.Second))
+	second := metav1.NewTime(first.Add(time.Minute))
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: b.workerPodName("a"), Namespace: b.namespace, UID: "pod"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "worker"}}}, Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "worker", ContainerID: "containerd://first", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: first}}}}}}
+	id := podInstanceID(pod)
+	observe := func(exited, unknown bool, successor string) {
+		t.Helper()
+		got, err := b.ObserveRuntimeExit(t.Context(), "a", id)
+		if err != nil || got.Exited != exited || got.Unconfirmed != unknown || got.Successor != successor {
+			t.Fatalf("observation %+v %v", got, err)
+		}
+	}
+	observe(false, true, "") // API absence cannot prove node-side exit.
+	fake.injectPod(pod)
+	observe(false, false, "")
+	c := &pod.Status.ContainerStatuses[0]
+	c.ContainerID = "containerd://second"
+	c.State.Running.StartedAt = second
+	fake.injectPod(pod)
+	observe(false, true, "") // A changed container ID alone is not a termination receipt.
+	c.LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ContainerID: "containerd://first", StartedAt: first, FinishedAt: second, Reason: "Error"}
+	fake.injectPod(pod)
+	observe(true, false, podInstanceID(pod))
+	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: "tool-runner"})
+	fake.injectPod(pod)
+	observe(false, true, "") // A worker-only restart cannot prove a tool sidecar exited.
 }

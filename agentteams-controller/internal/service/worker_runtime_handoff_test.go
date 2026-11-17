@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"testing"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
@@ -98,5 +99,33 @@ func TestRuntimeHandoffPublishesRegisteredBootAndRepairsAfterWriterRestart(t *te
 	state, _, err = fresh.SyncRegisteredStart(ctx, "alice", start.InstanceID, start.Runtime)
 	if err != nil || *state.ActiveStart != next {
 		t.Fatalf("late source replaced current registration: %+v %v", state, err)
+	}
+}
+
+func TestRuntimeHandoffRebindsOnlyProvenRegisteredSourceSuccessor(t *testing.T) {
+	ctx := t.Context()
+	store := WorkerRuntimeStore{Storage: ossfake.NewMemory()}
+	original := WorkerStart{InstanceID: "docker/id/first", Runtime: "hermes", ProcessID: "old"}
+	next := WorkerStart{InstanceID: "docker/id/second", Runtime: "hermes", ProcessID: "new"}
+	if _, _, err := store.Preflight(ctx, "agent", "op", "codex", "codex:fixture", original, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, etag, err := store.BeginDrain(ctx, "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit := backend.RuntimeExitObservation{Exited: true, Successor: "id/second"}
+	state, etag, err := store.RecordSourceLoss(ctx, "agent", "op", etag, exit, nil, nil)
+	if err != nil || state.Handoff.SourceLossReason != "successor_registration_pending" || state.Handoff.Source != original {
+		t.Fatalf("unregistered source took over %+v %v", state, err)
+	}
+	forged := next
+	forged.InstanceID = "docker/other"
+	if _, _, err := store.RecordSourceLoss(ctx, "agent", "op", etag, exit, &forged, nil); !errors.Is(err, ErrWorkerStateInvalid) {
+		t.Fatal("admitted unrelated source")
+	}
+	state, _, err = store.RecordSourceLoss(ctx, "agent", "op", etag, exit, &next, nil)
+	if err != nil || state.Handoff.Phase != "draining" || len(state.Handoff.LostSources) != 1 || state.Handoff.LostSources[0] != original || state.Handoff.Source != next || *state.ActiveStart != next {
+		t.Fatalf("lost original process or gate %+v %v", state, err)
 	}
 }

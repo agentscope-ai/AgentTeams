@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
+	"strings"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -37,6 +39,8 @@ type WorkerHandoff struct {
 	TargetRuntime        string                `json:"target_runtime"`
 	PriorTargets         []WorkerStart         `json:"prior_targets,omitempty"`
 	Target               *WorkerStart          `json:"target,omitempty"`
+	LostSources          []WorkerStart         `json:"lost_sources,omitempty"`
+	SourceLossReason     string                `json:"source_loss_reason,omitempty"`
 	SourceStopObservedAt string                `json:"source_stop_observed_at,omitempty"`
 	TargetRegisteredAt   string                `json:"target_registered_at,omitempty"`
 	CompletedAt          string                `json:"completed_at,omitempty"`
@@ -54,6 +58,7 @@ type WorkerCheckpointRef struct {
 	CompletedStepCount      *int   `json:"completed_step_count,omitempty"`
 	PendingReplyTxn         string `json:"pending_reply_txn,omitempty"`
 	VerifiedOperation       string `json:"verified_operation,omitempty"`
+	RequiresVerification    bool   `json:"requires_verification,omitempty"`
 	Outcome                 string `json:"outcome,omitempty"`
 	TargetGeneration        uint64 `json:"target_generation,omitempty"`
 	TargetCheckpointVersion uint64 `json:"target_checkpoint_version,omitempty"`
@@ -86,7 +91,7 @@ func (s WorkerRuntimeStore) Load(ctx context.Context, name string) (*WorkerRunti
 	if op := state.Handoff; op != nil {
 		valid := validHandoffID(op.ID) && validRuntimeStart(op.Source) && validHandoffTarget(op.TargetRuntime)
 		switch op.Phase {
-		case "preflight", "draining", "checkpointed", "stopping", "stopped", "creating":
+		case "preflight", "draining", "source_lost", "checkpointed", "stopping", "stopped", "creating":
 			valid = valid && op.Source == *state.ActiveStart && op.Target == nil
 		case "recovering", "completed":
 			valid = valid && op.Target != nil && validRuntimeStart(*op.Target) && (op.Phase == "completed" || *op.Target == *state.ActiveStart) && op.Target.Runtime == op.TargetRuntime && op.Target.InstanceID != op.Source.InstanceID
@@ -257,6 +262,57 @@ func (s WorkerRuntimeStore) AdvanceLifecycle(ctx context.Context, name, id, from
 		return nil, "", ErrWorkerStateInvalid
 	}
 	op.Phase = to
+	return s.save(ctx, state, etag)
+}
+
+// RecordSourceLoss distinguishes an unavailable backend from a proven process
+// exit. Only a verified exit and safe authoritative work can skip a live ack.
+func (s WorkerRuntimeStore) RecordSourceLoss(ctx context.Context, name, id, expected string, exit backend.RuntimeExitObservation, successor *WorkerStart, refs []WorkerCheckpointRef) (*WorkerRuntimeState, string, error) {
+	state, etag, err := s.Load(ctx, name)
+	if err != nil {
+		return nil, "", err
+	}
+	op := state.Handoff
+	if op == nil || op.ID != id || (op.Phase != "draining" && op.Phase != "source_lost" && op.Phase != "stopping" && op.Phase != "stopped") || etag != expected {
+		return nil, "", ErrWorkerStateConflict
+	}
+	phase, reason := "source_lost", "source_exit_unconfirmed"
+	if exit.Exited {
+		if op.SourceStopObservedAt == "" {
+			op.SourceStopObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		phase, reason = "stopped", ""
+		for _, ref := range refs {
+			if ref.RequiresVerification {
+				phase, reason = "source_lost", "execution_requires_verification"
+				break
+			}
+		}
+		if phase == "stopped" && exit.Successor != "" {
+			if successor == nil {
+				phase, reason = "source_lost", "successor_registration_pending"
+			} else {
+				prefix, _, _ := strings.Cut(op.Source.InstanceID, "/")
+				if successor.Runtime != op.Source.Runtime || successor.InstanceID != prefix+"/"+exit.Successor || !validRuntimeStart(*successor) {
+					return nil, "", ErrWorkerStateInvalid
+				}
+				op.LostSources = append(op.LostSources, op.Source)
+				op.Source, *state.ActiveStart = *successor, *successor
+				op.SourceStopObservedAt = ""
+				phase = "draining"
+			}
+		}
+	} else if !exit.Unconfirmed {
+		if op.SourceStopObservedAt != "" {
+			reason = "conflicting_source_exit_evidence"
+		} else {
+			phase, reason = "draining", ""
+		}
+	}
+	if phase == op.Phase && reason == op.SourceLossReason && reflect.DeepEqual(op.CheckpointRefs, refs) && !(exit.Exited && op.Phase == "draining") {
+		return state, etag, nil
+	}
+	op.Phase, op.SourceLossReason, op.CheckpointRefs = phase, reason, refs
 	return s.save(ctx, state, etag)
 }
 

@@ -238,7 +238,11 @@ func (h *ProjectHandler) resolveTaskMetaCommitKey(
 // scoped access check.
 func (h *ProjectHandler) taskMetaPrefixes(ctx context.Context) ([]string, map[string]string, error) {
 	var teams v1beta1.TeamList
-	if err := h.client.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
+	reader := h.configReader
+	if reader == nil {
+		reader = h.client
+	}
+	if err := reader.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
 		return nil, nil, err
 	}
 	prefixes := make([]string, 0, len(teams.Items))

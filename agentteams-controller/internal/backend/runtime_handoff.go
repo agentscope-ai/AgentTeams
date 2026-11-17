@@ -211,8 +211,12 @@ func (k *K8sBackend) RemoveStoppedRuntime(ctx context.Context, name, instance st
 		return false, err
 	}
 	uid, _, ok := strings.Cut(instance, "/")
-	if !ok || string(pod.UID) != uid || pod.DeletionTimestamp == nil || !handoffPodTerminated(pod, instance) {
+	if !ok || string(pod.UID) != uid || !handoffPodTerminated(pod, instance) {
 		return false, errors.New("source Pod changed or lacks terminal status")
+	}
+	if pod.DeletionTimestamp == nil {
+		err := pods.Delete(ctx, pod.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion}})
+		return false, err
 	}
 	if slices.Contains(pod.Finalizers, runtimeStopFinalizer) {
 		_, err = patchStopFinalizer(ctx, pods, pod, slices.DeleteFunc(pod.Finalizers, func(s string) bool { return s == runtimeStopFinalizer }))
@@ -227,4 +231,110 @@ func (d *DockerBackend) HandoffTargetImage(runtime string) string {
 }
 func (k *K8sBackend) HandoffTargetImage(runtime string) string {
 	return map[string]string{RuntimeOpenClaw: k.config.WorkerImage, RuntimeHermes: k.config.HermesWorkerImage, RuntimeCodex: k.config.CodexWorkerImage, RuntimeQwenPaw: k.config.QwenPawWorkerImage, RuntimeDeepSeekHarness: k.config.DeepSeekHarnessWorkerImage, RuntimeOpenHuman: k.config.OpenHumanWorkerImage}[runtime]
+}
+
+// RuntimeExitObservation describes read-only evidence about a source that
+// disappeared before acknowledging drain. An API-level disappearance without
+// process evidence keeps the operation fenced.
+type RuntimeExitObservation struct {
+	Exited      bool
+	Unconfirmed bool
+	Successor   string // another start of the same backend resource
+}
+
+type RuntimeExitObserver interface {
+	ObserveRuntimeExit(context.Context, string, string) (RuntimeExitObservation, error)
+}
+
+func (d *DockerBackend) ObserveRuntimeExit(ctx context.Context, name, instance string) (RuntimeExitObservation, error) {
+	var obs RuntimeExitObservation
+	id, _, ok := strings.Cut(instance, "/")
+	if !ok || id == "" {
+		return obs, errors.New("invalid Docker start identity")
+	}
+	status, err := d.Status(ctx, name)
+	if err != nil {
+		return obs, err
+	}
+	if status.ContainerID != id {
+		code, err := d.dockerInstanceRequest(ctx, http.MethodGet, id, "/json")
+		if err != nil {
+			return obs, err
+		}
+		switch code {
+		case http.StatusNotFound:
+			if status.Status == StatusNotFound {
+				obs.Exited = true
+			} else {
+				obs.Unconfirmed = true
+			} // same name now belongs to a different resource
+		case http.StatusOK:
+			obs.Unconfirmed = true // source was renamed; never touch the new occupant
+		default:
+			return obs, fmt.Errorf("inspect original Docker container: HTTP %d", code)
+		}
+		return obs, nil
+	}
+	if status.InstanceID == instance {
+		obs.Exited = status.dockerProcessExited && (status.RawStatus == "exited" || status.RawStatus == "dead")
+		return obs, nil
+	}
+	if status.InstanceID != "" && status.Status == StatusRunning {
+		obs.Exited, obs.Successor = true, status.InstanceID
+	} else {
+		obs.Unconfirmed = true
+	}
+	return obs, nil
+}
+
+func (k *K8sBackend) ObserveRuntimeExit(ctx context.Context, name, instance string) (RuntimeExitObservation, error) {
+	var obs RuntimeExitObservation
+	target, ns, err := k.resolveClient(ctx)
+	if err != nil {
+		return obs, err
+	}
+	pod, err := target.Pods(ns).Get(ctx, k.workerPodName(name), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		obs.Unconfirmed = true
+		return obs, nil
+	}
+	if err != nil {
+		return obs, err
+	}
+	uid, _, ok := strings.Cut(instance, "/")
+	if !ok || string(pod.UID) != uid {
+		obs.Unconfirmed = true
+		return obs, nil
+	}
+	if handoffPodTerminated(pod, instance) {
+		obs.Exited = true
+		return obs, nil
+	}
+	current := podInstanceID(pod)
+	if current == instance {
+		return obs, nil
+	}
+	if current != "" {
+		// A worker-container restart proves that container's process tree
+		// exited. A surviving sidecar could still own tools from the old turn.
+		if len(pod.Spec.Containers) > 1 || len(pod.Spec.EphemeralContainers) > 0 {
+			obs.Unconfirmed = true
+			return obs, nil
+		}
+		for _, init := range pod.Spec.InitContainers {
+			if init.RestartPolicy != nil && *init.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+				obs.Unconfirmed = true
+				return obs, nil
+			}
+		}
+		for _, c := range pod.Status.ContainerStatuses {
+			last := c.LastTerminationState.Terminated
+			if c.Name == "worker" && last != nil && !last.FinishedAt.IsZero() && last.Reason != "ContainerStatusUnknown" && uid+"/"+last.ContainerID+"/"+last.StartedAt.UTC().Format(time.RFC3339Nano) == instance {
+				obs.Exited, obs.Successor = true, current
+				return obs, nil
+			}
+		}
+	}
+	obs.Unconfirmed = true
+	return obs, nil
 }

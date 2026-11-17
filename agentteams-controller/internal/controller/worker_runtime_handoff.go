@@ -102,12 +102,26 @@ func (r *WorkerReconciler) beginDesiredRuntimeHandoff(ctx context.Context, w *v1
 func (r *WorkerReconciler) reconcileHandoffSource(ctx context.Context, w *v1beta1.Worker, op *service.WorkerHandoff, etag string, state *MemberState) (reconcile.Result, error) {
 	wait := reconcile.Result{RequeueAfter: handoffPoll}
 	state.Message = "Worker runtime handoff: " + op.Phase
-	if op.Phase == "draining" || op.Phase == "preflight" {
+	if op.Phase == "preflight" || ((op.Phase == "draining" || op.Phase == "source_lost") && r.InspectLostHandoff == nil) {
 		return wait, nil
 	}
 	wb, instance, err := r.handoffBackend(ctx, op)
 	if err != nil {
 		return reconcile.Result{}, err
+	}
+	if op.Phase == "draining" || op.Phase == "source_lost" {
+		observer, ok := wb.(backend.RuntimeExitObserver)
+		if !ok {
+			return wait, nil
+		}
+		exit, err := observer.ObserveRuntimeExit(ctx, w.Name, instance)
+		if err != nil {
+			return wait, err
+		}
+		if !exit.Exited && !exit.Unconfirmed && op.Phase == "draining" {
+			return wait, nil
+		}
+		return wait, r.inspectSourceLoss(ctx, w, op, etag, exit)
 	}
 	source, ok := wb.(backend.RuntimeHandoffSource)
 	if !ok {
@@ -129,14 +143,20 @@ func (r *WorkerReconciler) reconcileHandoffSource(ctx context.Context, w *v1beta
 		next = "stopping"
 	case "stopping":
 		stopped, err := source.StopRuntimeInstance(ctx, w.Name, instance)
-		if err != nil || !stopped {
-			return wait, err
+		if err != nil {
+			return wait, r.checkChangedSource(ctx, w, op, etag, wb, instance, err)
+		}
+		if !stopped {
+			return wait, nil
 		}
 		next = "stopped"
 	case "stopped":
 		absent, err := source.RemoveStoppedRuntime(ctx, w.Name, instance)
-		if err != nil || !absent {
-			return wait, err
+		if err != nil {
+			return wait, r.checkChangedSource(ctx, w, op, etag, wb, instance, err)
+		}
+		if !absent {
+			return wait, nil
 		}
 		next = "creating"
 	default:
@@ -144,6 +164,49 @@ func (r *WorkerReconciler) reconcileHandoffSource(ctx context.Context, w *v1beta
 	}
 	_, _, err = r.RuntimeStore.AdvanceLifecycle(ctx, w.Spec.EffectiveWorkerName(w.Name), op.ID, op.Phase, next, etag, image, nil)
 	return wait, err
+}
+
+// The daemon may restart the same container between confirmed checkpoint,
+// stop and removal. A failed mutation never authorizes a name-based retry.
+func (r *WorkerReconciler) checkChangedSource(ctx context.Context, w *v1beta1.Worker, op *service.WorkerHandoff, etag string, wb backend.WorkerBackend, instance string, cause error) error {
+	observer, ok := wb.(backend.RuntimeExitObserver)
+	if !ok || r.InspectLostHandoff == nil {
+		return cause
+	}
+	exit, err := observer.ObserveRuntimeExit(ctx, w.Name, instance)
+	if err != nil || (!exit.Unconfirmed && !exit.Exited) {
+		return cause
+	}
+	return r.inspectSourceLoss(ctx, w, op, etag, exit)
+}
+
+func (r *WorkerReconciler) inspectSourceLoss(ctx context.Context, w *v1beta1.Worker, op *service.WorkerHandoff, etag string, exit backend.RuntimeExitObservation) error {
+	name := w.Spec.EffectiveWorkerName(w.Name)
+	var refs []service.WorkerCheckpointRef
+	var successor *service.WorkerStart
+	if exit.Exited {
+		var err error
+		refs, err = r.InspectLostHandoff(ctx, w, op)
+		if err != nil {
+			return err
+		}
+		if len(refs) == 0 {
+			refs = nil
+		}
+		if exit.Successor != "" {
+			matrix := service.WorkerMatrixStore{Storage: r.RuntimeStore.Storage}
+			consumption, _, err := matrix.Load(ctx, name)
+			if err != nil {
+				return err
+			}
+			prefix, _, _ := strings.Cut(op.Source.InstanceID, "/")
+			if start := consumption.ActiveStart; start.InstanceID == prefix+"/"+exit.Successor && start.Runtime == op.Source.Runtime {
+				successor = &start
+			}
+		}
+	}
+	_, _, err := r.RuntimeStore.RecordSourceLoss(ctx, name, op.ID, etag, exit, successor, refs)
+	return err
 }
 
 func (r *WorkerReconciler) applyHandoffTargetSpec(ctx context.Context, w *v1beta1.Worker, op *service.WorkerHandoff) error {

@@ -900,3 +900,16 @@ but Controller readback returned no OpenClaw traces. The Controller currently
 projects observability WorkerEnv only for QwenPaw/Hermes, and this OpenClaw
 native config has no diagnostics exporter. Trace collection/correlation and
 Dashboard UI must be implemented and verified, not inferred from saved settings.
+
+### Case34: OpenClaw normal restart completed steps; valid-session case failed
+
+[Case34 partial proof](evidence/runtime-recovery-1631-case34-partial.json)
+uses Core0f36d4c3 and OpenClawf0874a0. The same container restarted with a new
+actual process identity, claimed generation2 and reached checkpoint10/delivered;
+the native Worker submitted and the Leader accepted the result. The strict
+valid-session-reuse verifier failed because the source native transcript no
+longer matched its saved cache before restart. The target used a different
+native session. Do not relabel this as a dedicated stale-session acceptance or
+count a fourth normal-restart/valid-session Harness. The original assertion and
+failure are preserved. Tracing and Dashboard login also remain unaccepted.
+Controller and Workers were stopped after evidence capture, with volumes kept.

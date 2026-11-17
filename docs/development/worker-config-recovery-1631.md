@@ -42,8 +42,10 @@ QwenPaw validation for this increment:
   the host environment with Ruby; the baseline SDK/unit mismatch remains open.
 - Native image base:e0bc7bb/shared67dba059; SDK session module SHA256
   `5522f2a15897f7ec9c111ea2078a8dd77775e40f7ba957f64b2a2e40d8c65866`.
-  Mounted source supplies the new adapter/common clients; this is not a newly
-  packaged QwenPaw image. Matching Core/Harness pins and real H↔Q tests remain next.
+  Mounted source supplied the first SDK check. A subsequent local image packages
+  Coref6afb507 and QwenPawe88ebe8; the same111 focused tests also pass using only
+  image-packaged code, without a source mount. See the [packaging evidence](evidence/runtime-recovery-1631-qwenpaw-common-sdk.json).
+  Matching hosted Harness CI, Core pin and real H↔Q tests remain next.
 
 For the 1.2.8 candidate, use the current
 [per-Harness boundaries and release gates](../design/harness-recovery-boundaries.md).

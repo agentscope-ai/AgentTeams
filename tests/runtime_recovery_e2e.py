@@ -23,10 +23,16 @@ CONTROLLER = PREFIX + "-controller"
 NETWORK = PREFIX + "-net"
 STATE = Path("/tmp/recovery-1631-e2e-state.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-state.json")
 PRIVATE_BOOTSTRAP = Path("/tmp/recovery-1631-bootstrap.private.json" if PREFIX == "recovery-1631-live-20261116" else "/tmp/" + PREFIX + "-bootstrap.private.json")
-CORE_IMAGE = "recovery-1631/controller:local-20261117053228"
+CORE_IMAGE = os.getenv("RECOVERY_E2E_CORE_IMAGE", "recovery-1631/controller:local-20261117053228")
 HARNESS_IMAGES = {"codex": "recovery-1631/codex:local-20261117013200",
                   "hermes": "recovery-1631/hermes:local-20261117053547",
                   "deepseek-harness": "recovery-1631/deepseek:local-20261117053547"}
+image_overrides = json.loads(os.getenv("RECOVERY_E2E_HARNESS_IMAGES", "{}"))
+if (not isinstance(image_overrides, dict)
+        or not set(image_overrides) <= {"codex", "hermes", "qwenpaw", "deepseek-harness", "openclaw", "openhuman"}
+        or any(not isinstance(image, str) or not image.strip() for image in image_overrides.values())):
+    raise ValueError("Explicit recovery images must name supported Harnesses and nonempty image references")
+HARNESS_IMAGES.update(image_overrides)
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
 FAULT = os.getenv("RECOVERY_E2E_FAULT", "")

@@ -1013,3 +1013,49 @@ README assertion; the assignment did reach the Worker room despite earlier
 m.direct errors, so those errors alone do not explain the failure. Later
 Core86e7e134 integration44153988880 has a QwenPaw/Hermes failure under diagnosis.
 These integration failures remain open; no timeout/assertion is relaxed.
+
+
+### Case40: common-contract QwenPaw→Hermes continuation passed
+
+[Strict evidence](evidence/runtime-recovery-1631-case40-verified.json) uses
+Core262ecb13, source QwenPaw0589ed8/shared62c1d369/SDK2.2.2.post1 and target
+Hermes59b756d/shared19eb30c6/SDK2bd378ed. The source Task remains in_progress at
+checkpoint4 with a shared QwenPaw descriptor matching the actual persisted SDK
+state. The tightened driver requires this cache before initiating replacement.
+Old die/destroy precede target creation. With no external Matrix input, Hermes
+claims generation2, creates a fresh native Task session and completes remaining
+steps at checkpoint10. The independent effect ledger records each step once;
+artifacts/report hashes and the unique final Matrix reply pass unchanged strict
+assertions. An initial verification read preceded final reply persistence;
+the same verifier passed once native delivery completed, without repair/reseed.
+
+[Trace readback](evidence/runtime-recovery-1631-case40-traces.json) verifies the
+actual recovered turn through Controller, direct Langfuse and Dashboardv1.4.1:
+Task40/generation2/native session20261117_194337_6e1646f1,17 model and24 tool
+observations,387,672 tokens and102.09seconds. Error nodes remain visible.
+The SDK background skill review inherits Task context and is recorded separately;
+it is not another Task execution. Subsequent room chatter remains a policy/
+consumption investigation, not proof of the original Manager replay bug.
+Both owned v20 fixture Workers were slept through the normal lifecycle API
+after evidence capture; Tasks, native files and infrastructure data are retained.
+
+Cases39/40 now establish the new standard's two reference directions. They use
+different Tasks and do not establish same-Task return-to-an-old-session safety.
+Historical totals remain3/6 normal restart/reuse and7/30 directed lanes, and
+full Matrix hooks, ordinary messages, handoff and fault suites remain incomplete.
+
+### Common sync batch preparation (native hooks still pending)
+
+`WorkerMatrix.consumer` and `WorkerMatrix.sync`, also exposed through the existing
+JSON/stdin facade, centralize native cursor selection and ordered batch commits.
+Account/device/format/Harness must match; a shared token from another native
+consumer is never reused. Decoded, policy-classified inputs retain server order.
+A new consumer whose timeline does not reconnect the old shared room anchor
+must retain a backfill gap even when the SDK calls its initial timeline unlimited.
+Existing gaps are retained; missing pagination/retained anchors reject the batch
+without cursor advancement. The Controller's input-first persistence and CAS
+remain authoritative. Native adapters must call this before dispatch or local
+cursor advancement; this helper alone is not a completed native integration.
+The common/evidence regression suite passes80 tests plus52 subtests, including
+all six cursor identities, cross-device/format isolation, stale cursor rejection,
+limited/initial gaps, exact ordering, old-start fencing and the shared facade.

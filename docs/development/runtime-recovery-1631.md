@@ -979,3 +979,37 @@ The focused native-SDK suite now passes119 tests, including delayed tool
 completion plus unknown/cancelled/replaced-owner rejection. These tests mock
 Controller/model authority and do not retroactively accept case38. A new
 real Task/image must verify the fix before counting a passing direction.
+
+
+### Case39: common-contract Hermes→QwenPaw continuation passed
+
+[Strict verified evidence](evidence/runtime-recovery-1631-case39-verified.json)
+uses the actual Core262ecb13 server, Hermes59b756d/shared19eb30c6/SDK2bd378ed,
+and QwenPaw0589ed8/shared62c1d369/SDK2.2.2.post1. The new v20 Task retains its
+identity through replacement: source checkpoint4 and its common Hermes cache
+match persisted native content; old die/destroy precede target creation.
+Without a new external Matrix input, QwenPaw claims generation2, resumes steps
+two/three, submits through its native Task tool and reaches checkpoint10.
+The independent oracle records all three effects once; persisted artifacts
+and canonical result hashes match, and the final report appears once.
+The target Trace route selects the actual SDK session; no private journal
+fallback authorizes this proof. The submitted Task intentionally has no new
+session-cache write because the server rejects submitted-Task cache commits.
+
+[Trace evidence](evidence/runtime-recovery-1631-case39-traces.json) includes
+Controller and direct Langfuse retrieval plus actual Dashboard v1.4.1 readback
+through its normal Controller-admin login: exact Task/room/generation/native
+session,24 model observations,25 tool observations and1,017,481 tokens.
+Three HTTP-error nodes recovered during the turn; this is not an injected
+unknown-side-effect acceptance. This verifies the bounded H→Q Task lane under
+the new standard, not the complete Matrix/ordinary-message integration,
+Dashboard runtime-switch UI, all fault scenarios or a new eighth direction.
+Case38 remains failed/partial with its original Task state retained.
+
+Core now pins QwenPaw0589ed8 after its matching test/image CI44155767972 passed
+(publication skipped). Core62c1d369 Controller CI44156255299 passed. The older
+Core262ecb13 integration44146912227 failed only its OpenClaw/OpenClaw task03
+README assertion; the assignment did reach the Worker room despite earlier
+m.direct errors, so those errors alone do not explain the failure. Later
+Core86e7e134 integration44153988880 has a QwenPaw/Hermes failure under diagnosis.
+These integration failures remain open; no timeout/assertion is relaxed.

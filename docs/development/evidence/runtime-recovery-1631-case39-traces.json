@@ -1,0 +1,57 @@
+[
+  {
+    "trace_id": "7faf0f6937102c63a7c80e5534fd6d92",
+    "task_id": "live-hermes-qwenpaw-39",
+    "controller_readback": true,
+    "direct_langfuse_readback": true,
+    "metadata": {
+      "agentteams.session.id": "agent-a:e1330b370f80ce13c29855f1",
+      "agentteams.runtime.session_id": "matrix:task:c543126ee623e3a874a003fef43e96c0d865d2cabb7354a52e6f5caa9dcc72d2:10d746f173484b9a8987db7320ca7574",
+      "agentteams.turn.id": "e6a959ff5f7349d381ffee039940c32c",
+      "agentteams.task.id": "live-hermes-qwenpaw-39",
+      "agentteams.execution.generation": 2,
+      "agentteams.room.id": "!nErlXgs0rzPZArflfq:recovery-1631.test",
+      "agentteams.event.id": "recovery:recovery-team/live-hermes-qwenpaw-39:2",
+      "agentteams.team.id": "recovery-team",
+      "agentteams.task.correlation": "explicit request context",
+      "agentteams.worker.name": "agent-a",
+      "agentteams.runtime": "qwenpaw",
+      "agentteams.telemetry.schema": 1,
+      "agentteams.telemetry.adapter": "qwenpaw",
+      "agentteams.telemetry.versions": "{'agentscope': '2.0.10', 'qwenpaw': '2.2.2.post1', 'openai': '2.33.0'}",
+      "agentteams.telemetry.capture_content": false,
+      "agentteams.telemetry.field_limit_bytes": 262144,
+      "agentteams.telemetry.adapter_errors": [],
+      "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+      "agentteams.outcome": "ok"
+    },
+    "generation_observations": 24,
+    "tool_observations": 25,
+    "usage": {
+      "input": 1003961,
+      "output": 13520,
+      "total": 1017481
+    },
+    "timings_present": true,
+    "dashboard_ui": {
+      "status": "verified",
+      "fixture_dashboard_version": "v1.4.1",
+      "normal_controller_admin_login": true,
+      "view": "workbench/tracing",
+      "checks": [
+        "actual trace selected",
+        "Task and room match",
+        "execution generation 2",
+        "runtime qwenpaw",
+        "actual native session matches SDK readback",
+        "24 model and 25 tool observations",
+        "token total 1017481 and duration 272.81 seconds"
+      ],
+      "limits": [
+        "Trace readback only; runtime switching UI is not implemented",
+        "No Matrix chat acceptance from Controller-only admin login",
+        "Three HTTP error nodes recovered; no injected fault acceptance"
+      ]
+    }
+  }
+]

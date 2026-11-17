@@ -466,7 +466,7 @@ def cutover():
         raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
     if MODE == "restart" and SOURCE == "hermes":
         assert_hermes_native_cache(before["native_sessions"]["hermes_shared"], cp, TASK_ID)
-    if SOURCE == "qwenpaw" and before["native_sessions"].get("qwenpaw_shared", {}).get("cache"):
+    if SOURCE == "qwenpaw":
         assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"], cp, TASK_ID)
     with boundary_path.open("x") as stream:
         json.dump(before, stream, indent=2)
@@ -613,30 +613,14 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         if MODE == "restart":
             assert native["openhuman"]["cache"]["session_id"] == before["native_sessions"]["openhuman"]["cache"]["session_id"], "valid native Task session was not reused"
     if SOURCE == "qwenpaw":
-        source_native = before["native_sessions"]
-        source_cp = before["task"]["execution"]["checkpoint"]
-        if source_native.get("qwenpaw_shared", {}).get("cache"):
-            assert_qwenpaw_native_cache(source_native["qwenpaw_shared"], source_cp, TASK_ID)
-        else:
-            assert source_native["qwenpaw"]["checkpoint_digest"] == hashlib.sha256(json.dumps(source_cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            assert len(source_native["qwenpaw_native"]) == 1
-            assert source_native["qwenpaw_native"][0]["agent_state_present"] and source_native["qwenpaw_native"][0]["task_mentioned"]
+        assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"],
+            before["task"]["execution"]["checkpoint"], TASK_ID)
     if TARGET == "qwenpaw":
-        common = native.get("qwenpaw_shared", {})
-        if common.get("routes"):
-            selected = assert_qwenpaw_native_route(common, TASK_ID, execution["generation"])
-            if MODE == "restart":
-                source = before["native_sessions"]["qwenpaw_shared"]
-                assert_qwenpaw_native_cache(source, before["task"]["execution"]["checkpoint"], TASK_ID)
-                assert selected["session_id"] == source["cache"]["native_ref"], "valid native Task session was not reused"
-        else:
-            selected = native["qwenpaw"]
-            assert selected["runtime"] == "qwenpaw" and selected["expires_at"] > time.time()
-            assert selected["checkpoint_digest"] == hashlib.sha256(json.dumps(cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            assert len(native["qwenpaw_native"]) == 1
-            assert native["qwenpaw_native"][0]["agent_state_present"] and native["qwenpaw_native"][0]["task_mentioned"]
-            if MODE == "restart":
-                assert selected["session_id"] == before["native_sessions"]["qwenpaw"]["session_id"], "valid native Task session was not reused"
+        selected = assert_qwenpaw_native_route(native["qwenpaw_shared"], TASK_ID, execution["generation"])
+        if MODE == "restart":
+            source = before["native_sessions"]["qwenpaw_shared"]
+            assert_qwenpaw_native_cache(source, before["task"]["execution"]["checkpoint"], TASK_ID)
+            assert selected["session_id"] == source["cache"]["native_ref"], "valid native Task session was not reused"
     if SOURCE == "hermes":
         selected = before["native_sessions"]["hermes"][-1]["session_id"]
         assert before["native_sessions"]["hermes_message_counts"].get(selected, 0) > 0, "new route still used a different warm native Agent"

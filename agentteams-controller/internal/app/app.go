@@ -584,6 +584,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		remoteDynamicClientProvider = a.remoteClientCache
 	}
 	if _, err := (&controller.WorkerReconciler{
+		RuntimeStore:                &service.WorkerRuntimeStore{Storage: a.oss},
 		Client:                      a.mgr.GetClient(),
 		ObservabilityReader:         a.mgr.GetAPIReader(),
 		Provisioner:                 a.provisioner,

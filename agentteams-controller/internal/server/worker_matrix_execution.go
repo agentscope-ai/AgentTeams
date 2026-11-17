@@ -136,6 +136,15 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		httputil.WriteJSON(w, 200, map[string]any{"input": input, "execution": execution, "etag": etag, "recovery": "done"})
 		return
 	}
+	op, err := executionHandoff(r.Context(), h.deps.OSS, name)
+	if err != nil {
+		writeError(w, 503, "Worker handoff state unavailable")
+		return
+	}
+	if err := checkHandoffExecution(op, start, request.Action, execution.Checkpoint, request.Checkpoint); err != nil {
+		writeError(w, 409, err.Error())
+		return
+	}
 	switch request.Action {
 	case "claim":
 		if matrixRoomRecoveryMode(state, input, execution) == "backfill" {
@@ -147,6 +156,7 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 				writeError(w, 409, "another process owns this message execution")
 				return
 			}
+			execution.HandoffID = ""
 			execution.Generation++
 			execution.InstanceID, execution.ProcessID, execution.Runtime = instance, request.ProcessID, runtime
 		}
@@ -203,6 +213,9 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		}
 		savedResult = string(data)
 	}
+	if op != nil && request.Action != "cancel" && execution.Checkpoint != nil && !unresolvedOperation(execution.Checkpoint) {
+		execution.State, execution.HandoffID = "released", op.ID
+	}
 	input.Execution, _ = json.Marshal(execution)
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -221,6 +234,9 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		} else {
 			writeError(w, 503, "message execution commit failed")
 		}
+		return
+	}
+	if request.Action == "claim" && !handoffClaimStillOpen(w, r, h.deps.OSS, name) {
 		return
 	}
 	if matrixRecoveryMode(execution) == "done" {

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -67,7 +69,7 @@ func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(
 		t.Fatalf("deprecated target %d", w.Code)
 	}
 	first := call(http.MethodPost, req, "*")
-	if first.Code != 200 || !strings.Contains(first.Body.String(), `"phase":"preflight"`) || !strings.Contains(first.Body.String(), `"process_id":"registered-process"`) || !strings.Contains(first.Body.String(), `"runtime":"hermes"`) {
+	if first.Code != 200 || !strings.Contains(first.Body.String(), `"phase":"draining"`) || !strings.Contains(first.Body.String(), `"process_id":"registered-process"`) || !strings.Contains(first.Body.String(), `"runtime":"hermes"`) {
 		t.Fatalf("preflight %d %s", first.Code, first.Body)
 	}
 	etag := first.Header().Get("ETag")
@@ -94,6 +96,14 @@ func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(
 	if w := call(http.MethodGet, "", ""); w.Code != 200 || w.Header().Get("ETag") != etag || w.Body.String() != first.Body.String() {
 		t.Fatalf("new controller lost record while worker offline %d %s", w.Code, w.Body)
 	}
+	if w := call(http.MethodPost, req, "*"); w.Code != 200 || w.Header().Get("ETag") != etag {
+		t.Fatalf("offline duplicate %d %s", w.Code, w.Body)
+	}
+	caller.ServiceAccountNamespace = "other"
+	if w := call(http.MethodGet, "", ""); w.Code != 403 {
+		t.Fatalf("foreign operator response %d", w.Code)
+	}
+	caller.ServiceAccountNamespace = ""
 	if _, err := store.GetObject(t.Context(), "agents/stable-name/runtime/state.json"); err != nil {
 		t.Fatal(err)
 	}
@@ -105,5 +115,103 @@ func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(
 	caller.WorkerName = "member-cr"
 	if w := call(http.MethodPost, changed, etag); w.Code != 403 {
 		t.Fatalf("source worker requested replacement %d %s", w.Code, w.Body)
+	}
+}
+
+func TestRuntimeHandoffDrainsMatrixAtPersistedBoundary(t *testing.T) {
+	f := newMatrixExecutionFixture(t, nil)
+	f.expect("claim", nil, 200)
+	f.expect("checkpoint", &taskCheckpoint{Version: 1, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two", "three"}}, 200)
+	store := service.WorkerRuntimeStore{Storage: f.storage}
+	if _, _, err := store.Preflight(t.Context(), "runtime-alice", "switch", "codex", f.start, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.expect("claim", nil, 409)
+	f.expect("checkpoint", &taskCheckpoint{Version: 2, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two", "three"}}, 409)
+	f.expect("checkpoint", &taskCheckpoint{Version: 2, CompletedSteps: []string{"one"}, Operation: &taskOperation{ID: "side-effect", State: "started"}}, 409)
+	stepTwo := f.artifact("two", "persisted step two")
+	f.expect("checkpoint", &taskCheckpoint{Version: 2, CompletedSteps: []string{"one", "two"}, RemainingSteps: []string{"three"}, Artifacts: []taskArtifact{stepTwo}}, 200)
+	f.expect("checkpoint", &taskCheckpoint{Version: 3, CompletedSteps: []string{"one", "two", "three"}, Artifacts: []taskArtifact{stepTwo}}, 409)
+	input, err := f.h.store.Input(t.Context(), "runtime-alice", f.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var execution taskExecution
+	if err := json.Unmarshal(input.Execution, &execution); err != nil || execution.State != "released" || execution.HandoffID != "switch" || execution.Checkpoint.Version != 2 || len(execution.Checkpoint.Artifacts) != 1 {
+		t.Fatalf("lost released boundary: %+v %v", execution, err)
+	}
+	state, _, err := f.h.store.Load(t.Context(), "runtime-alice")
+	if err != nil || len(state.Pending) != 1 {
+		t.Fatalf("pending input discarded: %+v %v", state, err)
+	}
+}
+
+func TestRuntimeHandoffBlocksClaimStraddlingHandoffWrite(t *testing.T) {
+	f := newMatrixExecutionFixture(t, nil)
+	storage := &matrixExecutionCASStore{Memory: f.storage, eventKey: f.objectKey()}
+	f.h.deps.OSS = storage
+	storage.before = func() {
+		_, _, err := (service.WorkerRuntimeStore{Storage: f.storage}).Preflight(t.Context(), "runtime-alice", "switch", "codex", f.start, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.expect("claim", nil, 409)
+}
+
+func TestRuntimeHandoffDrainsTaskAfterSideEffectVerification(t *testing.T) {
+	ctx := t.Context()
+	store := ossfake.NewMemory()
+	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-dev", "status": "in_progress"}))
+	project := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+	h := NewTaskRecoveryHandler(project, ServerDeps{Namespace: "test-ns"})
+	start := service.WorkerStart{InstanceID: "docker/one", ProcessID: "proc-one", Runtime: "hermes"}
+	h.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
+		return start.InstanceID, start.Runtime, nil
+	}
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	call := func(action string, cp *taskCheckpoint, expected int) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"action": action, "instance_id": start.InstanceID, "process_id": start.ProcessID, "checkpoint": cp})
+		req := withCaller(httptest.NewRequest(http.MethodPost, "/api/v1/tasks/t1/execution?team=alpha-team", bytes.NewReader(body)), caller)
+		req.SetPathValue("id", "t1")
+		req.Header.Set("If-Match", taskMetaETag(t, store, taskMetaKey))
+		w := httptest.NewRecorder()
+		h.UpdateExecution(w, req)
+		if w.Code != expected {
+			t.Fatalf("%s got %d want %d %s", action, w.Code, expected, w.Body)
+		}
+	}
+	call("claim", nil, 200)
+	call("checkpoint", &taskCheckpoint{Version: 1, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two", "three"}, Operation: &taskOperation{ID: "external", State: "started"}}, 200)
+	_, _, err := (service.WorkerRuntimeStore{Storage: store}).Preflight(ctx, "alpha-dev", "switch", "codex", start, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call("claim", nil, 409)
+	call("release", &taskCheckpoint{Version: 2, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two", "three"}}, 409)
+	verified := &taskCheckpoint{Version: 2, CompletedSteps: []string{"one", "two"}, RemainingSteps: []string{"three"}, Operation: &taskOperation{ID: "external", State: "verified", Evidence: "external durable receipt"}}
+	caller.ServiceAccountNamespace = "other"
+	call("checkpoint", verified, 403)
+	caller.ServiceAccountNamespace = ""
+	call("checkpoint", verified, 200)
+	call("claim", nil, 409)
+	data, err := store.GetObject(ctx, taskMetaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved struct {
+		Status    string
+		Execution taskExecution
+	}
+	if err := json.Unmarshal(data, &saved); err != nil || saved.Status != "in_progress" || saved.Execution.State != "released" || saved.Execution.HandoffID != "switch" || saved.Execution.Checkpoint.Operation.Evidence != "external durable receipt" {
+		t.Fatalf("lost task boundary: %+v %v", saved, err)
+	}
+}
+
+func TestRuntimeHandoffPreflightWithMissingBackend(t *testing.T) {
+	h := NewTaskRecoveryHandler(nil, ServerDeps{})
+	if _, _, err := h.runningWorkerInstance(t.Context(), &v1beta1.Worker{}); err == nil {
+		t.Fatal("missing backend provided source identity")
 	}
 }

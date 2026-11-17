@@ -18,6 +18,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 )
 
 // Execution is part of the task CAS, never the notification outbox lease.
@@ -29,6 +30,7 @@ type taskExecution struct {
 	Runtime    string          `json:"runtime"`
 	State      string          `json:"state"`
 	Checkpoint *taskCheckpoint `json:"checkpoint,omitempty"`
+	HandoffID  string          `json:"handoff_id,omitempty"`
 }
 
 type taskArtifact struct {
@@ -234,7 +236,7 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		return
 	}
 	caller := authpkg.CallerFromContext(r.Context())
-	if !recoveryCaller(caller) {
+	if !recoveryCaller(caller) || (caller.ServiceAccountNamespace != "" && caller.ServiceAccountNamespace != h.deps.Namespace) {
 		writeError(w, 403, "team worker identity required")
 		return
 	}
@@ -296,6 +298,25 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		writeError(w, 409, "invalid authoritative execution record")
 		return
 	}
+	name := caller.Username
+	if h.deps.Client != nil || h.deps.APIReader != nil {
+		worker, err := NewCoordinationHandler(h.deps).worker(r.Context(), caller.Username)
+		if err != nil {
+			writeError(w, 403, "Worker identity unavailable")
+			return
+		}
+		name = worker.Spec.EffectiveWorkerName(worker.Name)
+	}
+	op, err := executionHandoff(r.Context(), h.project.oss, name)
+	if err != nil {
+		writeError(w, 503, "Worker handoff state unavailable")
+		return
+	}
+	start := service.WorkerStart{InstanceID: instance, ProcessID: input.ProcessID, Runtime: runtime}
+	if err := checkHandoffExecution(op, start, input.Action, execution.Checkpoint, input.Checkpoint); err != nil {
+		writeError(w, 409, err.Error())
+		return
+	}
 	sameProcess := execution.InstanceID == instance && execution.ProcessID == input.ProcessID
 	spec, err := h.project.oss.GetObject(r.Context(), path.Dir(key)+"/spec.md")
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -319,6 +340,7 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 				writeError(w, 409, "another process owns this live instance")
 				return
 			}
+			execution.HandoffID = ""
 			execution.Generation++
 			execution.InstanceID, execution.ProcessID, execution.Runtime = instance, input.ProcessID, runtime
 		}
@@ -394,6 +416,9 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		execution.Checkpoint = &cp
 		savedResult = string(result)
 	}
+	if op != nil && execution.Checkpoint != nil && !unresolvedOperation(execution.Checkpoint) {
+		execution.State, execution.HandoffID = "released", op.ID
+	}
 	task["execution"], _ = json.Marshal(execution)
 	body, _ := json.Marshal(task)
 	strict, ok := h.project.oss.(conditionalWriter)
@@ -407,6 +432,9 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		} else {
 			writeError(w, 503, "execution commit failed")
 		}
+		return
+	}
+	if input.Action == "claim" && !handoffClaimStillOpen(w, r, h.project.oss, name) {
 		return
 	}
 	w.Header().Set("ETag", contentETag(body))

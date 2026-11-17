@@ -49,6 +49,7 @@ const (
 type WorkerReconciler struct {
 	client.Client
 	ObservabilityReader client.Reader
+	RuntimeStore        *service.WorkerRuntimeStore
 
 	Provisioner                 service.WorkerProvisioner
 	Deployer                    service.WorkerDeployer
@@ -194,6 +195,16 @@ func edgeHeartbeatStale(lastHeartbeat string, timeout time.Duration) bool {
 // member reconcile phases, and writes runtime state back to Worker.Status.
 func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker, state *MemberState) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
+	if w.Annotations[service.WorkerRuntimeHandoffAnnotation] != "" && r.RuntimeStore != nil && w.Spec.DesiredContainerMan() && w.Spec.DesiredState() == "Running" && (w.Spec.DeployMode == nil || *w.Spec.DeployMode != v1beta1.DeployModeEdge) {
+		runtimeState, _, err := r.RuntimeStore.BeginDrain(ctx, w.Spec.EffectiveWorkerName(w.Name))
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		if runtimeState.Handoff != nil {
+			// Preserve the source while its executions publish a safe boundary.
+			return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
+		}
+	}
 
 	deps := MemberDeps{
 		ObservabilityReader:         r.ObservabilityReader,

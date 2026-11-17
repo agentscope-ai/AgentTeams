@@ -12,6 +12,10 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
 
+// WorkerRuntimeHandoffAnnotation enrolls a Worker in reconciliation of its
+// durable runtime record. The storage record alone owns operation identity.
+const WorkerRuntimeHandoffAnnotation = "agentteams.io/runtime-handoff"
+
 // WorkerRuntimeState belongs to the stable Worker storage identity. Native
 // sessions, task checkpoints and Matrix consumption retain their own records.
 type WorkerRuntimeState struct {
@@ -32,6 +36,9 @@ type WorkerHandoff struct {
 type WorkerRuntimeStore struct{ Storage oss.StorageClient }
 
 func (s WorkerRuntimeStore) Load(ctx context.Context, name string) (*WorkerRuntimeState, string, error) {
+	if s.Storage == nil {
+		return nil, "", errors.New("Worker runtime storage unavailable")
+	}
 	prefix, err := workerMatrixPrefix(name)
 	if err != nil {
 		return nil, "", err
@@ -49,10 +56,14 @@ func (s WorkerRuntimeStore) Load(ctx context.Context, name string) (*WorkerRunti
 	if !json.Valid(data) || dec.Decode(&state) != nil || state.SchemaVersion != 1 || state.Kind != "WorkerRuntimeState" || state.MemberPrefix != prefix || state.ActiveStart == nil || !validRuntimeStart(*state.ActiveStart) {
 		return nil, "", fmt.Errorf("%w: unsupported or foreign runtime state", ErrWorkerStateInvalid)
 	}
-	if h := state.Handoff; h != nil && (h.Phase != "preflight" || !validHandoffID(h.ID) || h.Source != *state.ActiveStart || !validHandoffTarget(h.TargetRuntime)) {
+	if h := state.Handoff; h != nil && ((h.Phase != "preflight" && h.Phase != "draining") || !validHandoffID(h.ID) || h.Source != *state.ActiveStart || !validHandoffTarget(h.TargetRuntime)) {
 		return nil, "", fmt.Errorf("%w: unsupported handoff record", ErrWorkerStateInvalid)
 	}
 	return &state, workerMatrixETag(data), nil
+}
+
+func ValidWorkerHandoffRequest(id, target string) bool {
+	return validHandoffID(id) && validHandoffTarget(target)
 }
 
 func validRuntimeStart(start WorkerStart) bool {
@@ -64,8 +75,7 @@ func validHandoffTarget(runtime string) bool {
 }
 
 // Preflight records a planned switch before either instance is modified. An
-// exact retry after a lost response returns the original operation. A changed
-// request must name the version it is replacing.
+// exact retry after a lost response returns the current phase of that operation.
 func (s WorkerRuntimeStore) Preflight(ctx context.Context, name, id, target string, source WorkerStart, expected string) (*WorkerRuntimeState, string, error) {
 	if !validRuntimeStart(source) || !validHandoffTarget(target) || !validHandoffID(id) {
 		return nil, "", fmt.Errorf("%w: a registered source start, request ID and supported target Harness are required", ErrWorkerStateInvalid)
@@ -75,17 +85,36 @@ func (s WorkerRuntimeStore) Preflight(ctx context.Context, name, id, target stri
 		return nil, "", err
 	}
 	handoff := WorkerHandoff{ID: id, Phase: "preflight", Source: source, TargetRuntime: target}
-	if h := state.Handoff; h != nil && h.ID == id {
-		if *h == handoff {
+	if h := state.Handoff; h != nil {
+		if h.ID == id && h.Source == source && h.TargetRuntime == target {
 			return state, etag, nil
 		}
-		return nil, "", fmt.Errorf("%w: request ID already identifies another operation", ErrWorkerStateConflict)
+		return nil, "", fmt.Errorf("%w: another handoff is already in progress", ErrWorkerStateConflict)
 	}
 	if expected != etag {
 		return nil, "", ErrWorkerStateConflict
 	}
 	state.ActiveStart = &source
 	state.Handoff = &handoff
+	return s.save(ctx, state, etag)
+}
+
+// BeginDrain can be called by the HTTP request and by the reconciler after a
+// crash. A pending request already closes claim admission, even between writes.
+func (s WorkerRuntimeStore) BeginDrain(ctx context.Context, name string) (*WorkerRuntimeState, string, error) {
+	state, etag, err := s.Load(ctx, name)
+	if err != nil || state.Handoff == nil || state.Handoff.Phase != "preflight" {
+		return state, etag, err
+	}
+	state.Handoff.Phase = "draining"
+	state, etag, err = s.save(ctx, state, etag)
+	if errors.Is(err, ErrWorkerStateConflict) {
+		return s.Load(ctx, name)
+	}
+	return state, etag, err
+}
+
+func (s WorkerRuntimeStore) save(ctx context.Context, state *WorkerRuntimeState, etag string) (*WorkerRuntimeState, string, error) {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return nil, "", err

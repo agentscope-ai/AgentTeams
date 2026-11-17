@@ -12,6 +12,10 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
 
+func boundReplyDevice(attempt *matrixReplyAttempt) bool {
+	return attempt != nil && attempt.State == "sending" && strings.HasPrefix(attempt.User, "@") && strings.Contains(attempt.User, ":") && strings.TrimSpace(attempt.Device) != ""
+}
+
 // Tasks and ordinary Matrix messages use the same checkpoint invariants.
 // The caller supplies the authoritative object's permitted artifact namespace.
 func validateWorkCheckpoint(ctx context.Context, store oss.StorageClient, key, artifactPrefix string, old, cp *taskCheckpoint) error {
@@ -21,6 +25,14 @@ func validateWorkCheckpoint(ctx context.Context, store oss.StorageClient, key, a
 	}
 	if cp == nil || cp.Version != version {
 		return fmt.Errorf("checkpoint version must advance from the authoritative snapshot")
+	}
+	if a := cp.ReplyAttempt; a != nil {
+		if cp.Delivery == "" || (a.State != "ready" && !boundReplyDevice(a)) || (a.State == "ready" && (a.User != "" || a.Device != "")) {
+			return fmt.Errorf("invalid saved reply device binding")
+		}
+		if (old == nil || old.ReplyTxn != cp.ReplyTxn) && (a.State != "ready" || cp.Delivery != "pending") {
+			return fmt.Errorf("save the result before binding its first delivery device")
+		}
 	}
 	if old != nil && old.Delivery == "pending" && (old.Result == nil || cp.Result == nil || *old.Result != *cp.Result || cp.ReplyTxn != old.ReplyTxn || (cp.Delivery != "pending" && cp.Delivery != "delivered")) {
 		return fmt.Errorf("acknowledge delivery before changing a pending saved reply")

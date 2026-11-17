@@ -18,9 +18,9 @@ def matrix_event_key(room_id, event_id):
 
 
 class WorkerMatrix:
-    def __init__(self, runtime, *, recovery=None):
+    def __init__(self, runtime, *, recovery=None, device_delivery=False):
         self.runtime = runtime
-        self.recovery = recovery or Recovery()
+        self.recovery = recovery or Recovery(device_delivery=device_delivery)
 
     def load(self):
         return self.recovery.request("GET", "runtime/matrix")
@@ -295,6 +295,8 @@ class WorkerMatrix:
                   delivery="pending", reply_txn="matrix-reply:" + Recovery.digest([
                       entry["input"]["member_prefix"], entry["input"]["room_id"],
                       entry["input"]["event_id"], cp.get("version", 0)+1, artifact["sha256"]]))
+        if getattr(self.recovery, "device_delivery", False) is True:
+            cp["reply_attempt"] = {"state": "ready"}
         cp.pop("reply_event", None)
         return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "checkpoint", cp))
 

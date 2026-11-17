@@ -25,7 +25,8 @@ class RecoveryUnavailable(ValueError):
 
 
 class Recovery:
-    def __init__(self, *, request=None):
+    def __init__(self, *, request=None, device_delivery=False):
+        self.device_delivery = device_delivery
         self.request = request or self._request
         self.process = os.environ["AGENTTEAMS_PROCESS_ID"]
 
@@ -33,6 +34,8 @@ class Recovery:
         token = Path(os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE") or "/var/run/secrets/agentteams/token").read_text().strip()
         headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json",
                    "X-AgentTeams-Process-ID": self.process}
+        if self.device_delivery:
+            headers["X-AgentTeams-Reply-Scope"] = "device-v1"
         if create and etag:
             raise ValueError("Use one conditional write precondition")
         if create:
@@ -94,6 +97,10 @@ class Recovery:
         subprocess.run(["mc", "pipe", os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/" + key],
                        input=data, check=True, capture_output=True, timeout=30)
         version = cp.get("version", 0) + 1
+        if self.device_delivery:
+            cp["reply_attempt"] = {"state": "ready"}
+        else:
+            cp.pop("reply_attempt", None)
         cp.pop("reply_event", None)
         cp.update(version=version, result={"key": key, "sha256": digest, "size": len(data)},
                   delivery="pending", reply_txn="task-reply:" + hashlib.sha256(f"{team}/{task_id}/{version}/{digest}".encode()).hexdigest())
@@ -146,7 +153,7 @@ class Recovery:
             # Submission already persisted the report. Claim verifies its bytes
             # and reconstructs delivery; a lost native callback is not new work.
             return
-        for field in ("result", "delivery", "reply_txn", "reply_event"):
+        for field in ("result", "delivery", "reply_txn", "reply_event", "reply_attempt"):
             cp.pop(field, None)
         operation = {"id": "native-turn:" + self.process}
         cp.update(version=cp.get("version", 0)+1, operation={**operation, "state": "unknown"})

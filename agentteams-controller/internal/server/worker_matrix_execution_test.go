@@ -328,3 +328,46 @@ func TestMatrixMessageLegacyNativeCommitNeedsVerificationBeforeExecution(t *test
 	}
 	f.expect("release", &taskCheckpoint{Version: 2}, 409)
 }
+
+func TestSavedReplyDeviceBindingIsImmutableAndExclusive(t *testing.T) {
+	ready := &matrixReplyAttempt{State: "ready"}
+	a := &matrixReplyAttempt{State: "sending", User: "@worker:test", Device: "A"}
+	b := &matrixReplyAttempt{State: "sending", User: "@worker:test", Device: "B"}
+	old := taskCheckpoint{Version: 2, Delivery: "pending", ReplyTxn: "txn", ReplyAttempt: ready}
+	bound := old
+	bound.Version++
+	bound.ReplyAttempt = a
+	if !savedReplyUpdateOnly(&old, &bound) {
+		t.Fatal("could not bind unsent result")
+	}
+	for _, change := range []func(*taskCheckpoint){
+		func(cp *taskCheckpoint) { cp.ReplyAttempt = b },
+		func(cp *taskCheckpoint) { cp.ReplyAttempt = ready },
+		func(cp *taskCheckpoint) { cp.ReplyAttempt = nil },
+		func(cp *taskCheckpoint) { cp.CompletedSteps = []string{"extra"} },
+	} {
+		next := bound
+		change(&next)
+		if savedReplyUpdateOnly(&bound, &next) {
+			t.Fatalf("saved result admitted another send scope: %+v", next)
+		}
+	}
+	done := bound
+	done.Version++
+	done.Delivery, done.ReplyEvent = "delivered", "$actual"
+	if !savedReplyUpdateOnly(&bound, &done) || savedReplyUpdateOnly(&old, &done) {
+		t.Fatal("ACK bypassed its original binding")
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	if canClaimSavedReply(req, &bound) {
+		t.Fatal("legacy sender claimed device-bound reply")
+	}
+	req.Header.Set("X-AgentTeams-Reply-Scope", "device-v1")
+	if !canClaimSavedReply(req, &bound) {
+		t.Fatal("capable sender could not recover bound reply")
+	}
+	old.ReplyAttempt = nil
+	if !canClaimSavedReply(httptest.NewRequest("GET", "/", nil), &old) {
+		t.Fatal("legacy record became unreadable")
+	}
+}

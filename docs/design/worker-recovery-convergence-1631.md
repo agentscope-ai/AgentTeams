@@ -113,7 +113,9 @@ task_notification 或 control；Task 通知继续验证 #1646 的 receipt，不�
 已进入上下文的普通输入也可能尚未执行，不能因为 read 就从 pending 删除。
 纯上下文／控制事件只有经既有策略明确处理后，才能以原因记录结束接管。
 
-### 持久化顺序与版本
+#支持设备绑定投递的适配器以 `X-AgentTeams-Reply-Scope: device-v1` 领取执行权。Task 和普通消息都先保存结果摘要、稳定的 `reply_txn` 及 `reply_attempt={"state":"ready"}`。首次发送前，用当前 Matrix token 调用 `/account/whoami`，通过检查点 CAS 持久化 `{"state":"sending","user_id":"…","device_id":"…"}`。同一账户、设备和事务号可以重试。在其他设备上，只有房间、发送者、事务标记和保存的正文都吻合的既有事件，才能用来确认投递。证据缺失时保留待核验结果。旧格式的待发记录仍可读，新的适配器先查可验证的历史事件。实际 Tuwunel 的跨设备事务行为见[隔离双设备试验](../development/evidence/runtime-recovery-1631-matrix-device-scope.json)。
+
+## 持久化顺序与版本
 
 1. 保存输入对象，确认远端可读，再条件提交 pending 索引与覆盖它的游标。
    `/sync` 出现 limited 时间线时保存缺口和分页位置，补齐之前不宣布完整消费。

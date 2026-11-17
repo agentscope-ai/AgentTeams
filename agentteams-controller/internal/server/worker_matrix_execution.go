@@ -16,11 +16,30 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 )
 
-func messageDeliveryAckOnly(old, next *taskCheckpoint) bool {
-	if next == nil || next.Delivery != "delivered" {
+func canClaimSavedReply(r *http.Request, cp *taskCheckpoint) bool {
+	return cp == nil || cp.Delivery != "pending" || cp.ReplyAttempt == nil || r.Header.Get("X-AgentTeams-Reply-Scope") == "device-v1"
+}
+
+func savedReplyUpdateOnly(old, next *taskCheckpoint) bool {
+	if next == nil {
 		return false
 	}
 	a, b := *old, *next
+	switch next.Delivery {
+	case "pending":
+		if old.ReplyAttempt == nil || old.ReplyAttempt.State != "ready" || !boundReplyDevice(next.ReplyAttempt) || next.ReplyEvent != old.ReplyEvent {
+			return false
+		}
+		b.ReplyAttempt = a.ReplyAttempt
+	case "delivered":
+		// Legacy pending results can be acknowledged after positive Matrix
+		// event verification. A new pending result first binds a device.
+		if old.ReplyAttempt != nil && !boundReplyDevice(old.ReplyAttempt) {
+			return false
+		}
+	default:
+		return false
+	}
 	b.Version, b.SavedAt, b.Delivery, b.ReplyEvent = a.Version, a.SavedAt, a.Delivery, a.ReplyEvent
 	x, err := json.Marshal(a)
 	y, otherErr := json.Marshal(b)
@@ -146,6 +165,10 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		writeError(w, 409, err.Error())
 		return
 	}
+	if request.Action == "claim" && !canClaimSavedReply(r, execution.Checkpoint) {
+		writeError(w, 409, "this saved result requires device-scoped Matrix delivery")
+		return
+	}
 	switch request.Action {
 	case "claim":
 		if matrixRoomRecoveryMode(state, input, execution) == "backfill" {
@@ -182,7 +205,7 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 			execution.State = "cancelled"
 			break
 		}
-		if matrixRecoveryMode(execution) == "deliver" && (request.Action != "checkpoint" || !messageDeliveryAckOnly(execution.Checkpoint, request.Checkpoint)) {
+		if matrixRecoveryMode(execution) == "deliver" && (request.Action != "checkpoint" || !savedReplyUpdateOnly(execution.Checkpoint, request.Checkpoint)) {
 			writeError(w, 409, "a saved message result permits only delivery acknowledgement or cancellation")
 			return
 		}

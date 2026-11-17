@@ -1172,7 +1172,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 # otherwise startup can mistake it for a delivered final reply.
                 from task_recovery import Recovery
                 from mcp.common.config import _runtime_team_name
-                cp = {key: value for key, value in cp.items() if key not in {"result", "delivery", "reply_txn", "reply_event"}}
+                cp = {key: value for key, value in cp.items() if key not in {"result", "delivery", "reply_txn", "reply_event", "reply_attempt"}}
                 cp["version"] += 1
                 task["execution"] = Recovery().checkpoint(task_id, _runtime_team_name(), cp)["execution"]
             try:

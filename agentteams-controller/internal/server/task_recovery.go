@@ -45,17 +45,24 @@ type taskOperation struct {
 	Evidence string `json:"evidence,omitempty"`
 }
 
+type matrixReplyAttempt struct {
+	State  string `json:"state"`
+	User   string `json:"user_id,omitempty"`
+	Device string `json:"device_id,omitempty"`
+}
+
 type taskCheckpoint struct {
-	Version        uint64         `json:"version"`
-	CompletedSteps []string       `json:"completed_steps"`
-	RemainingSteps []string       `json:"remaining_steps"`
-	Operation      *taskOperation `json:"operation,omitempty"`
-	Artifacts      []taskArtifact `json:"artifacts"`
-	Result         *taskArtifact  `json:"result,omitempty"`
-	Delivery       string         `json:"delivery,omitempty"` // pending, delivered
-	ReplyTxn       string         `json:"reply_txn,omitempty"`
-	ReplyEvent     string         `json:"reply_event,omitempty"`
-	SavedAt        string         `json:"saved_at"`
+	Version        uint64              `json:"version"`
+	CompletedSteps []string            `json:"completed_steps"`
+	RemainingSteps []string            `json:"remaining_steps"`
+	Operation      *taskOperation      `json:"operation,omitempty"`
+	Artifacts      []taskArtifact      `json:"artifacts"`
+	Result         *taskArtifact       `json:"result,omitempty"`
+	Delivery       string              `json:"delivery,omitempty"` // pending, delivered
+	ReplyTxn       string              `json:"reply_txn,omitempty"`
+	ReplyAttempt   *matrixReplyAttempt `json:"reply_attempt,omitempty"`
+	ReplyEvent     string              `json:"reply_event,omitempty"`
+	SavedAt        string              `json:"saved_at"`
 }
 
 type TaskRecoveryHandler struct {
@@ -366,6 +373,10 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		}
 		savedResult = string(result)
 	}
+	if input.Action == "claim" && !canClaimSavedReply(r, execution.Checkpoint) {
+		writeError(w, 409, "this saved result requires device-scoped Matrix delivery")
+		return
+	}
 	switch input.Action {
 	case "claim":
 		if !sameProcess {
@@ -386,7 +397,7 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 			writeError(w, 409, "execution ownership changed")
 			return
 		}
-		if cp := execution.Checkpoint; cp != nil && cp.Delivery == "pending" && (input.Action != "checkpoint" || !messageDeliveryAckOnly(cp, input.Checkpoint)) {
+		if cp := execution.Checkpoint; cp != nil && cp.Delivery == "pending" && (input.Action != "checkpoint" || !savedReplyUpdateOnly(cp, input.Checkpoint)) {
 			writeError(w, 409, "a saved Task result permits only acknowledgement of its reply")
 			return
 		}
@@ -446,6 +457,10 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		cp.Result = &taskArtifact{Key: resultKey, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(result))}
 		txn := sha256.Sum256([]byte(key + "/" + submissionID + "/" + cp.Result.SHA256))
 		cp.Delivery, cp.ReplyTxn, cp.ReplyEvent = "pending", "task-reply:"+hex.EncodeToString(txn[:]), ""
+		cp.ReplyAttempt = nil
+		if r.Header.Get("X-AgentTeams-Reply-Scope") == "device-v1" {
+			cp.ReplyAttempt = &matrixReplyAttempt{State: "ready"}
+		}
 		if err := h.validateCheckpoint(r.Context(), key, old, &cp); err != nil {
 			writeError(w, 409, err.Error())
 			return

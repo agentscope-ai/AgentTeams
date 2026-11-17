@@ -1,0 +1,15 @@
+{
+  "fixture": "recovery-1631-live-20261118-v22-controller",
+  "room_id": "!bcmAYtflWUXxBtAk6h:recovery-1631.test",
+  "observed_via_device": "AT1631_TEST_B_5a11f1afd7",
+  "binding": {
+    "state": "sending",
+    "user_id": "@recovery-admin:recovery-1631.test",
+    "device_id": "AT1631_TEST_A_5a11f1afd7"
+  },
+  "transaction": "matrix-reply:5a11f1afd7",
+  "visible_matching_events": [
+    "$dqEEhtTlLeKnqnwI-ukFyrrozjt3ZcaW236yTJ0_kvs"
+  ],
+  "scope": "Real Tuwunel and two real device tokens; send acknowledgement loss injected immediately after HTTP 200. Binding persistence callback is an in-memory fixture."
+}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
@@ -150,6 +151,14 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		if matrixRoomRecoveryMode(state, input, execution) == "backfill" {
 			writeError(w, 409, "backfill or verify the room's missing history before new inference")
 			return
+		}
+		// Older adapters could persist a native input and then execute tools
+		// without a shared execution record. Adoption cannot infer that the
+		// persisted user row was the last action performed.
+		if execution.Generation == 0 && input.NativeCommit != nil {
+			execution.Checkpoint = &taskCheckpoint{Version: 1, SavedAt: time.Now().UTC().Format(time.RFC3339Nano), Operation: &taskOperation{
+				ID: "legacy-native:" + r.PathValue("key"), State: "unknown", Evidence: input.NativeCommit.NativeDigest,
+			}}
 		}
 		if !sameProcess {
 			if execution.InstanceID == instance {

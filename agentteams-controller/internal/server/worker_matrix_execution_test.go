@@ -301,3 +301,30 @@ func TestMatrixMessageGapBlocksInferenceButAllowsSavedResultDelivery(t *testing.
 		}
 	}
 }
+
+func TestMatrixMessageLegacyNativeCommitNeedsVerificationBeforeExecution(t *testing.T) {
+	f := newMatrixExecutionFixture(t, nil)
+	input, _, err := f.h.store.InputSnapshot(t.Context(), "runtime-alice", f.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.NativeCommit = &service.WorkerMatrixNativeCommit{Start: f.start, Runtime: f.start.Runtime, NativeRef: "actual-old-session", NativeDigest: strings.Repeat("a", 64)}
+	input.InputState = "native_committed"
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.storage.PutObject(t.Context(), f.objectKey(), body); err != nil {
+		t.Fatal(err)
+	}
+	f.replace()
+	claimed := f.expect("claim", nil, 200)
+	var execution taskExecution
+	if err := json.Unmarshal(claimed["execution"], &execution); err != nil {
+		t.Fatal(err)
+	}
+	if string(claimed["recovery"]) != `"verify"` || execution.Checkpoint == nil || !unresolvedOperation(execution.Checkpoint) {
+		t.Fatalf("old native receipt permitted a fresh execution: %s", claimed["execution"])
+	}
+	f.expect("release", &taskCheckpoint{Version: 2}, 409)
+}

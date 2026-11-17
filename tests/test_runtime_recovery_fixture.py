@@ -126,6 +126,18 @@ class EffectReceiptTests(unittest.TestCase):
             self.invoke()
         self.assertEqual(self.receipts(), [])
 
+    def test_model_registered_start_without_oracle_intent_is_verified_before_effect(self):
+        self.task["recovery_fixture"]["oracle_version"] = 4
+        self.task["execution"].update(state="needs_verification", checkpoint={"version": 1,
+            "completed_steps": [], "remaining_steps": ["one", "two", "three"],
+            "operation": {"id": "fixture:stable:one", "state": "started"}})
+        self.invoke()
+        proof = self.ledger.proof("team", "stable")
+        self.assertEqual([row["method"] for row in proof["calls"]], ["GET", "REGISTER", "POST"])
+        self.assertEqual(proof["calls"][0]["verification"], "never_authorized")
+        self.assertTrue(all(row["accepted"] for row in proof["calls"]))
+        self.assertEqual([effect["step"] for effect in proof["effects"]], ["one"])
+
     def test_interruption_after_external_effect_requires_readback_before_continuing(self):
         self.task["recovery_fixture"]["pause_after_effect"] = "one"
         with patch("time.sleep", side_effect=RuntimeError("injected process stop")):

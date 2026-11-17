@@ -3,10 +3,24 @@ import unittest
 from unittest.mock import patch
 
 with patch.dict("os.environ", {"RECOVERY_E2E_FROM": "codex", "RECOVERY_E2E_TO": "hermes", "RECOVERY_E2E_MODE": "replace", "RECOVERY_E2E_CASE": "01"}):
-    from runtime_recovery_e2e import assert_step_boundaries
+    from runtime_recovery_e2e import assert_effect_authorization, assert_step_boundaries
 
 
 class ReceiptBoundaryTests(unittest.TestCase):
+    def test_independent_proof_requires_single_effect_after_same_start_registration(self):
+        effect = {"team_id": "team", "task_id": "T", "step": "two", "instance_id": "target",
+                  "process_id": "process", "generation": 2, "checkpoint_version": 3, "executed_at_ns": 30}
+        register = {**effect, "method": "REGISTER", "at_ns": 10, "accepted": True}
+        post = {**effect, "method": "POST", "at_ns": 20, "accepted": True}
+        assert_effect_authorization({"calls": [register, post], "intents": [effect]}, effect)
+        for calls, intents in [
+            ([post], [effect]), ([register, post, post], [effect]),
+            ([{**register, "at_ns": 25}, post], [effect]),
+            ([register, post], [{**effect, "generation": 1}]),
+        ]:
+            with self.subTest(calls=calls, intents=intents), self.assertRaises(AssertionError):
+                assert_effect_authorization({"calls": calls, "intents": intents}, effect)
+
     def test_registered_start_and_verified_boundary_before_the_next_step(self):
         assert_step_boundaries([{"checkpoint_version": n} for n in [1, 5, 7]], 4)
         assert_step_boundaries([{"checkpoint_version": n} for n in [1, 5, 7]], 2)

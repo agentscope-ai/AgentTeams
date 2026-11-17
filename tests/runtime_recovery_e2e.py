@@ -5,6 +5,7 @@ installation. Runtime/model execution evidence is separate from setup readiness.
 """
 import json
 import base64
+from datetime import datetime
 import hashlib
 import os
 import re
@@ -35,6 +36,7 @@ if (not isinstance(image_overrides, dict)
 HARNESS_IMAGES.update(image_overrides)
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
+OPERATOR_HANDOFF = os.getenv("RECOVERY_E2E_HANDOFF") == "1"
 FAULT = os.getenv("RECOVERY_E2E_FAULT", "")
 if FAULT not in {"", "after-effect"}:
     raise ValueError("Unknown recovery fault injection")
@@ -42,6 +44,8 @@ if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {
     raise ValueError("Select a packaged recovery Harness and replace/restart mode")
 if (MODE == "restart") != (SOURCE == TARGET):
     raise ValueError("Restart keeps the Harness; replacement switches between packaged Harnesses")
+if OPERATOR_HANDOFF and MODE != "replace":
+    raise ValueError("The operator handoff requires a target Harness")
 CASE = os.getenv("RECOVERY_E2E_CASE", "01")
 if len(CASE) != 2 or not CASE.isdecimal():
     raise ValueError("RECOVERY_E2E_CASE must be two decimal digits")
@@ -185,7 +189,7 @@ print(json.dumps(any(row.get('event')=='runtime.ready' and datetime.datetime.fro
     task = {"task_id": task_id, "main_task_id": main_id, "parent_task_id": main_id, "team_id": team,
         "task_kind": "subtask", "title": f"Run three stable steps across {SOURCE} to {TARGET}", "status": "assigned",
         "assigned_to": "@agent-a:recovery-1631.test", "room_id": room, "notifyTxn": "live-assignment-" + CASE,
-        "recovery_fixture": {"oracle_version": 3, "oracle_url": "http://" + PREFIX + "-oracle:8091"}}
+        "recovery_fixture": {"oracle_version": 4, "oracle_url": "http://" + PREFIX + "-oracle:8091"}}
     if FAULT == "after-effect":
         task["recovery_fixture"]["pause_after_effect"] = "one"
     if oracle_proof()["effects"]:
@@ -384,7 +388,7 @@ console.log("AGENTTEAMS_NATIVE_PROBE="+JSON.stringify({cache:cache??null,native}
 
 
 def step_ledger(task):
-    if task.get("recovery_fixture", {}).get("oracle_version") == 3:
+    if task.get("recovery_fixture", {}).get("oracle_version") in {3, 4}:
         return oracle_proof()["effects"]
     if task.get("recovery_fixture", {}).get("oracle_version") != 2:
         return json.loads(docker("exec", CONTROLLER, "mc", "cat",
@@ -404,6 +408,21 @@ def assert_step_boundaries(ledger, before_version):
     versions = [row["checkpoint_version"] for row in ledger]
     if versions[0] != 1 or versions[1] <= before_version or versions[2] != versions[1] + 2:
         raise ValueError("step boundary receipts must include a registered start and verified checkpoint per step")
+
+
+def assert_effect_authorization(proof, effect):
+    at_step = lambda row: all(row[k] == effect[k] for k in ("team_id", "task_id", "step"))
+    intents = [r for r in proof["intents"] if at_step(r)]
+    calls = [r for r in proof["calls"] if at_step(r)]
+    registers = [r for r in calls if r["method"] == "REGISTER" and r["accepted"]]
+    posts = [r for r in calls if r["method"] == "POST" and r["accepted"]]
+    assert len(intents) == len(registers) == len(posts) == 1
+    intent, register, post = intents[0], registers[0], posts[0]
+    assert all(intent[k] == effect[k] for k in ("instance_id", "process_id", "generation", "checkpoint_version"))
+    assert register["process_id"] == post["process_id"] == effect["process_id"]
+    assert register["at_ns"] < post["at_ns"] <= effect["executed_at_ns"]
+    for observation in (r for r in calls if r.get("verification") == "never_authorized"):
+        assert observation["method"] == "GET" and observation["accepted"] and observation["at_ns"] < register["at_ns"]
 
 
 def fixture_tool_processes():
@@ -473,10 +492,16 @@ def cutover():
     started = int(time.time())
     if MODE == "restart":
         api("POST", "workers/agent-a/restart", {})
+    elif OPERATOR_HANDOFF:
+        result = json.loads(agt("worker", "switch-runtime", "--name", "agent-a", "--runtime", TARGET,
+            "--request-id", TASK_ID, "-o", "json"))
+        op = result["handoff"]
+        if op["id"] != TASK_ID or op["target_runtime"] != TARGET or op["target_image"] != HARNESS_IMAGES[TARGET]:
+            raise RuntimeError("Handoff selected a different request or target image")
     else:
         api("PUT", "workers/agent-a", {"runtime": TARGET, "image": HARNESS_IMAGES[TARGET]})
     # No Matrix input is sent. Observe the Controller's actual replacement.
-    deadline = time.monotonic() + 45
+    deadline = time.monotonic() + (180 if OPERATOR_HANDOFF else 45)
     replacement = None
     while time.monotonic() < deadline:
         result = subprocess.run(["docker", "inspect", name], capture_output=True, text=True)
@@ -546,15 +571,18 @@ def verify():
     ledger = step_ledger(task)
     assert [row["step"] for row in ledger] == ["one", "two", "three"]
     assert [row["generation"] for row in ledger] == [1, 2, 2]
-    if task.get("recovery_fixture", {}).get("oracle_version") in {2, 3}:
+    if task.get("recovery_fixture", {}).get("oracle_version") in {2, 3, 4}:
         assert_step_boundaries(ledger, before["task"]["execution"]["checkpoint"]["version"])
-    if task.get("recovery_fixture", {}).get("oracle_version") == 3:
-        calls = oracle_proof()["calls"]
+    if task.get("recovery_fixture", {}).get("oracle_version") in {3, 4}:
+        proof = oracle_proof()
+        calls = proof["calls"]
         assert len([row for row in calls if row["method"] == "POST"]) == 3
         assert all(row["accepted"] for row in calls), "Rejected effects/verification must be investigated"
         if FAULT == "after-effect":
             assert any(row["method"] == "GET" and row["step"] == "one" and row["process_id"] == execution["process_id"] for row in calls), "replacement must verify the old effect"
         for row in ledger:
+            if task["recovery_fixture"]["oracle_version"] == 4:
+                assert_effect_authorization(proof, row)
             output = stored("teams/recovery-team/shared/tasks/" + TASK_ID + "/output/step-" + row["step"] + ".json")
             assert json.loads(output) == row, "step artifact differs from the independent effect result"
     artifacts = cp["artifacts"] + [cp["result"]]
@@ -665,6 +693,19 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         "checkpoint_before": before["task"]["execution"]["checkpoint"]["version"], "checkpoint_after": cp["version"],
         "execution": execution, "final_task_status": task["status"], "task_history": task["history"], "ledger": ledger, "artifacts_verified": artifacts,
         "docker_order_ns": order, "matrix": matrix}
+    if OPERATOR_HANDOFF:
+        op = json.loads(agt("worker", "runtime-status", "--name", "agent-a", "-o", "json"))["handoff"]
+        assert op["id"] == TASK_ID and op["phase"] == "completed" and op["target_image"] == HARNESS_IMAGES[TARGET]
+        for field in ("instance_id", "process_id", "runtime"):
+            assert op["source"][field] == before["task"]["execution"][field]
+            assert op["target"][field] == execution[field]
+        refs = [r for r in op["checkpoint_refs"] if r.get("team_id") == "recovery-team" and r.get("task_id") == TASK_ID]
+        assert len(refs) == 1 and refs[0]["generation"] == proof["generation_before"]
+        assert refs[0]["checkpoint_version"] >= proof["checkpoint_before"]
+        times = [datetime.fromisoformat(op[field].replace("Z", "+00:00"))
+                 for field in ("source_stop_observed_at", "target_registered_at", "completed_at")]
+        assert times[0] <= times[1] <= times[2]
+        proof["operator_handoff"] = op
     path = Path("/tmp/1631-live-" + CASE + "-verified.json")
     path.write_text(json.dumps(proof, indent=2))
     print(json.dumps({"passed": True, "evidence": str(path), **proof}))
@@ -780,6 +821,10 @@ def setup(*, restore=False):
         "AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN": secrets.token_urlsafe(32),
         "AGENTTEAMS_MATRIX_APPSERVICE_HS_TOKEN": secrets.token_urlsafe(32),
     }
+    if OPERATOR_HANDOFF:
+        target_image_env = ("AGENTTEAMS_WORKER_IMAGE" if TARGET == "openclaw" else
+                            "AGENTTEAMS_" + TARGET.upper().replace("-", "_") + "_WORKER_IMAGE")
+        env[target_image_env] = HARNESS_IMAGES[TARGET]
     private = PRIVATE_BOOTSTRAP
     if restore and private.exists():
         env = json.loads(private.read_text())

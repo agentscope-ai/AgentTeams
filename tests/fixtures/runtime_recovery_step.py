@@ -58,6 +58,13 @@ if cp.get("operation", {}).get("state") in {"started", "unknown"}:
     if cp["operation"]["id"] != operation["id"]:
         raise RuntimeError("Needs verification: operation outcome cannot be proved; no rerun")
     data = effect("GET")
+    proof = json.loads(data)
+    if task["recovery_fixture"].get("oracle_version") == 4 and proof.get("verification") == "never_authorized":
+        # The oracle requires the same current owner, checkpoint and operation
+        # to register against its durable negative evidence. HTTP errors or an
+        # absent response grant no authority to execute.
+        effect("REGISTER")
+        data = effect("POST")
 else:
     effect("REGISTER")
     for field in ("result", "delivery", "reply_txn", "reply_event"):

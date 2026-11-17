@@ -488,6 +488,10 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 func deployMemberRuntimeConfig(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState, runtime, aiGatewayURL string) error {
 	var matrixAccessToken, gatewayKey string
 	skillRegistryURL, skillRegistryAuthType := runtimeSkillRegistryConfig(d, m, state)
+	tracing, err := observability.ReadRuntimeSettings(ctx, d.ObservabilityReader, m.Namespace)
+	if err != nil {
+		return fmt.Errorf("read Worker observability configuration: %w", err)
+	}
 	if m.DeployMode == v1beta1.DeployModeEdge {
 		runtime = runtimeRemoteManagedLocal
 		matrixAccessToken = state.ProvResult.MatrixToken
@@ -502,6 +506,7 @@ func deployMemberRuntimeConfig(ctx context.Context, d MemberDeps, m MemberContex
 		Spec:                  m.Spec,
 		SubagentModel:         resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
 		Heartbeat:             m.TeamHeartbeat,
+		Observability:         tracing,
 		MatrixUserID:          state.MatrixUserID,
 		PersonalRoomID:        state.RoomID,
 		MatrixAccessToken:     matrixAccessToken,
@@ -1008,8 +1013,9 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 	}
 	workerEnv["AGENTTEAMS_WORKER_ROLE"] = m.Role.String()
 	workerEnv["AGENTTEAMS_AGENT_ROLE"] = m.Role.String()
+	workerEnv["AGENTTEAMS_TEAM_NAME"] = m.TeamName
 	runtime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
-	if d.ObservabilityReader != nil && (runtime == "qwenpaw" || runtime == "hermes") {
+	if d.ObservabilityReader != nil && (runtime == "qwenpaw" || runtime == "hermes" || runtime == "openclaw") {
 		config, _, err := observability.Read(ctx, d.ObservabilityReader, m.Namespace)
 		if err != nil {
 			return nil, fmt.Errorf("read Worker observability configuration: %w", err)

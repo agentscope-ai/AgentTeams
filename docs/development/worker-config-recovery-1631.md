@@ -93,3 +93,20 @@ unverified for the new path.
 Track full recovery acceptance and exact-source evidence in
 [the existing recovery record](runtime-recovery-1631.md), Core issue #1631 and
 [Dashboard #260](https://github.com/agentteams-group/agentteams-dashboard/issues/260).
+
+## Common observability settings
+
+The Controller publishes collection-only `desired.observability` in the same
+Worker record for all six Harnesses: revision, enabled, captureContent and
+collectorEndpoint. `credentials.traceHeadersEnv` binds ingestion authentication
+to `OTEL_EXPORTER_OTLP_HEADERS`; no ingestion or backend query secret is written
+into that desired-state section. Disabled records clear collection endpoint
+and content capture. Worker, Team and detach projections read the same persisted
+configuration through the API reader, rather than dropping it on roster updates.
+
+OpenClaw now receives collection environment bindings alongside QwenPaw/Hermes.
+Its adapter enables the installed SDK's diagnostics-otel exporter from this
+record. Other Harnesses accepting the record is not proof they export traces.
+Core package tests cover common projection and enable/disable; installed native
+schema and real OTLP-exporter boundary tests are separate from real model,
+Controller/Langfuse readback and Dashboard UI acceptance, which remain open.

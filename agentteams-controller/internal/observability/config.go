@@ -14,6 +14,38 @@ import (
 
 const SecretName = "agentteams-observability"
 
+// WorkerSettings contains collection settings, never backend query credentials.
+type WorkerSettings struct {
+	Revision          string `json:"revision"`
+	Enabled           bool   `json:"enabled"`
+	CaptureContent    bool   `json:"captureContent"`
+	CollectorEndpoint string `json:"collectorEndpoint"`
+}
+
+func RuntimeSettings(config map[string]any) *WorkerSettings {
+	revision, _ := config["revision"].(string)
+	if revision == "" {
+		return nil
+	}
+	settings := &WorkerSettings{Revision: revision, Enabled: config["enabled"] == true}
+	if settings.Enabled {
+		settings.CaptureContent = config["captureContent"] == true
+		settings.CollectorEndpoint, _ = config["collectorEndpoint"].(string)
+	}
+	return settings
+}
+
+func ReadRuntimeSettings(ctx context.Context, reader client.Reader, namespace string) (*WorkerSettings, error) {
+	if reader == nil {
+		return nil, nil
+	}
+	config, _, err := Read(ctx, reader, namespace)
+	if err != nil {
+		return nil, err
+	}
+	return RuntimeSettings(config), nil
+}
+
 func Read(ctx context.Context, reader client.Reader, namespace string) (map[string]any, *corev1.Secret, error) {
 	secret := &corev1.Secret{}
 	err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: SecretName}, secret)

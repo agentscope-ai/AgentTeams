@@ -18,6 +18,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credprovider"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/executor"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -105,6 +106,7 @@ type MemberRuntimeConfigDeployRequest struct {
 	// the runtime keeps its current/unset setting.
 	SubagentModel string
 	Heartbeat     *agentconfig.HeartbeatConfig
+	Observability *observability.WorkerSettings
 
 	MatrixUserID   string
 	PersonalRoomID string

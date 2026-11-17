@@ -610,13 +610,14 @@ func (a *App) initReconcilers(_ context.Context) error {
 	}
 
 	if _, err := (&controller.TeamReconciler{
-		Client:          a.mgr.GetClient(),
-		Provisioner:     a.provisioner,
-		Deployer:        a.deployer,
-		ManagerConfig:   a.managerConfig,
-		DefaultRuntime:  a.cfg.DefaultWorkerRuntime,
-		GatewayClient:   a.gateway,
-		SystemAdminUser: a.cfg.MatrixAdminUser,
+		Client:              a.mgr.GetClient(),
+		ObservabilityReader: a.mgr.GetAPIReader(),
+		Provisioner:         a.provisioner,
+		Deployer:            a.deployer,
+		ManagerConfig:       a.managerConfig,
+		DefaultRuntime:      a.cfg.DefaultWorkerRuntime,
+		GatewayClient:       a.gateway,
+		SystemAdminUser:     a.cfg.MatrixAdminUser,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}

@@ -6,9 +6,37 @@ import (
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"sigs.k8s.io/yaml"
 )
+
+func TestMemberRuntimeConfigPublishesCommonObservabilityForEveryHarness(t *testing.T) {
+	for _, harness := range []string{"codex", "hermes", "qwenpaw", "deepseek-harness", "openclaw", "openhuman"} {
+		for _, enabled := range []bool{true, false} {
+			store := ossfake.NewMemory()
+			d := NewDeployer(DeployerConfig{OSS: store})
+			settings := observability.RuntimeSettings(map[string]any{"revision": "r1", "enabled": enabled, "captureContent": false, "collectorEndpoint": "http://collector:4318"})
+			if err := d.DeployMemberRuntimeConfig(t.Context(), MemberRuntimeConfigDeployRequest{Name: "worker", Runtime: harness, Observability: settings}); err != nil {
+				t.Fatal(err)
+			}
+			data, err := store.GetObject(t.Context(), "agents/worker/runtime/runtime.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc memberRuntimeConfigDocument
+			if err := yaml.Unmarshal(data, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if got := doc.Desired.Observability; got == nil || *got != *settings {
+				t.Fatalf("%s: common record lost tracing settings", harness)
+			}
+			if doc.Credentials.TraceHeadersEnv != "OTEL_EXPORTER_OTLP_HEADERS" {
+				t.Fatal("missing standard ingestion credential binding")
+			}
+		}
+	}
+}
 
 // TestMemberRuntimeConfigProjectsProvider pins the runtime invariant:
 // spec.modelProvider is the gateway provider name and must not become the

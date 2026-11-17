@@ -13,6 +13,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/controller/humanidentity"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/metrics"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -38,9 +39,10 @@ const (
 type TeamReconciler struct {
 	client.Client
 
-	Provisioner   service.WorkerProvisioner
-	Deployer      service.WorkerDeployer
-	ManagerConfig *service.ManagerConfigStore // nil in incluster mode
+	Provisioner         service.WorkerProvisioner
+	Deployer            service.WorkerDeployer
+	ManagerConfig       *service.ManagerConfigStore // nil in incluster mode
+	ObservabilityReader client.Reader
 
 	// DefaultRuntime is forwarded into MemberDeps.DefaultRuntime for every
 	// team member this reconciler converges. Sourced from
@@ -664,6 +666,10 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 	rooms *service.TeamRoomResult,
 ) error {
 	roster := runtimeConfigTeamMembers(t, members, leaderName)
+	tracing, err := observability.ReadRuntimeSettings(ctx, r.ObservabilityReader, t.Namespace)
+	if err != nil {
+		return fmt.Errorf("read team Worker observability configuration: %w", err)
+	}
 	for _, member := range members {
 		// Skip members being deleted — their runtime config no longer needs
 		// updating and the model provider may already have been removed.
@@ -703,6 +709,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			Generation:        member.worker.Generation,
 			Spec:              spec,
 			SubagentModel:     resolveSubagentModel(member.worker.Spec.SubagentModel, t.Spec.SubagentModel),
+			Observability:     tracing,
 			AIGatewayURL:      aiGatewayURL,
 			MatrixUserID:      member.worker.Status.MatrixUserID,
 			PersonalRoomID:    member.worker.Status.RoomID,
@@ -868,6 +875,10 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 	if resolveErr != nil {
 		logger.Error(resolveErr, "failed to resolve worker model provider for runtime config reset", "worker", runtimeName)
 	}
+	tracing, err := observability.ReadRuntimeSettings(ctx, r.ObservabilityReader, w.Namespace)
+	if err != nil {
+		return fmt.Errorf("read detached Worker observability configuration: %w", err)
+	}
 	if err := r.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 		Name:            w.Name,
 		RuntimeName:     runtimeName,
@@ -876,6 +887,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		Generation:      w.Generation,
 		Spec:            w.Spec,
 		SubagentModel:   w.Spec.SubagentModel,
+		Observability:   tracing,
 		AIGatewayURL:    aiGatewayURL,
 		MatrixUserID:    w.Status.MatrixUserID,
 		PersonalRoomID:  w.Status.RoomID,

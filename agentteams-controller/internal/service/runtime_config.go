@@ -11,6 +11,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"sigs.k8s.io/yaml"
 )
 
@@ -119,6 +120,7 @@ type memberRuntimeConfigDesired struct {
 	Skills             []string                          `json:"skills,omitempty"`
 	State              string                            `json:"state"`
 	Heartbeat          *memberRuntimeConfigHeartbeat     `json:"heartbeat,omitempty"`
+	Observability      *observability.WorkerSettings     `json:"observability,omitempty"`
 }
 
 type memberRuntimeConfigHeartbeat struct {
@@ -191,6 +193,7 @@ type memberRuntimeConfigAgentIdentityData struct {
 type memberRuntimeConfigCredentials struct {
 	MatrixTokenEnv          string `json:"matrixTokenEnv"`
 	GatewayKeyEnv           string `json:"gatewayKeyEnv"`
+	TraceHeadersEnv         string `json:"traceHeadersEnv,omitempty"`
 	StorageAccessKeyEnv     string `json:"storageAccessKeyEnv"`
 	StorageSecretKeyEnv     string `json:"storageSecretKeyEnv"`
 	ServiceAccountTokenPath string `json:"serviceAccountTokenPath"`
@@ -370,6 +373,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		CredentialBindings: copyCredentialBindings(req.Spec.CredentialBindings),
 		Skills:             runtimeSkillNames(req.Spec),
 		State:              req.Spec.DesiredState(),
+		Observability:      req.Observability,
 	}
 	if role != "manager" {
 		heartbeat := agentconfig.ResolveLLMHeartbeat(req.Spec.LlmHeartbeatEnabled, req.Heartbeat)
@@ -449,6 +453,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		Credentials: memberRuntimeConfigCredentials{
 			MatrixTokenEnv:          "AGENTTEAMS_WORKER_MATRIX_TOKEN",
 			GatewayKeyEnv:           "AGENTTEAMS_WORKER_GATEWAY_KEY",
+			TraceHeadersEnv:         "OTEL_EXPORTER_OTLP_HEADERS",
 			StorageAccessKeyEnv:     "AGENTTEAMS_FS_ACCESS_KEY",
 			StorageSecretKeyEnv:     "AGENTTEAMS_FS_SECRET_KEY",
 			ServiceAccountTokenPath: "/var/run/secrets/agentteams/token",

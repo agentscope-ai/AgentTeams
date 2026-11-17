@@ -72,6 +72,10 @@ acceptance remains incomplete.
 
 ## Common startup and consumption boundary (#1631)
 
+The confirmed [implementation baseline and staged plan](worker-recovery-convergence-1631.md)
+defines the target storage paths, versioned records, migration and recovery
+order. New records in that plan are implementation work, not completed acceptance.
+
 The recovery path is source Harness → Worker contract → target Harness. There
 must be no production A-to-B session or configuration converter. Six native
 adapters implement one contract; the 30 directed pairs are regression cases.

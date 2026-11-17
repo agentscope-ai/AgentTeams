@@ -850,3 +850,23 @@ process, instance and generation and delegate to the common implementation.
 It does not widen Project listing or create a second execution lease. Empty
 native finals require an already submitted durable result. Six host boundary
 tests pass; they mock authority and are not Task continuation E2E.
+
+### Case32: OpenClaw real execution/delivery observations; full lane unaccepted
+
+[Case32 partial proof](evidence/runtime-recovery-1631-case32-partial.json)
+records Hermes965b612a/shared05967bf6 → OpenClaw34c4fb8/shared1a364763,
+using a canonical local OpenClaw Dockerfile build. Without new external Matrix
+input, OpenClaw claimed generation2 and invoked native model/exec/MCP tools.
+The three effects remained once at generations1/2/2; checkpoint10 was delivered,
+all artifacts and the authoritative report matched, one final Matrix report
+was read back, and the Task subsequently completed through native Leader review.
+
+This is not full lane acceptance. The driver requested cutover before capturing
+its required source native/cache/process boundary snapshot. The later snapshot
+is explicitly retained as post-cutover. The OpenClaw native cache initially
+matched58 transcript events, then a native skill-workshop notice appended a59th
+event; the old cache correctly fails comparison with that newer transcript.
+No cache or verifier assertion was rewritten to pass. Task trace/UI acceptance
+also remains open. The driver now captures and exclusively persists its source
+boundary before lifecycle mutation, with a regression test. SDK-based native
+cache/transcript readback is required for future OpenClaw acceptance.

@@ -268,6 +268,8 @@ qwen_dir=home/".qwenpaw/workspaces/default/sessions"
 qwen_cache=qwen_dir/".agentteams-task-recovery"
 digest=lambda value: hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 qwen=json.loads(qwen_cache.read_text()).get(digest(['recovery-team',task_id])) if qwen_cache.exists() else None
+openclaw_file=home/"runtime/openclaw-task-sessions.json"
+openclaw_cache=json.loads(openclaw_file.read_text()).get(digest(['recovery-team',task_id])) if openclaw_file.exists() else None
 qwen_native=[]
 if qwen:
  for path in (qwen_dir/"agentteams_matrix").glob('*.json'):
@@ -276,9 +278,35 @@ if qwen:
    qwen_native.append({'file':path.name,'native_digest':digest(native),'agent_state_present':bool(native.get('agent')),'task_mentioned':task_id in json.dumps(native)})
 print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,
     "hermes_cache":[r for r in rows if r.get("event")=="task.recovery.cache" and r.get("task_id")==task_id],"codex":cache,
-    "qwenpaw":qwen,"qwenpaw_native":qwen_native}))
+    "qwenpaw":qwen,"qwenpaw_native":qwen_native,"openclaw_cache":openclaw_cache}))
 '''
-    return json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
+    result = json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
+    if api("GET", "workers/agent-a").get("runtime") == "openclaw":
+        # Use the pinned SDK's actual SQLite APIs, not a guessed session filename.
+        probe = '''import fs from "node:fs";
+import {createHash} from "node:crypto";
+import {getSessionEntryAsync,loadTranscriptEventsSync} from "openclaw/plugin-sdk/session-store-runtime";
+const digest=(value)=>createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const home="/root/agentteams-fs/agents/agent-a";
+const file=home+"/runtime/openclaw-task-sessions.json";
+const cache=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8"))[digest(["recovery-team",process.argv[1]])]:null;
+let native=null;
+if(cache){
+ const agentId=cache.session_key.split(":")[1];
+ const entry=await getSessionEntryAsync({agentId,sessionKey:cache.session_key,readConsistency:"latest"});
+ if(entry){
+  const events=loadTranscriptEventsSync({agentId,sessionKey:cache.session_key,sessionId:entry.sessionId});
+  native={session_id:entry.sessionId,native_digest:digest({entry,events}),
+   message_count:events.length,task_mentioned:JSON.stringify(events).includes(process.argv[1])};
+ }
+}
+console.log("AGENTTEAMS_NATIVE_PROBE="+JSON.stringify({cache:cache??null,native}));
+'''
+        output = docker("exec", "-w", "/opt/openclaw", PREFIX + "-worker-agent-a",
+            "node", "--input-type=module", "-e", probe, TASK_ID)
+        result["openclaw"] = json.loads(next(line.removeprefix("AGENTTEAMS_NATIVE_PROBE=")
+            for line in output.splitlines() if line.startswith("AGENTTEAMS_NATIVE_PROBE=")))
+    return result
 
 
 def step_ledger(task):
@@ -318,7 +346,7 @@ print(json.dumps(rows))
     return json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
 
 
-def evidence():
+def evidence(*, emit=True):
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     instances = []
     for name in (CONTROLLER, PREFIX + "-worker-agent-a", PREFIX + "-worker-leader"):
@@ -334,10 +362,15 @@ def evidence():
     path.write_text(json.dumps(result, indent=2))
     with Path("/tmp/1631-live-" + CASE + "-evidence.jsonl").open("a") as stream:
         stream.write(json.dumps(result) + "\n")
-    print(json.dumps(result))
+    if emit:
+        print(json.dumps(result))
+    return result
 
 
 def cutover():
+    boundary_path = Path("/tmp/1631-live-" + CASE + "-before-cutover.json")
+    if boundary_path.exists():
+        raise RuntimeError("Cutover already has a boundary snapshot; inspect it instead of replacing it")
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     cp = task.get("execution", {}).get("checkpoint", {})
     if FAULT == "after-effect":
@@ -351,6 +384,14 @@ def cutover():
     old = json.loads(docker("inspect", name))[0]
     if old["Config"]["Image"] != HARNESS_IMAGES[SOURCE]:
         raise RuntimeError("The cutover requires this fixture's selected source image")
+    # Capture the source while it still exists; post-cutover reads cannot prove
+    # the source native session or absence of the target Task session.
+    before = evidence(emit=False)
+    before["tool_processes"] = fixture_tool_processes()
+    if before["instances"][1]["id"] != old["Id"] or before["task"]["execution"] != task["execution"]:
+        raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
+    with boundary_path.open("x") as stream:
+        json.dump(before, stream, indent=2)
     started = int(time.time())
     if MODE == "restart":
         api("POST", "workers/agent-a/restart", {})
@@ -507,6 +548,12 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     if TARGET == "hermes":
         selected = native["hermes"][-1]["session_id"]
         assert native["hermes_message_counts"].get(selected, 0) > 0, "recovered input was not persisted in the selected native session"
+    if TARGET == "openclaw":
+        assert_openclaw_native_cache(native["openclaw"], cp)
+        if MODE == "restart":
+            source_cache = before["native_sessions"]["openclaw"]
+            assert_openclaw_native_cache(source_cache, before["task"]["execution"]["checkpoint"])
+            assert native["openclaw"]["cache"]["session_id"] == source_cache["cache"]["session_id"], "valid native Task session was not reused"
     if MODE == "restart" and SOURCE == "codex":
         cache = before["native_sessions"]["codex"]
         assert cache["runtime"] == "codex" and cache["expires_at"] > before["recorded_at"]
@@ -540,6 +587,15 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     path = Path("/tmp/1631-live-" + CASE + "-verified.json")
     path.write_text(json.dumps(proof, indent=2))
     print(json.dumps({"passed": True, "evidence": str(path), **proof}))
+
+
+def assert_openclaw_native_cache(proof, checkpoint):
+    cache, native = proof["cache"], proof["native"]
+    assert cache and cache["runtime"] == "openclaw" and cache["expires_at"] > time.time()
+    assert cache["checkpoint_digest"] == hashlib.sha256(json.dumps(checkpoint, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert native and native["session_id"] == cache["session_id"]
+    assert native["native_digest"] == cache["native_digest"], "native transcript changed after checkpoint binding"
+    assert native["message_count"] > 0 and native["task_mentioned"]
 
 
 def setup(*, restore=False):

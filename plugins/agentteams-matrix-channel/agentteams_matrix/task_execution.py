@@ -2,15 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
-from pathlib import Path
-import tempfile
 import time
 from uuid import uuid4
 
-from task_recovery import Recovery, RecoveryConflict
+from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
+from worker_matrix_state import WorkerMatrix
+from worker_sessions import WorkerSessions
 
 logger = logging.getLogger(__name__)
 
@@ -28,18 +26,12 @@ class TaskExecution:
         self.admitted = tracker._agentteams_task_admissions
         self.native_active = tracker._agentteams_task_native_active
         self.lock = tracker._agentteams_task_admission_lock
-        self.cache_path = Path(channel._workspace.session.save_dir) / ".agentteams-task-recovery"
+        self.sessions = WorkerSessions("qwenpaw", recovery=self.recovery)
+        self.matrix = WorkerMatrix("qwenpaw", recovery=self.recovery)
 
     @staticmethod
     def key(team, task_id):
         return Recovery.digest([team, task_id])
-
-    def _cache(self):
-        try:
-            data = json.loads(self.cache_path.read_text())
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
 
     def verify(self, identity, *, finished=False):
         task = self.recovery.current(identity["task_id"], identity["team_id"])
@@ -47,24 +39,27 @@ class TaskExecution:
         if (execution.get("process_id") != self.recovery.process
                 or execution.get("generation") != identity["generation"]
                 or identity.get("instance_id", execution.get("instance_id")) != execution.get("instance_id")
-                or (not finished and execution.get("state") not in {"active", "needs_verification"})):
+                or execution.get("runtime") != "qwenpaw"
+                or execution.get("state") not in ({"active", "released"} if finished else {"active"})):
             raise RecoveryConflict("Task was cancelled, reassigned or replaced before native execution")
         return task
 
     async def select_session(self, team, task):
         key = self.key(team, task["task_id"])
         prefix = "matrix:task:" + key + ":"
-        cached = self._cache().get(key)
-        if not isinstance(cached, dict):
-            cached = {}
-        session_id = cached.get("session_id", "")
-        if (isinstance(session_id, str) and session_id.startswith(prefix)
-                and Recovery.session_usable(cached, task, "qwenpaw")):
+        view = await asyncio.to_thread(self.sessions.load,
+            {"kind": "task", "team_id": team, "task_id": task["task_id"]})
+        if (view["generation"] != task["execution"]["generation"]
+                or view["checkpoint_digest"] != Recovery.digest(task["execution"].get("checkpoint"))):
+            raise RecoveryConflict("Task checkpoint advanced before native session selection")
+        cached = view.get("cache") or {}
+        session_id = cached.get("native_ref", "")
+        if isinstance(session_id, str) and session_id.startswith(prefix):
             try:
                 state = await self.channel._workspace.session.get_session_state_dict(
                     session_id=session_id, user_id=task["room_id"], channel=self.channel.channel,
                 )
-                if state.get("agent") and cached.get("native_digest") == Recovery.digest(state):
+                if state.get("agent") and self.sessions.usable(view, session_id, Recovery.digest(state)):
                     return session_id
             except Exception:
                 logger.warning("Native Task session is unreadable; rebuilding from authority")
@@ -74,33 +69,32 @@ class TaskExecution:
         task = await asyncio.to_thread(self.recovery.current, identity["task_id"], identity["team_id"])
         if task is None:
             return
+        if task["status"] == "submitted":
+            return
         await asyncio.to_thread(self.verify, identity, finished=True)
         state = await self.channel._workspace.session.get_session_state_dict(
             session_id=session_id, user_id=task["room_id"], channel=self.channel.channel,
         )
         if not state.get("agent"):
             return
-        cache = self._cache()
-        cache[self.key(identity["team_id"], identity["task_id"])] = {
-            "runtime": "qwenpaw", "session_id": session_id, "expires_at": time.time() + 86400,
-            "checkpoint_digest": Recovery.digest(task["execution"].get("checkpoint")),
-            "native_digest": Recovery.digest(state),
-        }
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        candidate = None
+        work = {"kind": "task", "team_id": identity["team_id"], "task_id": identity["task_id"]}
         try:
-            with tempfile.NamedTemporaryFile(mode="w", dir=self.cache_path.parent, delete=False) as output:
-                candidate = Path(output.name)
-                json.dump(cache, output)
-                output.flush()
-                os.fsync(output.fileno())
-            candidate.replace(self.cache_path)
-        finally:
-            if candidate is not None:
-                candidate.unlink(missing_ok=True)
+            view = await asyncio.to_thread(self.sessions.load, work)
+            # Native usage can be saved after the final callback. The snapshot
+            # from that callback must still match; never relabel old native
+            # bytes with a checkpoint advanced by a later operation.
+            if view["checkpoint_digest"] != identity.get("checkpoint_digest"):
+                return
+            await asyncio.to_thread(self.sessions.remember, work, view, identity,
+                session_id, Recovery.digest(state), int(time.time()) + 86400)
+        except (RecoveryConflict, RecoveryUnavailable):
+            # The saved reply remains authoritative when an optional cache
+            # loses its CAS race or storage becomes unavailable.
+            logger.warning("Native Task cache was not committed; retain authority and rebuild")
 
     async def recover(self, only_task=None, source_event=None, *, source_room=None):
         async with self.lock:
+            await asyncio.to_thread(self.matrix.start)
             snapshot = await asyncio.to_thread(self.recovery.discover)
             for entry in snapshot["tasks"]:
                 task_id, team = entry["task"]["task_id"], entry["team_id"]
@@ -124,11 +118,15 @@ class TaskExecution:
                     # A competing Worker must not prevent unrelated owned work.
                     continue
                 task = claimed["task"]
+                if task["execution"]["state"] == "needs_verification":
+                    logger.warning("Task %s requires side-effect verification before native execution", task_id)
+                    continue
                 if source_room is not None and task.get("room_id") != source_room:
                     continue
                 identity = {"task_id": task_id, "team_id": team,
                             "generation": task["execution"]["generation"],
-                            "instance_id": task["execution"]["instance_id"]}
+                            "instance_id": task["execution"]["instance_id"],
+                            "process_id": self.recovery.process}
                 cp = task["execution"].get("checkpoint") or {}
                 if cp.get("delivery") == "pending":
                     event_id = await self.channel.send_task_reply(task["room_id"], claimed["saved_result"], cp["reply_txn"])
@@ -170,4 +168,5 @@ class TaskExecution:
         if cp.get("delivery") != "delivered":
             room = saved.get("task", saved)["room_id"]
             event_id = await self.channel.send_task_reply(room, text, cp["reply_txn"])
-            await asyncio.to_thread(self.recovery.delivered, identity["task_id"], identity["team_id"], event_id)
+            saved = await asyncio.to_thread(self.recovery.delivered, identity["task_id"], identity["team_id"], event_id)
+        identity["checkpoint_digest"] = Recovery.digest(saved["execution"]["checkpoint"])

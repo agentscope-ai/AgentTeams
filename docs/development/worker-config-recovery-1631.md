@@ -3,6 +3,48 @@
 Status: incomplete. This follow-up separates configuration authority from
 native session persistence and execution-recovery acceptance.
 
+Latest native integration: Hermes case37 passed one real normal restart with
+valid native-session reuse (Core262ecb13, Hermes59b756d, shared19eb30c6,
+SDK2bd378ed). The same Task continued without new Matrix input; effective
+config remained version3. See the [case37 proof](evidence/runtime-recovery-1631-case37-verified.json).
+This is not the full fault set, all-Harness acceptance or Dashboard UI proof.
+
+QwenPaw's Task adapter now uses the same `WorkerSessions` descriptor API instead
+of its private `.agentteams-task-recovery` file. Existing private files remain
+untouched. Startup registers the common actual process fence before Task
+discovery/claim. Session selection compares the current checkpoint/config and
+reads the actual SDK state before reuse; missing/changed/expired state rebuilds.
+The final delivery callback captures its saved checkpoint digest, then cache
+publication waits until the SDK stream has closed and finished its later usage
+save. A newer authoritative checkpoint rejects that old snapshot. Optional
+cache write conflicts/unavailability preserve the saved reply. Unknown side
+effects stay parked; both native reasoning entry points reject verification-only
+execution. This does not yet connect native Matrix batches/cursors, ordinary
+message execution, legacy import or generic before-tool ownership/cancellation.
+
+QwenPaw validation for this increment:
+
+- Two new behavior regressions failed before the change and passed afterward:
+  reuse from a shared descriptor without a private index, and parking unknown
+  effects before native session selection/inference.
+- Host Task/common-client suite:80 passed,24 native-SDK cases skipped,6 subtests.
+  Host QwenPaw adapter/package suite:55 passed,31 native cases skipped.
+- Native QwenPaw2.2.2.post1 image with current source mounted:54 Task recovery
+  tests passed. A focused Task/reload/context/cleanup/native-coordination suite
+  passed111 tests, including both Matrix compatibility copies and actual SDK
+  session serialization. Controller/model/admission authority is mocked; this
+  is not new real-model restart or cross-Harness acceptance.
+- An expanded native-image adapter/package suite initially had137 passes and6
+  failures:5 required Ruby, absent from the runtime image;1 register-hook unit
+  assertion also fails with the unchanged75283430 plugin under the installed
+  SDK because it registers additional runtime hooks. The failures were retained;
+  no product behavior or assertions were weakened. Packaging checks passed in
+  the host environment with Ruby; the baseline SDK/unit mismatch remains open.
+- Native image base:e0bc7bb/shared67dba059; SDK session module SHA256
+  `5522f2a15897f7ec9c111ea2078a8dd77775e40f7ba957f64b2a2e40d8c65866`.
+  Mounted source supplies the new adapter/common clients; this is not a newly
+  packaged QwenPaw image. Matching Core/Harness pins and real H↔Q tests remain next.
+
 For the 1.2.8 candidate, use the current
 [per-Harness boundaries and release gates](../design/harness-recovery-boundaries.md).
 

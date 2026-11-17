@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "shared/lib"))
-from task_recovery import RecoveryConflict, RecoveryUnavailable
+from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def adapter(monkeypatch, tmp_path):
     spec.loader.exec_module(module)
     monkeypatch.setenv("AGENTTEAMS_PROCESS_ID", "native-process")
     task = {"task_id": "T", "room_id": "!task:hs", "status": "in_progress", "title": "Three steps",
-            "execution": {"generation": 2, "instance_id": "container/start", "process_id": "native-process", "state": "active",
+            "execution": {"generation": 2, "instance_id": "container/start", "process_id": "native-process", "state": "active", "runtime": "qwenpaw",
                           "checkpoint": {"version": 4, "completed_steps": ["one"], "remaining_steps": ["two", "three"]}}}
     authority = SimpleNamespace(
         process="native-process",
@@ -32,6 +32,29 @@ def adapter(monkeypatch, tmp_path):
         current=lambda task_id, team: copy.deepcopy(task),
         interrupted=lambda *args: None,
     )
+    authority.cache = None
+    authority.config_generation = 3
+    authority.session_etag = ""
+    def request(method, path, body=None, etag=None, *, create=False):
+        if path == "runtime/matrix":
+            return {"runtime": "qwenpaw", "instance_id": "container/start", "etag": ""}
+        assert path.startswith("runtime/sessions?")
+        cp = task["execution"]["checkpoint"]
+        view = {"runtime": "qwenpaw", "instance_id": "container/start", "generation": task["execution"]["generation"],
+                "work": {"kind": "task", "team_id": "team", "task_id": "T"},
+                "checkpoint_version": cp["version"], "checkpoint_digest": Recovery.digest(cp),
+                "config_generation": authority.config_generation, "cache": copy.deepcopy(authority.cache),
+                "etag": authority.session_etag, "compatible": True}
+        if method == "GET":
+            return view
+        assert method == "PUT"
+        assert (create and not authority.session_etag) or etag == authority.session_etag
+        for key in ("generation", "checkpoint_version", "checkpoint_digest", "config_generation"):
+            assert body[key] == view[key]
+        authority.cache = {**body, "runtime": "qwenpaw"}
+        authority.session_etag = "committed-cache"
+        return {**view, "cache": copy.deepcopy(authority.cache), "etag": authority.session_etag}
+    authority.request = request
     store = SimpleNamespace(get_session_state_dict=AsyncMock(return_value={}), save_dir=str(tmp_path / "sessions"))
     channel = SimpleNamespace(channel="agentteams_matrix", matrix_user_id="@worker:hs",
                               _workspace=SimpleNamespace(session=store, task_tracker=SimpleNamespace()), _workspace_dir=tmp_path,
@@ -45,6 +68,12 @@ def test_startup_claims_and_resumes_without_an_external_message(adapter):
     order = []
     claim = authority.claim
     authority.claim = lambda *args: (order.append("claim"), claim(*args))[1]
+    request = authority.request
+    def fenced_request(method, path, *args, **kwargs):
+        if method == "POST" and path == "runtime/matrix":
+            order.append("start")
+        return request(method, path, *args, **kwargs)
+    authority.request = fenced_request
     async def enqueue(payload):
         order.append("native")
         assert payload["meta"]["task_execution"]["task_id"] == "T"
@@ -57,7 +86,7 @@ def test_startup_claims_and_resumes_without_an_external_message(adapter):
         assert "Continue two and three" in payload["recovery_text"]
     channel.enqueue_recovered_task.side_effect = enqueue
     asyncio.run(recovery.recover())
-    assert order == ["claim", "native"]
+    assert order == ["start", "claim", "native"]
 
 
 def test_same_generation_is_admitted_once_and_conflicts_never_enter_native(adapter):
@@ -120,7 +149,7 @@ def test_saved_result_is_only_resent_with_its_durable_transaction(adapter):
     claim = authority.claim
     authority.claim = lambda *args: {**claim(*args), "saved_result": "saved answer"}
     delivered = []
-    authority.delivered = lambda *args: delivered.append(args)
+    authority.delivered = lambda *args: (delivered.append(args), copy.deepcopy(task))[1]
     asyncio.run(recovery.recover())
     channel.send_task_reply.assert_awaited_once_with("!task:hs", "saved answer", "stable-transaction")
     assert delivered == [("T", "team", "$reply")]
@@ -199,7 +228,7 @@ def test_empty_native_final_requires_a_submitted_authoritative_report(adapter, s
     cp.update(delivery='pending', reply_txn='saved-report')
     prepared = []
     authority.prepare_reply = lambda *args: (prepared.append(args), ({'execution': {'checkpoint': cp}, 'room_id': '!task:hs'}, 'authoritative report'))[1]
-    authority.delivered = lambda *args: None
+    authority.delivered = lambda *args: copy.deepcopy(task)
     async def scenario():
         if allowed:
             await recovery.finish({'task_id': 'T', 'team_id': 'team', 'generation': 2}, 'session', '')
@@ -244,15 +273,13 @@ def test_empty_final_cannot_deliver_a_reassigned_task_report(adapter):
     channel.send_task_reply.assert_not_awaited()
 
 
-def test_unknown_operation_enters_resume_context_without_running_a_tool(adapter):
+def test_unknown_operation_stays_parked_without_native_reasoning(adapter):
     recovery, authority, task, channel = adapter
     task["execution"]["checkpoint"]["operation"] = {"id": "effect-one", "state": "unknown"}
     task["execution"]["state"] = "needs_verification"
     asyncio.run(recovery.recover())
-    text = channel.enqueue_recovered_task.call_args.args[0]["recovery_text"]
-    assert "verify its external outcome" in text
-    assert '"id": "effect-one"' in text
-    assert '"state": "unknown"' in text
+    channel.enqueue_recovered_task.assert_not_awaited()
+    assert task["execution"]["checkpoint"]["operation"] == {"id": "effect-one", "state": "unknown"}
 
 
 def test_cancelled_or_reassigned_and_replaced_process_cannot_run(adapter):
@@ -272,20 +299,18 @@ def test_native_cache_reuse_requires_file_expiry_and_latest_checkpoint(adapter):
     recovery, authority, task, channel = adapter
     async def scenario():
         first = await recovery.select_session("team", task)
-        await recovery.remember({"task_id": "T", "team_id": "team", "generation": 2}, first)
+        await recovery.remember({"task_id": "T", "team_id": "team", **task["execution"], "checkpoint_digest": Recovery.digest(task["execution"]["checkpoint"])}, first)
         # No persisted native session: the index alone cannot authorize reuse.
         missing = await recovery.select_session("team", task)
         assert missing != first
         channel._workspace.session.get_session_state_dict.return_value = {"agent": {"state": {"memory": "step one"}}}
-        await recovery.remember({"task_id": "T", "team_id": "team", "generation": 2}, first)
+        await recovery.remember({"task_id": "T", "team_id": "team", **task["execution"], "checkpoint_digest": Recovery.digest(task["execution"]["checkpoint"])}, first)
         assert await recovery.select_session("team", task) == first
         task["execution"]["checkpoint"]["version"] += 1
         newer = await recovery.select_session("team", task)
         assert newer != first  # Switching back cannot use an older checkpoint.
         task["execution"]["checkpoint"]["version"] -= 1
-        data = json.loads(recovery.cache_path.read_text())
-        next(iter(data.values()))["expires_at"] = 0
-        recovery.cache_path.write_text(json.dumps(data))
+        authority.cache["expires_at"] = 0
         assert await recovery.select_session("team", task) != first
     asyncio.run(scenario())
 
@@ -295,10 +320,10 @@ def test_native_file_changed_since_checkpoint_does_not_reuse(adapter):
     async def scenario():
         channel._workspace.session.get_session_state_dict.return_value = {"agent": {"state": {"memory": "step one"}}}
         session = await recovery.select_session("team", task)
-        await recovery.remember({"task_id": "T", "team_id": "team", "generation": 2}, session)
+        await recovery.remember({"task_id": "T", "team_id": "team", **task["execution"], "checkpoint_digest": Recovery.digest(task["execution"]["checkpoint"])}, session)
         channel._workspace.session.get_session_state_dict.return_value = {"agent": {"state": {"memory": "uncommitted side effect"}}}
         assert await recovery.select_session("team", task) != session
-        assert recovery.cache_path.stat().st_mode & 0o777 == 0o600
+        assert not (Path(channel._workspace.session.save_dir) / ".agentteams-task-recovery").exists()
     asyncio.run(scenario())
 
 
@@ -342,6 +367,7 @@ def test_actual_sdk_session_store_and_request_reconstruction(adapter, native_cha
         state = {"state": {"memory": {"messages": ["step one done"]}}}
         await store.save_session_state(session_id=request.session_id, user_id=request.user_id,
                                        channel=channel.channel, agent=SimpleNamespace(state_dict=lambda: state))
+        request.channel_meta["task_execution"]["checkpoint_digest"] = Recovery.digest(task["execution"]["checkpoint"])
         await recovery.remember(request.channel_meta["task_execution"], request.session_id)
         assert await recovery.select_session("team", task) == request.session_id
         task["execution"]["checkpoint"]["version"] += 1
@@ -361,11 +387,11 @@ def test_task_cache_follows_sdk_post_completion_session_save(adapter, native_cha
     channel.send_task_reply = AsyncMock(return_value="$reply")
     recovery = type(recovery)(channel, authority)
     channel._task_execution = recovery
-    identity = {"task_id": "T", "team_id": "team", "generation": 2}
+    identity = {"task_id": "T", "team_id": "team", **task["execution"]}
     session = "matrix:task:" + recovery.key("team", "T") + ":native"
     task["execution"]["checkpoint"].update(delivery="pending", reply_txn="result")
     authority.prepare_reply = lambda *args: (task, "saved result")
-    authority.delivered = lambda *args: task["execution"]["checkpoint"].update(delivery="delivered")
+    authority.delivered = lambda *args: (task["execution"]["checkpoint"].update(delivery="delivered"), copy.deepcopy(task))[1]
     async def save(memory):
         await store.save_session_state(session_id=session, user_id="!task:hs", channel=channel.channel,
                                        agent=SimpleNamespace(state_dict=lambda: {"memory": memory}))
@@ -501,7 +527,7 @@ def test_final_callback_prefers_authoritative_saved_result(adapter):
     task["execution"]["checkpoint"].update(delivery="pending", reply_txn="saved-txn")
     authority.prepare_reply = lambda *args: ({"task": task, "execution": task["execution"]}, "saved authoritative answer")
     delivered = []
-    authority.delivered = lambda *args: delivered.append(args)
+    authority.delivered = lambda *args: (delivered.append(args), copy.deepcopy(task))[1]
     asyncio.run(recovery.finish({"task_id": "T", "team_id": "team", "generation": 2}, "native-session", "stale native answer"))
     channel.send_task_reply.assert_awaited_once_with("!task:hs", "saved authoritative answer", "saved-txn")
     assert delivered == [("T", "team", "$reply")]
@@ -522,6 +548,11 @@ def test_recovered_native_reasoning_is_fenced_before_task_tools(adapter, monkeyp
         "task_id": "T", "team_id": "team", "generation": 2, "instance_id": "container/start",
     }}), extras={}, inject_context=lambda *args, **kwargs: None)
     async def scenario():
+        if state == "needs_verification":
+            with pytest.raises(RecoveryConflict):
+                await plugin._manager_report_context(ctx)
+            assert "execution_task_token" not in ctx.extras
+            return
         assert await plugin._manager_report_context(ctx) is False
         assert plugin._execution_task.get() == "T"
         plugin._execution_task.reset(ctx.extras.pop("execution_task_token"))
@@ -555,3 +586,74 @@ def test_ordinary_error_path_keeps_native_error_handling(native_channel, monkeyp
     request = SimpleNamespace(channel_meta={})
     asyncio.run(channel._on_consume_error(request, "!room", "native failure"))
     base.assert_awaited_once()
+
+
+def test_common_descriptor_reuses_native_without_a_private_index(adapter):
+    import time
+    from task_recovery import Recovery
+    from worker_sessions import WorkerSessions
+    recovery, authority, task, channel = adapter
+    native = {"agent": {"memory": "step one tool result"}}
+    session = "matrix:task:" + recovery.key("team", "T") + ":persisted"
+    cache = {"runtime": "qwenpaw", "native_ref": session, "native_digest": Recovery.digest(native),
+             "expires_at": time.time()+3600, "checkpoint_version": 4,
+             "checkpoint_digest": Recovery.digest(task["execution"]["checkpoint"]), "config_generation": 3}
+    view = {"runtime": "qwenpaw", "cache": cache, "compatible": True, "generation": 2,
+            **{key: cache[key] for key in ("checkpoint_version", "checkpoint_digest", "config_generation")}}
+    authority.request = lambda *args, **kwargs: copy.deepcopy(view)
+    channel._workspace.session.get_session_state_dict.return_value = native
+    assert asyncio.run(recovery.select_session("team", task)) == session
+    view["config_generation"] = 4
+    view["compatible"] = False
+    assert asyncio.run(recovery.select_session("team", task)) != session
+
+
+def test_unknown_effect_is_parked_before_native_session_selection(adapter):
+    recovery, authority, task, channel = adapter
+    task["execution"]["state"] = "needs_verification"
+    task["execution"]["checkpoint"]["operation"] = {"id": "external-effect", "state": "unknown"}
+    asyncio.run(recovery.recover())
+    channel.enqueue_recovered_task.assert_not_awaited()
+    channel._workspace.session.get_session_state_dict.assert_not_awaited()
+
+
+def test_private_cache_is_retained_but_cannot_override_common_authority(adapter):
+    recovery, authority, task, channel = adapter
+    path = Path(channel._workspace.session.save_dir) / ".agentteams-task-recovery"
+    path.parent.mkdir(parents=True)
+    legacy = json.dumps({recovery.key("team", "T"): {
+        "session_id": "matrix:task:"+recovery.key("team", "T")+":old",
+        "runtime": "qwenpaw", "checkpoint_digest": Recovery.digest(task["execution"]["checkpoint"]),
+        "expires_at": 9999999999}})
+    path.write_text(legacy)
+    selected = asyncio.run(recovery.select_session("team", task))
+    assert not selected.endswith(":old")
+    assert path.read_text() == legacy
+
+
+def test_late_sdk_save_cannot_relabel_its_old_checkpoint(adapter):
+    recovery, authority, task, channel = adapter
+    identity = {"task_id": "T", "team_id": "team", **task["execution"],
+                "checkpoint_digest": Recovery.digest(task["execution"]["checkpoint"])}
+    channel._workspace.session.get_session_state_dict.return_value = {"agent": {"memory": "old turn"}}
+    task["execution"]["checkpoint"]["version"] += 1
+    asyncio.run(recovery.remember(identity, "native"))
+    assert authority.cache is None
+
+
+@pytest.mark.parametrize("failure", [RecoveryConflict, RecoveryUnavailable])
+def test_optional_cache_failure_preserves_the_saved_checkpoint(adapter, failure):
+    recovery, authority, task, channel = adapter
+    before = copy.deepcopy(task)
+    identity = {"task_id": "T", "team_id": "team", **task["execution"],
+                "checkpoint_digest": Recovery.digest(task["execution"]["checkpoint"])}
+    channel._workspace.session.get_session_state_dict.return_value = {"agent": {"memory": "final SDK turn"}}
+    request = authority.request
+    def unavailable(method, path, *args, **kwargs):
+        if method == "PUT":
+            raise failure("cache write did not commit")
+        return request(method, path, *args, **kwargs)
+    authority.request = unavailable
+    asyncio.run(recovery.remember(identity, "native"))
+    assert authority.cache is None
+    assert task == before

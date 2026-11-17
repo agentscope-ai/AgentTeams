@@ -34,8 +34,9 @@ def test_checkpoint_unavailable_does_not_terminate_the_tool_server(monkeypatch):
 
 
 @pytest.mark.parametrize("progress_delivery", [None, "delivered", "pending"])
-def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supplied(tmp_path, monkeypatch, progress_delivery):
-    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+@pytest.mark.parametrize("runtime_role", ["worker", "leader"])
+def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supplied(tmp_path, monkeypatch, progress_delivery, runtime_role):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", runtime_role)
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
     monkeypatch.setattr(server, "_pull_project", lambda *a, **kw: True)
     monkeypatch.setattr(server, "_pull_task", lambda *a, **kw: True)
@@ -85,8 +86,9 @@ def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supp
 @pytest.mark.parametrize("action", ["ack_task", "submit_task", "report_progress"])
 @pytest.mark.parametrize("assigned_to", ["alice", "@alice:example.test"])
 @pytest.mark.parametrize("actor,allowed", [("bob", False), ("alice", True)])
-def test_worker_can_write_only_the_assigned_task(tmp_path, monkeypatch, action, assigned_to, actor, allowed):
-    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+@pytest.mark.parametrize("runtime_role", ["worker", "leader"])
+def test_worker_can_write_only_the_assigned_task(tmp_path, monkeypatch, action, assigned_to, actor, allowed, runtime_role):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", runtime_role)
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", actor)
     monkeypatch.setattr(server, "_pull_project", lambda *a, **kw: True)
     monkeypatch.setattr(server, "_pull_task", lambda *a, **kw: True)
@@ -110,7 +112,7 @@ def test_worker_can_write_only_the_assigned_task(tmp_path, monkeypatch, action, 
 
 
 @pytest.mark.parametrize("status", ["planned", "prepared", "assigned"])
-@pytest.mark.parametrize("runtime_role", ["worker", "remote-member"])
+@pytest.mark.parametrize("runtime_role", ["worker", "remote-member", "leader"])
 def test_controller_submission_requires_ack_before_any_mutation(tmp_path, monkeypatch, status, runtime_role):
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.example.test")
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", runtime_role)
@@ -137,9 +139,10 @@ def test_controller_submission_requires_ack_before_any_mutation(tmp_path, monkey
 
 
 @pytest.mark.parametrize("project_pull_ok", [True, False])
-def test_first_ack_loads_its_project_before_writing(tmp_path, monkeypatch, project_pull_ok):
+@pytest.mark.parametrize("runtime_role", ["worker", "leader"])
+def test_first_ack_loads_its_project_before_writing(tmp_path, monkeypatch, project_pull_ok, runtime_role):
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.example.test")
-    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", runtime_role)
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
     task_path = tmp_path / "shared/tasks/p1-01/meta.json"
     project_path = tmp_path / "shared/projects/p1/meta.json"

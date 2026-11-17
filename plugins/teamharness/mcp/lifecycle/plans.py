@@ -38,7 +38,19 @@ def _sync_main_plan(
     )
 
     local = _read_json(_task_state_path(arguments, main_id))
+    def advance_phase(main):
+        states = {n.get("status") for n in main.get("tasks", [])}
+        current = main.get("status")
+        phase = "in_progress" if states & {"in_progress", "submitted", "completed"} else "assigned" if "assigned" in states else "planned"
+        if (current == "planned" and phase in {"assigned", "in_progress"}) or (current == "assigned" and phase == "in_progress"):
+            from .transitions import _append_transition_history, _transition_actor
+            main["status"] = phase
+            _append_transition_history(main, current, phase, "delegate_task", _transition_actor(arguments))
+
     if not os.getenv("AGENTTEAMS_CONTROLLER_URL"):
+        if task_update:
+            advance_phase(local)
+            refs.resolve("_write_task")(arguments, local)
         return refs.resolve("_sync_task")(arguments, main_id)
     key = f"shared/tasks/{main_id}/meta.json"
     for _ in range(3):
@@ -80,6 +92,7 @@ def _sync_main_plan(
             ):
                 return False
             node.update(updates)
+            advance_phase(remote)
         else:
             # Delivery receipts are advisory; never copy a stale whole plan.
             for field in ("requesterCompletionEventId", "requester_report"):
@@ -123,7 +136,7 @@ def _sync_main_plan(
 def _advance_main_task(
     arguments: dict[str, Any], main: dict[str, Any]
 ) -> dict[str, Any]:
-    if main.get("status") != "in_progress":
+    if main.get("status") not in {"planned", "assigned", "in_progress"}:
         raise ValueError("dispatch requires an active main task")
     assignments = []
     for node in _ready_nodes(main):
@@ -228,7 +241,10 @@ def _start_task(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str,
     from mcp.artifact.sync import _load_authoritative_task_optional
 
     existing = _load_authoritative_task_optional(arguments, main_id)
-    if existing:
+    pending = bool(existing and existing.get("status") == "planned" and not existing.get("tasks"))
+    if pending and existing.get("spec") != spec:
+        raise ValueError("planning must preserve the original assigned request")
+    if existing and not pending:
 
         def shape(items):
             return [
@@ -288,21 +304,22 @@ def _start_task(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str,
         if not room.get("ok"):
             return room
         main = {
+            **(existing or {}),
             "task_id": main_id,
             "task_kind": "main",
-            "title": payload.get("title") or main_id,
+            "title": (existing or {}).get("title") or payload.get("title") or main_id,
             "team_id": payload.get("teamId") or _runtime_team_name(),
-            "status": "in_progress",
-            "assigned_to": refs.resolve("_runtime_identity")(),
+            "status": "planned",
+            "assigned_to": (existing or {}).get("assigned_to") or refs.resolve("_runtime_identity")(),
             "project_id": project_id,
             "plan_type": "dag",
             "dispatch_mode": "automatic",
             "room_id": room["roomId"],
-            "source_room_id": payload.get("sourceRoomId", ""),
-            "requester": payload.get("requester", ""),
-            "reply_route": payload.get("replyRoute", {}),
-            "requester_reply_route": payload.get("requesterReplyRoute", {}),
-            "created_at": _utc_timestamp(),
+            "source_room_id": (existing or {}).get("source_room_id") or payload.get("sourceRoomId", ""),
+            "requester": (existing or {}).get("requester") or payload.get("requester", ""),
+            "reply_route": (existing or {}).get("reply_route") or payload.get("replyRoute", {}),
+            "requester_reply_route": (existing or {}).get("requester_reply_route") or payload.get("requesterReplyRoute", {}),
+            "created_at": (existing or {}).get("created_at") or _utc_timestamp(),
             "tasks": nodes,
             "spec_path": f"shared/tasks/{main_id}/spec.md",
         }

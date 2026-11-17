@@ -78,7 +78,7 @@ Dir.mktmpdir("teamharness-roomflow-") do |dir|
                 payload = json.dumps({"room_id": "!created:example.test"}).encode("utf-8")
             elif self.path == "/_matrix/client/v3/rooms/%21created%3Aexample.test/invite":
                 payload = json.dumps({}).encode("utf-8")
-            elif self.path == "/_matrix/client/v3/rooms/%21created%3Aexample.test/leave":
+            elif self.path == "/api/v1/task-rooms/%21created%3Aexample.test/archive":
                 payload = b"{}"
             else:
                 self.send_response(404)
@@ -343,11 +343,15 @@ Dir.mktmpdir("teamharness-roomflow-") do |dir|
         raise AssertionError(f"leader DM admin power level missing: {dry_leader_dm_admin!r}")
     os.environ.pop("TEAMHARNESS_RUNTIME_CONFIG", None)
 
+    os.environ["AGENTTEAMS_CONTROLLER_URL"] = f"http://127.0.0.1:{server.server_address[1]}"
+    token_file = pathlib.Path("#{dir}") / "controller-token"
+    token_file.write_text("controller-token")
+    os.environ["AGENTTEAMS_AUTH_TOKEN_FILE"] = str(token_file)
     archived = payload({"action": "archive_room", "roomId": "room:!created:example.test"})
     server.shutdown()
     if not archived.get("ok") or archived.get("archived") is not True:
         raise AssertionError(f"archive failed: {archived!r}")
-    if captured["posts"][-1].get("path") != "/_matrix/client/v3/rooms/%21created%3Aexample.test/leave":
+    if captured["posts"][-1].get("path") != "/api/v1/task-rooms/%21created%3Aexample.test/archive" or captured["posts"][-1].get("auth") != "Bearer controller-token":
         raise AssertionError(f"archive path mismatch: {captured!r}")
 
     print(json.dumps({

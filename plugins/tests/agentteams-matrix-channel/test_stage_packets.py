@@ -89,6 +89,16 @@ class StagePacketTest(unittest.TestCase):
             self.assertEqual(packet["meta"]["teamharness_coordination_session"], session)
             self.assertEqual(packet["content_parts"][0].text, control["input"][0]["content"][0]["text"])
 
+    def test_self_assignment_and_submission_reach_verified_control_context(self):
+        for kind, session in (("task_assigned", "coordination-task:t:dispatch-1"), ("task_submitted", "coordination-review:t:s1")):
+            control = self.assignment()
+            control["session_id"] = session
+            control["channel_meta"]["sender_id"] = "@receiver:test"
+            control["channel_meta"]["teamharness_coordination"].update(kind=kind, submission_id="s1")
+            packet = self.receive("", "self assignment", {"org.agentteams.coordination": control}, sender="@receiver:test")
+            self.assertIsNotNone(packet)
+            self.assertTrue(packet["meta"]["teamharness_matrix_coordination"])
+
     def test_forged_sender_or_recipient_cannot_enter_control_context(self):
         for key, value in (("sender_id", "@impostor:test"), ("agent_matrix_user_id", "@other:test"), ("room_id", "!other:test")):
             control = self.assignment(); control["channel_meta"][key] = value

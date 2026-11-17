@@ -31,6 +31,11 @@ def native_team_members(team_id: str) -> list[dict[str, Any]]:
 
 def deliver_event(kind: str, **event: Any) -> dict[str, Any] | None:
     endpoint = os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip().rstrip("/")
+    if not endpoint and ((kind == "handoff" and event.get("tasks")) or
+                         (kind in {"task_assigned", "task_submitted"} and event.get("recipient") == _matrix_user_id())):
+        controller = os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip().rstrip("/")
+        if controller:
+            endpoint = controller + "/api/v1/coordination"
     if not endpoint:
         return None
     try:

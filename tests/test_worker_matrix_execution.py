@@ -101,3 +101,51 @@ def test_fresh_message_session_context_and_digest_use_the_shared_checkpoint():
 def test_non_string_rpc_actions_are_controlled_invalid_requests(action):
     with patch("task_recovery_rpc.enabled", return_value=True), patch("task_recovery_rpc.Recovery"), pytest.raises(ValueError):
         execute({"action": action})
+
+
+def test_native_tool_batch_is_fenced_before_dispatch_and_verified_with_matching_receipts():
+    source = entry()
+    requests = []
+    def request(method, path, *args):
+        if method == "POST":
+            cp = args[0]["checkpoint"]
+            requests.append(copy.deepcopy(cp))
+            source["execution"]["checkpoint"] = cp
+            pending = cp["operation"]["state"] == "started"
+            source["recovery"] = "verify" if pending else "resume"
+            source["execution"]["state"] = "needs_verification" if pending else "active"
+        return copy.deepcopy(source)
+    matrix = WorkerMatrix("hermes", recovery=Mock(process="current-process", request=request))
+    calls = [{"id": "call-a", "name": "write", "arguments": {"file": "report.txt"}}]
+    op = matrix.message_begin_tools(identity(), calls)
+    assert requests[-1]["operation"]["state"] == "started"
+    with pytest.raises(RecoveryConflict):
+        matrix.message_begin_tools(identity(), calls)
+    with pytest.raises(RecoveryConflict):
+        matrix.message_finish_tools(identity(), op, [{"id": "other", "content": "ok"}])
+    assert len(requests) == 1
+    with patch.dict(os.environ, {"AGENTTEAMS_STORAGE_PREFIX": "storage/tenant"}), patch("worker_matrix_state.subprocess.run") as upload:
+        matrix.message_finish_tools(identity(), op, [{"id": "call-a", "content": "verified file digest"}])
+    cp = requests[-1]
+    assert cp["version"] == 5 and cp["completed_steps"] == ["one", op]
+    assert cp["operation"]["id"] == op and cp["operation"]["state"] == "verified"
+    assert hashlib.sha256(upload.call_args.kwargs["input"]).hexdigest() == cp["artifacts"][-1]["sha256"]
+    assert "verified file digest" in upload.call_args.kwargs["input"].decode()
+    with pytest.raises(RecoveryConflict):
+        matrix.message_begin_tools(identity(), calls)
+    assert len(requests) == 2
+
+
+def test_missing_or_ambiguous_tool_results_leave_original_operation_pending():
+    source = entry()
+    matrix = WorkerMatrix("hermes", recovery=Mock(process="current-process", request=Mock(return_value=source)))
+    calls = [{"id": "a", "name": "command", "arguments": "foo"}, {"id": "b", "name": "command", "arguments": "bar"}]
+    op = matrix.message_begin_tools(identity(), calls)
+    cp = matrix.recovery.request.call_args.args[2]["checkpoint"]
+    source["execution"].update(checkpoint=cp, state="needs_verification")
+    source["recovery"] = "verify"
+    with patch("worker_matrix_state.subprocess.run") as upload:
+        for results in ([], [{"id": "a", "content": "ok"}], [{"id": "a", "content": "ok"}, {"id": "a", "content": "ok"}]):
+            with pytest.raises(RecoveryConflict):
+                matrix.message_finish_tools(identity(), op, results)
+        upload.assert_not_called()

@@ -234,6 +234,54 @@ class WorkerMatrix:
         entry = self._message_owned(identity)
         return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "release" if release else "checkpoint", checkpoint))
 
+    def message_begin_tools(self, identity, calls):
+        """Commit the native call identities before the adapter invokes any tool."""
+        entry = self.message_current(identity)
+        if not calls or any(not c.get("id") or not c.get("name") or "arguments" not in c for c in calls):
+            raise RecoveryConflict("Native tool calls require IDs, names and arguments")
+        ids = [call["id"] for call in calls]
+        if len(set(ids)) != len(ids):
+            raise RecoveryConflict("Native tool call IDs must be unique")
+        op = "tools:" + Recovery.digest([identity["event_key"], calls])
+        cp = dict(entry["execution"].get("checkpoint") or {})
+        if op in (cp.get("completed_steps") or []):
+            raise RecoveryConflict("Tool operation already completed")
+        # Retain enough information to verify an interrupted native batch. A
+        # digest of arguments avoids placing full command payloads in metadata.
+        expected = [{"id": c["id"], "name": c["name"], "arguments_sha256": Recovery.digest(c["arguments"])} for c in calls]
+        cp.update(version=cp.get("version", 0) + 1,
+                  operation={"id": op, "state": "started", "evidence": json.dumps(expected)})
+        self._message_update(identity["event_key"], entry, "checkpoint", cp)
+        return op
+
+    def message_finish_tools(self, identity, operation_id, results):
+        """Call only for confirmed tool returns. Uncertain effects remain fenced."""
+        entry = self._message_owned(identity)
+        cp = dict(entry["execution"].get("checkpoint") or {})
+        operation = cp.get("operation") or {}
+        if (entry["recovery"] != "verify" or operation.get("id") != operation_id
+                or operation.get("state") != "started"):
+            raise RecoveryConflict("Native results do not own an outstanding tool operation")
+        expected = json.loads(operation["evidence"])
+        if (sorted(r["id"] for r in results) != sorted(c["id"] for c in expected)
+                or any("content" not in result for result in results)):
+            raise RecoveryConflict("Native tool receipts differ from the admitted calls")
+        data = json.dumps({"calls": expected, "results": results}, ensure_ascii=False).encode()
+        artifact = self._message_artifact(entry, data)
+        cp.update(version=cp["version"] + 1,
+                  completed_steps=[*(cp.get("completed_steps") or []), operation_id],
+                  artifacts=[*(cp.get("artifacts") or []), artifact],
+                  operation={"id": operation_id, "state": "verified", "evidence": artifact["key"]})
+        return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "checkpoint", cp))
+
+    @staticmethod
+    def _message_artifact(entry, data):
+        digest = hashlib.sha256(data).hexdigest()
+        key = entry["input"]["member_prefix"] + "/runtime/matrix/results/" + digest + ".txt"
+        subprocess.run(["mc", "pipe", os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/" + key],
+                       input=data, capture_output=True, check=True, timeout=30)
+        return {"key": key, "sha256": digest, "size": len(data)}
+
     def message_save_reply(self, identity, text):
         entry = self._message_owned(identity)
         if entry["recovery"] == "deliver":
@@ -241,16 +289,12 @@ class WorkerMatrix:
             return self.message_claim(identity["event_key"])
         if entry["recovery"] != "resume" or entry["execution"]["state"] != "active" or not text:
             raise RecoveryConflict("A verified active message and a result are required")
-        data = text.encode()
-        digest = hashlib.sha256(data).hexdigest()
-        key = entry["input"]["member_prefix"] + "/runtime/matrix/results/" + digest + ".txt"
-        subprocess.run(["mc", "pipe", os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/" + key],
-                       input=data, capture_output=True, check=True, timeout=30)
+        artifact = self._message_artifact(entry, text.encode())
         cp = dict(entry["execution"].get("checkpoint") or {})
-        cp.update(version=cp.get("version", 0)+1, result={"key": key, "sha256": digest, "size": len(data)},
+        cp.update(version=cp.get("version", 0)+1, result=artifact,
                   delivery="pending", reply_txn="matrix-reply:" + Recovery.digest([
                       entry["input"]["member_prefix"], entry["input"]["room_id"],
-                      entry["input"]["event_id"], cp.get("version", 0)+1, digest]))
+                      entry["input"]["event_id"], cp.get("version", 0)+1, artifact["sha256"]]))
         cp.pop("reply_event", None)
         return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "checkpoint", cp))
 

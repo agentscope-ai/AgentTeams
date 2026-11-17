@@ -1104,3 +1104,34 @@ Verified coordination handoffs remain control inputs rather than creating an
 ordinary-message execution alongside their coordination authority. The focused
 installed-SDK suite now passes111 tests. This follow-up is later than the case41
 image: its native regression is not a new real-model/fault-matrix acceptance.
+
+
+### Case41: QwenPaw restart/reuse with common accepted-input persistence
+
+[Strict case41 evidence](evidence/runtime-recovery-1631-case41-verified.json)
+uses actual Core server262ecb13,QwenPaw189664f/sharedfb8bfd0c/SDK2.2.2.post1
+and local image09f8bc45. Before restart, the original Matrix assignment is a
+shared native_committed input linked to recovery-team/the same Task. Its fact
+binds the actual source process/instance, SDK session reference and saved-state
+digest; it is not a Task checkpoint. The independent shared descriptor and SDK
+state match checkpoint4. Normal restart keeps the container ID but changes its
+actual start/process. With no new external Matrix input, generation2 reuses the
+same valid native session, finishes steps two/three and reaches checkpoint10.
+The oracle records each step once; all artifacts, canonical submission/report,
+unique final reply and original native read source pass strict verification.
+
+[Trace proof](evidence/runtime-recovery-1631-case41-traces.json) retrieves both
+turns via Controller and direct Langfuse. The source native-fact POST ends at
+20:32:53.155Z, before first model start20:32:53.198Z; the retained shared record
+identifies that same source session. Actual Dashboard readback of the resumed
+turn verifies Task/room/generation2 and the reused SDK session,4 model calls,
+5 tools,162,148 tokens,39.10seconds and71 nodes, with no error/HTTP-failure nodes.
+Owned v21 Workers were slept after proof capture; data remains preserved.
+
+This revalidates QwenPaw under new input hooks, not a fourth restart Harness or
+an eighth direction. Full-batch/legacy/ordinary-message execution integration
+and the full fault/return matrix are still open. Case41's image predates the
+later absent-receipt-service/control-classification fix; the111-test installed
+SDK follow-up does not retroactively change this case's source SHA. Matching
+Corefb8bfd0c Controller CI44168348788 and Q189664f test/image CI44168366402 passed
+(publication skipped); Core9dd2ca4b pins that candidate after its matching CI.

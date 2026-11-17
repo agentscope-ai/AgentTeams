@@ -1,0 +1,210 @@
+[
+  {
+    "trace_id": "562f7c409e3614ff76100dafce86a122",
+    "task_id": "live-qwenpaw-qwenpaw-41",
+    "controller_readback": true,
+    "direct_langfuse_readback": true,
+    "metadata": {
+      "agentteams.event.id": "recovery:recovery-team/live-qwenpaw-qwenpaw-41:2",
+      "agentteams.execution.generation": 2,
+      "agentteams.outcome": "ok",
+      "agentteams.room.id": "!7Hi4xQEITs7pIUIDme:recovery-1631.test",
+      "agentteams.runtime": "qwenpaw",
+      "agentteams.runtime.session_id": "matrix:task:3f7b369b18bf6ee23639659130041c9fd93a1719aa392f63979b7128988de733:5f149d5607fd45999544d999268d2f5a",
+      "agentteams.session.id": "agent-a:2e0915cf1bef4578de27be3c",
+      "agentteams.task.correlation": "explicit request context",
+      "agentteams.task.id": "live-qwenpaw-qwenpaw-41",
+      "agentteams.team.id": "recovery-team",
+      "agentteams.telemetry.adapter": "qwenpaw",
+      "agentteams.telemetry.adapter_errors": [],
+      "agentteams.telemetry.capture_content": false,
+      "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+      "agentteams.telemetry.field_limit_bytes": 262144,
+      "agentteams.telemetry.schema": 1,
+      "agentteams.telemetry.versions": "{'agentscope': '2.0.10', 'qwenpaw': '2.2.2.post1', 'openai': '2.33.0'}",
+      "agentteams.turn.id": "f0627369090e45d880943ca8fbe03e34",
+      "agentteams.worker.name": "agent-a",
+      "attributes": {
+        "agentteams.event.id": "recovery:recovery-team/live-qwenpaw-qwenpaw-41:2",
+        "agentteams.execution.generation": "2",
+        "agentteams.outcome": "ok",
+        "agentteams.room.id": "!7Hi4xQEITs7pIUIDme:recovery-1631.test",
+        "agentteams.runtime": "qwenpaw",
+        "agentteams.runtime.session_id": "matrix:task:3f7b369b18bf6ee23639659130041c9fd93a1719aa392f63979b7128988de733:5f149d5607fd45999544d999268d2f5a",
+        "agentteams.session.id": "agent-a:2e0915cf1bef4578de27be3c",
+        "agentteams.task.correlation": "explicit request context",
+        "agentteams.task.id": "live-qwenpaw-qwenpaw-41",
+        "agentteams.team.id": "recovery-team",
+        "agentteams.telemetry.adapter": "qwenpaw",
+        "agentteams.telemetry.adapter_errors": "[]",
+        "agentteams.telemetry.capture_content": "false",
+        "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+        "agentteams.telemetry.field_limit_bytes": "262144",
+        "agentteams.telemetry.schema": "1",
+        "agentteams.telemetry.versions": "{'agentscope': '2.0.10', 'qwenpaw': '2.2.2.post1', 'openai': '2.33.0'}",
+        "agentteams.turn.id": "f0627369090e45d880943ca8fbe03e34",
+        "agentteams.worker.name": "agent-a",
+        "gen_ai.agent.id": "agent-a",
+        "gen_ai.agent.name": "agent-a",
+        "gen_ai.operation.name": "enter",
+        "gen_ai.session.id": "agent-a:2e0915cf1bef4578de27be3c",
+        "gen_ai.span.kind": "ENTRY",
+        "gen_ai.turn.id": "f0627369090e45d880943ca8fbe03e34",
+        "langfuse.observation.type": "agent",
+        "langfuse.session.id": "agent-a:2e0915cf1bef4578de27be3c",
+        "langfuse.trace.name": "agent-a / turn",
+        "langfuse.trace.tags": "[\"agentteams\",\"qwenpaw\",\"worker-turn\",\"task:live-qwenpaw-qwenpaw-41\",\"team:recovery-team\",\"room:!7Hi4xQEITs7pIUIDme:recovery-1631.test\"]",
+        "langfuse.user.id": "agent-a"
+      },
+      "resourceAttributes": {
+        "agentteams.runtime": "qwenpaw",
+        "agentteams.telemetry.config_revision": "ca518e64-30e4-4b23-82ca-979633129a59",
+        "agentteams.worker.name": "agent-a",
+        "service.instance.id": "75ad2dc7-f825-47d0-a411-7356bec2e1ba",
+        "service.name": "agentteams-worker-agent-a",
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope": {
+        "attributes": {},
+        "name": "agentteams.worker",
+        "version": "2.0.10"
+      }
+    },
+    "generation_observations": 4,
+    "tool_observations": 5,
+    "usage": {
+      "input": 161025,
+      "output": 1123,
+      "total": 162148
+    },
+    "timings_present": true,
+    "native_input_http": [],
+    "first_model_start": "2026-11-17T20:35:39.330Z",
+    "outcome": "ok",
+    "dashboard_ui": {
+      "status": "verified",
+      "normal_controller_admin_login": true,
+      "dashboard_version": "v1.4.1",
+      "checks": [
+        "exact Task and room",
+        "execution generation 2",
+        "native session matches source descriptor and actual SDK",
+        "4 model observations and 5 tools",
+        "162148 tokens,39.10 seconds,71 nodes",
+        "no error or HTTP-failure nodes"
+      ],
+      "limits": [
+        "Trace readback only; runtime-switch UI not implemented",
+        "Controller admin login is not Matrix-chat identity acceptance"
+      ]
+    }
+  },
+  {
+    "trace_id": "043de9a502d0a3e5c65397e5d9ab1531",
+    "task_id": "live-qwenpaw-qwenpaw-41",
+    "controller_readback": true,
+    "direct_langfuse_readback": true,
+    "metadata": {
+      "agentteams.event.id": "recovery:recovery-team/live-qwenpaw-qwenpaw-41:1",
+      "agentteams.execution.generation": 1,
+      "agentteams.outcome": "ok",
+      "agentteams.room.id": "!7Hi4xQEITs7pIUIDme:recovery-1631.test",
+      "agentteams.runtime": "qwenpaw",
+      "agentteams.runtime.session_id": "matrix:task:3f7b369b18bf6ee23639659130041c9fd93a1719aa392f63979b7128988de733:5f149d5607fd45999544d999268d2f5a",
+      "agentteams.session.id": "agent-a:2e0915cf1bef4578de27be3c",
+      "agentteams.task.correlation": "explicit request context",
+      "agentteams.task.id": "live-qwenpaw-qwenpaw-41",
+      "agentteams.team.id": "recovery-team",
+      "agentteams.telemetry.adapter": "qwenpaw",
+      "agentteams.telemetry.adapter_errors": [],
+      "agentteams.telemetry.capture_content": false,
+      "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+      "agentteams.telemetry.field_limit_bytes": 262144,
+      "agentteams.telemetry.schema": 1,
+      "agentteams.telemetry.versions": "{'agentscope': '2.0.10', 'qwenpaw': '2.2.2.post1', 'openai': '2.33.0'}",
+      "agentteams.turn.id": "fc992bb4871543dda91815384098e526",
+      "agentteams.worker.name": "agent-a",
+      "attributes": {
+        "agentteams.event.id": "recovery:recovery-team/live-qwenpaw-qwenpaw-41:1",
+        "agentteams.execution.generation": "1",
+        "agentteams.outcome": "ok",
+        "agentteams.room.id": "!7Hi4xQEITs7pIUIDme:recovery-1631.test",
+        "agentteams.runtime": "qwenpaw",
+        "agentteams.runtime.session_id": "matrix:task:3f7b369b18bf6ee23639659130041c9fd93a1719aa392f63979b7128988de733:5f149d5607fd45999544d999268d2f5a",
+        "agentteams.session.id": "agent-a:2e0915cf1bef4578de27be3c",
+        "agentteams.task.correlation": "explicit request context",
+        "agentteams.task.id": "live-qwenpaw-qwenpaw-41",
+        "agentteams.team.id": "recovery-team",
+        "agentteams.telemetry.adapter": "qwenpaw",
+        "agentteams.telemetry.adapter_errors": "[]",
+        "agentteams.telemetry.capture_content": "false",
+        "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+        "agentteams.telemetry.field_limit_bytes": "262144",
+        "agentteams.telemetry.schema": "1",
+        "agentteams.telemetry.versions": "{'agentscope': '2.0.10', 'qwenpaw': '2.2.2.post1', 'openai': '2.33.0'}",
+        "agentteams.turn.id": "fc992bb4871543dda91815384098e526",
+        "agentteams.worker.name": "agent-a",
+        "gen_ai.agent.id": "agent-a",
+        "gen_ai.agent.name": "agent-a",
+        "gen_ai.operation.name": "enter",
+        "gen_ai.session.id": "agent-a:2e0915cf1bef4578de27be3c",
+        "gen_ai.span.kind": "ENTRY",
+        "gen_ai.turn.id": "fc992bb4871543dda91815384098e526",
+        "langfuse.observation.type": "agent",
+        "langfuse.session.id": "agent-a:2e0915cf1bef4578de27be3c",
+        "langfuse.trace.name": "agent-a / turn",
+        "langfuse.trace.tags": "[\"agentteams\",\"qwenpaw\",\"worker-turn\",\"task:live-qwenpaw-qwenpaw-41\",\"team:recovery-team\",\"room:!7Hi4xQEITs7pIUIDme:recovery-1631.test\"]",
+        "langfuse.user.id": "agent-a"
+      },
+      "resourceAttributes": {
+        "agentteams.runtime": "qwenpaw",
+        "agentteams.telemetry.config_revision": "ca518e64-30e4-4b23-82ca-979633129a59",
+        "agentteams.worker.name": "agent-a",
+        "service.instance.id": "b1865ef4-516b-4d11-b541-7b6c447d9deb",
+        "service.name": "agentteams-worker-agent-a",
+        "telemetry.sdk.language": "python",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "1.45.2"
+      },
+      "scope": {
+        "attributes": {},
+        "name": "agentteams.worker",
+        "version": "2.0.10"
+      }
+    },
+    "generation_observations": 6,
+    "tool_observations": 7,
+    "usage": {
+      "input": 155895,
+      "output": 897,
+      "total": 156792
+    },
+    "timings_present": true,
+    "native_input_http": [
+      {
+        "method": "GET",
+        "path": "/api/v1/runtime/matrix/events/646bb85396a1f51e1f02f4bf2880f40ff355e09861bbbd39ca1f3dd6fce6d21e/native",
+        "start": "2026-11-17T20:32:51.748Z",
+        "end": "2026-11-17T20:32:52.149Z"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/runtime/matrix/events/646bb85396a1f51e1f02f4bf2880f40ff355e09861bbbd39ca1f3dd6fce6d21e/native",
+        "start": "2026-11-17T20:32:52.152Z",
+        "end": "2026-11-17T20:32:53.155Z"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/runtime/matrix/events/646bb85396a1f51e1f02f4bf2880f40ff355e09861bbbd39ca1f3dd6fce6d21e",
+        "start": "2026-11-17T20:32:51.362Z",
+        "end": "2026-11-17T20:32:51.745Z"
+      }
+    ],
+    "first_model_start": "2026-11-17T20:32:53.198Z",
+    "outcome": "ok",
+    "dashboard_ui": "pending",
+    "native_fact_before_first_model": true
+  }
+]

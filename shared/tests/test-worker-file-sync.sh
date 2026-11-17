@@ -152,6 +152,11 @@ EOF
     grep -Fq -- '--exclude runtime/compat-config.json*' "${FAKE_MC_LOG}" ||
         fail "bulk mirror would upload derived credentials"
 
+    for pattern in "runtime/state.json" "runtime/matrix/**" "runtime/sessions/**"; do
+        grep -Fq -- "--exclude ${pattern}" "${FAKE_MC_LOG}" ||
+            fail "bulk mirror would overwrite shared Worker state"
+    done
+
     unset AGENTTEAMS_WORKER_SYNC_MIRROR_THRESHOLD
     rm -rf "${tmpdir}"
 }
@@ -234,7 +239,7 @@ test_coding_cli_prefix_is_synced
 if worker_sync_should_push "credentials/.config-pull.fixture/merged.json"; then
     fail "temporary config would be uploaded"
 fi
-for _runtime_file in runtime/runtime.yaml runtime/compat-config.json runtime/compat-config.json.migrate.fixture runtime/compat-config.json.bak credentials/.runtime-config-fixture; do
+for _runtime_file in runtime/state.json runtime/matrix/state.json runtime/matrix/events/input.json runtime/matrix/results/result.txt runtime/sessions/codex/task.json runtime/runtime.yaml runtime/compat-config.json runtime/compat-config.json.migrate.fixture runtime/compat-config.json.bak credentials/.runtime-config-fixture; do
     if worker_sync_should_push "${_runtime_file}"; then
         fail "Controller configuration or derived credentials would be uploaded"
     fi

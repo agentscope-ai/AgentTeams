@@ -599,8 +599,8 @@ not reset the Task/effect count or be called a clean two-generation acceptance.
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement cases 06/09/13 passed; other scenarios incomplete | untested | untested | untested | untested |
-| Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | case25 failed final delivery | replacement case 20 passed; other scenarios incomplete | untested | untested |
-| QwenPaw | untested | case24 failed; generation3 repair passed separately; case27 partial (extra Leader messages) | untested | untested | untested | untested |
+| Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | strict replacement case28 passed; case25 failed,26 partial retained | replacement case 20 passed; other scenarios incomplete | untested | untested |
+| QwenPaw | untested | case24 failed; generation3 repair passed separately; case27 partial (extra Leader messages) | normal restart + valid session case29 passed; other scenarios incomplete | untested | untested | untested |
 | DeepSeek | untested | replacement case 21 passed; other scenarios incomplete | untested | untested | untested | untested |
 | OpenClaw | untested | untested | untested | untested | untested | untested |
 | OpenHuman | untested | untested | untested | untested | untested | untested |
@@ -723,3 +723,42 @@ Independent QwenPaw `5272ce21` test/image/native configuration smoke CI passed;
 Hermes `965b612a` test/image CI passed. Core candidate pins now consume these
 exact revisions. Neither independent CI result proves full six-Harness or
 30-direction execution acceptance.
+
+### Case28: pinned Hermes→QwenPaw continuation passed
+
+[Case28 proof](evidence/runtime-recovery-1631-case28-verified.json) uses Hermes
+`965b612a` / shared05967bf6 → QwenPaw `5272ce21` / shared4c680c6c,
+Controller binary774d6285 and drivere8717a7c. These are local source overlays;
+independent canonical test/image CI passed separately. The fresh v12 fixture
+enabled tracing before creating Workers. Before assignment, the test Leader's
+native effective tool-progress setting was verified off through its Worker
+environment; native review stayed enabled. Matrix backlog and strict
+no-external-message assertions were preserved.
+
+Task `live-hermes-qwenpaw-28` had native ACK/read and a durable step-one
+checkpoint4, with no QwenPaw Task cache. Source helper processes were absent at
+the boundary; old die/destroy preceded target creation. Without new Matrix
+input, QwenPaw claimed generation2, rebuilt a native Task session and executed
+steps two/three. The independent ledger proves steps once at generations1/2/2.
+Checkpoint10 is submitted/delivered, all artifact/report bytes match and the
+canonical final report has exactly one Matrix event. The final native session
+digest and latest shared checkpoint both match the cache. This accepts one
+new direction, bringing the strict count to3/30; cases25/26/27 remain failed or
+partial at their original revisions.
+
+### Case29: QwenPaw normal restart and valid session reuse passed
+
+[Case29 proof](evidence/runtime-recovery-1631-case29-verified.json) uses the same
+QwenPaw5272ce21/shared4c680c6c candidate and Controller774d6285. After native
+ACK/read, step one and checkpoint4, the existing normal Worker restart API
+stopped and restarted the same container. The execution identity binds its new
+actual start/process; generation advanced1→2. Its existing, unexpired native
+Task session was reused with the same session ID and valid source/final
+digests. Without new Matrix input, steps two/three completed, checkpoint
+advanced4→10, artifacts and the canonical report matched, and one final report
+event was delivered. The independent ledger remains1/2/2 with no repeated step.
+
+This is one same-Harness normal-restart/valid-session scenario, not abnormal
+restart, replacement, lost/expired-session, saved-result-only or unknown-effect
+acceptance. Both live cases use plaintext Matrix (`AGENTTEAMS_MATRIX_E2EE=0`);
+encrypted backlog/crypto continuity and Dashboard trace UI remain unaccepted.

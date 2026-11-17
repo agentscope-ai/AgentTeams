@@ -1,0 +1,17 @@
+{
+  "fixture": "recovery-1631-live-20261118-v22-controller",
+  "native_client": "DeepSeek MatrixClient / Codex packaging",
+  "devices": [
+    "AT_RAW_A_09ea6eb272",
+    "AT_RAW_B_09ea6eb272"
+  ],
+  "room_id": "!cPSIg469BwgYBkilcc:recovery-1631.test",
+  "sender": "@recovery-admin:recovery-1631.test",
+  "initial": "$TfrfzmdYbM327tpT9rZ_WsliWkbdfcFVZtwjEaKMfd0",
+  "replacement": "$TfrfzmdYbM327tpT9rZ_WsliWkbdfcFVZtwjEaKMfd0",
+  "matching": [
+    "$TfrfzmdYbM327tpT9rZ_WsliWkbdfcFVZtwjEaKMfd0"
+  ],
+  "encrypted": false,
+  "scope": "Native Matrix transport with fixture checkpoint and no model invocation"
+}

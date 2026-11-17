@@ -1,0 +1,611 @@
+{
+  "passed": false,
+  "case": "26",
+  "scope": "Hermes-to-QwenPaw execution and report delivery passed; additional native-cache consistency acceptance failed",
+  "recorded_at": "2026-11-17T07:22:41.416730+00:00",
+  "build": {
+    "images": {
+      "controller": "recovery-1631/controller:local-20261117124854",
+      "hermes": "recovery-1631/hermes:local-20261117145000",
+      "qwenpaw": "recovery-1631/qwenpaw:local-20261117144935"
+    },
+    "metadata": {
+      "controller": {
+        "tag": "recovery-1631/controller:local-20261117124854",
+        "id": "sha256:af5d46f503d63aba7f1f1e0a56bb65d3c6f725e4f7fafa10888f5532d5da5dc0",
+        "labels": {
+          "io.agentteams.recovery.core-sha": "774d628568c227ea041f90c14a56138ae2c91493",
+          "io.agentteams.recovery.kind": "local-source-overlay"
+        }
+      },
+      "hermes": {
+        "tag": "recovery-1631/hermes:local-20261117145000",
+        "id": "sha256:f816b6be455dc322edda68e7778044e4e39845c42d15d8f391d7ae278fa8920b",
+        "labels": {
+          "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+          "io.agentteams.recovery.harness-sha": "965b612a82c3bee074c1c3b77d41dddea0fd75d7",
+          "io.agentteams.recovery.kind": "local-source-overlay"
+        }
+      },
+      "qwenpaw": {
+        "tag": "recovery-1631/qwenpaw:local-20261117144935",
+        "id": "sha256:9b3aadd43097187dd2a18ce33689adf4ab94422fecdc807e13e75fe64eee5b87",
+        "labels": {
+          "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+          "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+          "io.agentteams.recovery.kind": "local-source-overlay"
+        }
+      }
+    }
+  },
+  "execution_delivery_checks": {
+    "passed": true,
+    "proof": {
+      "task_id": "live-hermes-qwenpaw-26",
+      "case": "26",
+      "scope": "one real hermes-to-qwenpaw in-progress continuation",
+      "mode": "replace",
+      "fixture_prefix": "recovery-1631-live-20261117-v11",
+      "authoritative_report_verified": true,
+      "sources": {
+        "core": "774d628568c227ea041f90c14a56138ae2c91493",
+        "shared_contract": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+        "hermes": "965b612a82c3bee074c1c3b77d41dddea0fd75d7",
+        "qwenpaw": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d"
+      },
+      "native_recovery_sessions": {
+        "hermes": [],
+        "hermes_message_counts": {},
+        "hermes_cache": [],
+        "codex": null
+      },
+      "generation_before": 1,
+      "generation_after": 2,
+      "checkpoint_before": 4,
+      "checkpoint_after": 10,
+      "execution": {
+        "generation": 2,
+        "instance_id": "docker/6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6/2026-11-17T07:04:04.398586762Z",
+        "process_id": "1:1794899044587684397:736dce9943fb4a45909df476c0de3832",
+        "runtime": "qwenpaw",
+        "state": "active",
+        "checkpoint": {
+          "version": 10,
+          "completed_steps": [
+            "one",
+            "two",
+            "three"
+          ],
+          "remaining_steps": [],
+          "operation": {
+            "id": "fixture:live-hermes-qwenpaw-26:three",
+            "state": "verified",
+            "evidence": "Independent effect ledger; persisted output SHA256=41ace140e27d88357bfe7b9fb6f409c8728745b2b4a7da5d787377a00ca6e631; step=three; count=1"
+          },
+          "artifacts": [
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-26/output/step-one.json",
+              "sha256": "074c3b3c3f4f3350091b4d79d8ae60fab4c9455ef83a1786023b711e7377ac1b",
+              "size": 354
+            },
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-26/output/step-two.json",
+              "sha256": "2316828095596a42191849e7b2fc37137b2d5a35432f7491f6b6cdf4a5045c3c",
+              "size": 354
+            },
+            {
+              "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-26/output/step-three.json",
+              "sha256": "41ace140e27d88357bfe7b9fb6f409c8728745b2b4a7da5d787377a00ca6e631",
+              "size": 356
+            }
+          ],
+          "result": {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-26/result.md",
+            "sha256": "b7d977722ec4a1478f6946ec41b05942c0b39a42ec9ce46be4fdf0d3430b1851",
+            "size": 707
+          },
+          "delivery": "delivered",
+          "reply_txn": "task-reply:74bf18d39b4096428529e9f8f206ad00b0180461e0c2000f7d547498dfe2c49d",
+          "reply_event": "$mUP46jKmRcEulNIZ1tCL-tVbkoXd_qTirJr1nUf_0sk",
+          "saved_at": "2026-11-17T07:05:04.587021601Z"
+        }
+      },
+      "ledger": [
+        {
+          "checkpoint_version": 1,
+          "executed_at_ns": 1794898574982620581,
+          "generation": 1,
+          "instance_id": "docker/9e3e310b3dee660c60d947140305ea740f7e22badc5172ef0c8829d014ce30fd/2026-11-17T06:55:12.128058931Z",
+          "process_id": "1:1794898512529739282:3a7da3549879437494d3bb38591a2541",
+          "step": "one",
+          "task_id": "live-hermes-qwenpaw-26",
+          "team_id": "recovery-team"
+        },
+        {
+          "checkpoint_version": 5,
+          "executed_at_ns": 1794899077681434672,
+          "generation": 2,
+          "instance_id": "docker/6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6/2026-11-17T07:04:04.398586762Z",
+          "process_id": "1:1794899044587684397:736dce9943fb4a45909df476c0de3832",
+          "step": "two",
+          "task_id": "live-hermes-qwenpaw-26",
+          "team_id": "recovery-team"
+        },
+        {
+          "checkpoint_version": 7,
+          "executed_at_ns": 1794899085096329409,
+          "generation": 2,
+          "instance_id": "docker/6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6/2026-11-17T07:04:04.398586762Z",
+          "process_id": "1:1794899044587684397:736dce9943fb4a45909df476c0de3832",
+          "step": "three",
+          "task_id": "live-hermes-qwenpaw-26",
+          "team_id": "recovery-team"
+        }
+      ],
+      "artifacts_verified": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-26/output/step-one.json",
+          "sha256": "074c3b3c3f4f3350091b4d79d8ae60fab4c9455ef83a1786023b711e7377ac1b",
+          "size": 354
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-26/output/step-two.json",
+          "sha256": "2316828095596a42191849e7b2fc37137b2d5a35432f7491f6b6cdf4a5045c3c",
+          "size": 354
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-26/output/step-three.json",
+          "sha256": "41ace140e27d88357bfe7b9fb6f409c8728745b2b4a7da5d787377a00ca6e631",
+          "size": 356
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-qwenpaw-26/result.md",
+          "sha256": "b7d977722ec4a1478f6946ec41b05942c0b39a42ec9ce46be4fdf0d3430b1851",
+          "size": 707
+        }
+      ],
+      "docker_order_ns": {
+        "die": 1794898698749172089,
+        "destroy": 1794898698995354987,
+        "create": 1794898701167460019
+      },
+      "matrix": {
+        "reply_event": "$mUP46jKmRcEulNIZ1tCL-tVbkoXd_qTirJr1nUf_0sk",
+        "report_copies": 1,
+        "external_matrix_inputs_after_stop": [],
+        "native_read_sources": [
+          "$IPckZFCq8upm49pderGmeSzrbWoOy-P8Dbtk0sq4yT8"
+        ],
+        "read_receipt_events": [
+          "$MXbxD3f6VgGckzOpdHw-_etAQUQC8fqm5t66N56fEtI"
+        ]
+      }
+    }
+  },
+  "source_native_read": {
+    "native_read_sources": [
+      "$IPckZFCq8upm49pderGmeSzrbWoOy-P8Dbtk0sq4yT8"
+    ],
+    "read_events": [
+      "$MXbxD3f6VgGckzOpdHw-_etAQUQC8fqm5t66N56fEtI"
+    ],
+    "task_room_messages": [
+      {
+        "id": "$Or3kO1gzP9-UieP_3gaCyM-Hdwgltgg55owyIt1Ms-g",
+        "sender": "@agent-a:recovery-1631.test",
+        "type": "m.room.message"
+      },
+      {
+        "id": "$G4HCn3Xxe4BmrH-SHeGYT9GWA3Dsv-v5E20hPhQheaE",
+        "sender": "@agent-a:recovery-1631.test",
+        "type": "m.room.message"
+      },
+      {
+        "id": "$IPckZFCq8upm49pderGmeSzrbWoOy-P8Dbtk0sq4yT8",
+        "sender": "@leader:recovery-1631.test",
+        "type": "m.room.message"
+      }
+    ]
+  },
+  "lifecycle": {
+    "events": [
+      {
+        "Type": "container",
+        "Action": "kill",
+        "Actor": {
+          "ID": "9e3e310b3dee660c60d947140305ea740f7e22badc5172ef0c8829d014ce30fd",
+          "Attributes": {
+            "agentteams.io/runtime": "hermes",
+            "image": "recovery-1631/hermes:local-20261117145000",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "965b612a82c3bee074c1c3b77d41dddea0fd75d7",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7",
+            "signal": "9"
+          }
+        },
+        "scope": "local",
+        "time": 1794898698,
+        "timeNano": 1794898698477444585
+      },
+      {
+        "Type": "container",
+        "Action": "die",
+        "Actor": {
+          "ID": "9e3e310b3dee660c60d947140305ea740f7e22badc5172ef0c8829d014ce30fd",
+          "Attributes": {
+            "agentteams.io/runtime": "hermes",
+            "execDuration": "186",
+            "exitCode": "137",
+            "image": "recovery-1631/hermes:local-20261117145000",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "965b612a82c3bee074c1c3b77d41dddea0fd75d7",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794898698,
+        "timeNano": 1794898698749172089
+      },
+      {
+        "Type": "container",
+        "Action": "destroy",
+        "Actor": {
+          "ID": "9e3e310b3dee660c60d947140305ea740f7e22badc5172ef0c8829d014ce30fd",
+          "Attributes": {
+            "agentteams.io/runtime": "hermes",
+            "image": "recovery-1631/hermes:local-20261117145000",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "965b612a82c3bee074c1c3b77d41dddea0fd75d7",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794898698,
+        "timeNano": 1794898698995354987
+      },
+      {
+        "Type": "container",
+        "Action": "create",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794898701,
+        "timeNano": 1794898701167460019
+      },
+      {
+        "Type": "container",
+        "Action": "extract-to-dir",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794898701,
+        "timeNano": 1794898701190912001
+      },
+      {
+        "Type": "container",
+        "Action": "start",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794898701,
+        "timeNano": 1794898701513359300
+      },
+      {
+        "Type": "container",
+        "Action": "die",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "execDuration": "72",
+            "exitCode": "1",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794898773,
+        "timeNano": 1794898773959187251
+      },
+      {
+        "Type": "container",
+        "Action": "archive-path",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794898998,
+        "timeNano": 1794898998390807774
+      },
+      {
+        "Type": "container",
+        "Action": "archive-path",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794899037,
+        "timeNano": 1794899037066021025
+      },
+      {
+        "Type": "container",
+        "Action": "start",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794899044,
+        "timeNano": 1794899044537278042
+      },
+      {
+        "Type": "container",
+        "Action": "exec_create: python3 -c import hashlib,json,pathlib,sys,urllib.parse\nfrom agentteams_receipts import credentials,matrix_request,RECEIPT_TYPE\np=json.load(sys.stdin); request=matrix_request(*credentials(pathlib.Path(\"/root/agentteams-fs/agents/agent-a\")))\nroom=\"/_matrix/client/v3/rooms/\"+urllib.parse.quote(p[\"room\"],safe=\"\")\nevent=request(\"GET\",room+\"/event/\"+urllib.parse.quote(p[\"event\"],safe=\"\"))\nassert hashlib.sha256(event[\"content\"][\"body\"].encode()).hexdigest()==p[\"sha256\"]\nrows=[]; cursor=None\nwhile True:\n page=request(\"GET\",room+\"/messages?dir=b&limit=100\"+(\"&from=\"+urllib.parse.quote(cursor,safe=\"\") if cursor else \"\"))\n rows.extend(page[\"chunk\"])\n if not page[\"chunk\"] or not page.get(\"end\") or page[\"end\"]==cursor: break\n cursor=page[\"end\"]\nmatches=[r[\"event_id\"] for r in rows if hashlib.sha256(r.get(\"content\",{}).get(\"body\",\"\").encode()).hexdigest()==p[\"sha256\"]]\nexternal=[r[\"event_id\"] for r in rows if r.get(\"type\")==\"m.room.message\" and p[\"stopped_ms\"]<=r.get(\"origin_server_ts\",0)<=event[\"origin_server_ts\"] and r.get(\"sender\")!=\"@agent-a:recovery-1631.test\"]\nassert matches==[p[\"event\"]], matches\nassert not external, external\nreceipts=[r for r in rows if r.get(\"type\")==RECEIPT_TYPE and r.get(\"sender\")==\"@agent-a:recovery-1631.test\" and r.get(\"content\",{}).get(\"status\")==\"read\"]\nreceipts=[r for r in receipts if r.get(\"origin_server_ts\",0)<p[\"stopped_ms\"]]\nreads={r[\"content\"][\"m.relates_to\"][\"event_id\"] for r in receipts}\nsources=[r[\"event_id\"] for r in rows if r[\"event_id\"] in reads and r.get(\"origin_server_ts\",0)<p[\"stopped_ms\"] and p[\"task_id\"] in r.get(\"content\",{}).get(\"body\",\"\")]\nassert sources, \"source assignment has no delivered native read receipt\"\nprint(json.dumps({\"reply_event\":p[\"event\"],\"report_copies\":len(matches),\"external_matrix_inputs_after_stop\":external,\"native_read_sources\":sources,\n    \"read_receipt_events\":[r[\"event_id\"] for r in receipts if r[\"content\"][\"m.relates_to\"][\"event_id\"] in sources]}))\n",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "execID": "727cb0c4908c2737cf9b6f11f8c594ca5700c483d1ad782f928e10a0b55017f7",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794899191,
+        "timeNano": 1794899191601326312
+      },
+      {
+        "Type": "container",
+        "Action": "exec_start: python3 -c import hashlib,json,pathlib,sys,urllib.parse\nfrom agentteams_receipts import credentials,matrix_request,RECEIPT_TYPE\np=json.load(sys.stdin); request=matrix_request(*credentials(pathlib.Path(\"/root/agentteams-fs/agents/agent-a\")))\nroom=\"/_matrix/client/v3/rooms/\"+urllib.parse.quote(p[\"room\"],safe=\"\")\nevent=request(\"GET\",room+\"/event/\"+urllib.parse.quote(p[\"event\"],safe=\"\"))\nassert hashlib.sha256(event[\"content\"][\"body\"].encode()).hexdigest()==p[\"sha256\"]\nrows=[]; cursor=None\nwhile True:\n page=request(\"GET\",room+\"/messages?dir=b&limit=100\"+(\"&from=\"+urllib.parse.quote(cursor,safe=\"\") if cursor else \"\"))\n rows.extend(page[\"chunk\"])\n if not page[\"chunk\"] or not page.get(\"end\") or page[\"end\"]==cursor: break\n cursor=page[\"end\"]\nmatches=[r[\"event_id\"] for r in rows if hashlib.sha256(r.get(\"content\",{}).get(\"body\",\"\").encode()).hexdigest()==p[\"sha256\"]]\nexternal=[r[\"event_id\"] for r in rows if r.get(\"type\")==\"m.room.message\" and p[\"stopped_ms\"]<=r.get(\"origin_server_ts\",0)<=event[\"origin_server_ts\"] and r.get(\"sender\")!=\"@agent-a:recovery-1631.test\"]\nassert matches==[p[\"event\"]], matches\nassert not external, external\nreceipts=[r for r in rows if r.get(\"type\")==RECEIPT_TYPE and r.get(\"sender\")==\"@agent-a:recovery-1631.test\" and r.get(\"content\",{}).get(\"status\")==\"read\"]\nreceipts=[r for r in receipts if r.get(\"origin_server_ts\",0)<p[\"stopped_ms\"]]\nreads={r[\"content\"][\"m.relates_to\"][\"event_id\"] for r in receipts}\nsources=[r[\"event_id\"] for r in rows if r[\"event_id\"] in reads and r.get(\"origin_server_ts\",0)<p[\"stopped_ms\"] and p[\"task_id\"] in r.get(\"content\",{}).get(\"body\",\"\")]\nassert sources, \"source assignment has no delivered native read receipt\"\nprint(json.dumps({\"reply_event\":p[\"event\"],\"report_copies\":len(matches),\"external_matrix_inputs_after_stop\":external,\"native_read_sources\":sources,\n    \"read_receipt_events\":[r[\"event_id\"] for r in receipts if r[\"content\"][\"m.relates_to\"][\"event_id\"] in sources]}))\n",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "execID": "727cb0c4908c2737cf9b6f11f8c594ca5700c483d1ad782f928e10a0b55017f7",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794899191,
+        "timeNano": 1794899191602230025
+      },
+      {
+        "Type": "container",
+        "Action": "exec_die",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "execID": "727cb0c4908c2737cf9b6f11f8c594ca5700c483d1ad782f928e10a0b55017f7",
+            "exitCode": "0",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794899191,
+        "timeNano": 1794899191696293849
+      },
+      {
+        "Type": "container",
+        "Action": "exec_create: python3 -c import json,pathlib,sys,sqlite3\ntask_id=sys.argv[1]; home=pathlib.Path(\"/root/agentteams-fs/agents/agent-a\")\nevents=pathlib.Path(\"/var/log/agentteams/workers/agent-a/events.jsonl\")\nrows=[json.loads(x) for x in events.read_text().splitlines()] if events.exists() else []\njournal=home/\"runtime/codex-bridge-state.json\"\ncache=json.loads(journal.read_text()).get(\"task_sessions\",{}).get(\"recovery-team/\"+task_id) if journal.exists() else None\nhermes=[r for r in rows if r.get(\"event\")==\"task.recovery.session\" and r.get(\"task_id\")==task_id]\ncounts={}; db=home/\".hermes/state.db\"\nif db.exists():\n with sqlite3.connect('file:'+str(db)+'?mode=ro',uri=True) as connection:\n  for r in hermes:\n   counts[r['session_id']]=connection.execute('select count(*) from messages where session_id=?',(r['session_id'],)).fetchone()[0]\nprint(json.dumps({\"hermes\":hermes,\"hermes_message_counts\":counts,\n    \"hermes_cache\":[r for r in rows if r.get(\"event\")==\"task.recovery.cache\" and r.get(\"task_id\")==task_id],\"codex\":cache}))\n live-hermes-qwenpaw-26",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "execID": "005bd2aef8dcc22944309baa84a18682cc71375b3d31c484c2625608e611bc48",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794899191,
+        "timeNano": 1794899191947925718
+      },
+      {
+        "Type": "container",
+        "Action": "exec_start: python3 -c import json,pathlib,sys,sqlite3\ntask_id=sys.argv[1]; home=pathlib.Path(\"/root/agentteams-fs/agents/agent-a\")\nevents=pathlib.Path(\"/var/log/agentteams/workers/agent-a/events.jsonl\")\nrows=[json.loads(x) for x in events.read_text().splitlines()] if events.exists() else []\njournal=home/\"runtime/codex-bridge-state.json\"\ncache=json.loads(journal.read_text()).get(\"task_sessions\",{}).get(\"recovery-team/\"+task_id) if journal.exists() else None\nhermes=[r for r in rows if r.get(\"event\")==\"task.recovery.session\" and r.get(\"task_id\")==task_id]\ncounts={}; db=home/\".hermes/state.db\"\nif db.exists():\n with sqlite3.connect('file:'+str(db)+'?mode=ro',uri=True) as connection:\n  for r in hermes:\n   counts[r['session_id']]=connection.execute('select count(*) from messages where session_id=?',(r['session_id'],)).fetchone()[0]\nprint(json.dumps({\"hermes\":hermes,\"hermes_message_counts\":counts,\n    \"hermes_cache\":[r for r in rows if r.get(\"event\")==\"task.recovery.cache\" and r.get(\"task_id\")==task_id],\"codex\":cache}))\n live-hermes-qwenpaw-26",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "execID": "005bd2aef8dcc22944309baa84a18682cc71375b3d31c484c2625608e611bc48",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794899191,
+        "timeNano": 1794899191948567555
+      },
+      {
+        "Type": "container",
+        "Action": "exec_die",
+        "Actor": {
+          "ID": "6a083d294c220082c9e88fc33c4c673cf7a0d4ac58f5bb122d61516db6c419f6",
+          "Attributes": {
+            "agentteams.io/runtime": "qwenpaw",
+            "execID": "005bd2aef8dcc22944309baa84a18682cc71375b3d31c484c2625608e611bc48",
+            "exitCode": "0",
+            "image": "recovery-1631/qwenpaw:local-20261117144935",
+            "io.agentteams.recovery.core-sha": "05967bf6969e6ab64e84700cdf2c8b8cafd1133d",
+            "io.agentteams.recovery.harness-sha": "4ce3bf303e4b00e6f110fdeae8926b9415d32a5d",
+            "io.agentteams.recovery.kind": "local-source-overlay",
+            "name": "recovery-1631-live-20261117-v11-worker-agent-a",
+            "org.opencontainers.image.revision": "84d78999ed0c7be0e2768fd40ad9581ef9a79e0e",
+            "org.opencontainers.image.version": "v1.2.7"
+          }
+        },
+        "scope": "local",
+        "time": 1794899191,
+        "timeNano": 1794899191976809148
+      }
+    ],
+    "initial_target_exit_code": 1,
+    "initial_target_error": "QwenPaw API GET /api/models unavailable: TimeoutError",
+    "automatic_target_restart_observed": true,
+    "docker_restart_policy": "no",
+    "manual_worker_restart_after_cutover": false
+  },
+  "native_cache_checks": {
+    "passed": false,
+    "evidence": {
+      "cache": {
+        "runtime": "qwenpaw",
+        "session_id": "matrix:task:4d4a48c256a493f382a9baf69fdf1a164d180c2138b515197fb34db1b1755bb4:865ab5d11d514343857efb575123478e",
+        "expires_at": 1794985504.6135285,
+        "checkpoint_digest": "e1374d93ed12551b141977bc9e76f3d46fdd1126dcf3b7bb3413b55d8742a342",
+        "native_digest": "0d37898f9bc965f0297405823f19317813dfcbae35d14af7d64695e6f4dd96ef"
+      },
+      "cache_mtime": 1794899104.6139786,
+      "native_files": [
+        {
+          "file": "!bzTII3bCbxVqzOjt5Q--recovery-1631.test_matrix--task--4d4a48c256a493f382a9baf69fdf1a164d180c2138b515197fb34db1b1755bb4--865ab5d11d514343857efb575123478e.json",
+          "mtime": 1794899104.6244366,
+          "native_digest": "9ef7b15369a614ec04ae218bb0683308be1f13beb949b76c042115f2074c0776",
+          "agent_present": true,
+          "task_mentioned": true
+        }
+      ]
+    },
+    "failure": "remember ran before the SDK post-completion session save; digest no longer matches native state",
+    "new_fixture_assertion_failed": true
+  },
+  "tracing": {
+    "trace_id": "4c1b76a68080ec1f5122185f28a1992d",
+    "controller_readback": true,
+    "direct_langfuse_readback": true,
+    "metadata": {
+      "agentteams.session.id": "agent-a:5afd763fa0f23cb6576abdd4",
+      "agentteams.runtime.session_id": "matrix:task:4d4a48c256a493f382a9baf69fdf1a164d180c2138b515197fb34db1b1755bb4:865ab5d11d514343857efb575123478e",
+      "agentteams.turn.id": "e209d2512a1c48f38cde57dbf19c155f",
+      "agentteams.task.id": "live-hermes-qwenpaw-26",
+      "agentteams.execution.generation": 2,
+      "agentteams.room.id": "!bzTII3bCbxVqzOjt5Q:recovery-1631.test",
+      "agentteams.event.id": "recovery:recovery-team/live-hermes-qwenpaw-26:2",
+      "agentteams.team.id": "recovery-team",
+      "agentteams.task.correlation": "explicit request context",
+      "agentteams.worker.name": "agent-a",
+      "agentteams.runtime": "qwenpaw",
+      "agentteams.telemetry.schema": 1,
+      "agentteams.telemetry.adapter": "qwenpaw",
+      "agentteams.telemetry.versions": "{'agentscope': '2.0.10', 'qwenpaw': '2.2.2.post1', 'openai': '2.33.0'}",
+      "agentteams.telemetry.capture_content": false,
+      "agentteams.telemetry.field_limit_bytes": 262144,
+      "agentteams.telemetry.adapter_errors": [],
+      "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+      "agentteams.outcome": "ok"
+    },
+    "dashboard_ui": "authentication failed after navigation; unaccepted",
+    "model_observations": 8
+  },
+  "driver_recording_limitations": [
+    "Original source snapshot was captured before cutover; the exclusive archive step incorrectly assumed a fault-only tool_processes field. The original timestamp and Docker die ordering were verified before archiving it. No missing process probe was fabricated.",
+    "A local follow-up annotation captured an already recovered Task but incorrectly described it as unclaimed. That invalid annotation is retained privately and excluded from this evidence."
+  ],
+  "task_or_oracle_reset": false,
+  "new_external_matrix_inputs_after_stop": 0,
+  "strict_full_lane_accepted": false
+}

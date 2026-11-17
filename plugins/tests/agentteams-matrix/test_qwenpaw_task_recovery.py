@@ -293,6 +293,41 @@ def test_actual_sdk_session_store_and_request_reconstruction(adapter, native_cha
     asyncio.run(scenario())
 
 
+def test_task_cache_follows_sdk_post_completion_session_save(adapter, native_channel, tmp_path, monkeypatch):
+    from qwenpaw.app.chats.session import SafeJSONSession
+    recovery, authority, task, _ = adapter
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None)
+    store = SafeJSONSession(str(tmp_path / "native"))
+    channel._workspace = SimpleNamespace(session=store, task_tracker=SimpleNamespace())
+    channel._send_typing = AsyncMock()
+    channel.send_task_reply = AsyncMock(return_value="$reply")
+    recovery = type(recovery)(channel, authority)
+    channel._task_execution = recovery
+    identity = {"task_id": "T", "team_id": "team", "generation": 2}
+    session = "matrix:task:" + recovery.key("team", "T") + ":native"
+    task["execution"]["checkpoint"].update(delivery="pending", reply_txn="result")
+    authority.prepare_reply = lambda *args: (task, "saved result")
+    authority.delivered = lambda *args: task["execution"]["checkpoint"].update(delivery="delivered")
+    async def save(memory):
+        await store.save_session_state(session_id=session, user_id="!task:hs", channel=channel.channel,
+                                       agent=SimpleNamespace(state_dict=lambda: {"memory": memory}))
+    async def native_stream(self, payload):
+        await save("native tool result")
+        await channel._on_process_completed(SimpleNamespace(session_id=session), "!task:hs", {
+            "task_execution": identity, native_channel._MATRIX_STREAMING_FINAL_TEXT_KEY: "result",
+        })
+        # BaseChannel commits turn usage after the completion callback and
+        # can persist the native Agent again before closing its stream.
+        await save("native tool result plus persisted turn usage")
+        yield "finished"
+    monkeypatch.setattr(native_channel.BaseChannel, "_stream_with_tracker", native_stream)
+    async def scenario():
+        async for _ in channel._stream_recovered_task({"meta": {"task_execution": identity, "task_session_id": session}}):
+            pass
+        assert await recovery.select_session("team", task) == session
+    asyncio.run(scenario())
+
+
 def test_startup_scan_waits_for_committed_workspace_without_new_matrix_input(native_channel):
     channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None)
     channel._workspace = SimpleNamespace(_manager=None)

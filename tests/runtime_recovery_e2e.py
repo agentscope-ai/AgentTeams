@@ -248,7 +248,7 @@ def refresh_controller():
 
 
 def native_sessions():
-    code = '''import json,pathlib,sys,sqlite3
+    code = '''import hashlib,json,pathlib,sys,sqlite3
 task_id=sys.argv[1]; home=pathlib.Path("/root/agentteams-fs/agents/agent-a")
 events=pathlib.Path("/var/log/agentteams/workers/agent-a/events.jsonl")
 rows=[json.loads(x) for x in events.read_text().splitlines()] if events.exists() else []
@@ -260,8 +260,19 @@ if db.exists():
  with sqlite3.connect('file:'+str(db)+'?mode=ro',uri=True) as connection:
   for r in hermes:
    counts[r['session_id']]=connection.execute('select count(*) from messages where session_id=?',(r['session_id'],)).fetchone()[0]
+qwen_dir=home/".qwenpaw/workspaces/default/sessions"
+qwen_cache=qwen_dir/".agentteams-task-recovery"
+digest=lambda value: hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+qwen=json.loads(qwen_cache.read_text()).get(digest(['recovery-team',task_id])) if qwen_cache.exists() else None
+qwen_native=[]
+if qwen:
+ for path in (qwen_dir/"agentteams_matrix").glob('*.json'):
+  native=json.loads(path.read_text())
+  if digest(native)==qwen['native_digest']:
+   qwen_native.append({'file':path.name,'native_digest':digest(native),'agent_state_present':bool(native.get('agent')),'task_mentioned':task_id in json.dumps(native)})
 print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,
-    "hermes_cache":[r for r in rows if r.get("event")=="task.recovery.cache" and r.get("task_id")==task_id],"codex":cache}))
+    "hermes_cache":[r for r in rows if r.get("event")=="task.recovery.cache" and r.get("task_id")==task_id],"codex":cache,
+    "qwenpaw":qwen,"qwenpaw_native":qwen_native}))
 '''
     return json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
 
@@ -455,6 +466,12 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     labels = next(row["Actor"]["Attributes"] for row in events if row["Action"] == ("create" if MODE == "replace" else "start") and
         ((row["Actor"]["ID"] != old) if MODE == "replace" else (row["Actor"]["ID"] == old)))
     native = native_sessions()
+    if TARGET == "qwenpaw":
+        selected = native["qwenpaw"]
+        assert selected["runtime"] == "qwenpaw" and selected["expires_at"] > time.time()
+        assert selected["checkpoint_digest"] == hashlib.sha256(json.dumps(cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert len(native["qwenpaw_native"]) == 1
+        assert native["qwenpaw_native"][0]["agent_state_present"] and native["qwenpaw_native"][0]["task_mentioned"]
     if SOURCE == "hermes":
         selected = before["native_sessions"]["hermes"][-1]["session_id"]
         assert before["native_sessions"]["hermes_message_counts"].get(selected, 0) > 0, "new route still used a different warm native Agent"
@@ -480,6 +497,7 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         if row["Action"] == ("create" if MODE == "replace" else "start")
         and ((row["Actor"]["ID"] != old) if MODE == "replace" else row["Actor"]["ID"] == old)), "additional replacement requires separate evidence"
     assert current["Id"] in execution["instance_id"]
+    assert current["State"]["StartedAt"] in execution["instance_id"], "execution must bind the actual process start, including automatic retries"
     sources = {"core": controller["Config"]["Labels"]["io.agentteams.recovery.core-sha"],
         "shared_contract": labels["io.agentteams.recovery.core-sha"],
         SOURCE: old_source["io.agentteams.recovery.harness-sha"], TARGET: labels["io.agentteams.recovery.harness-sha"]}

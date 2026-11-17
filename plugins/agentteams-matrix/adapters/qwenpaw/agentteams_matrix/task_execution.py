@@ -161,4 +161,3 @@ class TaskExecution:
             room = saved.get("task", saved)["room_id"]
             event_id = await self.channel.send_task_reply(room, text, cp["reply_txn"])
             await asyncio.to_thread(self.recovery.delivered, identity["task_id"], identity["team_id"], event_id)
-        await self.remember(identity, session_id)

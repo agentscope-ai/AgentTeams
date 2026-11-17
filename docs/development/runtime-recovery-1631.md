@@ -651,3 +651,36 @@ that invocation lacked a system-Python YAML dependency, the E2EE test backend
 and the uninitialized OpenClaw submodule. Its log is retained; it is not
 reported as a full bundle pass. The repository CI installs those dependencies
 and initializes submodules separately.
+
+### Case26: execution/delivery passed; native cache consistency failed
+
+[Case26 evidence](evidence/runtime-recovery-1631-case26-partial.json) uses
+Core/shared `05967bf6`, Hermes `965b612a`, QwenPaw `4ce3bf30` and the unchanged
+`774d6285` Controller binary. Source native ACK/read and checkpoint4 passed.
+QwenPaw initially exited on a model-directory API timeout, then automatically
+restarted in the same container. No manual Worker restart or new external
+Matrix message was sent. The execution claim binds the later actual start and
+new process, generation2. Steps remained once each at generations1/2/2;
+checkpoint10 is submitted/delivered, with matching artifacts/authoritative
+report and one Matrix report event. The original execution/delivery verifier
+passed without weakening its checks.
+
+A stronger follow-up native-cache check failed: `remember` ran inside the
+completion callback, before the SDK committed turn usage and saved the native
+session again. Its cached native digest no longer matched the actual session
+file. This safely causes rebuilding instead of reusing that session, but does
+not satisfy valid-session reuse. Preserve the partial evidence and do not count
+the combined lane as a third strict acceptance. The fix moves cache binding
+after the native stream and cleanup finish; both legacy/bundle regressions
+failed before it. Recovery/reload tests now pass47 and fixture/oracle tests14;
+real validation of the new ordering remains open.
+
+QwenPaw companion `07230780` separately disables automatic remote catalog
+discovery when saving an explicitly declared managed model. The real SDK
+probe accessed the slow `/v1/models` endpoint before the fix; afterward native
+configuration/readback passed with zero catalog or model calls. All32 API
+regressions passed. The probe is part of independent image smoke CI.
+
+Case26's explicit Task/team/generation2 trace was read through Controller and
+Langfuse. Dashboardv1.4.1 setup/token login reached the workspace, but Tracing
+navigation returned to a rejected-login page; UI acceptance remains open.

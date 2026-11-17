@@ -615,6 +615,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
                                             identity["task_id"], identity["team_id"])
                 except (RecoveryConflict, RecoveryUnavailable):
                     logger.warning("Interrupted Task checkpoint could not be committed; retain authority")
+            else:
+                # The SDK can save turn usage after its completion callback.
+                # Bind the cache only after all native persistence has ended.
+                await self._task_execution.remember(identity, payload["meta"]["task_session_id"])
 
 
     async def _recover_owned_tasks(self):

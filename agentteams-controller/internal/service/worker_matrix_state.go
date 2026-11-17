@@ -143,6 +143,14 @@ func WorkerMatrixEventKey(room, event string) string {
 	return workerMatrixIdentity(room, event)
 }
 
+func WorkerTaskSessionKey(memberPrefix, team, task string) string {
+	return workerMatrixIdentity(memberPrefix, "task", team, task)
+}
+
+func WorkerMessageSessionKey(memberPrefix, room, event string) string {
+	return workerMatrixIdentity(memberPrefix, "message", room, event)
+}
+
 func WorkerMatrixConsumerKey(consumer WorkerMatrixConsumer) string {
 	return workerMatrixIdentity(consumer.Runtime, consumer.Account, consumer.Device, consumer.Format)
 }

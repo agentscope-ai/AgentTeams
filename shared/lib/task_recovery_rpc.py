@@ -22,6 +22,17 @@ def execute(request):
     action = request['action']
     if not isinstance(action, str):
         raise ValueError('Recovery action must be a string')
+    if action.startswith('session.'):
+        from worker_sessions import WorkerSessions
+        sessions = WorkerSessions(request['runtime'], recovery=recovery)
+        if action == 'session.load':
+            return sessions.load(request['work'])
+        if action == 'session.usable':
+            return sessions.usable(request['snapshot'], request.get('native_ref'), request.get('native_digest'))
+        if action == 'session.remember':
+            return sessions.remember(request['work'], request['snapshot'], request['identity'],
+                                     request['native_ref'], request['native_digest'], request['expires_at'])
+        raise ValueError('Unsupported session action')
     if action.startswith('matrix.'):
         from worker_matrix_state import WorkerMatrix
         matrix = WorkerMatrix(request['runtime'], recovery=recovery)

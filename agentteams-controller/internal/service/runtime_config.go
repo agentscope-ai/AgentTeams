@@ -12,6 +12,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"sigs.k8s.io/yaml"
 )
 
@@ -29,6 +30,23 @@ const (
 
 func memberRuntimeConfigObjectKey(runtimeName string) string {
 	return fmt.Sprintf("agents/%s/runtime/runtime.yaml", runtimeName)
+}
+
+// WorkerRuntimeConfigGeneration binds a native cache to the Controller's
+// current desired config. Never infer it from a Harness-private config file.
+func WorkerRuntimeConfigGeneration(ctx context.Context, store oss.StorageClient, name, runtime string) (int64, error) {
+	if _, err := workerMatrixPrefix(name); err != nil {
+		return 0, err
+	}
+	data, err := store.GetObject(ctx, memberRuntimeConfigObjectKey(name))
+	if err != nil {
+		return 0, err
+	}
+	var doc memberRuntimeConfigDocument
+	if yaml.Unmarshal(data, &doc) != nil || doc.APIVersion != "agentteams.io/v1beta1" || doc.Kind != memberRuntimeConfigKind || doc.Member.RuntimeName != name || doc.Member.Runtime != runtime || doc.Storage.MemberPrefix != "agents/"+name || doc.Metadata.Generation < 0 {
+		return 0, fmt.Errorf("Worker runtime configuration identity unavailable")
+	}
+	return doc.Metadata.Generation, nil
 }
 
 // Managers use the same desired-state contract as team members. The CR name

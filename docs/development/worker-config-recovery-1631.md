@@ -83,8 +83,37 @@ build-workflow14, rename and whitespace checks passed. Controller CI for the
 previous642bba4f head passed in run44115181152; its integration run44115191717
 was still running at the last refresh. Those runs do not validate later code.
 
+The next shared increment adds `GET/PUT /api/v1/runtime/sessions`. The query
+selects an assigned Task by explicit team/task identity or an ordinary message
+by event key. The Controller derives the Worker/runtime storage namespace and
+stores versioned `WorkerSessionCache` descriptors under
+`agents/W/runtime/sessions/<harness>/<work-key>.json`. Descriptors bind native
+reference/digest/expiry to the authoritative checkpoint version/digest and the
+Controller's current `runtime.yaml` generation. Conditional writes require the
+registered actual start and current execution owner. Task/message authority is
+only read, never copied into or rewritten by the cache.
+
+`shared/lib/worker_sessions.py` and `session.*` native RPC actions require the
+adapter to verify actual native content before reuse. A compatible descriptor
+alone is insufficient. Same-Harness restart can retain an unchanged native
+cache across execution generations. Checkpoint/config changes, expiry and
+cross-Harness lookup require rebuilding. Returning to an old Harness preserves
+its old descriptor but rejects it when behind shared authority. Unknown effects,
+pending result delivery, cancellation and reassignment cannot enter normal
+session continuation through this endpoint. Native persistence callbacks keep
+their original checkpoint snapshot; they cannot refresh and relabel stale bytes
+with a newer checkpoint. UTF-8 identity keys and the common Python-compatible
+checkpoint digest remain separate conventions.
+
+Local validation for this increment: five Go packages passed; six session
+tests cover the descriptor/authority boundary, stale writers, assignment and
+cancellation, restart/old-Harness return, missing config/invalid records and
+Python-compatible digest values. The common Python suite passed49 tests plus6
+subtests; build-workflow contracts passed14. These checks do not prove native
+serialization or real continuation. Native input-commit evidence is still open.
+
 No new real Harness lane is accepted. H/Q adapter hooks, explicit gap
-completion, native input-commit/session metadata and durable lifecycle
+completion, native input-commit transitions and durable lifecycle
 handoff remain implementation work. Native snapshot evidence
 must not be inferred from these object-store/HTTP/client tests. Historical
 normal-restart and directed-lane counts remain3/6 and7/30 at their recorded SHAs.

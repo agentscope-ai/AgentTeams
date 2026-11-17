@@ -9,7 +9,7 @@ from uuid import uuid4
 from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
 from worker_matrix_state import WorkerMatrix, matrix_event_key
 from worker_sessions import WorkerSessions
-from qwenpaw_message_execution import MessageExecution
+from qwenpaw_message_execution import MessageExecution, publish_nio_reply
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class TaskExecution:
     def __init__(self, channel, recovery=None):
         self.channel = channel
-        self.recovery = recovery or Recovery()
+        self.recovery = recovery or Recovery(device_delivery=True)
         tracker = channel._workspace.task_tracker
         if not hasattr(tracker, "_agentteams_task_admissions"):
             tracker._agentteams_task_admissions = set()
@@ -172,8 +172,11 @@ class TaskExecution:
                             "process_id": self.recovery.process}
                 cp = task["execution"].get("checkpoint") or {}
                 if cp.get("delivery") == "pending":
-                    event_id = await self.channel.send_task_reply(task["room_id"], claimed["saved_result"], cp["reply_txn"])
-                    await asyncio.to_thread(self.recovery.delivered, task_id, team, event_id)
+                    try:
+                        await self.deliver(identity, task["room_id"], cp, claimed["saved_result"])
+                    except (RecoveryConflict, RecoveryUnavailable):
+                        logger.warning("Saved Task reply awaits verification for %s", task_id)
+                        continue
                     task = await asyncio.to_thread(self.recovery.current, task_id, team)
                     if task is None:
                         continue
@@ -199,6 +202,13 @@ class TaskExecution:
     def native_closed(self, identity):
         self.native_active.discard((identity["team_id"], identity["task_id"], identity["generation"]))
 
+    async def deliver(self, identity, room, checkpoint, text):
+        task_id, team = identity["task_id"], identity["team_id"]
+        event_id = await publish_nio_reply(self.channel, room, checkpoint, text, identity,
+            lambda next_cp: self.recovery.checkpoint(task_id, team, next_cp),
+            lambda txn: self.channel.send_task_reply(room, text, txn))
+        return await asyncio.to_thread(self.recovery.delivered, task_id, team, event_id)
+
     async def finish(self, identity, session_id, text):
         if not text:
             task = await asyncio.to_thread(self.verify, identity, finished=True)
@@ -211,6 +221,5 @@ class TaskExecution:
         cp = saved["execution"]["checkpoint"]
         if cp.get("delivery") != "delivered":
             room = saved.get("task", saved)["room_id"]
-            event_id = await self.channel.send_task_reply(room, text, cp["reply_txn"])
-            saved = await asyncio.to_thread(self.recovery.delivered, identity["task_id"], identity["team_id"], event_id)
+            saved = await self.deliver(identity, room, cp, text)
         identity["checkpoint_digest"] = Recovery.digest(saved["execution"]["checkpoint"])

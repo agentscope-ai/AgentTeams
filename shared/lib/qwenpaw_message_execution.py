@@ -6,8 +6,58 @@ import time
 from uuid import uuid4
 
 from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
+from worker_matrix_delivery import publish_saved
 
 log = logging.getLogger(__name__)
+
+async def publish_nio_reply(channel, room, checkpoint, text, identity, write_checkpoint, send):
+    client = channel._client
+
+    async def whoami():
+        response = await client.whoami()
+        if getattr(response, "user_id", None) != channel.matrix_user_id:
+            raise RecoveryConflict("Matrix session no longer belongs to this Worker")
+        return response.user_id, getattr(response, "device_id", None)
+
+    async def bind(next_checkpoint):
+        saved = await asyncio.to_thread(write_checkpoint, next_checkpoint)
+        execution = saved["execution"]
+        if (execution.get("state") != "active" or execution.get("runtime") != "qwenpaw"
+                or any(execution.get(key) != identity[key] for key in ("generation", "instance_id", "process_id"))
+                or execution.get("checkpoint") != next_checkpoint):
+            raise RecoveryConflict("Matrix reply device was not bound to the active execution")
+
+    async def find(txn, body, sender):
+        from nio import RoomMessageText, RoomMessagesResponse
+
+        token = None
+        seen = set()
+        while token not in seen:
+            seen.add(token)
+            # The SDK decrypts /messages before inspecting the marker. A
+            # server-side event-type filter would hide encrypted replies.
+            page = await client.room_messages(room, start=token, limit=100, message_filter={"senders": [sender]})
+            if not isinstance(page, RoomMessagesResponse) or page.room_id != room:
+                raise RecoveryUnavailable("Matrix reply history is unavailable")
+            for event in page.chunk:
+                if not isinstance(event, RoomMessageText) or event.sender != sender:
+                    continue
+                source = event.source
+                content = source["content"]
+                if source.get("room_id", room) != room or content.get("body") != body:
+                    continue
+                marker = content.get("org.agentteams.reply_txn")
+                if marker == txn:
+                    return event.event_id
+                if not checkpoint.get("reply_attempt") and marker is None and (source.get("unsigned") or {}).get("transaction_id") == txn:
+                    return event.event_id
+            token = page.end
+            if not token:
+                break
+        return None
+
+    return await publish_saved(checkpoint, text, whoami, bind, find, send)
+
 
 class MessageExecution:
     def __init__(self, channel, execution):
@@ -64,7 +114,10 @@ class MessageExecution:
     async def deliver(self, claim):
         identity = claim["identity"]
         cp = claim["execution"]["checkpoint"]
-        event_id = await self.channel.send_message_reply(claim["input"], claim["saved_result"], cp["reply_txn"])
+        source, text = claim["input"], claim["saved_result"]
+        event_id = await publish_nio_reply(self.channel, source["room_id"], cp, text, identity,
+            lambda next_cp: self.matrix.message_checkpoint(identity, next_cp),
+            lambda txn: self.channel.send_message_reply(source, text, txn))
         return await asyncio.to_thread(self.matrix.message_delivered, identity, event_id)
 
     async def finish(self, identity, text):

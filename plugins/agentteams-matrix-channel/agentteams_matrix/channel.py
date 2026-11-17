@@ -711,7 +711,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if parent.get("rel_type") == "m.thread" and parent.get("event_id"):
             relation.update(rel_type="m.thread", event_id=parent["event_id"], is_falling_back=True)
         response = await self._room_send_with_retry(source["room_id"], "m.room.message", {
-            "msgtype": "m.text", "body": text, "m.relates_to": relation}, tx_id=txn)
+            "msgtype": "m.text", "body": text, "m.relates_to": relation, "org.agentteams.reply_txn": txn}, tx_id=txn)
         if isinstance(response, RoomSendError) or not getattr(response, "event_id", None):
             raise RuntimeError("Matrix has not acknowledged the saved message reply")
         return response.event_id
@@ -735,7 +735,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
     async def send_task_reply(self, room_id, text, txn):
         response = await self._room_send_with_retry(room_id, "m.room.message", {
-            "msgtype": "m.text", "body": text, "org.agentteams.progress_only": True,
+            "msgtype": "m.text", "body": text, "org.agentteams.progress_only": True, "org.agentteams.reply_txn": txn,
         }, tx_id=txn)
         if isinstance(response, RoomSendError) or not getattr(response, "event_id", None):
             raise RuntimeError("Task reply was not acknowledged by Matrix")

@@ -1,6 +1,7 @@
 """Startup recovery uses authority before native admission, without Matrix input."""
 import asyncio
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -13,6 +14,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "shared/lib"))
 from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
+
+
+def pending_reply(text, txn):
+    data = text.encode()
+    return {"result": {"key": "saved-report", "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)},
+            "delivery": "pending", "reply_txn": txn, "reply_attempt": {"state": "ready"}}
 
 
 @pytest.fixture
@@ -32,6 +39,13 @@ def adapter(monkeypatch, tmp_path):
         current=lambda task_id, team: copy.deepcopy(task),
         interrupted=lambda *args: None,
     )
+    def checkpoint(task_id, team, cp):
+        assert (task_id, team) == ("T", "team")
+        old = task["execution"]["checkpoint"]
+        assert cp["version"] == old["version"] + 1
+        old.update(cp)
+        return copy.deepcopy(task)
+    authority.checkpoint = checkpoint
     authority.cache = None
     authority.config_generation = 3
     authority.session_etag = ""
@@ -57,6 +71,7 @@ def adapter(monkeypatch, tmp_path):
     authority.request = request
     store = SimpleNamespace(get_session_state_dict=AsyncMock(return_value={}), save_dir=str(tmp_path / "sessions"))
     channel = SimpleNamespace(channel="agentteams_matrix", matrix_user_id="@worker:hs",
+                              _client=SimpleNamespace(whoami=AsyncMock(return_value=SimpleNamespace(user_id="@worker:hs", device_id="DEVICE"))),
                               _workspace=SimpleNamespace(session=store, task_tracker=SimpleNamespace()), _workspace_dir=tmp_path,
                               send_task_reply=AsyncMock(return_value="$reply"), enqueue_recovered_task=AsyncMock())
     recovery = module.TaskExecution(channel, authority)
@@ -145,7 +160,7 @@ def test_admission_does_not_hide_a_replaced_execution(adapter, changed):
 def test_saved_result_is_only_resent_with_its_durable_transaction(adapter):
     recovery, authority, task, channel = adapter
     task["status"] = "submitted"
-    task["execution"]["checkpoint"].update(delivery="pending", reply_txn="stable-transaction")
+    task["execution"]["checkpoint"].update(pending_reply("saved answer", "stable-transaction"))
     claim = authority.claim
     authority.claim = lambda *args: {**claim(*args), "saved_result": "saved answer"}
     delivered = []
@@ -166,6 +181,8 @@ def test_same_process_retries_saved_delivery_only_after_native_stream_closes(
                                          task_tracker=SimpleNamespace())
     channel._send_typing = AsyncMock()
     channel.enqueue_recovered_task = AsyncMock()
+    channel.matrix_user_id = "@worker:hs"
+    channel._client = SimpleNamespace(whoami=AsyncMock(return_value=SimpleNamespace(user_id="@worker:hs", device_id="DEVICE")))
     channel.send_task_reply = AsyncMock(return_value="$reply")
     recovery = type(recovery)(channel, authority)
     channel._task_execution = recovery
@@ -173,7 +190,7 @@ def test_same_process_retries_saved_delivery_only_after_native_stream_closes(
     attempts = []
     def prepared(*args):
         task["status"] = "submitted"
-        cp.update(result={"key": "saved-report"}, delivery="pending", reply_txn="stable-txn")
+        cp.update(pending_reply("saved answer", "stable-txn"))
         return task, "saved answer"
     authority.prepare_reply = prepared
     claim = authority.claim
@@ -225,18 +242,19 @@ def test_empty_native_final_requires_a_submitted_authoritative_report(adapter, s
     if report:
         task['result_path'] = report
     cp = task['execution']['checkpoint']
-    cp.update(delivery='pending', reply_txn='saved-report')
+    if allowed:
+        cp.update(pending_reply('authoritative report', 'saved-report'))
     prepared = []
     authority.prepare_reply = lambda *args: (prepared.append(args), ({'execution': {'checkpoint': cp}, 'room_id': '!task:hs'}, 'authoritative report'))[1]
     authority.delivered = lambda *args: copy.deepcopy(task)
     async def scenario():
         if allowed:
-            await recovery.finish({'task_id': 'T', 'team_id': 'team', 'generation': 2}, 'session', '')
+            await recovery.finish({'task_id': 'T', 'team_id': 'team', **task['execution']}, 'session', '')
             assert prepared == [('T', 'team', '')]
             channel.send_task_reply.assert_awaited_once_with('!task:hs', 'authoritative report', 'saved-report')
         else:
             with pytest.raises(RuntimeError, match='without a durable result'):
-                await recovery.finish({'task_id': 'T', 'team_id': 'team', 'generation': 2}, 'session', '')
+                await recovery.finish({'task_id': 'T', 'team_id': 'team', **task['execution']}, 'session', '')
             assert not prepared
             channel.send_task_reply.assert_not_awaited()
     asyncio.run(scenario())
@@ -384,12 +402,14 @@ def test_task_cache_follows_sdk_post_completion_session_save(adapter, native_cha
     store = SafeJSONSession(str(tmp_path / "native"))
     channel._workspace = SimpleNamespace(session=store, task_tracker=SimpleNamespace())
     channel._send_typing = AsyncMock()
+    channel.matrix_user_id = "@worker:hs"
+    channel._client = SimpleNamespace(whoami=AsyncMock(return_value=SimpleNamespace(user_id="@worker:hs", device_id="DEVICE")))
     channel.send_task_reply = AsyncMock(return_value="$reply")
     recovery = type(recovery)(channel, authority)
     channel._task_execution = recovery
     identity = {"task_id": "T", "team_id": "team", **task["execution"]}
     session = "matrix:task:" + recovery.key("team", "T") + ":native"
-    task["execution"]["checkpoint"].update(delivery="pending", reply_txn="result")
+    task["execution"]["checkpoint"].update(pending_reply("saved result", "result"))
     authority.prepare_reply = lambda *args: (task, "saved result")
     authority.delivered = lambda *args: (task["execution"]["checkpoint"].update(delivery="delivered"), copy.deepcopy(task))[1]
     async def save(memory):
@@ -434,12 +454,90 @@ def test_reply_uses_saved_transaction_and_requires_matrix_event_id(native_channe
     async def scenario():
         assert await channel.send_task_reply("!room", "saved result", "stable-txn") == "$persisted"
         channel._room_send_with_retry.assert_awaited_once_with("!room", "m.room.message", {
-            "msgtype": "m.text", "body": "saved result", "org.agentteams.progress_only": True,
+            "msgtype": "m.text", "body": "saved result", "org.agentteams.progress_only": True, "org.agentteams.reply_txn": "stable-txn",
         }, tx_id="stable-txn")
         channel._room_send_with_retry.return_value = SimpleNamespace()
         with pytest.raises(RuntimeError, match="not acknowledged"):
             await channel.send_task_reply("!room", "saved result", "stable-txn")
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("work", ["task", "message"])
+@pytest.mark.parametrize("proof", ["marker", "legacy", "absent"])
+def test_device_replacement_requires_own_verified_reply(native_channel, adapter, work, proof):
+    import nio
+    from unittest.mock import Mock
+    from qwenpaw_message_execution import MessageExecution
+
+    recovery, authority, task, _ = adapter
+    room, worker, txn = task["room_id"], "@worker:hs", "saved-txn"
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None, matrix_user_id=worker)
+    channel._workspace = SimpleNamespace(task_tracker=SimpleNamespace())
+    client = channel._client = nio.AsyncClient("https://hs", worker, "D2")
+    client.whoami = AsyncMock(return_value=nio.WhoamiResponse(worker, "D2", False))
+    def event(event_id, sender, body, marker=None, unsigned=None):
+        content = {"msgtype": "m.text", "body": body}
+        if marker is not None:
+            content["org.agentteams.reply_txn"] = marker
+        return nio.Event.parse_event({"type": "m.room.message", "sender": sender, "room_id": room, "event_id": event_id,
+            "origin_server_ts": 1, "content": content, "unsigned": {"transaction_id": unsigned} if unsigned else {}})
+    decoys = [event("$wrong-sender", "@other:hs", "saved answer", txn), event("$wrong-text", worker, "different", txn),
+              event("$wrong-marker", worker, "saved answer", "different", txn)]
+    if proof != "legacy":
+        decoys.append(event("$missing-marker", worker, "saved answer", unsigned=txn))
+    match = {"marker": [event("$original", worker, "saved answer", txn)],
+             "legacy": [event("$original", worker, "saved answer", unsigned=txn)], "absent": []}[proof]
+    client.room_messages = AsyncMock(side_effect=[
+        nio.RoomMessagesResponse(room, decoys, "newest", "next"), nio.RoomMessagesResponse(room, match, "next", None)])
+    cp = {**task["execution"]["checkpoint"], **pending_reply("saved answer", txn),
+          "reply_attempt": {"state": "sending", "user_id": worker, "device_id": "D1"}}
+    if proof == "legacy":
+        del cp["reply_attempt"]
+    identity = {"task_id": "T", "team_id": "team", **task["execution"]}
+    ack = Mock()
+    channel._room_send_with_retry = AsyncMock()
+    recovery = type(recovery)(channel, authority)
+    if work == "task":
+        authority.delivered = ack
+        publish = recovery.deliver(identity, room, cp, "saved answer")
+    else:
+        recovery.matrix.message_delivered = ack
+        publish = MessageExecution(channel, recovery).deliver({"identity": {"event_key": "e", **identity},
+            "execution": {"checkpoint": cp}, "input": {"room_id": room}, "saved_result": "saved answer"})
+    async def scenario():
+        if proof == "absent":
+            with pytest.raises(RecoveryConflict, match="needs verification"):
+                await publish
+            ack.assert_not_called()
+        else:
+            await publish
+            assert ack.call_count == 1 and ack.call_args.args[-1] == "$original"
+        channel._room_send_with_retry.assert_not_awaited()
+        assert [c.kwargs["start"] for c in client.room_messages.await_args_list] == [None, "next"]
+        await client.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("lost", ["state", "generation", "checkpoint"])
+def test_task_reply_losing_device_bind_cannot_send(adapter, lost):
+    recovery, authority, task, channel = adapter
+    cp = {**task["execution"]["checkpoint"], **pending_reply("saved report", "txn")}
+    identity = {"team_id": "team", "task_id": "T", **task["execution"]}
+    write = authority.checkpoint
+    def changed(*args):
+        response = write(*args)
+        execution = response["execution"]
+        if lost == "state":
+            execution["state"] = "released"
+        elif lost == "generation":
+            execution["generation"] += 1
+        else:
+            execution["checkpoint"]["reply_attempt"] = {"state": "ready"}
+        return response
+    authority.checkpoint = changed
+    with pytest.raises(RecoveryConflict, match="not bound"):
+        asyncio.run(recovery.deliver(identity, task["room_id"], cp, "saved report"))
+    channel.send_task_reply.assert_not_awaited()
 
 
 def test_replacement_cancels_native_stream_before_interruption_checkpoint(native_channel, monkeypatch):
@@ -524,11 +622,11 @@ def test_distinct_task_sessions_in_one_room_wait_for_previous_execution(native_c
 
 def test_final_callback_prefers_authoritative_saved_result(adapter):
     recovery, authority, task, channel = adapter
-    task["execution"]["checkpoint"].update(delivery="pending", reply_txn="saved-txn")
+    task["execution"]["checkpoint"].update(pending_reply("saved authoritative answer", "saved-txn"))
     authority.prepare_reply = lambda *args: ({"task": task, "execution": task["execution"]}, "saved authoritative answer")
     delivered = []
     authority.delivered = lambda *args: (delivered.append(args), copy.deepcopy(task))[1]
-    asyncio.run(recovery.finish({"task_id": "T", "team_id": "team", "generation": 2}, "native-session", "stale native answer"))
+    asyncio.run(recovery.finish({"task_id": "T", "team_id": "team", **task["execution"]}, "native-session", "stale native answer"))
     channel.send_task_reply.assert_awaited_once_with("!task:hs", "saved authoritative answer", "saved-txn")
     assert delivered == [("T", "team", "$reply")]
 
@@ -866,14 +964,20 @@ def test_pending_ordinary_message_rebuilds_then_retries_only_saved_reply(native_
     order = []
     def claim(_key):
         assert _key == key
-        return {"execution": {"checkpoint": state["checkpoint"], "generation": 2}, "input": record,
+        return {"execution": {**identity, "checkpoint": state["checkpoint"], "runtime": "qwenpaw", "state": "active"}, "input": record,
                 "identity": identity, "checkpoint_digest": Recovery.digest(state["checkpoint"]),
                 "recovery": state["mode"], "resume_text": "step one already done. Continue step two.",
                 "saved_result": "saved second step"}
     def store(actual, text):
         assert actual == identity and text == "saved second step" and state["mode"] == "resume"
         order.append("save")
-        state.update(mode="deliver", checkpoint={"version": 2, "reply_txn": "stable"})
+        state.update(mode="deliver", checkpoint={"version": 2, **pending_reply(text, "stable")})
+        return claim(key)
+    def bind(actual, cp):
+        assert actual == identity
+        assert cp["reply_attempt"] == {"state": "sending", "user_id": worker, "device_id": "D"}
+        order.append("bind")
+        state["checkpoint"] = cp
         return claim(key)
     def delivered(actual, event):
         assert actual == identity and event == "$reply"
@@ -883,6 +987,7 @@ def test_pending_ordinary_message_rebuilds_then_retries_only_saved_reply(native_
     channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None, matrix_user_id=worker)
     channel._user_id = worker
     client = nio.AsyncClient("https://hs", worker, "D")
+    client.whoami = AsyncMock(return_value=nio.WhoamiResponse(worker, "D", False))
     channel._client = client
     client.rooms[room] = nio.MatrixRoom(room, worker)
     def event(identifier, body):
@@ -900,6 +1005,7 @@ def test_pending_ordinary_message_rebuilds_then_retries_only_saved_reply(native_
     async def send(_room, _type, content, *, tx_id):
         assert (_room, _type, content["body"], tx_id) == (room, "m.room.message", "saved second step", "stable")
         assert content["m.relates_to"]["m.in_reply_to"]["event_id"] == event_id
+        assert content["org.agentteams.reply_txn"] == tx_id
         order.append("send")
         if order.count("send") == 1:
             raise TimeoutError("Matrix may already have accepted this transaction")
@@ -908,7 +1014,7 @@ def test_pending_ordinary_message_rebuilds_then_retries_only_saved_reply(native_
     stored = {key: record, previous_key: {"intent": "context", "input": previous.source}}
     matrix = SimpleNamespace(input=stored.get, message=lambda _key: claim(_key),
         message_claim=claim, message_current=lambda actual: claim(actual["event_key"]),
-        message_save_reply=store, message_delivered=delivered)
+        message_save_reply=store, message_checkpoint=bind, message_delivered=delivered)
     sessions = SimpleNamespace(load=lambda work: {"generation": 2, "checkpoint_digest": Recovery.digest(state["checkpoint"]),
         "cache": {"native_ref": "matrix:message:" + key + ":lost"}})
     execution = SimpleNamespace(matrix=matrix, sessions=sessions, lock=asyncio.Lock())
@@ -940,12 +1046,12 @@ def test_pending_ordinary_message_rebuilds_then_retries_only_saved_reply(native_
         with pytest.raises(TimeoutError):
             async for _ in channel._stream_with_tracker(payload):
                 pass
-        assert order == ["inference", "save", "send"]
+        assert order == ["inference", "save", "bind", "send"]
         assert not execution.messages.turns
         # A replacement with an empty local session store sees only pending delivery.
         await ManagedNioSync(channel, execution).dispatch(snapshot)
         await runner.dispatch(snapshot)
-        assert order == ["inference", "save", "send", "send", "ack"] and not queued
+        assert order == ["inference", "save", "bind", "send", "send", "ack"] and not queued
         state["mode"] = "verify"
         await runner.dispatch(snapshot)
         assert not queued

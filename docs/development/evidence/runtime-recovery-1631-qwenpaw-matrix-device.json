@@ -1,0 +1,39 @@
+{
+  "fixture": "recovery-1631-live-20261118-v22-controller",
+  "room_id": "!DgCHFCBeH3lghIMX5S:recovery-1631.test",
+  "devices": [
+    "AT_QWEN_A_20654ec9a2",
+    "AT_QWEN_B_20654ec9a2"
+  ],
+  "encrypted": false,
+  "cases": [
+    {
+      "work": "task",
+      "original_event": "$6ewVU3zqA6Qtzqklsd0G6co86uXEhtVhfN-M5a4poQA",
+      "replacement_verified": "$6ewVU3zqA6Qtzqklsd0G6co86uXEhtVhfN-M5a4poQA",
+      "visible_events": [
+        "$6ewVU3zqA6Qtzqklsd0G6co86uXEhtVhfN-M5a4poQA"
+      ],
+      "native_send_device_sequence": [
+        "AT_QWEN_A_20654ec9a2"
+      ],
+      "replacement_missing_marker": "verification pending"
+    },
+    {
+      "work": "ordinary",
+      "original_event": "$jIM60-AHBZwCQfYO4gC0R48_Jl0ZrHuSZTPfT8imizk",
+      "replacement_verified": "$jIM60-AHBZwCQfYO4gC0R48_Jl0ZrHuSZTPfT8imizk",
+      "visible_events": [
+        "$jIM60-AHBZwCQfYO4gC0R48_Jl0ZrHuSZTPfT8imizk"
+      ],
+      "native_send_device_sequence": [
+        "AT_QWEN_A_20654ec9a2"
+      ],
+      "replacement_missing_marker": "verification pending"
+    }
+  ],
+  "scope": "QwenPaw native Task and ordinary reply send methods with real matrix-nio and Tuwunel, a fixture execution checkpoint and no model call.",
+  "qwenpaw": "2.2.2.post1",
+  "matrix_nio": "0.26.0",
+  "image": "sha256:ff108c0ceae6e484959585ccd663afe04919bf34f20e8fdda1d0138e02854bf3"
+}

@@ -73,6 +73,46 @@ def test_same_generation_is_admitted_once_and_conflicts_never_enter_native(adapt
     asyncio.run(scenario())
 
 
+def test_polling_does_not_reclaim_a_running_operation_or_deliver_its_reply(adapter):
+    recovery, authority, task, channel = adapter
+    calls = []
+    claim = authority.claim
+    def counted_claim(*args):
+        calls.append(True)
+        return claim(*args)
+    authority.claim = counted_claim
+    async def scenario():
+        await recovery.recover()
+        task["execution"]["checkpoint"]["operation"] = {"id": "effect-two", "state": "started"}
+        await recovery.recover()
+        assert len(calls) == 1
+        # A turn owns delivery until it finishes; a scan must not reclaim
+        # execution or race its pending checkpoint/Matrix acknowledgement.
+        task["execution"]["checkpoint"].update(delivery="pending", reply_txn="turn-reply")
+        await recovery.recover()
+        assert len(calls) == 1
+        channel.enqueue_recovered_task.assert_awaited_once()
+        channel.send_task_reply.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("changed", ["process_id", "instance_id", "generation"])
+def test_admission_does_not_hide_a_replaced_execution(adapter, changed):
+    recovery, authority, task, channel = adapter
+    async def scenario():
+        await recovery.recover()
+        task["execution"][changed] = 3 if changed == "generation" else "successor"
+        calls = []
+        def conflict(*args):
+            calls.append(True)
+            raise RecoveryConflict("owned by another process")
+        authority.claim = conflict
+        await recovery.recover()
+        assert calls == [True]
+        channel.enqueue_recovered_task.assert_awaited_once()
+    asyncio.run(scenario())
+
+
 def test_saved_result_is_only_resent_with_its_durable_transaction(adapter):
     recovery, authority, task, channel = adapter
     task["status"] = "submitted"

@@ -105,6 +105,13 @@ class TaskExecution:
                     continue
                 if source_room is not None and entry["task"].get("room_id") != source_room:
                     continue
+                execution = entry["task"].get("execution") or {}
+                if (execution.get("process_id") == self.recovery.process
+                        and execution.get("instance_id") == snapshot["instance_id"]
+                        and (team, task_id, execution.get("generation")) in self.admitted):
+                    # Reclaiming a native turn races its operation checkpoints
+                    # and pending reply. The admitted turn owns both.
+                    continue
                 try:
                     claimed = await asyncio.to_thread(self.recovery.claim, snapshot, entry)
                 except RecoveryConflict:

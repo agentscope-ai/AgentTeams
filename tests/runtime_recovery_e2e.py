@@ -309,8 +309,10 @@ print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,"hermes_shared"
     "qwenpaw":qwen,"qwenpaw_native":qwen_native,"openclaw_cache":openclaw_cache,
     "openhuman":{"cache":openhuman_cache,"authority":openhuman_authority}}))
 '''
-    result = json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
-    if api("GET", "workers/agent-a").get("runtime") == "openclaw":
+    runtime = api("GET", "workers/agent-a").get("runtime")
+    interpreter = "/opt/venv/hermes/bin/python" if runtime == "hermes" else "python3"
+    result = json.loads(docker("exec", PREFIX + "-worker-agent-a", interpreter, "-c", code, TASK_ID))
+    if runtime == "openclaw":
         # Use the pinned SDK's actual SQLite APIs, not a guessed session filename.
         probe = '''import fs from "node:fs";
 import {createHash} from "node:crypto";

@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
@@ -70,5 +72,47 @@ func TestWorkerConfigurationSurvivesHarnessChanges(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestWorkerConfigurationCarriesResolvedMatrixPolicyWithoutNativeSecrets(t *testing.T) {
+	ctx := context.Background()
+	store := ossfake.NewMemory()
+	// The Controller already resolved role/Human allowlists when publishing
+	// this Worker-level compatibility projection. Do not recompute policy in
+	// each Harness, and do not carry native device credentials into the record.
+	compatibility := []byte(`{"channels":{"matrix":{"homeserver":"https://matrix.test","userId":"@worker-a:matrix.test","accessToken":"old-device-secret","deviceId":"old-device","encryption":true,"dm":{"policy":"allowlist","allowFrom":["@admin:matrix.test"]},"groupPolicy":"allowlist","groupAllowFrom":["@leader:matrix.test"],"requireMention":true}},"messages":{"groupChat":{"historyLimit":24}}}`)
+	if err := store.PutObject(ctx, "agents/worker-a/openclaw.json", compatibility); err != nil {
+		t.Fatal(err)
+	}
+	err := NewDeployer(DeployerConfig{OSS: store}).DeployMemberRuntimeConfig(ctx, MemberRuntimeConfigDeployRequest{
+		Name: "worker-cr-a", RuntimeName: "worker-a", Runtime: "hermes", Role: "worker",
+		MatrixUserID: "@worker-a:matrix.test", PersonalRoomID: "!worker:matrix.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := store.GetObject(ctx, "agents/worker-a/runtime/runtime.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		Matrix struct {
+			Transport map[string]any `json:"transport"`
+		} `json:"matrix"`
+	}
+	if err := yaml.Unmarshal(body, &record); err != nil {
+		t.Fatal(err)
+	}
+	policy := record.Matrix.Transport
+	if policy["homeserver"] != "https://matrix.test" || policy["groupPolicy"] != "allowlist" || policy["encryption"] != true || policy["historyLimit"] != float64(24) {
+		t.Fatalf("missing Worker-owned Matrix transport: %v", policy)
+	}
+	got, _ := json.Marshal(policy["groupAllowFrom"])
+	if string(got) != `["@leader:matrix.test"]` {
+		t.Fatalf("resolved group allowlist changed: %s", got)
+	}
+	if strings.Contains(string(body), "old-device") || strings.Contains(string(body), "accessToken") {
+		t.Fatal("Worker transport projection copied native device credentials")
 	}
 }

@@ -28,6 +28,25 @@ Harness, prove a native configuration was loaded, stop a tool process, consume
 a Matrix event or resume a Task. It must not be reported as a passing
 six-Harness/30-direction execution matrix.
 
+## Worker transport snapshot
+
+The Controller now publishes `matrix.transport` in the Worker record from its
+already-resolved Worker-level Matrix projection. This retains the endpoint,
+DM/group allowlists, encryption and message-history settings without
+reimplementing role/Human policy in each Harness. Only the explicit transport
+fields are copied; access tokens, user/device IDs and other native state are
+not copied into this snapshot. Identity and credential bindings remain in the
+existing standard fields.
+
+[Hermes #11](https://github.com/agentteams-group/agentteams-harness-hermes/pull/11)
+can load this standard snapshot without reading `openclaw.json`, materialize
+its Matrix identity/token from Worker fields/bindings, and feed the existing
+native bridge. Missing bindings fail before falling back to an old token.
+Controllers without the optional snapshot retain the compatibility path.
+The Controller projection and Hermes loader/bridge have unit coverage;
+real storage, transport startup and execution continuation remain unverified
+for this new path.
+
 ## Remaining implementation and acceptance
 
 - Audit standard fields and configuration write paths across all six Harnesses.

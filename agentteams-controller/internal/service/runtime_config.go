@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -96,6 +99,9 @@ type memberRuntimeConfigMember struct {
 
 type memberRuntimeConfigMatrix struct {
 	AccessToken string `json:"accessToken,omitempty"`
+	// Transport is the Controller-resolved endpoint/policy, independent of
+	// native device state. Credentials are resolved through their bindings.
+	Transport map[string]any `json:"transport,omitempty"`
 }
 
 type memberRuntimeConfigDesired struct {
@@ -207,6 +213,9 @@ func (d *Deployer) DeployMemberRuntimeConfig(ctx context.Context, req MemberRunt
 	if doc.Team == nil && !req.DropTeamContext {
 		d.preserveExistingRuntimeTeamContext(ctx, runtimeName, &doc)
 	}
+	if err := d.projectRuntimeMatrixTransport(ctx, runtimeName, &doc); err != nil {
+		return err
+	}
 	payload, err := yaml.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("marshal runtime config: %w", err)
@@ -267,6 +276,9 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 		doc.Member.PersonalRoomID = req.PersonalRoomID
 	}
 	applyRuntimeTeamContext(&doc, req)
+	if err := d.projectRuntimeMatrixTransport(ctx, runtimeName, &doc); err != nil {
+		return err
+	}
 
 	payload, err := yaml.Marshal(doc)
 	if err != nil {
@@ -274,6 +286,59 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 	}
 	if err := d.oss.PutObject(ctx, key, payload); err != nil {
 		return fmt.Errorf("write runtime config: %w", err)
+	}
+	return nil
+}
+
+func (d *Deployer) projectRuntimeMatrixTransport(ctx context.Context, name string, doc *memberRuntimeConfigDocument) error {
+	// Reuse the resolved Worker policy, including Human/Team overlays. Do not
+	// reconstruct allowlists independently in each Harness or read native dirs.
+	body, err := d.oss.GetObject(ctx, "agents/"+name+"/openclaw.json")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // Compatibility with members without this projection.
+	}
+	if err != nil {
+		return fmt.Errorf("read Worker Matrix projection: %w", err)
+	}
+	var config struct {
+		Channels struct {
+			Matrix map[string]any `json:"matrix"`
+		} `json:"channels"`
+		Messages struct {
+			GroupChat struct {
+				HistoryLimit *int `json:"historyLimit"`
+			} `json:"groupChat"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &config); err != nil {
+		return fmt.Errorf("decode Worker Matrix projection: %w", err)
+	}
+	if config.Channels.Matrix == nil {
+		return nil
+	}
+	transport := map[string]any{}
+	for _, key := range []string{"homeserver", "encryption", "groupPolicy", "groupAllowFrom", "requireMention", "freeResponseRooms", "autoThread", "dmMentionThreads", "historyLimit"} {
+		if value, ok := config.Channels.Matrix[key]; ok {
+			transport[key] = value
+		}
+	}
+	if dm, ok := config.Channels.Matrix["dm"].(map[string]any); ok {
+		policy := map[string]any{}
+		for _, key := range []string{"policy", "allowFrom"} {
+			if value, ok := dm[key]; ok {
+				policy[key] = value
+			}
+		}
+		transport["dm"] = policy
+	}
+	if _, ok := transport["historyLimit"]; !ok && config.Messages.GroupChat.HistoryLimit != nil {
+		transport["historyLimit"] = *config.Messages.GroupChat.HistoryLimit
+	}
+	if len(transport) != 0 {
+		if doc.Matrix == nil {
+			doc.Matrix = &memberRuntimeConfigMatrix{}
+		}
+		doc.Matrix.Transport = transport
 	}
 	return nil
 }

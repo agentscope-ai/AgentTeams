@@ -127,6 +127,65 @@ def test_saved_result_is_only_resent_with_its_durable_transaction(adapter):
     channel.enqueue_recovered_task.assert_not_awaited()
 
 
+@pytest.mark.parametrize('status,report,allowed', [
+    ('submitted', 'shared/tasks/T/result.md', True),
+    ('in_progress', 'shared/tasks/T/result.md', False),
+    ('submitted', None, False),
+])
+def test_empty_native_final_requires_a_submitted_authoritative_report(adapter, status, report, allowed):
+    recovery, authority, task, channel = adapter
+    task['status'] = status
+    if report:
+        task['result_path'] = report
+    cp = task['execution']['checkpoint']
+    cp.update(delivery='pending', reply_txn='saved-report')
+    prepared = []
+    authority.prepare_reply = lambda *args: (prepared.append(args), ({'execution': {'checkpoint': cp}, 'room_id': '!task:hs'}, 'authoritative report'))[1]
+    authority.delivered = lambda *args: None
+    async def scenario():
+        if allowed:
+            await recovery.finish({'task_id': 'T', 'team_id': 'team', 'generation': 2}, 'session', '')
+            assert prepared == [('T', 'team', '')]
+            channel.send_task_reply.assert_awaited_once_with('!task:hs', 'authoritative report', 'saved-report')
+        else:
+            with pytest.raises(RuntimeError, match='without a durable result'):
+                await recovery.finish({'task_id': 'T', 'team_id': 'team', 'generation': 2}, 'session', '')
+            assert not prepared
+            channel.send_task_reply.assert_not_awaited()
+    asyncio.run(scenario())
+
+
+def test_native_completion_after_submit_does_not_require_another_model_message(native_channel):
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None)
+    channel._task_execution = SimpleNamespace(finish=AsyncMock())
+    channel._send_typing = AsyncMock()
+    identity = {'task_id': 'T', 'team_id': 'team', 'generation': 2}
+    asyncio.run(channel._on_process_completed(SimpleNamespace(session_id='native-session'), '!room', {'task_execution': identity}))
+    channel._task_execution.finish.assert_awaited_once_with(identity, 'native-session', '')
+    channel._send_typing.assert_awaited_once_with('!room', False)
+
+
+def test_saved_report_does_not_bypass_unknown_operation_verification(adapter):
+    recovery, authority, task, channel = adapter
+    task.update(status='submitted', result_path='shared/tasks/T/result.md')
+    operation = {'id': 'unknown-effect', 'state': 'unknown'}
+    task['execution']['checkpoint']['operation'] = operation.copy()
+    authority.prepare_reply = lambda *args: (_ for _ in ()).throw(RecoveryConflict('verify the previous operation'))
+    with pytest.raises(RecoveryConflict, match='verify the previous operation'):
+        asyncio.run(recovery.finish({'task_id': 'T', 'team_id': 'team', 'generation': 2}, 'session', ''))
+    assert task['execution']['checkpoint']['operation'] == operation
+    channel.send_task_reply.assert_not_awaited()
+
+
+def test_empty_final_cannot_deliver_a_reassigned_task_report(adapter):
+    recovery, authority, task, channel = adapter
+    task.update(status='submitted', result_path='shared/tasks/T/result.md')
+    task['execution']['process_id'] = 'successor'
+    with pytest.raises(RecoveryConflict, match='replaced'):
+        asyncio.run(recovery.finish({'task_id': 'T', 'team_id': 'team', 'generation': 2}, 'session', ''))
+    channel.send_task_reply.assert_not_awaited()
+
+
 def test_unknown_operation_enters_resume_context_without_running_a_tool(adapter):
     recovery, authority, task, channel = adapter
     task["execution"]["checkpoint"]["operation"] = {"id": "effect-one", "state": "unknown"}

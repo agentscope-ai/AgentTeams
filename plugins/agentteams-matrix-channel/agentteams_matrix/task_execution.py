@@ -148,6 +148,13 @@ class TaskExecution:
                 self.admitted.add(admission)
 
     async def finish(self, identity, session_id, text):
+        if not text:
+            task = await asyncio.to_thread(self.verify, identity, finished=True)
+            cp = task["execution"].get("checkpoint") or {}
+            if task["status"] != "submitted" or not (task.get("result_path") or cp.get("result")):
+                raise RuntimeError("Task turn ended without a durable result")
+            # submit_task can end native inference without a final message.
+            # prepare_reply verifies and reads the authoritative stored report.
         saved, text = await asyncio.to_thread(self.recovery.prepare_reply, identity["task_id"], identity["team_id"], text)
         cp = saved["execution"]["checkpoint"]
         if cp.get("delivery") != "delivered":

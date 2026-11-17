@@ -4706,8 +4706,6 @@ class AgentTeamsMatrixChannel(BaseChannel):
             pending = send_meta.pop(_MATRIX_PENDING_FINAL_MESSAGE_KEY, None)
             if not text and pending is not None:
                 text = self._text_from_message_event(pending)
-            if not text:
-                raise RuntimeError("Task turn ended without a durable result")
             await self._task_execution.finish(send_meta["task_execution"], request.session_id, text)
             await self._send_typing(to_handle, False)
             return

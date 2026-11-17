@@ -599,8 +599,8 @@ not reset the Task/effect count or be called a clean two-generation acceptance.
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement cases 06/09/13 passed; other scenarios incomplete | untested | untested | untested | untested |
-| Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | untested | replacement case 20 passed; other scenarios incomplete | untested | untested |
-| QwenPaw | untested | untested | untested | untested | untested | untested |
+| Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | case25 failed final delivery | replacement case 20 passed; other scenarios incomplete | untested | untested |
+| QwenPaw | untested | case24 failed; generation3 repair passed separately | untested | untested | untested | untested |
 | DeepSeek | untested | replacement case 21 passed; other scenarios incomplete | untested | untested | untested | untested |
 | OpenClaw | untested | untested | untested | untested | untested | untested |
 | OpenHuman | untested | untested | untested | untested | untested | untested |
@@ -612,4 +612,42 @@ Run the three-step in-progress continuation with **no new Matrix input after
 stop** separately from saved-result redelivery. Also cover normal/abnormal
 restart, replacement, valid/expired/missing session, uncertain side effects,
 conflicting claim, cancellation and reassignment. Keep failures and missing
-evidence open in #1631. No automatic merge, release or existing-install deploy.
+evidence open in #1631. The user authorizes merge only after actual validation;
+incomplete changes remain Draft. No release or existing-install deployment.
+
+### Case25: native submission succeeded; final delivery failed
+
+[Case25 evidence](evidence/runtime-recovery-1631-case25-failed.json) records
+Hermes `4cb4e6a` with Core/shared `8ba908e3` and QwenPaw `9d7346ab`
+with Core/shared `f96f9dda`, using the unchanged `774d6285` Controller binary.
+These were local source overlays; the evidence includes image identities and
+does not represent a canonical full image build. Native Hermes MCP discovery
+passed before inference. Source Hermes acknowledged/read Task
+`live-hermes-qwenpaw-25`, persisted step one and checkpoint4, and stopped before
+the QwenPaw replacement was created. No new external Matrix message was sent.
+
+QwenPaw continued steps two/three and submitted the persisted report through
+its native MCP tool. The independent ledger recorded each step once, with
+generations1/2/2. Its SDK then ended inference without a final message. The
+completion callback rejected that valid submitted-report path and recorded an
+unknown native-turn operation at checkpoint9 instead of delivering the report.
+This is a failed lane. The Task, report, unknown operation and ledger remain
+unchanged for later verified recovery.
+
+The fix delegates an empty native final to authoritative report verification.
+It requires a submitted Task with a stored report, retains execution fencing
+and unknown-operation checks, and uses the existing durable reply transaction.
+The native-SDK regression initially failed four cases; after the fix42 tests
+pass, including empty/in-progress results, replaced execution and unknown
+operation rejection, and both legacy/bundled native completion callbacks.
+This regression result does not retroactively pass case25 or prove delivery
+retry after arbitrary callback failures.
+
+Additional targeted native-SDK delivery/gate/reload suites passed144 tests
+with7 existing mock coroutine warnings; host contract golden checks passed13
+and skipped3 optional native SDK probes. An attempted all-bundle run inside
+the local QwenPaw image was not green (433 passed,26 failed,4 errors,13 skipped):
+that invocation lacked a system-Python YAML dependency, the E2EE test backend
+and the uninitialized OpenClaw submodule. Its log is retained; it is not
+reported as a full bundle pass. The repository CI installs those dependencies
+and initializes submodules separately.

@@ -31,3 +31,28 @@ class ImageSelectionTests(unittest.TestCase):
         self.assertEqual(config["CORE_IMAGE"], "recovery-1631/controller:local-current")
         self.assertEqual(config["HARNESS_IMAGES"]["qwenpaw"], "recovery-1631/qwenpaw:local-current")
         self.assertEqual(config["TASK_ID"], "live-qwenpaw-hermes-23")
+
+
+class SubmissionHistoryTests(unittest.TestCase):
+    def test_acceptance_preserves_the_native_worker_submission(self):
+        from runtime_recovery_e2e import assert_native_submission
+        submit = {"action": "submit_task", "actor": "worker:agent-a", "from": "in_progress", "to": "submitted", "seq": 2}
+        accept = {"action": "accept_task_result", "actor": "leader:leader", "from": "submitted", "to": "completed", "seq": 3}
+        assert_native_submission({"status": "submitted", "history": [submit]})
+        assert_native_submission({"status": "completed", "history": [submit, accept]})
+
+    def test_final_status_alone_does_not_prove_submission_or_review(self):
+        from runtime_recovery_e2e import assert_native_submission
+        submit = {"action": "submit_task", "actor": "worker:agent-a", "from": "in_progress", "to": "submitted", "seq": 2}
+        accept = {"action": "accept_task_result", "actor": "leader:leader", "from": "submitted", "to": "completed", "seq": 3}
+        invalid = [
+            {"status": "completed", "history": []},
+            {"status": "completed", "history": [submit]},
+            {"status": "completed", "history": [submit, {**accept, "actor": "worker:agent-a"}]},
+            {"status": "completed", "history": [submit, {**accept, "seq": 1}]},
+            {"status": "submitted", "history": [submit, submit]},
+            {"status": "cancelled", "history": [submit, accept]},
+        ]
+        for task in invalid:
+            with self.subTest(task=task), self.assertRaises(ValueError):
+                assert_native_submission(task)

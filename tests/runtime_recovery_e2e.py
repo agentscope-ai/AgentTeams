@@ -123,9 +123,13 @@ def prepare():
         if not worker.get("roomID"):
             raise RuntimeError("Wait for the disposable member's personal room before preparation")
         env = worker.get("env", {})
-        if env.get("MATRIX_HOME_ROOM") != worker["roomID"]:
-            env["MATRIX_HOME_ROOM"] = worker["roomID"]
-            api("PUT", "workers/" + name, {"env": env})
+        desired = {**env, "MATRIX_HOME_ROOM": worker["roomID"]}
+        if name == "leader":
+            # Native review remains enabled. Its tool-status bubbles would
+            # otherwise inject extra room messages into the no-input test.
+            desired["HERMES_TOOL_PROGRESS_MODE"] = "off"
+        if desired != env:
+            api("PUT", "workers/" + name, {"env": desired})
     print("Prepared native home rooms only for the disposable test members; wait for Running before seeding")
 
 
@@ -382,6 +386,22 @@ def cutover():
         "events": str(path), "external_matrix_inputs_sent": 0, "task_continuation": "not yet verified"}))
 
 
+def assert_native_submission(task):
+    submissions = [row for row in task.get("history", []) if row.get("action") == "submit_task"]
+    if task["status"] not in {"submitted", "completed"} or len(submissions) != 1:
+        raise ValueError("Expected one native Worker submission")
+    submission = submissions[0]
+    if (submission.get("actor") != "worker:agent-a" or submission.get("from") != "in_progress"
+            or submission.get("to") != "submitted" or not isinstance(submission.get("seq"), int)):
+        raise ValueError("Invalid native Worker submission history")
+    if task["status"] == "completed" and not any(
+            row.get("action") == "accept_task_result" and row.get("actor") == "leader:leader"
+            and row.get("from") == "submitted" and row.get("to") == "completed"
+            and isinstance(row.get("seq"), int) and row["seq"] > submission["seq"]
+            for row in task.get("history", [])):
+        raise ValueError("Completed Task lacks subsequent Leader acceptance")
+
+
 def verify():
     """Read back real task, storage, native receipt and Matrix evidence."""
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
@@ -394,7 +414,8 @@ def verify():
         assert before["tool_processes"], "fault scenario must interrupt an actual tool process"
     else:
         assert before["task"]["execution"]["checkpoint"]["completed_steps"] == ["one"]
-    assert task["status"] == "submitted" and cp["delivery"] == "delivered"
+    assert_native_submission(task)
+    assert cp["delivery"] == "delivered"
     assert cp["completed_steps"] == ["one", "two", "three"] and not cp["remaining_steps"]
     assert execution["instance_id"] != before["task"]["execution"]["instance_id"]
     assert execution["process_id"] != before["task"]["execution"]["process_id"]
@@ -466,12 +487,20 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     labels = next(row["Actor"]["Attributes"] for row in events if row["Action"] == ("create" if MODE == "replace" else "start") and
         ((row["Actor"]["ID"] != old) if MODE == "replace" else (row["Actor"]["ID"] == old)))
     native = native_sessions()
+    if SOURCE == "qwenpaw":
+        source_native = before["native_sessions"]
+        source_cp = before["task"]["execution"]["checkpoint"]
+        assert source_native["qwenpaw"]["checkpoint_digest"] == hashlib.sha256(json.dumps(source_cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert len(source_native["qwenpaw_native"]) == 1
+        assert source_native["qwenpaw_native"][0]["agent_state_present"] and source_native["qwenpaw_native"][0]["task_mentioned"]
     if TARGET == "qwenpaw":
         selected = native["qwenpaw"]
         assert selected["runtime"] == "qwenpaw" and selected["expires_at"] > time.time()
         assert selected["checkpoint_digest"] == hashlib.sha256(json.dumps(cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         assert len(native["qwenpaw_native"]) == 1
         assert native["qwenpaw_native"][0]["agent_state_present"] and native["qwenpaw_native"][0]["task_mentioned"]
+        if MODE == "restart":
+            assert selected["session_id"] == before["native_sessions"]["qwenpaw"]["session_id"], "valid native Task session was not reused"
     if SOURCE == "hermes":
         selected = before["native_sessions"]["hermes"][-1]["session_id"]
         assert before["native_sessions"]["hermes_message_counts"].get(selected, 0) > 0, "new route still used a different warm native Agent"
@@ -503,10 +532,10 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         SOURCE: old_source["io.agentteams.recovery.harness-sha"], TARGET: labels["io.agentteams.recovery.harness-sha"]}
     proof = {"task_id": TASK_ID, "case": CASE, "scope": f"one real {SOURCE}-to-{TARGET} in-progress continuation", "mode": MODE,
         "fixture_prefix": PREFIX, "authoritative_report_verified": True,
-        "sources": sources, "native_recovery_sessions": native,
+        "sources": sources, "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "native_recovery_sessions": native,
         "generation_before": before["task"]["execution"]["generation"], "generation_after": execution["generation"],
         "checkpoint_before": before["task"]["execution"]["checkpoint"]["version"], "checkpoint_after": cp["version"],
-        "execution": execution, "ledger": ledger, "artifacts_verified": artifacts,
+        "execution": execution, "final_task_status": task["status"], "task_history": task["history"], "ledger": ledger, "artifacts_verified": artifacts,
         "docker_order_ns": order, "matrix": matrix}
     path = Path("/tmp/1631-live-" + CASE + "-verified.json")
     path.write_text(json.dumps(proof, indent=2))

@@ -600,7 +600,7 @@ not reset the Task/effect count or be called a clean two-generation acceptance.
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement cases 06/09/13 passed; other scenarios incomplete | untested | untested | untested | untested |
 | Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | case25 failed final delivery | replacement case 20 passed; other scenarios incomplete | untested | untested |
-| QwenPaw | untested | case24 failed; generation3 repair passed separately | untested | untested | untested | untested |
+| QwenPaw | untested | case24 failed; generation3 repair passed separately; case27 partial (extra Leader messages) | untested | untested | untested | untested |
 | DeepSeek | untested | replacement case 21 passed; other scenarios incomplete | untested | untested | untested | untested |
 | OpenClaw | untested | untested | untested | untested | untested | untested |
 | OpenHuman | untested | untested | untested | untested | untested | untested |
@@ -684,3 +684,42 @@ regressions passed. The probe is part of independent image smoke CI.
 Case26's explicit Task/team/generation2 trace was read through Controller and
 Langfuse. Dashboardv1.4.1 setup/token login reached the workspace, but Tracing
 navigation returned to a rejected-login page; UI acceptance remains open.
+
+### Case27: native cache fixed; strict message isolation failed
+
+[Case27 evidence](evidence/runtime-recovery-1631-case27-partial.json) records
+QwenPaw `5272ce21` / shared Core `4c680c6c` → Hermes `965b612a` / shared Core
+`05967bf6`, with the unchanged `774d6285` Controller binary. After native source
+ACK/read and step one, the real session file digest matched its cache and the
+latest checkpoint4; the cache-order fix therefore passed this source-side real
+check. No fixture helper process was running before cutover. Old stop/delete
+preceded target creation. Steps stayed once at generations1/2/2, artifacts and
+the authoritative report matched, and the final report had one Matrix copy.
+Leader subsequently accepted the native Worker submission, leaving `completed`.
+
+The strict no-new-room-message assertion failed on nine automatic Leader
+tool-status bubbles between source stop and Worker final reply. The driver
+sent zero new inputs, but this fixture did not remain quiet. Preserve the
+partial evidence; do not exclude those events or count the lane as accepted.
+Future isolated runs set the test Leader's supported
+`HERMES_TOOL_PROGRESS_MODE=off` through its Worker environment before assignment;
+native review stays enabled and all backlog/events and the strict assertion
+remain intact. This changes fixture display only, not production defaults.
+
+The verifier now checks exactly one native Worker submission and, for an
+already `completed` Task, a subsequent genuine Leader acceptance history.
+`completed` alone, missing/repeated submissions, a wrong reviewer or reversed
+sequence fail. This handles normal acceptance without rewriting Task status;
+fixture/oracle checks pass16 tests and6 negative subtests. Actual process start
+binding and QwenPaw source/final cache consistency checks were also added.
+
+Hermes case27 internal recovery traces `aedc74aa0212ab8418d2800bf5802207` and
+`23ed6a3a8a9b258b7ca10fe680db1df2` were read directly from Langfuse with explicit
+Task/team/generation2 and native session correlation. Specific Controller and
+Dashboard UI readback remain open. The v11 Controller and both Workers were
+stopped after recording evidence, retaining data, sessions and message backlog.
+
+Independent QwenPaw `5272ce21` test/image/native configuration smoke CI passed;
+Hermes `965b612a` test/image CI passed. Core candidate pins now consume these
+exact revisions. Neither independent CI result proves full six-Harness or
+30-direction execution acceptance.

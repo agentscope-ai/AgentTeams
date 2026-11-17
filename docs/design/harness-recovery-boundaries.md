@@ -74,6 +74,7 @@ prove its tools are registered in the Agent's native runtime.
 | Case24 generation3 repair | With the missing MCP dependency installed and native discovery preflight passed, the same Task automatically submitted through native MCP and delivered one authoritative final reply, without new external Matrix input or additional effects; old QwenPaw sessions retained | Does not retroactively pass the two-generation case, saved-result-only retry, active return to QwenPaw or complete fault matrix |
 | Real case25 | Hermes native ACK/read and checkpoint4; QwenPaw fresh-session continuation, steps once at generations1/2/2 and native report submission | Final delivery failed: QwenPaw ended its native stream without a final message after `submit_task`; the adapter misclassified the persisted report as an interrupted turn. Checkpoint9 remains pending verification. The callback fix has42 native-SDK regression passes, but has not passed a new real lane. |
 | Real case26 | After an initial QwenPaw model-directory startup timeout and automatic restart, unchanged execution/delivery checks passed: same Task, no external Matrix input, effects once at generations1/2/2, artifact/report hashes and one final report | Added native-cache checks failed: the SDK saved its session again after the completion callback, invalidating the cached native digest. Execution/delivery success does not establish valid-session reuse; the combined lane remains unaccepted pending the cache-order fix and a new real run. |
+| Real case27 | QwenPaw5272ce2/Core4c680c6c source session/cache/checkpoint4 consistency passed after the ordering fix. Hermes965b612/Shared05967bf6 continued steps once at generations1/2/2 and delivered the authoritative report; Leader accepted the Task | Strict no-new-room-message check failed: nine automatic Leader tool-status events arrived before the Worker's final report. No event was discarded and the check remains in place. This is partial evidence, not a third accepted direction. |
 
 Evidence is under [the recovery record](../development/runtime-recovery-1631.md)
 and its adjacent `evidence/` directory. Configuration and protocol test counts
@@ -83,9 +84,11 @@ Trace acceptance is also separate. QwenPaw case23 exported explicit Task/team/
 generation fields. Hermes case24 repair exported its recovery event ID and
 native session. Core `8ba908e3` now decodes Task/team/generation from internal
 Hermes recovery event IDs, with31 telemetry regression passes; live readback
-of those fields remains open. Turns admitted from a real Matrix event need
-separate correlation and are not covered by that decoder. Dashboard trace UI
-readback remains unverified for these fixtures.
+of those fields passed directly from Langfuse in case27, with internal recovery
+event ID and native session `20261117_072926_4326694b`. Specific Controller
+readback of those case27 traces remains open. Turns admitted from a real Matrix
+event need separate correlation and are not covered by that decoder. Dashboard
+trace UI readback remains unverified for these fixtures.
 
 Case26 QwenPaw trace `4c1b76a68080ec1f5122185f28a1992d` was read through
 Controller and directly from Langfuse with Task/team/generation2, room/event,

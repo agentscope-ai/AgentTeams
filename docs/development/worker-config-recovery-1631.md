@@ -39,10 +39,13 @@ not copied into this snapshot. Identity and credential bindings remain in the
 existing standard fields.
 
 [Hermes #11](https://github.com/agentteams-group/agentteams-harness-hermes/pull/11)
-can load this standard snapshot without reading `openclaw.json`, materialize
+can load this standard snapshot without reading `openclaw.json` when a managed
+model is declared, materialize
 its Matrix identity/token from Worker fields/bindings, and feed the existing
 native bridge. Missing bindings fail before falling back to an old token.
 Controllers without the optional snapshot retain the compatibility path.
+Models not declared in the standard record retain their compatibility model;
+this does not yet standardize every native-owned configuration setting.
 The Controller projection and Hermes loader/bridge have unit coverage;
 real storage, transport startup and execution continuation remain unverified
 for this new path.

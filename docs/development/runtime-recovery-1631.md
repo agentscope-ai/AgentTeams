@@ -762,3 +762,29 @@ This is one same-Harness normal-restart/valid-session scenario, not abnormal
 restart, replacement, lost/expired-session, saved-result-only or unknown-effect
 acceptance. Both live cases use plaintext Matrix (`AGENTTEAMS_MATRIX_E2EE=0`);
 encrypted backlog/crypto continuity and Dashboard trace UI remain unaccepted.
+
+### Saved-reply retry after native stream closure
+
+QwenPaw's process-local admission guard also blocked delivery recovery after a
+native completion had saved a result but failed to send it or acknowledge its
+delivery. The two Matrix adapters now share an additional live-native set on
+the SDK task tracker. Polls do not reclaim an executing native turn. After its
+stream, tools and final native persistence close, a saved pending reply may be
+claimed and retried with the original transaction; historical admission still
+prevents another inference for that generation. Ownership changes and unknown
+operations retain the authoritative claim checks.
+
+Fault regressions on the installed QwenPaw SDK failed on the previous code and
+passed after the fix for both adapter copies and both send/ack failure points.
+Recovery/reload suites passed51 tests. These use the real channel/session SDK
+with injected native-stream, authority and Matrix boundaries; they do not
+establish real delivery-fault E2E, another directed lane or step continuation.
+
+OpenClaw Harness candidate
+[`e57b75aa`](https://github.com/agentteams-group/agentteams-harness-openclaw/commit/e57b75aa2c631a215d1c2b1dd6d4d7e065b5fa95)
+removes launch-time Matrix deletion/password relogin. Its12 host tests and2
+actual pinned-SDK SQLite-store tests passed. The latter reopen existing stores
+around the real launch preamble with both clean-shutdown marker values, retain
+device/cursor/synthetic crypto snapshot, and isolate a different device. This
+does not prove a real SIGKILL/WAL crash, encrypted traffic, replacement snapshot
+or native Task recovery. The candidate remains Draft and unpinned by Core.

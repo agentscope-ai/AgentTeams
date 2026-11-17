@@ -582,44 +582,46 @@ class AgentTeamsMatrixChannel(BaseChannel):
     async def _stream_recovered_task(self, payload):
         from task_recovery import RecoveryConflict, RecoveryUnavailable
         identity = payload["meta"]["task_execution"]
-        await asyncio.to_thread(self._task_execution.verify, identity)
-        producer = asyncio.current_task()
-
-        async def monitor():
-            while True:
-                await asyncio.sleep(TASK_OWNERSHIP_POLL_S)
-                try:
-                    await asyncio.to_thread(self._task_execution.verify, identity, finished=True)
-                except RecoveryUnavailable:
-                    continue  # Connection failure does not prove replacement.
-                except RecoveryConflict:
-                    producer.cancel("Task ownership changed")
-                    return
-
-        guard = asyncio.create_task(monitor())
-        stream = super()._stream_with_tracker(payload)
-        interrupted = False
         try:
-            async for item in stream:
-                yield item
-        except BaseException:
-            interrupted = True
-            raise
-        finally:
-            guard.cancel()
-            await asyncio.gather(guard, return_exceptions=True)
-            await stream.aclose()
-            if interrupted:
-                try:
-                    await asyncio.to_thread(self._task_execution.recovery.interrupted,
-                                            identity["task_id"], identity["team_id"])
-                except (RecoveryConflict, RecoveryUnavailable):
-                    logger.warning("Interrupted Task checkpoint could not be committed; retain authority")
-            else:
-                # The SDK can save turn usage after its completion callback.
-                # Bind the cache only after all native persistence has ended.
-                await self._task_execution.remember(identity, payload["meta"]["task_session_id"])
+            await asyncio.to_thread(self._task_execution.verify, identity)
+            producer = asyncio.current_task()
 
+            async def monitor():
+                while True:
+                    await asyncio.sleep(TASK_OWNERSHIP_POLL_S)
+                    try:
+                        await asyncio.to_thread(self._task_execution.verify, identity, finished=True)
+                    except RecoveryUnavailable:
+                        continue  # Connection failure does not prove replacement.
+                    except RecoveryConflict:
+                        producer.cancel("Task ownership changed")
+                        return
+
+            guard = asyncio.create_task(monitor())
+            stream = super()._stream_with_tracker(payload)
+            interrupted = False
+            try:
+                async for item in stream:
+                    yield item
+            except BaseException:
+                interrupted = True
+                raise
+            finally:
+                guard.cancel()
+                await asyncio.gather(guard, return_exceptions=True)
+                await stream.aclose()
+                if interrupted:
+                    try:
+                        await asyncio.to_thread(self._task_execution.recovery.interrupted,
+                                                identity["task_id"], identity["team_id"])
+                    except (RecoveryConflict, RecoveryUnavailable):
+                        logger.warning("Interrupted Task checkpoint could not be committed; retain authority")
+                else:
+                    # The SDK can save turn usage after its completion callback.
+                    # Bind the cache only after all native persistence has ended.
+                    await self._task_execution.remember(identity, payload["meta"]["task_session_id"])
+        finally:
+            self._task_execution.native_closed(identity)
 
     async def _recover_owned_tasks(self):
         from task_recovery import RecoveryConflict, RecoveryUnavailable

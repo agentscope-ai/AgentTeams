@@ -127,6 +127,64 @@ def test_saved_result_is_only_resent_with_its_durable_transaction(adapter):
     channel.enqueue_recovered_task.assert_not_awaited()
 
 
+@pytest.mark.parametrize("failure", ["send", "ack"])
+def test_same_process_retries_saved_delivery_only_after_native_stream_closes(
+        adapter, native_channel, tmp_path, monkeypatch, failure):
+    from qwenpaw.app.chats.session import SafeJSONSession
+    recovery, authority, task, _ = adapter
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None)
+    channel._workspace = SimpleNamespace(session=SafeJSONSession(str(tmp_path / "native")),
+                                         task_tracker=SimpleNamespace())
+    channel._send_typing = AsyncMock()
+    channel.enqueue_recovered_task = AsyncMock()
+    channel.send_task_reply = AsyncMock(return_value="$reply")
+    recovery = type(recovery)(channel, authority)
+    channel._task_execution = recovery
+    cp = task["execution"]["checkpoint"]
+    attempts = []
+    def prepared(*args):
+        task["status"] = "submitted"
+        cp.update(result={"key": "saved-report"}, delivery="pending", reply_txn="stable-txn")
+        return task, "saved answer"
+    authority.prepare_reply = prepared
+    claim = authority.claim
+    authority.claim = lambda *args: {**claim(*args), "saved_result": "saved answer"}
+    def delivered(*args):
+        attempts.append(args)
+        if failure == "ack" and len(attempts) == 1:
+            raise RecoveryUnavailable("delivery acknowledgement unavailable")
+        cp.update(delivery="delivered")
+    authority.delivered = delivered
+    if failure == "send":
+        channel.send_task_reply.side_effect = [RuntimeError("Matrix send unavailable"), "$reply"]
+    async def native_stream(self, payload):
+        # A scan during completion must not race the admitted native turn.
+        prepared()
+        await recovery.recover()
+        channel.send_task_reply.assert_not_awaited()
+        await channel._on_process_completed(SimpleNamespace(session_id=payload["meta"]["task_session_id"]), "!task:hs", {
+            **payload["meta"], native_channel._MATRIX_STREAMING_FINAL_TEXT_KEY: "native answer",
+        })
+        yield "finished"
+    monkeypatch.setattr(native_channel.BaseChannel, "_stream_with_tracker", native_stream)
+    async def scenario():
+        await recovery.recover()
+        payload = channel.enqueue_recovered_task.call_args.args[0]
+        with pytest.raises((RuntimeError, RecoveryUnavailable)):
+            async for _ in channel._stream_recovered_task(payload):
+                pass
+        assert cp["delivery"] == "pending"
+        await recovery.recover()  # No restart or new Matrix message.
+        assert cp["delivery"] == "delivered"
+        assert channel.send_task_reply.await_args_list[0] == channel.send_task_reply.await_args_list[1]
+        channel.send_task_reply.assert_awaited_with("!task:hs", "saved answer", "stable-txn")
+        channel.enqueue_recovered_task.assert_awaited_once()
+        assert task["execution"]["generation"] == 2
+        await recovery.recover()
+        assert channel.send_task_reply.await_count == 2
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('status,report,allowed', [
     ('submitted', 'shared/tasks/T/result.md', True),
     ('in_progress', 'shared/tasks/T/result.md', False),
@@ -368,7 +426,8 @@ def test_replacement_cancels_native_stream_before_interruption_checkpoint(native
             raise RecoveryConflict("reassigned")
     def interrupted(*args):
         order.append("checkpoint")
-    channel._task_execution = SimpleNamespace(verify=verify, recovery=SimpleNamespace(interrupted=interrupted))
+    channel._task_execution = SimpleNamespace(verify=verify, recovery=SimpleNamespace(interrupted=interrupted),
+                                             native_closed=lambda identity: order.append("native closed"))
     async def native_stream(self, payload):
         order.append("started")
         try:
@@ -384,7 +443,7 @@ def test_replacement_cancels_native_stream_before_interruption_checkpoint(native
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(consume(), 1)
     asyncio.run(scenario())
-    assert order == ["started", "tools stopped", "checkpoint"]
+    assert order == ["started", "tools stopped", "checkpoint", "native closed"]
 
 
 def test_task_queue_keys_do_not_merge_different_tasks_in_one_room(native_channel):
@@ -399,8 +458,11 @@ def test_reload_shares_admission_and_does_not_start_task_twice(adapter):
     async def scenario():
         await recovery.recover()
         replacement = type(recovery)(channel, authority)
+        assert replacement.native_active is recovery.native_active
+        task["execution"]["checkpoint"].update(delivery="pending", reply_txn="active-turn")
         await replacement.recover()
         channel.enqueue_recovered_task.assert_awaited_once()
+        channel.send_task_reply.assert_not_awaited()
     asyncio.run(scenario())
 
 

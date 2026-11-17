@@ -23,7 +23,10 @@ class TaskExecution:
         if not hasattr(tracker, "_agentteams_task_admissions"):
             tracker._agentteams_task_admissions = set()
             tracker._agentteams_task_admission_lock = asyncio.Lock()
+        if not hasattr(tracker, "_agentteams_task_native_active"):
+            tracker._agentteams_task_native_active = set()
         self.admitted = tracker._agentteams_task_admissions
+        self.native_active = tracker._agentteams_task_native_active
         self.lock = tracker._agentteams_task_admission_lock
         self.cache_path = Path(channel._workspace.session.save_dir) / ".agentteams-task-recovery"
 
@@ -109,9 +112,12 @@ class TaskExecution:
                 if (execution.get("process_id") == self.recovery.process
                         and execution.get("instance_id") == snapshot["instance_id"]
                         and (team, task_id, execution.get("generation")) in self.admitted):
-                    # Reclaiming a native turn races its operation checkpoints
-                    # and pending reply. The admitted turn owns both.
-                    continue
+                    admission = (team, task_id, execution.get("generation"))
+                    # A live native turn owns its checkpoints and reply. Once
+                    # fully closed, only a saved pending reply may be retried.
+                    if (admission in self.native_active
+                            or (execution.get("checkpoint") or {}).get("delivery") != "pending"):
+                        continue
                 try:
                     claimed = await asyncio.to_thread(self.recovery.claim, snapshot, entry)
                 except RecoveryConflict:
@@ -146,6 +152,10 @@ class TaskExecution:
                              "is_group": True, "is_dm": False},
                 })
                 self.admitted.add(admission)
+                self.native_active.add(admission)
+
+    def native_closed(self, identity):
+        self.native_active.discard((identity["team_id"], identity["task_id"], identity["generation"]))
 
     async def finish(self, identity, session_id, text):
         if not text:

@@ -27,10 +27,20 @@ type WorkerRuntimeState struct {
 }
 
 type WorkerHandoff struct {
-	ID            string      `json:"id"`
-	Phase         string      `json:"phase"`
-	Source        WorkerStart `json:"source"`
-	TargetRuntime string      `json:"target_runtime"`
+	ID             string                `json:"id"`
+	Phase          string                `json:"phase"`
+	Source         WorkerStart           `json:"source"`
+	TargetRuntime  string                `json:"target_runtime"`
+	CheckpointRefs []WorkerCheckpointRef `json:"checkpoint_refs,omitempty"`
+}
+
+type WorkerCheckpointRef struct {
+	Kind              string `json:"kind"`
+	TeamID            string `json:"team_id,omitempty"`
+	TaskID            string `json:"task_id,omitempty"`
+	EventKey          string `json:"event_key,omitempty"`
+	Generation        uint64 `json:"generation"`
+	CheckpointVersion uint64 `json:"checkpoint_version"`
 }
 
 type WorkerRuntimeStore struct{ Storage oss.StorageClient }
@@ -56,7 +66,7 @@ func (s WorkerRuntimeStore) Load(ctx context.Context, name string) (*WorkerRunti
 	if !json.Valid(data) || dec.Decode(&state) != nil || state.SchemaVersion != 1 || state.Kind != "WorkerRuntimeState" || state.MemberPrefix != prefix || state.ActiveStart == nil || !validRuntimeStart(*state.ActiveStart) {
 		return nil, "", fmt.Errorf("%w: unsupported or foreign runtime state", ErrWorkerStateInvalid)
 	}
-	if h := state.Handoff; h != nil && ((h.Phase != "preflight" && h.Phase != "draining") || !validHandoffID(h.ID) || h.Source != *state.ActiveStart || !validHandoffTarget(h.TargetRuntime)) {
+	if h := state.Handoff; h != nil && ((h.Phase != "preflight" && h.Phase != "draining" && h.Phase != "checkpointed") || !validHandoffID(h.ID) || h.Source != *state.ActiveStart || !validHandoffTarget(h.TargetRuntime)) {
 		return nil, "", fmt.Errorf("%w: unsupported handoff record", ErrWorkerStateInvalid)
 	}
 	return &state, workerMatrixETag(data), nil
@@ -112,6 +122,27 @@ func (s WorkerRuntimeStore) BeginDrain(ctx context.Context, name string) (*Worke
 		return s.Load(ctx, name)
 	}
 	return state, etag, err
+}
+
+// ConfirmCheckpoint commits the server-discovered references in the same CAS
+// as the phase. A stopped container is verified independently by its backend.
+func (s WorkerRuntimeStore) ConfirmCheckpoint(ctx context.Context, name, id string, source WorkerStart, expected string, refs []WorkerCheckpointRef) (*WorkerRuntimeState, string, error) {
+	state, etag, err := s.Load(ctx, name)
+	if err != nil {
+		return nil, "", err
+	}
+	op := state.Handoff
+	if op == nil || op.ID != id || op.Source != source {
+		return nil, "", ErrWorkerStateConflict
+	}
+	if op.Phase == "checkpointed" {
+		return state, etag, nil
+	}
+	if op.Phase != "draining" || etag != expected {
+		return nil, "", ErrWorkerStateConflict
+	}
+	op.CheckpointRefs, op.Phase = refs, "checkpointed"
+	return s.save(ctx, state, etag)
 }
 
 func (s WorkerRuntimeStore) save(ctx context.Context, state *WorkerRuntimeState, etag string) (*WorkerRuntimeState, string, error) {

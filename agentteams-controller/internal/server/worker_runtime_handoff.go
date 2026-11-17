@@ -174,7 +174,7 @@ func checkHandoffExecution(op *service.WorkerHandoff, start service.WorkerStart,
 	if op == nil {
 		return nil
 	}
-	if op.Source != start || action == "claim" {
+	if op.Source != start || op.Phase == "checkpointed" || action == "claim" {
 		return fmt.Errorf("Worker handoff %s is draining; new execution is closed", op.ID)
 	}
 	if next == nil || action == "cancel" {

@@ -124,17 +124,24 @@ func (h *TaskRecoveryHandler) runningWorkerInstance(ctx context.Context, w *v1be
 	return b.Name() + "/" + status.InstanceID, status.Runtime, nil
 }
 
-func (h *TaskRecoveryHandler) owns(ctx context.Context, caller *authpkg.CallerIdentity, task map[string]json.RawMessage) bool {
+func taskAssignedTo(task map[string]json.RawMessage, names ...string) bool {
 	var assigned string
 	_ = json.Unmarshal(task["assigned_to"], &assigned)
-	for _, name := range []string{caller.Username, caller.WorkerName, caller.MatrixUserID} {
+	for _, name := range names {
 		if name != "" && assigned == name {
 			return true
 		}
 	}
-	if h.deps.Client != nil {
+	return false
+}
+
+func (h *TaskRecoveryHandler) owns(ctx context.Context, caller *authpkg.CallerIdentity, task map[string]json.RawMessage) bool {
+	if taskAssignedTo(task, caller.Username, caller.WorkerName, caller.MatrixUserID) {
+		return true
+	}
+	if h.deps.Client != nil || h.deps.APIReader != nil {
 		w, err := NewCoordinationHandler(h.deps).worker(ctx, caller.Username)
-		return err == nil && (assigned == w.Name || assigned == w.Spec.EffectiveWorkerName(w.Name) || (w.Status.MatrixUserID != "" && assigned == w.Status.MatrixUserID))
+		return err == nil && taskAssignedTo(task, w.Name, w.Spec.EffectiveWorkerName(w.Name), w.Status.MatrixUserID)
 	}
 	return false
 }
@@ -153,7 +160,7 @@ func recoveryStatus(task map[string]json.RawMessage) bool {
 // Namespace is fixed by this Controller and teams come from the bearer identity.
 func (h *TaskRecoveryHandler) ListRecoverableTasks(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
-	if caller == nil || (caller.Role != authpkg.RoleWorker && caller.Role != authpkg.RoleTeamLeader) {
+	if caller == nil || (caller.Role != authpkg.RoleWorker && caller.Role != authpkg.RoleTeamLeader) || (caller.ServiceAccountNamespace != "" && caller.ServiceAccountNamespace != h.deps.Namespace) {
 		writeError(w, 403, "team worker identity required")
 		return
 	}
@@ -166,46 +173,67 @@ func (h *TaskRecoveryHandler) ListRecoverableTasks(w http.ResponseWriter, r *htt
 		writeError(w, 503, err.Error())
 		return
 	}
-	prefixes, aliases, err := h.project.taskMetaPrefixes(r.Context())
+	tasks, err := h.discoverRecoverableTasks(r.Context(), caller)
 	if err != nil {
-		writeError(w, 503, "task scopes unavailable")
+		writeError(w, 503, err.Error())
 		return
 	}
-	tasks := []map[string]any{}
+	httputil.WriteJSON(w, 200, map[string]any{"tasks": tasks, "instance_id": instance, "runtime": runtime})
+}
+
+type taskRecoveryItem struct {
+	ETag string                     `json:"etag"`
+	Task map[string]json.RawMessage `json:"task"`
+	Team string                     `json:"team_id"`
+}
+
+func (h *TaskRecoveryHandler) discoverRecoverableTasks(ctx context.Context, caller *authpkg.CallerIdentity) ([]taskRecoveryItem, error) {
+	prefixes, aliases, err := h.project.taskMetaPrefixes(ctx)
+	if err != nil {
+		return nil, errors.New("task scopes unavailable")
+	}
+	owners := []string{caller.Username, caller.WorkerName, caller.MatrixUserID}
+	if h.deps.Client != nil || h.deps.APIReader != nil {
+		// Resolve aliases once. A failed lookup must never shrink the set of
+		// executions that a handoff needs to drain.
+		worker, err := NewCoordinationHandler(h.deps).worker(ctx, caller.Username)
+		if err != nil {
+			return nil, errors.New("Worker task identity unavailable")
+		}
+		owners = append(owners, worker.Name, worker.Spec.EffectiveWorkerName(worker.Name), worker.Status.MatrixUserID)
+	}
+	tasks := []taskRecoveryItem{}
 	for _, prefix := range prefixes {
 		team := candidateTeam(prefix)
 		if !callerMatchesStorageTeam(caller, team, aliases) {
 			continue
 		}
-		children, err := h.project.oss.ListObjects(r.Context(), prefix)
+		children, err := h.project.oss.ListObjects(ctx, prefix)
 		if err != nil {
-			writeError(w, 503, "task discovery unavailable")
-			return
+			return nil, errors.New("task discovery unavailable")
 		}
 		for _, child := range children {
 			key, ok := metaKeyFromListResult(prefix, child)
 			if !ok {
 				continue
 			}
-			data, err := h.project.oss.GetObject(r.Context(), key)
+			data, err := h.project.oss.GetObject(ctx, key)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			var task map[string]json.RawMessage
 			if err != nil || json.Unmarshal(data, &task) != nil {
-				writeError(w, 503, "task snapshot unavailable")
-				return
+				return nil, errors.New("task snapshot unavailable")
 			}
 			var taskID string
 			_ = json.Unmarshal(task["task_id"], &taskID)
 			if taskID != path.Base(path.Dir(key)) {
-				writeError(w, 503, "task identity does not match storage scope")
-				return
+				return nil, errors.New("task identity does not match storage scope")
 			}
-			if !recoveryStatus(task) || !h.owns(r.Context(), caller, task) {
+			if !recoveryStatus(task) || !taskAssignedTo(task, owners...) {
 				continue
 			}
-			tasks = append(tasks, map[string]any{"team_id": team, "task": task, "etag": contentETag(data)})
+			tasks = append(tasks, taskRecoveryItem{Team: team, Task: task, ETag: contentETag(data)})
 		}
 	}
 	sort.Slice(tasks, func(i, j int) bool {
@@ -213,7 +241,7 @@ func (h *TaskRecoveryHandler) ListRecoverableTasks(w http.ResponseWriter, r *htt
 		b, _ := json.Marshal(tasks[j])
 		return string(a) < string(b)
 	})
-	httputil.WriteJSON(w, 200, map[string]any{"tasks": tasks, "instance_id": instance, "runtime": runtime})
+	return tasks, nil
 }
 
 func unresolvedOperation(cp *taskCheckpoint) bool {

@@ -71,7 +71,9 @@ def materialize(workspace: Path, harness: str, worker: str) -> Path:
         legacy = json.loads(compatibility.read_text())
     output = project(record, harness, worker, legacy)
     target = runtime.parent / "compat-config.json"
-    with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, delete=False) as pending:
+    staging = workspace / "credentials"
+    staging.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", dir=staging, prefix=".runtime-config-", delete=False) as pending:
         try:
             json.dump(output, pending)
             pending.close()

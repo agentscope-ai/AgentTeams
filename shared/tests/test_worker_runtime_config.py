@@ -90,10 +90,12 @@ class WorkerRuntimeConfigTests(unittest.TestCase):
                 self.assertEqual(output, workspace / "runtime/compat-config.json")
                 previous = output.read_bytes()
                 self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(list((workspace / "credentials").iterdir()), [])
                 runtime.write_text(yaml.safe_dump(self.record("hermes")))
                 with self.assertRaises(ValueError):
                     config.materialize(workspace, "openhuman", "worker")
                 self.assertEqual(output.read_bytes(), previous)
+                self.assertEqual(list((workspace / "credentials").iterdir()), [])
 
 
 if __name__ == "__main__":

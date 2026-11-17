@@ -274,7 +274,7 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 		Action: []string{"s3:PutObject", "s3:DeleteObject"},
 		Resource: []string{
 			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/runtime.yaml", bucket),
-			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/compat-config.json", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/compat-config.json*", bucket),
 			fmt.Sprintf("arn:aws:s3:::%s/shared/tasks/*/meta.json", bucket),
 			fmt.Sprintf("arn:aws:s3:::%s/teams/*/shared/tasks/*/meta.json", bucket),
 		},

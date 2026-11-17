@@ -149,7 +149,7 @@ EOF
         fail "large change set did not collapse to one operation"
     grep -Fq "mirror ${workspace}/ ${remote_prefix}/ --overwrite" "${FAKE_MC_LOG}" ||
         fail "large change set did not use mirror"
-    grep -Fq -- '--exclude runtime/compat-config.json' "${FAKE_MC_LOG}" ||
+    grep -Fq -- '--exclude runtime/compat-config.json*' "${FAKE_MC_LOG}" ||
         fail "bulk mirror would upload derived credentials"
 
     unset AGENTTEAMS_WORKER_SYNC_MIRROR_THRESHOLD
@@ -234,7 +234,7 @@ test_coding_cli_prefix_is_synced
 if worker_sync_should_push "credentials/.config-pull.fixture/merged.json"; then
     fail "temporary config would be uploaded"
 fi
-for _runtime_file in runtime/runtime.yaml runtime/compat-config.json; do
+for _runtime_file in runtime/runtime.yaml runtime/compat-config.json runtime/compat-config.json.migrate.fixture runtime/compat-config.json.bak credentials/.runtime-config-fixture; do
     if worker_sync_should_push "${_runtime_file}"; then
         fail "Controller configuration or derived credentials would be uploaded"
     fi

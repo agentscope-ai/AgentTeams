@@ -5,7 +5,7 @@ import "testing"
 func TestMemberStorageCannotOverwriteAuthoritativeTaskMetadata(t *testing.T) {
 	for _, manager := range []bool{false, true} {
 		policy := NewMinIOAdminClient(Config{}).buildWorkerPolicy("alice", "storage", "team", manager)
-		for _, key := range []string{"shared/tasks/*/meta.json", "teams/*/shared/tasks/*/meta.json", "agents/*/runtime/runtime.yaml", "agents/*/runtime/compat-config.json"} {
+		for _, key := range []string{"shared/tasks/*/meta.json", "teams/*/shared/tasks/*/meta.json", "agents/*/runtime/runtime.yaml", "agents/*/runtime/compat-config.json*"} {
 			resource := "arn:aws:s3:::storage/" + key
 			for _, action := range []string{"s3:PutObject", "s3:DeleteObject"} {
 				denied := false

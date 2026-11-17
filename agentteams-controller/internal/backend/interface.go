@@ -302,11 +302,12 @@ type ServiceBackend interface {
 
 // WorkerResult holds the result of a worker operation.
 type WorkerResult struct {
-	Name           string       `json:"name"`
-	Backend        string       `json:"backend"`
-	DeploymentMode string       `json:"deployment_mode"`
-	Status         WorkerStatus `json:"status"`
-	ContainerID    string       `json:"container_id,omitempty"`
+	dockerProcessExited bool         // Docker inspect confirmed Running=false and PID=0.
+	Name                string       `json:"name"`
+	Backend             string       `json:"backend"`
+	DeploymentMode      string       `json:"deployment_mode"`
+	Status              WorkerStatus `json:"status"`
+	ContainerID         string       `json:"container_id,omitempty"`
 	// InstanceID changes on every actual container start, including a restart
 	// of the same container/Pod. Recovery must not use CR generation or a
 	// notification delivery lease as an execution generation.

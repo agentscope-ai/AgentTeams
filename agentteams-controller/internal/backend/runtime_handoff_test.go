@@ -52,6 +52,11 @@ func TestRuntimeHandoffPodNeedsTerminalWorkerAndChildren(t *testing.T) {
 	if !handoffPodTerminated(pod, id) || handoffPodTerminated(pod, uid+"/containerd://other/start") {
 		t.Fatal("confirmation did not bind the original process")
 	}
+	pod.Spec.Containers = []corev1.Container{{Name: "worker"}, {Name: "sidecar"}, {Name: "unreported"}}
+	if handoffPodTerminated(pod, id) {
+		t.Fatal("unobserved sidecar admitted stop confirmation")
+	}
+	pod.Spec.Containers = nil
 	pod.Status.ContainerStatuses[0].State.Terminated.Reason = "ContainerStatusUnknown"
 	if handoffPodTerminated(pod, id) {
 		t.Fatal("node loss declared a stopped process")
@@ -190,5 +195,29 @@ func TestRuntimeHandoffK8sUsesUIDAndWaitsForKubeletBeforeRemovingFinalizer(t *te
 	}
 	if stopped, err := b.StopRuntimeInstance(ctx, "alice", id); err == nil || stopped {
 		t.Fatal("a disappearing Pod without observed termination was treated as stopped")
+	}
+}
+
+func TestRuntimeHandoffDockerRejectsAmbiguousDeadSource(t *testing.T) {
+	state := map[string]any{"Status": "dead", "StartedAt": "boot", "Pid": 41, "Running": true}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Error("ambiguous source was removed")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"Id": "id", "State": state})
+	}))
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+	for _, variant := range []string{"live-pid", "missing-pid"} {
+		if variant == "missing-pid" {
+			delete(state, "Pid")
+			state["Running"] = false
+		}
+		if stopped, err := b.StopRuntimeInstance(t.Context(), "alice", "id/boot"); stopped || err == nil {
+			t.Fatalf("%s declared stopped", variant)
+		}
+		if gone, err := b.RemoveStoppedRuntime(t.Context(), "alice", "id/boot"); gone || err == nil {
+			t.Fatalf("%s permitted removal", variant)
+		}
 	}
 }

@@ -45,6 +45,9 @@ func (d *DockerBackend) StopRuntimeInstance(ctx context.Context, name, instance 
 		return false, errors.New("Docker Worker start changed before stop")
 	}
 	if status.RawStatus == "exited" || status.RawStatus == "dead" {
+		if !status.dockerProcessExited {
+			return false, errors.New("Docker has not confirmed zero source processes")
+		}
 		return true, nil
 	}
 	code, err := d.dockerInstanceRequest(ctx, http.MethodPost, id, "/stop?t=10")
@@ -85,7 +88,7 @@ func (d *DockerBackend) RemoveStoppedRuntime(ctx context.Context, name, instance
 	if status.Status == StatusNotFound {
 		return d.dockerInstanceGone(ctx, id)
 	}
-	if status.InstanceID != instance || status.ContainerID != id || (status.RawStatus != "exited" && status.RawStatus != "dead") {
+	if status.InstanceID != instance || status.ContainerID != id || !status.dockerProcessExited || (status.RawStatus != "exited" && status.RawStatus != "dead") {
 		return false, errors.New("source changed or resumed before removal")
 	}
 	// Docker refuses a non-force removal if the source restarted since inspect.
@@ -166,15 +169,29 @@ func handoffPodTerminated(pod *corev1.Pod, instance string) bool {
 		return false
 	}
 	workerExited := false
+	reported := make(map[string]bool)
 	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses, pod.Status.EphemeralContainerStatuses} {
 		for _, container := range statuses {
 			terminated := container.State.Terminated
 			if terminated == nil || terminated.FinishedAt.IsZero() || terminated.Reason == "ContainerStatusUnknown" {
 				return false
 			}
+			reported[container.Name] = true
 			if container.Name == "worker" {
 				workerExited = string(pod.UID)+"/"+container.ContainerID+"/"+terminated.StartedAt.UTC().Format(time.RFC3339Nano) == instance
 			}
+		}
+	}
+	for _, group := range [][]corev1.Container{pod.Spec.Containers, pod.Spec.InitContainers} {
+		for _, container := range group {
+			if !reported[container.Name] {
+				return false
+			}
+		}
+	}
+	for _, container := range pod.Spec.EphemeralContainers {
+		if !reported[container.Name] {
+			return false
 		}
 	}
 	return workerExited

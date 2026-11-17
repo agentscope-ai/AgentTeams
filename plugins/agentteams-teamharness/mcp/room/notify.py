@@ -24,7 +24,7 @@ from mcp.common.identity import _canonical_room_id
 from mcp.common.io import _read_json, _utc_timestamp
 from mcp.common.paths import _task_state_path, _project_dir
 from mcp.transport.coordination import deliver_event
-from .matrix import _matrix_room_member_user_ids, _team_human_matrix_ids, _team_leader_matrix_id
+from .matrix import _matrix_room_member_user_ids, _team_human_matrix_ids, _team_leader_matrix_id, _matrix_user_id
 from .mention import MATRIX_ROOM_RE, _matrix_content
 
 # Frozen notification-gap vocabulary. The Matrix core side hosts the
@@ -156,7 +156,7 @@ def _send_delegate_notification(
     ``txn`` is omitted, a fresh id is generated for this send only.
     Returns the Matrix ``eventId`` on success.
     """
-    if os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip():
+    if os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip() or (os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip() and assignee == _matrix_user_id()):
         task = _read_json(_task_state_path(arguments, task_id), {})
         api_delivery = deliver_event("task_assigned", project_id=task.get("project_id"), main_task_id=task.get("main_task_id", ""), task_id=task_id,
             recipient=assignee, delivery_id=txn, room_id=_canonical_room_id(room_id), text=spec)
@@ -629,13 +629,13 @@ def _task_completion_notification(
     result and never blocks the terminal submission.
     """
     room_id = str(task.get("room_id") or "").strip()
+    leader = _team_leader_matrix_id()
     api_delivery = deliver_event("task_submitted", project_id=task.get("project_id"), main_task_id=task.get("main_task_id", ""), task_id=task_id,
-        submission_id=task.get("submission_id"), room_id=_canonical_room_id(room_id), text=summary)
+        recipient=leader, submission_id=task.get("submission_id"), room_id=_canonical_room_id(room_id), text=summary)
     if api_delivery is not None:
         return api_delivery
     if not room_id:
         return {"sent": False, "skipped": True, "error": "task has no room_id"}
-    leader = _team_leader_matrix_id()
     if not leader:
         return {
             "sent": False,

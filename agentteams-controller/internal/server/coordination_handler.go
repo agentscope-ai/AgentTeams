@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
@@ -32,37 +33,43 @@ type CoordinationHandler struct {
 }
 
 type coordinationEvent struct {
-	Kind              string         `json:"kind"`
-	Actor             string         `json:"actor"`
-	Recipient         string         `json:"recipient"`
-	MainTaskID        string         `json:"main_task_id,omitempty"`
-	ProjectID         string         `json:"project_id,omitempty"`
-	TaskID            string         `json:"task_id,omitempty"`
-	DeliveryID        string         `json:"delivery_id,omitempty"`
-	SubmissionID      string         `json:"submission_id,omitempty"`
-	OriginEventID     string         `json:"origin_event_id,omitempty"`
-	RoomID            string         `json:"room_id,omitempty"`
-	Text              string         `json:"text"`
-	SourceRoute       map[string]any `json:"source_route,omitempty"`
-	RequesterRoute    map[string]any `json:"requester_route,omitempty"`
-	ID                string         `json:"id"`
-	Team              string         `json:"team"`
-	StorageTeam       string         `json:"storage_team"`
-	ActorName         string         `json:"actor_name"`
-	ActorRole         string         `json:"actor_role"`
-	RecipientName     string         `json:"recipient_name"`
-	RecipientKind     string         `json:"recipient_kind"`
-	TargetURL         string         `json:"-"`
-	RecipientRuntime  string         `json:"-"`
-	External          bool           `json:"external,omitempty"`
-	EligibleAssignees []string       `json:"eligible_assignees,omitempty"`
-	FinalReport       string         `json:"final_report,omitempty"`
-	PlanType          string         `json:"-"`
-	DispatchMode      string         `json:"-"`
+	Tasks             []mainTaskRequest `json:"tasks,omitempty"`
+	Kind              string            `json:"kind"`
+	Actor             string            `json:"actor"`
+	Recipient         string            `json:"recipient"`
+	MainTaskID        string            `json:"main_task_id,omitempty"`
+	ProjectID         string            `json:"project_id,omitempty"`
+	TaskID            string            `json:"task_id,omitempty"`
+	DeliveryID        string            `json:"delivery_id,omitempty"`
+	SubmissionID      string            `json:"submission_id,omitempty"`
+	OriginEventID     string            `json:"origin_event_id,omitempty"`
+	RoomID            string            `json:"room_id,omitempty"`
+	Text              string            `json:"text"`
+	SourceRoute       map[string]any    `json:"source_route,omitempty"`
+	RequesterRoute    map[string]any    `json:"requester_route,omitempty"`
+	ID                string            `json:"id"`
+	Team              string            `json:"team"`
+	StorageTeam       string            `json:"storage_team"`
+	ActorName         string            `json:"actor_name"`
+	ActorRole         string            `json:"actor_role"`
+	RecipientName     string            `json:"recipient_name"`
+	RecipientKind     string            `json:"recipient_kind"`
+	TargetURL         string            `json:"-"`
+	RecipientRuntime  string            `json:"-"`
+	External          bool              `json:"external,omitempty"`
+	EligibleAssignees []string          `json:"eligible_assignees,omitempty"`
+	FinalReport       string            `json:"final_report,omitempty"`
+	PlanType          string            `json:"-"`
+	DispatchMode      string            `json:"-"`
 }
 
 var coordinationSafeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 var errCoordinationRejected = errors.New("coordination event does not match current task ownership or execution identity")
+
+func coordinationStorageTeamSafe(team string) bool {
+	return team != "" && team != "." && team != ".." && strings.TrimSpace(team) == team &&
+		!strings.ContainsAny(team, "/\\") && strings.IndexFunc(team, unicode.IsControl) < 0
+}
 
 func NewCoordinationHandler(deps ServerDeps) *CoordinationHandler {
 	h := &CoordinationHandler{deps: deps, wake: make(chan struct{}, 1), http: &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
@@ -197,7 +204,7 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		}
 		e.Team = tm.Name
 		e.StorageTeam = tm.Spec.EffectiveTeamName(tm.Name)
-		if !coordinationSafeID.MatchString(e.StorageTeam) {
+		if !coordinationStorageTeamSafe(e.StorageTeam) {
 			return reject()
 		}
 		e.EligibleAssignees = nil
@@ -246,7 +253,7 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		}
 		e.Team = tm.Name
 		e.StorageTeam = tm.Spec.EffectiveTeamName(tm.Name)
-		if !coordinationSafeID.MatchString(e.StorageTeam) {
+		if !coordinationStorageTeamSafe(e.StorageTeam) {
 			return reject()
 		}
 		project, err := h.read(ctx, coordinationPlanPath(e, "meta.json"))

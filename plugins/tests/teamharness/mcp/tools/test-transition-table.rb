@@ -666,12 +666,12 @@ Dir.mktmpdir("teamharness-transition-") do |dir|
     # ==================================================================
     must_fail(
         payload("taskflow", {
-            "role": "leader",
+            "role": "human",
             "action": "report_progress",
             "payload": {"taskId": "t-redel", "note": "x"},
         }),
-        "report_progress requires worker",
-        "progress@leader",
+        "report_progress requires an execution role",
+        "progress@human",
     )
     must_fail(progress("t-redel", "   "), "note is required", "progress@empty")
     long_note = "x" * 250

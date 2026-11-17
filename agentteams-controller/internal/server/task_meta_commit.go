@@ -480,6 +480,10 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 	if bodyStatus == "assigned" && h.taskAssigned != nil {
 		h.taskAssigned()
 	}
+	if err := h.advanceMainTaskExecution(r.Context(), key, body); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "execution committed; main task phase update needs retry")
+		return
+	}
 	committed, err := h.oss.StatMeta(r.Context(), key)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "stat task meta after commit: "+err.Error())
@@ -602,6 +606,10 @@ func (h *ProjectHandler) putTaskMetaCreateIfAbsent(
 		default:
 			writeError(w, http.StatusInternalServerError, "create task meta: "+err.Error())
 		}
+		return
+	}
+	if err := h.advanceMainTaskExecution(ctx, key, body); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "execution created; main task phase update needs retry")
 		return
 	}
 	committed, err := h.oss.StatMeta(ctx, key)

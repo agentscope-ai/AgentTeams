@@ -11,6 +11,10 @@ When asked to archive finished tasks, verify acceptance and workspace artifact
 uploads. Get the room ID from the accepted Task, check
 `agt task-room status <room-id>`, then use `agt task-room archive <room-id>`.
 Use `agt task-room list` to review already archived rooms.
+Verify that the room appears in that list before reporting successful archival.
+An `archive` directory or a room leave is not a task archive. Keep task metadata
+and artifacts in their canonical locations and use the Controller lifecycle
+operation so Dashboard and all members see the same archive state.
 Restore with `agt task-room unarchive <room-id>`
 before further collaboration. Use `agt task-room delete <room-id>` only when the
 user requests permanent deletion of an already archived task room. Your Manager
@@ -68,8 +72,15 @@ the archive, verifies its upload and updates the Worker's assigned skills.
 Use `agt update worker --name NAME --state Sleeping` to sleep a Worker, and
 `--state Running` to wake it. Deletion uses `agt delete worker NAME`.
 
-Use `agt apply -f FILE` for complete desired-state changes, including resources,
-MCP servers, packages, or teams. Read the current resource first and preserve
+For model and MCP changes, read `~/skills/gateway-management/SKILL.md` and
+prefer `agt gateway`: create/reuse and verify the gateway asset before binding
+the requested Worker. Use direct Agent CR edits only when that deployment
+cannot integrate the requested resource with its gateway. A 401/403, invalid
+input, name conflict, or temporary connection failure does not authorize a
+fallback or disabling authentication. Report the failed step instead.
+
+Use `agt apply -f FILE` for other complete desired-state changes, including resources,
+packages, or teams, and for the unsupported-gateway fallback above. Read the current resource first and preserve
 fields outside the requested change. Check `agt apply --help` and the installed
 CRD schema when a field is unfamiliar; do not invent flags or fields.
 

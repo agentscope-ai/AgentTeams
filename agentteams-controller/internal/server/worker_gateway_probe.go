@@ -14,6 +14,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -25,6 +26,7 @@ type workerGatewayProbe struct {
 	namespace, gatewayURL string
 	key                   func(context.Context, string) (string, error)
 	manager               bool
+	gateway               gateway.Client
 }
 
 func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -64,16 +66,24 @@ func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		consumer = "worker-" + worker.Spec.EffectiveWorkerName(worker.Name)
 		servers = worker.Spec.McpServers
 	}
-	if provider != "" {
-		httputil.WriteError(w, 501, "provider-specific gateway probing is not available; verify using the provider console")
-		return
-	}
 	base, err := url.Parse(h.gatewayURL)
 	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") || base.User != nil {
 		httputil.WriteError(w, 503, "gateway URL not configured")
 		return
 	}
 	endpoint := strings.TrimRight(h.gatewayURL, "/") + "/v1/chat/completions"
+	if input.Kind == "model" && provider != "" {
+		if h.gateway == nil {
+			httputil.WriteError(w, 501, "provider-specific gateway probing is unavailable")
+			return
+		}
+		info, err := h.gateway.ResolveModelProvider(r.Context(), provider)
+		if err != nil || info == nil {
+			httputil.WriteError(w, 409, "model provider has no usable gateway route")
+			return
+		}
+		endpoint = strings.TrimRight(info.IntranetURL, "/") + "/chat/completions"
+	}
 	if input.Kind == "model" && model == "" {
 		httputil.WriteError(w, 409, "save an explicit model before probing")
 		return

@@ -448,13 +448,15 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
         if arguments.get("dryRun"):
             return {"ok": True, "tool": "message", "dryRun": True, "targetKind": "user", "target": target_id}
         handoff_room = ""
-        if os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip() and not arguments.get("dryRun"):
+        if (os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip() or arguments.get("tasks")) and not arguments.get("dryRun"):
             try:
                 handoff_room = _direct_message_room(os.getenv("AGENTTEAMS_MATRIX_URL", "").rstrip("/"),
                     os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", ""), target_id)
             except (OSError, ValueError, KeyError) as exc:
                 return {"ok": False, "tool": "message", "error": f"handoff room unavailable: {exc}"}
-        delivery = deliver_event("handoff", recipient=target_id, text=message_text,
+        if arguments.get("tasks") and not (os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip() or os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip()):
+            return {"ok": False, "tool": "message", "error": "task handoff requires Controller coordination to register pending main tasks"}
+        delivery = deliver_event("handoff", recipient=target_id, text=message_text, tasks=arguments.get("tasks"),
             origin_event_id=arguments.get("originEventId"), source_route=arguments.get("requesterReplyRoute") or {},
             room_id=handoff_room or (arguments.get("requesterReplyRoute") or {}).get("target_session"))
         if delivery is not None:

@@ -396,7 +396,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 from .plans import _load_main_plan
                 project = _load_main_plan(arguments, main_task_id)
                 project_id = str(project.get("project_id") or "")
-                if project.get("status") != "in_progress":
+                if project.get("status") not in {"planned", "assigned", "in_progress"}:
                     raise ValueError("main task is not active")
                 if not any(n.get("task_id") == task_id for n in project.get("tasks", [])):
                     raise ValueError("task not found in main task plan")
@@ -694,7 +694,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 # dispatched work may finish under the agreed contract).
                 if main_task_id:
                     project = _load_main_plan(arguments, main_task_id)
-                    if project.get("status") != "in_progress":
+                    if project.get("status") not in {"planned", "assigned", "in_progress"}:
                         raise ValueError("main task is not active before assignment")
                 elif not _pull_project(arguments, project_id):
                     raise ValueError(
@@ -798,8 +798,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 ),
             }
         if action == "ack_task":
-            if role not in {"worker", "remote-member"}:
-                raise ValueError("ack_task requires worker or remote-member role")
+            if role not in {"worker", "remote-member", "leader"}:
+                raise ValueError("ack_task requires an execution role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             local_task = _read_json(_task_state_path(arguments, task_id))
             if local_task:
@@ -820,7 +820,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             if task.get("main_task_id"):
                 from .plans import _load_main_plan
                 project = _load_main_plan(arguments, task["main_task_id"])
-                if project.get("status") != "in_progress":
+                if project.get("status") not in {"assigned", "in_progress"}:
                     raise ValueError("main task is not active")
             else:
                 project = _read_json(_project_state_path(arguments, project_id)) if project_id else {}
@@ -905,8 +905,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             }
 
         if action == "submit_task":
-            if role not in {"worker", "remote-member"}:
-                raise ValueError("submit_task requires worker or remote-member role")
+            if role not in {"worker", "remote-member", "leader"}:
+                raise ValueError("submit_task requires an execution role")
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             # W2 round 11 (#1467): same invariant as ack/report/review — the
             # whole task directory is mirrored back, so the write must start
@@ -920,7 +920,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # than turning a missing ACK into an opaque storage-sync failure.
             if (
                 os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip()
-                and _runtime_role() in {"worker", "remote-member"}
+                and _runtime_role() in {"worker", "remote-member", "leader"}
                 and task.get("status") not in {"in_progress", "submitted"}
             ):
                 raise ValueError(
@@ -1290,9 +1290,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             return result
 
         if action == "report_progress":
-            if role not in {"worker", "remote-member"}:
+            if role not in {"worker", "remote-member", "leader"}:
                 raise ValueError(
-                    "report_progress requires worker or remote-member role"
+                    "report_progress requires an execution role"
                 )
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             # W2 round 11 (#1467): authoritative task, fail closed — the

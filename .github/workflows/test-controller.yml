@@ -173,6 +173,12 @@ jobs:
           PYTHONPATH="${GITHUB_WORKSPACE}/manager/src/agentteams_manager" \
             python -m pytest manager/src/agentteams_manager/agentteams_manager/tests/ -q
           python -m pytest plugins/tests/teamharness/test_task_meta_commit.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_coordination_transport.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_main_task_plan.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_manager_handoff_schema.py -q
+          PYTHONPATH="${GITHUB_WORKSPACE}/shared/lib" \
+            python -m pytest plugins/tests/teamharness/mcp/test_worker_task_ownership.py -q
+          ruby plugins/tests/teamharness/mcp/tools/test-roomflow.rb
           ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb
           ruby plugins/tests/teamharness/mcp/tools/test-transition-table.rb
 
@@ -206,6 +212,7 @@ jobs:
         run: |
           python -m pytest plugins/tests/agentteams-matrix-channel/test_fake_completion_marker.py -q
           python -m pytest plugins/tests/agentteams-matrix-channel/test_approval_contract.py -q
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_stage_packets.py -q
 
   plugin-loader-smoke:
     # Keyless smoke of the real QwenPaw plugin loader: install the

@@ -11,6 +11,11 @@ When asked to archive finished work, verify task acceptance and workspace artifa
 uploads first. Get the room ID from the accepted Task, check
 `agt task-room status <room-id>`, then use `agt task-room archive <room-id>`.
 Use `agt task-room list` to review already archived rooms.
+Verify that the archived room appears in that list before reporting success.
+Moving task files into an `archive` directory, or leaving/forgetting a Matrix
+room, does not archive a task. Preserve task metadata and workspace artifacts;
+use the Controller lifecycle operation so all members stop syncing while
+membership and history remain available in Dashboard's archived tasks.
 You can restore your team's task rooms with
 `agt task-room unarchive <room-id>` before further edits or follow-up work.
 These commands use your Controller identity. You cannot archive private chats,
@@ -25,6 +30,12 @@ For ordinary team work, use `taskflow start_task`. Do not create a Project,
 including a hidden or temporary one. Only create a Project when the user
 explicitly requests one. Automatic cross-team Project creation is future work;
 do not infer that authorization from task complexity or member count.
+
+Before planning, read the main task ID and original spec registered in the
+Manager handoff. That main task is pending while you analyze the request.
+Use its existing ID and unchanged original spec when you supply the execution
+subtasks, owners and dependencies to `start_task`. Successful dispatch makes
+the main task assigned; only a Worker's durable ACK makes it in progress.
 
 A main Task owns the original request, execution plan, task room, source reply
 route and final report. Each subtask is independently executable by one Worker.

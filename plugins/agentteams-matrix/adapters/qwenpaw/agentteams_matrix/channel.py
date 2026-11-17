@@ -2568,9 +2568,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         teamharness_self_trigger = None
         if sender_id == self._user_id:
             teamharness_self_trigger = self._teamharness_self_trigger(room_id, event)
-            if control is not None and assignment.get("kind") in {"project_ready", "main_task_ready"}:
-                # The runtime hook verifies this self-addressed closure against
-                # the Controller receipt and accepted leaf state before inference.
+            if control is not None and assignment.get("kind") in {"task_assigned", "task_submitted", "project_ready", "main_task_ready"}:
+                # The runtime hook verifies self-addressed execution/closure
+                # against the Controller receipt and current task before inference.
                 teamharness_self_trigger = {"type": "project_ready", "kind": "coordination"}
 
         # Skip own messages early

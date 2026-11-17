@@ -300,6 +300,12 @@ func (c *HigressClient) modifyAIRoutes(ctx context.Context, consumerName string,
 			}
 
 			consumers := toStringSlice(authConfig["allowedConsumers"])
+			// Managed model routes grant access explicitly through asset binding.
+			// Legacy startup repair may re-sync an existing grant, but must not
+			// add every newly provisioned Worker to these routes.
+			if add && providerFilter == "" && strings.HasPrefix(routeInfo.Name, "agentteams-") && !containsString(consumers, consumerName) {
+				break
+			}
 
 			changed := true
 			if add && matchesProvider {

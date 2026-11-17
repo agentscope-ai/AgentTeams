@@ -95,6 +95,16 @@ func (h *CoordinationHandler) PostEvent(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	if err := h.registerHandoffTasks(r.Context(), resolved); err != nil {
+		if errors.Is(err, errCoordinationRejected) {
+			writeError(w, 400, "invalid main task requests")
+		} else if errors.Is(err, oss.ErrPreconditionFailed) {
+			writeError(w, 409, "main task ID already belongs to another request")
+		} else {
+			writeError(w, 503, "main task registration unavailable")
+		}
+		return
+	}
 	delivery := coordinationDelivery{Event: resolved, Status: "queued", Created: time.Now().UTC()}
 	delivery.Transport = coordinationTransport(resolved.Kind, resolved.RecipientRuntime)
 	data, _ := json.Marshal(delivery)

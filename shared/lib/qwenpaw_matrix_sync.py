@@ -26,6 +26,7 @@ class ManagedNioSync:
         self.tasks_scanned = False
         # Typed events await their batch/page commit and any prior room gap.
         self.waiting = {}
+        self.assignments = getattr(execution, "assignments", None)
 
     def task_scan_complete(self):
         if not self.tasks_scanned:
@@ -166,12 +167,30 @@ class ManagedNioSync:
 
     async def dispatch(self, snapshot):
         deferred_rooms = set()
+        if self.assignments:
+            self.assignments.notified.intersection_update(snapshot["state"]["pending"])
         for key in snapshot["state"]["pending"]:
             waiting = self.waiting.get(key)
             if self.messages:
                 record = await asyncio.to_thread(self.matrix.input, key)
                 if not record:
                     raise RecoveryConflict("Shared pending input is unavailable")
+                if record["intent"] == "task_notification":
+                    room = record["room_id"]
+                    commit = record.get("native_commit") or {}
+                    if key in self.assignments.notified or room not in self.client.rooms or snapshot["state"]["rooms"].get(room, {}).get("gaps"):
+                        continue
+                    if commit and commit["start"] == snapshot["state"]["active_start"]:
+                        await self.assignments.acknowledge(room, record["event_id"])
+                        self.waiting.pop(key, None)
+                        continue
+                    event = waiting[1] if waiting else Event.parse_event({
+                        **record["input"], "room_id": room, "event_id": record["event_id"]})
+                    try:
+                        await self.channel._on_room_event(self.client.rooms[room], event, input_key=key)
+                    except Exception as error:
+                        log.warning("Task notification pending in %s: %s", room, type(error).__name__)
+                    continue
                 if record["intent"] == "message":
                     room = record["room_id"]
                     if (room not in self.client.rooms or room in deferred_rooms

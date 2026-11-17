@@ -94,7 +94,7 @@ def test_verified_task_input_is_saved_before_task_recovery(channel_module, monke
         event = source()
         event.source["content"]["org.agentteams.coordination"] = {}
         monkeypatch.setattr(task_coordination, "notification", lambda *a: {
-            "meta": {"teamharness_coordination": {"kind": "task_assigned", "task_id": "T"}}})
+            "text": "Canonical assignment", "meta": {"teamharness_coordination": {"kind": "task_assigned", "task_id": "T"}}})
         await ch._on_room_event(SimpleNamespace(room_id="!room:test"), event)
         assert order == ["persist", "recover"]
         assert ch._task_execution.accept_input.await_args.kwargs == {"task_id": "T"}

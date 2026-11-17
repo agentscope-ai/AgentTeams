@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -1143,3 +1144,106 @@ def test_ordinary_message_cache_requires_native_bytes_and_latest_shared_version(
             assert (turn["session_id"] == session) is reused
             assert turn["rebuild"] is not reused
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("phase", ["closed", "active", "stale", "lost_descriptor_ack"])
+def test_late_assignment_is_observed_in_existing_task_session(adapter, native_channel, tmp_path, monkeypatch, phase):
+    import nio
+    from unittest.mock import Mock
+    from agentscope.agent import Agent
+    from agentscope.message import UserMsg
+    from qwenpaw.app.chats.session import SafeJSONSession
+    from qwenpaw_matrix_sync import ManagedNioSync
+    from worker_matrix_state import matrix_event_key
+
+    execution, authority, task, _ = adapter
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None, matrix_user_id="@worker:hs")
+    store = SafeJSONSession(str(tmp_path / "sdk"))
+    channel._workspace = SimpleNamespace(session=store, task_tracker=SimpleNamespace())
+    channel._task_execution = execution = type(execution)(channel, authority)
+    room, event_id = task["room_id"], "$late-assignment"
+    key = matrix_event_key(room, event_id)
+    source = {"type": "m.room.message", "sender": "@lead:hs", "origin_server_ts": 42,
+              "content": {"msgtype": "m.text", "body": "Assigned Task T", "org.agentteams.coordination": {"id": "receipt"}}}
+    work = {"kind": "task", "team_id": "team", "task_id": "T"}
+    record = {"intent": "task_notification", "work": work, "input": source, "room_id": room, "event_id": event_id}
+    identity = {"team_id": "team", "task_id": "T", **task["execution"]}
+    admission = ("team", "T", identity["generation"])
+    session = "matrix:task:" + execution.key("team", "T") + ":original"
+    address = {"session_id": session, "user_id": room, "channel": channel.channel}
+    client = channel._client = nio.AsyncClient("https://hs", "@worker:hs", "D")
+    client.rooms[room] = nio.MatrixRoom(room, "@worker:hs")
+    channel._session_receipts = SimpleNamespace(submit=AsyncMock())
+    channel.enqueue_recovered_task = AsyncMock()
+    authority.claim = Mock(side_effect=AssertionError("Existing Task must not be claimed or executed again"))
+    execution.admitted.add(admission)
+    execution.matrix.input = Mock(return_value=record)
+    execution.matrix.native_input = Mock(return_value={"input": record})
+    execution.matrix.native_current = Mock(return_value=False)
+    order = []
+    def commit(source_key, _, native_ref, native_digest):
+        assert source_key == key and native_ref == session
+        assert phase == "active" or authority.cache["native_digest"] == native_digest
+        record["native_commit"] = {"native_ref": native_ref, "native_digest": native_digest,
+                                   "start": {"process_id": authority.process}}
+        order.append("native fact")
+    execution.matrix.native_committed = Mock(side_effect=commit)
+    channel._session_receipts.submit.side_effect = lambda *_: order.append("read")
+    canonical = {"text": "Canonical assigned Task T", "meta": {"teamharness_coordination": {"kind": "task_assigned", "task_id": "T"}}}
+    monkeypatch.setattr("task_coordination.notification", lambda *_: canonical)
+    channel._user_id = "@worker:hs"
+    runner = ManagedNioSync(channel, execution)
+    snapshot = {"state": {"pending": [key], "rooms": {room: {}}}}
+
+    async def run():
+        # Persist a real AgentScope state through the same SDK store that runs the turn.
+        model = Mock()
+        agent = Agent("worker", "Execute the Task", model)
+        await agent.observe(UserMsg("worker", "Completed step one"))
+        agent.state_dict = lambda: {"state": agent.state.model_dump(mode="json")}
+        await store.save_session_state(**address, agent=agent)
+        original = await store.get_session_state_dict(**address)
+        view = execution.sessions.load(work)
+        execution.sessions.remember(work, view, identity, session, Recovery.digest(original), int(time.time()) + 1800)
+        if phase == "active":
+            execution.native_active.add(admission)
+        elif phase == "stale":
+            authority.cache["native_digest"] = "wrong"
+        elif phase == "lost_descriptor_ack":
+            remember = execution.sessions.remember
+            writes = []
+            def reject_first(*args):
+                writes.append(True)
+                if len(writes) == 1:
+                    raise RecoveryConflict("descriptor CAS unavailable")
+                return remember(*args)
+            execution.sessions.remember = reject_first
+        await runner.dispatch(snapshot)  # empty process-local waiting cache, no new Matrix event
+        if phase == "active":
+            assert not order
+            ctx = SimpleNamespace(session_id=session, request=SimpleNamespace(channel_meta={"task_execution": identity}), mode_state={})
+            await execution.assignments.before_reasoning(ctx, agent)
+        elif phase == "lost_descriptor_ack":
+            assert not order
+            await runner.dispatch(snapshot)
+        if phase == "stale":
+            assert not order
+            assert await store.get_session_state_dict(**address) == original
+        else:
+            assert order == ["native fact", "read"]
+            latest = await store.get_session_state_dict(**address)
+            msgs = latest["agent"]["state"]["context"]
+            observed = [m for m in msgs if m["id"] == "matrix:" + key]
+            assert len(observed) == 1 and observed[0]["metadata"]["matrix_source"] == source
+            assert observed[0]["content"][0]["text"] == canonical["text"]
+            assert record["native_commit"]["native_digest"] == Recovery.digest(latest)
+            assert msgs[0] == original["agent"]["state"]["context"][0]
+            await runner.dispatch(snapshot)
+            execution.matrix.native_committed.assert_called_once()
+            channel._session_receipts.submit.assert_awaited_once_with(room, [event_id])
+        channel.enqueue_recovered_task.assert_not_awaited()
+        authority.claim.assert_not_called()
+        assert task["execution"]["checkpoint"]["completed_steps"] == ["one"]
+        model.assert_not_called()
+        await client.close()
+    asyncio.run(run())

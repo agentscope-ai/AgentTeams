@@ -3715,7 +3715,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 if not input_key:
                     await self._task_execution.accept_input(room.room_id, event, "task_notification",
                         task_id=canonical["meta"]["teamharness_coordination"]["task_id"])
-                await self._task_execution.recover(canonical["meta"]["teamharness_coordination"]["task_id"], event, source_room=room.room_id)
+                await self._task_execution.recover(canonical["meta"]["teamharness_coordination"]["task_id"], event, source_room=room.room_id, source_text=canonical["text"])
                 self._mark_event_callback_accepted()
                 return
         room_id = room.room_id

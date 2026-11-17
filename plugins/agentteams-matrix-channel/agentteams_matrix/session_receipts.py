@@ -114,6 +114,9 @@ class SessionReceiptMiddleware(MiddlewareBase):
         return messages.matrix, turn
 
     async def on_reasoning(self, agent, input_kwargs, next_handler):
+        if (getattr(self.ctx.request, "channel_meta", {}) or {}).get("task_execution"):
+            channel = await self.ctx.workspace.channel_manager.get_channel("agentteams_matrix")
+            await channel._task_execution.assignments.before_reasoning(self.ctx, agent)
         managed = await self._message_turn()
         if managed:
             matrix, turn = managed

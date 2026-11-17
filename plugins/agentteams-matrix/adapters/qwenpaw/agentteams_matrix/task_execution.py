@@ -10,6 +10,7 @@ from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
 from worker_matrix_state import WorkerMatrix, matrix_event_key
 from worker_sessions import WorkerSessions
 from qwenpaw_message_execution import MessageExecution, publish_nio_reply
+from qwenpaw_task_assignment import TaskAssignments
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class TaskExecution:
         self.sessions = WorkerSessions("qwenpaw", recovery=self.recovery)
         self.matrix = WorkerMatrix("qwenpaw", recovery=self.recovery)
         self.messages = MessageExecution(channel, self)
+        self.assignments = TaskAssignments(self)
 
     async def accept_input(self, room, event, intent, *, task_id=None):
         """Persist an accepted native callback without inventing a batch token."""
@@ -135,13 +137,22 @@ class TaskExecution:
             # loses its CAS race or storage becomes unavailable.
             logger.warning("Native Task cache was not committed; retain authority and rebuild")
 
-    async def recover(self, only_task=None, source_event=None, *, source_room=None):
+    async def recover(self, only_task=None, source_event=None, *, source_room=None, source_text=None):
         async with self.lock:
             await asyncio.to_thread(self.matrix.start)
+            source = None
+            if source_event is not None and source_text is not None:
+                source = await asyncio.to_thread(self.matrix.input, matrix_event_key(source_room, source_event.event_id))
+                if (not source or source.get("intent") != "task_notification"
+                        or (source.get("work") or {}).get("kind") != "task"
+                        or source["work"]["task_id"] != only_task or source["room_id"] != source_room
+                        or source["event_id"] != source_event.event_id or source["input"]["sender"] != source_event.sender
+                        or source["input"]["content"] != source_event.source["content"]):
+                    raise RecoveryConflict("Task notification differs from its accepted assignment")
             snapshot = await asyncio.to_thread(self.recovery.discover)
             for entry in snapshot["tasks"]:
                 task_id, team = entry["task"]["task_id"], entry["team_id"]
-                if only_task is not None and task_id != only_task:
+                if (only_task is not None and task_id != only_task) or (source and team != source["work"]["team_id"]):
                     continue
                 if source_room is not None and entry["task"].get("room_id") != source_room:
                     continue
@@ -150,6 +161,11 @@ class TaskExecution:
                         and execution.get("instance_id") == snapshot["instance_id"]
                         and (team, task_id, execution.get("generation")) in self.admitted):
                     admission = (team, task_id, execution.get("generation"))
+                    if source:
+                        await self.assignments.accept({"task_id": task_id, "team_id": team,
+                            "generation": admission[2], "instance_id": snapshot["instance_id"],
+                            "process_id": self.recovery.process}, source, source_text)
+                        continue
                     # A live native turn owns its checkpoints and reply. Once
                     # fully closed, only a saved pending reply may be retried.
                     if (admission in self.native_active

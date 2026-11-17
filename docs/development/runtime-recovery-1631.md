@@ -1155,3 +1155,24 @@ hooks are being connected in its companion; its shared native-fact guard, batch
 cursor/backfill, legacy import and ordinary-message execution remain incomplete.
 Historical real coverage remains3/6 and7/30. Core24af3dd3 Controller44176802757
 passed; f852ff57 integration44175315246 was still running at this check.
+
+[Packaged adapter evidence](evidence/runtime-recovery-1631-shared-input-adapters.json)
+records Hermes e803db0 and QwenPaw66e1e53, both using shared6281c493.
+Hermes imagef167d66a repeats15 native callback/session/direct-control tests,
+the decoded-input smoke,2 native approval queue tests and native Task recovery/
+tool discovery. QwenPaw imageff108c0c repeats111 focused SDK tests. Only tests
+and pure Python test dependencies were mounted, not product source. These
+checks mock authority/transport and make no new real-model or direction claim.
+Hermes normal callback tests failed3 cases before hooking common persistence;
+its common native-fact-before-inference guard remains open. Both companion
+matching CI runs and Core6281c493 Controller CI were running when recorded;
+Core submodule pins remain on the previously green companions until those
+new-head jobs pass.
+
+The pinned Hermes SDK's `pre_llm_call` plugin dispatch is bounded and fail-open;
+it cannot be the required persistence gate by itself. Native
+`agent/turn_context.py` builds the staged user row before that hook and persists
+the turn after turn-start compaction. Its persistence helper logs failures.
+The remaining native guard must therefore verify actual saved SDK rows and
+propagate failure before any inference, including compaction, rather than
+equating a hook callback, receipt scan or session routing ID with that fact.

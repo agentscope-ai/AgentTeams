@@ -150,10 +150,11 @@ def test_unavailable_authority_is_not_a_cancellation_or_new_execution(adapter):
     channel.enqueue_recovered_task.assert_not_awaited()
 
 
-@pytest.fixture
-def native_channel(monkeypatch):
+@pytest.fixture(params=["legacy", "bundle"])
+def native_channel(monkeypatch, request):
     pytest.importorskip("qwenpaw.app.channels.base")
-    path = ROOT / "plugins/agentteams-matrix-channel/agentteams_matrix/channel.py"
+    path = ROOT / ("plugins/agentteams-matrix-channel/agentteams_matrix/channel.py" if request.param == "legacy"
+                   else "plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py")
     spec = importlib.util.spec_from_file_location("_native_task_channel", path)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)
@@ -335,3 +336,23 @@ def test_verified_matrix_source_cannot_be_attached_to_another_task_room(adapter)
     recovery, authority, task, channel = adapter
     asyncio.run(recovery.recover("T", SimpleNamespace(event_id="$source"), source_room="!other:hs"))
     channel.enqueue_recovered_task.assert_not_awaited()
+
+
+def test_recovered_error_records_uncertainty_without_requesting_a_new_message(native_channel):
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None)
+    checkpointed = []
+    channel._task_execution = SimpleNamespace(recovery=SimpleNamespace(interrupted=lambda *args: checkpointed.append(args)))
+    channel._send_typing = AsyncMock()
+    request = SimpleNamespace(channel_meta={"task_execution": {"task_id": "T", "team_id": "team"}})
+    asyncio.run(channel._on_consume_error(request, "!room", "native failure"))
+    assert checkpointed == [("T", "team")]
+    channel._send_typing.assert_awaited_once()
+
+
+def test_ordinary_error_path_keeps_native_error_handling(native_channel, monkeypatch):
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None)
+    base = AsyncMock()
+    monkeypatch.setattr(native_channel.BaseChannel, "_on_consume_error", base)
+    request = SimpleNamespace(channel_meta={})
+    asyncio.run(channel._on_consume_error(request, "!room", "native failure"))
+    base.assert_awaited_once()

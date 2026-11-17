@@ -5793,6 +5793,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     ) -> None:
         """Edit thread root on error; suppress cancellation noise; mask raw errors before room send."""
         request_meta = getattr(request, "channel_meta", None)
+        typing_lifecycle = self._typing_lifecycle_from_meta(request_meta)
         if (request_meta or {}).get("task_execution"):
             from task_recovery import RecoveryConflict
             identity = request_meta["task_execution"]
@@ -5803,7 +5804,6 @@ class AgentTeamsMatrixChannel(BaseChannel):
             await self._send_typing(to_handle, False, lifecycle_token=typing_lifecycle)
             logger.warning("Task turn interrupted; preserve its checkpoint for recovery or verification")
             return
-        typing_lifecycle = self._typing_lifecycle_from_meta(request_meta)
         root_id = self._active_thread_roots.pop(to_handle, None)
         if root_id:
             fallback_meta = {_MATRIX_OWN_THREAD_ROOT_KEY: root_id}

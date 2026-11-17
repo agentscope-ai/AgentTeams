@@ -128,6 +128,7 @@ CHANNEL_KEY = "agentteams_matrix"
 
 # Tunables: sync / typing / DM membership cache TTL
 SYNC_TIMEOUT_MS = 30000
+TASK_OWNERSHIP_POLL_S = 3.0
 TYPING_SERVER_TIMEOUT_MS = 30000
 TYPING_RENEWAL_INTERVAL_S = 25
 TYPING_MAX_DURATION_S = 120
@@ -434,6 +435,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
     channel = CHANNEL_KEY  # type: ignore[assignment]
     uses_manager_queue: bool = True
     _session_receipts = None
+    _task_execution = None
+    _task_recovery_loop = None
 
     def __init__(
         self,
@@ -567,9 +570,141 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # Debounce key — serialize by room_id (avoid concurrent session access)
     # ------------------------------------------------------------------
 
+    async def _stream_with_tracker(self, payload):
+        meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
+        if meta.get("task_execution"):
+            async for item in self._stream_recovered_task(payload):
+                yield item
+            return
+        async for item in super()._stream_with_tracker(payload):
+            yield item
+
+    async def _stream_recovered_task(self, payload):
+        from task_recovery import RecoveryConflict, RecoveryUnavailable
+        identity = payload["meta"]["task_execution"]
+        await asyncio.to_thread(self._task_execution.verify, identity)
+        producer = asyncio.current_task()
+
+        async def monitor():
+            while True:
+                await asyncio.sleep(TASK_OWNERSHIP_POLL_S)
+                try:
+                    await asyncio.to_thread(self._task_execution.verify, identity, finished=True)
+                except RecoveryUnavailable:
+                    continue  # Connection failure does not prove replacement.
+                except RecoveryConflict:
+                    producer.cancel("Task ownership changed")
+                    return
+
+        guard = asyncio.create_task(monitor())
+        stream = super()._stream_with_tracker(payload)
+        interrupted = False
+        try:
+            async for item in stream:
+                yield item
+        except BaseException:
+            interrupted = True
+            raise
+        finally:
+            guard.cancel()
+            await asyncio.gather(guard, return_exceptions=True)
+            await stream.aclose()
+            if interrupted:
+                try:
+                    await asyncio.to_thread(self._task_execution.recovery.interrupted,
+                                            identity["task_id"], identity["team_id"])
+                except (RecoveryConflict, RecoveryUnavailable):
+                    logger.warning("Interrupted Task checkpoint could not be committed; retain authority")
+
+
+    async def _recover_owned_tasks(self):
+        from task_recovery import RecoveryConflict, RecoveryUnavailable
+        # Channels start before WorkspaceManager commits the workspace. Do
+        # not block start() waiting for a binding it is responsible for.
+        while self._workspace._manager is None:
+            await asyncio.sleep(0.01)
+        while True:
+            try:
+                await self._task_execution.recover()
+            except (RecoveryConflict, RecoveryUnavailable):
+                logger.warning("Task startup recovery deferred; authority is unavailable or changed")
+            except Exception:
+                logger.exception("Task startup recovery deferred")
+            await asyncio.sleep(10)
+
+
+    async def enqueue_recovered_task(self, payload):
+        payload = {**payload, "channel_id": self.channel,
+                   "sender_id": self.matrix_user_id,
+                   "content_parts": [TextContent(type=ContentType.TEXT, text=payload["recovery_text"])]}
+        if self._enqueue is None:
+            raise RuntimeError("Native Matrix queue is not ready for Task recovery")
+        self._enqueue(payload)
+
+
+    async def send_task_reply(self, room_id, text, txn):
+        response = await self._room_send_with_retry(room_id, "m.room.message", {
+            "msgtype": "m.text", "body": text, "org.agentteams.progress_only": True,
+        }, tx_id=txn)
+        if isinstance(response, RoomSendError) or not getattr(response, "event_id", None):
+            raise RuntimeError("Task reply was not acknowledged by Matrix")
+        return response.event_id
+
+
+    async def _consume_with_tracker(self, request: Any, payload: Any) -> None:
+        # SDK reloads share a TaskTracker, but create separate channel queues.
+        # Keep accepted Matrix deliveries with that agent-scoped tracker so an
+        # old queue's shutdown cannot discard a follow-up or execute it twice.
+        workspace = self._workspace
+        tracker = workspace.task_tracker
+        if not hasattr(tracker, "_agentteams_matrix_deliveries"):
+            tracker._agentteams_matrix_deliveries = {}
+            tracker._agentteams_matrix_delivery_locks = {}
+        deliveries = tracker._agentteams_matrix_deliveries
+        session = (request.session_id, request.user_id)
+        event_id = (request.channel_meta or {}).get("event_id") or str(uuid4())
+        key = (*session, event_id)
+        if key not in deliveries:
+            room = (request.channel_meta or {}).get("room_id")
+            lock_key = ("matrix-room", room) if room else session
+            lock = tracker._agentteams_matrix_delivery_locks.setdefault(lock_key, asyncio.Lock())
+
+            async def deliver() -> None:
+                async with lock:
+                    # Workspace.start() starts channels before the SDK binds
+                    # the manager. A reload candidate must use the committed
+                    # workspace rather than retain its old execution context.
+                    while workspace._manager is None:
+                        await asyncio.sleep(0.01)
+                    manager = workspace._manager
+                    current = manager.get_loaded_agent(workspace.agent_id)
+                    chat = await current.chat_manager.get_or_create_chat(
+                        request.session_id, request.user_id, self.channel,
+                        name=self._extract_chat_name(payload),
+                    )
+                    active = await tracker.snapshot_active_tasks()
+                    if chat.id in active:
+                        await asyncio.gather(asyncio.shield(active[chat.id]), return_exceptions=True)
+                    current = manager.get_loaded_agent(workspace.agent_id)
+                    channel = await current.channel_manager.get_channel(self.channel)
+                    await BaseChannel._consume_with_tracker(channel, request, payload)
+
+            deliveries[key] = asyncio.create_task(deliver())
+            # Retain recent completed IDs for overlapping sync clients only;
+            # pending deliveries must never be evicted.
+            for previous, task in tuple(deliveries.items()):
+                if len(deliveries) <= 256:
+                    break
+                if task.done():
+                    deliveries.pop(previous)
+        await asyncio.shield(deliveries[key])
+
+
     def get_debounce_key(self, payload: Any) -> str:
         if isinstance(payload, dict):
             meta = payload.get("meta") or {}
+            if meta.get("task_execution"):
+                return meta["task_session_id"]
             if meta.get("teamharness_matrix_coordination"):
                 return meta["teamharness_coordination_session"]
             room_id = meta.get("room_id")
@@ -1046,10 +1181,27 @@ class AgentTeamsMatrixChannel(BaseChannel):
             on_maintenance=self._e2ee_maintenance,
             on_token_invalid=self._clear_access_token,
         )
+        from .session_receipts import SessionReceipts
+
+        self._session_receipts = SessionReceipts(
+            self, (self._workspace_dir or Path(WORKING_DIR)) / "sessions"
+        )
+        await self._session_receipts.start()
+        if os.getenv("AGENTTEAMS_CONTROLLER_URL") and os.getenv("AGENTTEAMS_PROCESS_ID"):
+            from task_recovery import enabled
+        else:
+            enabled = lambda: False
+        if enabled():
+            from .task_execution import TaskExecution
+            self._task_execution = TaskExecution(self)
+            self._task_recovery_loop = asyncio.create_task(self._recover_owned_tasks())
         self._sync_task = self._sync_engine.start()
         logger.info("MatrixChannel: sync loop started component=matrix")
 
     async def stop(self) -> None:
+        if self._task_recovery_loop:
+            self._task_recovery_loop.cancel()
+            await asyncio.gather(self._task_recovery_loop, return_exceptions=True)
         if self._session_receipts:
             await self._session_receipts.stop()
         if self._sync_task:
@@ -2534,6 +2686,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
     ) -> None:
         if (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.progress_only") is True:
             return
+        content = (getattr(event, "source", {}) or {}).get("content", {})
+        if self._task_execution and "org.agentteams.coordination" in content:
+            from task_coordination import notification, IgnoredNotification
+            try:
+                canonical = await asyncio.to_thread(notification, content, room.room_id, event.sender, self._user_id)
+            except IgnoredNotification:
+                return
+            if canonical["meta"]["teamharness_coordination"]["kind"] == "task_assigned":
+                await self._task_execution.recover(canonical["meta"]["teamharness_coordination"]["task_id"], event, source_room=room.room_id)
+                self._mark_event_callback_accepted()
+                return
         control = (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.coordination")
         control_meta = control.get("channel_meta", {}) if isinstance(control, dict) else {}
         if control is not None:
@@ -3145,7 +3308,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         meta = native_payload.get("meta", {})
         sender_id = native_payload.get("sender_id", "")
         room_id = meta.get("room_id", sender_id)
-        session_id = meta.get("teamharness_coordination_session", f"matrix:{room_id}") if meta.get("teamharness_matrix_coordination") else f"matrix:{room_id}"
+        session_id = meta.get("task_session_id") or (meta.get("teamharness_coordination_session", f"matrix:{room_id}") if meta.get("teamharness_matrix_coordination") else f"matrix:{room_id}")
 
         # content_parts are already ContentType objects (from both
         # _on_room_event and _on_room_media_event); filter out None.
@@ -3165,7 +3328,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             channel_id=CHANNEL_KEY,
             sender_id=(
                 sender_id
-                if meta.get("is_group") and not self.share_session_in_group
+                if meta.get("is_group") and not self.share_session_in_group and not meta.get("task_execution")
                 else room_id
             ),
             session_id=session_id,
@@ -4538,6 +4701,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
         send_meta: Dict[str, Any],
     ) -> None:
         """Edit thread root with final reply, or send directly if no thread."""
+        if send_meta.get("task_execution"):
+            text = send_meta.pop(_MATRIX_STREAMING_FINAL_TEXT_KEY, "")
+            pending = send_meta.pop(_MATRIX_PENDING_FINAL_MESSAGE_KEY, None)
+            if not text and pending is not None:
+                text = self._text_from_message_event(pending)
+            if not text:
+                raise RuntimeError("Task turn ended without a durable result")
+            await self._task_execution.finish(send_meta["task_execution"], request.session_id, text)
+            await self._send_typing(to_handle, False)
+            return
         gate_action, gate_new_count = self._evaluate_send_gate(send_meta, to_handle)
         if gate_action == "retrigger":
             await self._retrigger_for_new_context(send_meta, to_handle, gate_new_count)
@@ -4622,6 +4795,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
         err_text: str,
     ) -> None:
         """Edit thread root on error; suppress cancellation noise; mask raw errors before room send."""
+        request_meta = getattr(request, "channel_meta", None)
+        if (request_meta or {}).get("task_execution"):
+            from task_recovery import RecoveryConflict
+            identity = request_meta["task_execution"]
+            try:
+                await asyncio.to_thread(self._task_execution.recovery.interrupted, identity["task_id"], identity["team_id"])
+            except RecoveryConflict:
+                pass
+            await self._send_typing(to_handle, False)
+            logger.warning("Task turn interrupted; preserve its checkpoint for recovery or verification")
+            return
         root_id = self._active_thread_roots.pop(to_handle, None)
         if root_id:
             fallback_meta = {_MATRIX_OWN_THREAD_ROOT_KEY: root_id}
@@ -4703,6 +4887,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         *,
         max_retries: int = 3,
         base_delay: float = 1.0,
+        tx_id: str | None = None,
     ) -> Any:
         """Wrap ``_prepare_room_send`` + ``room_send`` with limited retries.
 
@@ -4727,7 +4912,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     }
             except Exception:
                 logger.debug("Message read audience unavailable", exc_info=True)
-        tx_id = str(uuid4())
+        tx_id = tx_id or str(uuid4())
         last_exc: Optional[Exception] = None
         last_err_resp: Any = None
 

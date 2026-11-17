@@ -50,6 +50,7 @@ type WorkerReconciler struct {
 	client.Client
 	ObservabilityReader client.Reader
 	RuntimeStore        *service.WorkerRuntimeStore
+	HandoffMatrix       service.WorkerHandoffMatrix
 	InspectLostHandoff  func(context.Context, *v1beta1.Worker, *service.WorkerHandoff) ([]service.WorkerCheckpointRef, error)
 
 	Provisioner                 service.WorkerProvisioner

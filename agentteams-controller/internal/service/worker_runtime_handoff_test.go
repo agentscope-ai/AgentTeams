@@ -3,7 +3,13 @@ package service
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"testing"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
@@ -127,5 +133,65 @@ func TestRuntimeHandoffRebindsOnlyProvenRegisteredSourceSuccessor(t *testing.T) 
 	state, _, err = store.RecordSourceLoss(ctx, "agent", "op", etag, exit, &next, nil)
 	if err != nil || state.Handoff.Phase != "draining" || len(state.Handoff.LostSources) != 1 || state.Handoff.LostSources[0] != original || state.Handoff.Source != next || *state.ActiveStart != next {
 		t.Fatalf("lost original process or gate %+v %v", state, err)
+	}
+}
+
+func TestRuntimeHandoffPlaintextOnlyTargetChecksJoinedRoomsAsWorker(t *testing.T) {
+	status := http.StatusNotFound
+	absent := true
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer existing-worker-session" {
+			t.Errorf("preflight must only read using the existing Worker session")
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/joined_rooms"):
+			fmt.Fprint(w, `{"joined_rooms":["!room:example"]}`)
+		case strings.HasSuffix(r.URL.Path, "/rooms/!room:example/state/m.room.encryption/"):
+			w.WriteHeader(status)
+			if status == http.StatusNotFound && absent {
+				fmt.Fprint(w, `{"errcode":"M_NOT_FOUND"}`)
+			}
+			if status == http.StatusOK {
+				fmt.Fprint(w, `{"algorithm":"m.megolm.v1.aes-sha2"}`)
+			}
+		default:
+			t.Errorf("unexpected Matrix request %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	p := Provisioner{matrix: matrix.NewTuwunelClient(matrix.Config{ServerURL: server.URL}, server.Client()), creds: fakeCredentialStore{"member-cr": {MatrixToken: "existing-worker-session"}}}
+	w := &v1beta1.Worker{}
+	w.Name = "member-cr"
+	w.Spec.WorkerName = "stable-name"
+	m := p.HandoffMatrix()
+	if err := m.Validate(t.Context(), w, "codex"); err != nil || calls != 2 {
+		t.Fatalf("plaintext room not verified: %v, calls=%d", err, calls)
+	}
+	absent = false
+	if err := m.Validate(t.Context(), w, "codex"); err == nil {
+		t.Fatal("treated a proxy 404 as a plaintext room")
+	}
+	status = http.StatusOK
+	if err := m.Validate(t.Context(), w, "deepseek-harness"); !errors.Is(err, ErrWorkerStateConflict) {
+		t.Fatalf("accepted encrypted room: %v", err)
+	}
+	status = http.StatusForbidden
+	if err := m.Validate(t.Context(), w, "codex"); err == nil || errors.Is(err, ErrWorkerStateConflict) {
+		t.Fatalf("treated an unreadable room as known: %v", err)
+	}
+	lastCalls := calls
+	w.Spec.Env = map[string]string{"AGENTTEAMS_MATRIX_E2EE": "TRUE"}
+	if err := m.Validate(t.Context(), w, "codex"); !errors.Is(err, ErrWorkerStateConflict) {
+		t.Fatalf("accepted worker E2EE environment: %v", err)
+	}
+	w.Spec.Env["AGENTTEAMS_MATRIX_E2EE"] = "0"
+	m.E2EEEnabled = true
+	if err := m.Validate(t.Context(), w, "deepseek-harness"); !errors.Is(err, ErrWorkerStateConflict) {
+		t.Fatalf("worker override bypassed cluster E2EE: %v", err)
+	}
+	if err := m.Validate(t.Context(), w, "hermes"); err != nil || calls != lastCalls {
+		t.Fatalf("unnecessary Matrix request, error=%v, calls=%d", err, calls)
 	}
 }

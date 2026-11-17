@@ -584,6 +584,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		remoteDynamicClientProvider = a.remoteClientCache
 	}
 	if _, err := (&controller.WorkerReconciler{
+		HandoffMatrix:               a.provisioner.HandoffMatrix(),
 		RuntimeStore:                &service.WorkerRuntimeStore{Storage: a.oss},
 		InspectLostHandoff:          server.NewLostHandoffInspector(server.ServerDeps{Client: a.mgr.GetClient(), APIReader: a.mgr.GetAPIReader(), Namespace: a.namespace, OSS: a.oss}),
 		Client:                      a.mgr.GetClient(),
@@ -676,6 +677,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 
 func (a *App) initHTTPServer(_ context.Context) error {
 	a.httpServer = server.NewHTTPServer(a.cfg.HTTPAddr, server.ServerDeps{
+		HandoffMatrix:   a.provisioner.HandoffMatrix(),
 		Client:          a.mgr.GetClient(),
 		APIReader:       a.mgr.GetAPIReader(),
 		Backend:         a.registry,

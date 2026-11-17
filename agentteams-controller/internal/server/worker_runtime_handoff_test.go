@@ -36,6 +36,16 @@ func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(
 	caller := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "operator"}
 	middleware := authpkg.NewMiddleware(&roleAuthenticator{identity: caller}, nil, authpkg.NewAuthorizer(), k8s, "test-ns")
 	deps := ServerDeps{Client: k8s, Namespace: "test-ns", OSS: store, Backend: backend.NewRegistry([]backend.WorkerBackend{b}), AuthMw: middleware}
+	encrypted := true
+	deps.HandoffMatrix.CheckPlaintextRooms = func(_ context.Context, credentialName string) error {
+		if credentialName != worker.Name {
+			t.Fatalf("room inspection used credential identity %q", credentialName)
+		}
+		if encrypted {
+			return service.ErrWorkerStateConflict
+		}
+		return nil
+	}
 	controller := NewHTTPServer(":0", deps)
 	t.Cleanup(controller.coordinationCancel)
 	call := func(method, body, expected string) *httptest.ResponseRecorder {
@@ -68,6 +78,16 @@ func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(
 	if w := call(http.MethodPost, `{"request_id":"invalid","target_runtime":"copaw"}`, "*"); w.Code != 400 {
 		t.Fatalf("deprecated target %d", w.Code)
 	}
+	for _, target := range []string{"codex", "deepseek-harness"} {
+		body := strings.Replace(req, "codex", target, 1)
+		if w := call(http.MethodPost, body, "*"); w.Code != 409 {
+			t.Fatalf("accepted incompatible %s target: %d %s", target, w.Code, w.Body)
+		}
+	}
+	if pre, _, err := (service.WorkerRuntimeStore{Storage: store}).Load(t.Context(), "stable-name"); err != nil || pre.Handoff != nil {
+		t.Fatalf("rejected switch already persisted a drain %+v %v", pre, err)
+	}
+	encrypted = false
 	first := call(http.MethodPost, req, "*")
 	if first.Code != 200 || !strings.Contains(first.Body.String(), `"phase":"draining"`) || !strings.Contains(first.Body.String(), `"process_id":"registered-process"`) || !strings.Contains(first.Body.String(), `"runtime":"hermes"`) {
 		t.Fatalf("preflight %d %s", first.Code, first.Body)

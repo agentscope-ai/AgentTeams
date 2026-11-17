@@ -25,6 +25,7 @@ import (
 
 // ServerDeps aggregates all dependencies needed by the HTTP API handlers.
 type ServerDeps struct {
+	HandoffMatrix    service.WorkerHandoffMatrix
 	WorkerEnvBuilder *service.WorkerEnvBuilder
 	Client           client.Client
 	// APIReader reads CRs straight from the API server (uncached). Write-path

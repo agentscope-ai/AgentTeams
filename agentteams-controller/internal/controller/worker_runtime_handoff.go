@@ -57,6 +57,9 @@ func (r *WorkerReconciler) beginDesiredRuntimeHandoff(ctx context.Context, w *v1
 	if actual.Runtime == target || (actual.Status != backend.StatusRunning && actual.Status != backend.StatusStarting && actual.Status != backend.StatusReady) {
 		return false, nil
 	}
+	if err := r.HandoffMatrix.Validate(ctx, w, target); err != nil {
+		return false, err
+	}
 	name := w.Spec.EffectiveWorkerName(w.Name)
 	matrix := service.WorkerMatrixStore{Storage: r.RuntimeStore.Storage}
 	consumption, _, err := matrix.Load(ctx, name)
@@ -130,6 +133,9 @@ func (r *WorkerReconciler) reconcileHandoffSource(ctx context.Context, w *v1beta
 	var next, image string
 	switch op.Phase {
 	case "checkpointed":
+		if err := r.HandoffMatrix.Validate(ctx, w, op.TargetRuntime); err != nil {
+			return wait, err
+		}
 		image = op.TargetImage
 		if image == "" {
 			image = source.HandoffTargetImage(op.TargetRuntime)

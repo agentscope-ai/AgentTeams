@@ -80,7 +80,7 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 	reg := backend.NewRegistry([]backend.WorkerBackend{b})
 	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "default"}, Spec: v1beta1.WorkerSpec{WorkerName: "stable", Runtime: "hermes", Image: "old-custom:image"}}
 	member := &MemberState{ProvResult: &service.WorkerProvisionResult{MatrixToken: "token"}}
-	r := &WorkerReconciler{RuntimeStore: store, Backend: reg}
+	r := &WorkerReconciler{RuntimeStore: store, Backend: reg, HandoffMatrix: service.WorkerHandoffMatrix{CheckPlaintextRooms: func(context.Context, string) error { return nil }}}
 	phase := func(want string) (*service.WorkerHandoff, string) {
 		t.Helper()
 		record, etag, err := store.Load(t.Context(), "stable")
@@ -97,6 +97,13 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 		}
 		phase(to)
 	}
+	r.HandoffMatrix.E2EEEnabled = true
+	op, etag := phase("checkpointed")
+	if _, err := r.reconcileHandoffSource(t.Context(), w, op, etag, member); !errors.Is(err, service.ErrWorkerStateConflict) || b.stops != 0 {
+		t.Fatalf("late E2EE config edit did not preserve source: %v", err)
+	}
+	phase("checkpointed")
+	r.HandoffMatrix.E2EEEnabled = false
 	tick("checkpointed", "stopping")
 	if b.stops != 0 {
 		t.Fatal("stopped source before durable intent")
@@ -110,7 +117,7 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 	tick("stopped", "stopped")
 	b.removed = true
 	tick("stopped", "creating")
-	op, etag := phase("creating")
+	op, etag = phase("creating")
 	if op.TargetImage != "codex:fixture" {
 		t.Fatal("source image reused by target")
 	}
@@ -179,6 +186,11 @@ func TestRuntimeHandoffDeclarativeWorkerUpdateEntersDrainBeforeRecreate(t *testi
 	}
 	r := WorkerReconciler{Client: k8s, RuntimeStore: store, Backend: backend.NewRegistry([]backend.WorkerBackend{b})}
 	mctx := MemberContext{StatusBackendRuntime: "mock", Spec: w.Spec, AppliedSpecHash: "desired"}
+	r.HandoffMatrix.E2EEEnabled = true
+	if _, err := r.beginDesiredRuntimeHandoff(ctx, w, mctx); !errors.Is(err, service.ErrWorkerStateConflict) || len(w.Annotations) != 0 || b.stops != 0 {
+		t.Fatalf("declarative switch enrolled an incompatible target: %v", err)
+	}
+	r.HandoffMatrix = service.WorkerHandoffMatrix{CheckPlaintextRooms: func(context.Context, string) error { return nil }}
 	if handled, err := r.beginDesiredRuntimeHandoff(ctx, w, mctx); err != nil || handled {
 		t.Fatalf("unregistered legacy lifecycle changed %v %v", handled, err)
 	}

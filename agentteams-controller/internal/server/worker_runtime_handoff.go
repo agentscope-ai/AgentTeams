@@ -141,6 +141,10 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 		writeError(w, 503, "source backend unavailable")
 		return
 	}
+	if err := h.deps.HandoffMatrix.Validate(r.Context(), &worker, input.Target); err != nil {
+		h.writeError(w, err)
+		return
+	}
 	image, err := service.HandoffTargetImage(&worker, wb, runtime, input.Target)
 	if err != nil {
 		h.writeError(w, err)

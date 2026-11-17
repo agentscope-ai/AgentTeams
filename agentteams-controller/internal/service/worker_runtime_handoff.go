@@ -136,6 +136,59 @@ func (s WorkerRuntimeStore) SyncRegisteredStart(ctx context.Context, name, insta
 	return state, etag, err
 }
 
+// WorkerHandoffMatrix checks the deployment policy, the target environment, and
+// the actual rooms joined by this Worker before a plaintext-only target starts.
+type WorkerHandoffMatrix struct {
+	E2EEEnabled         bool
+	CheckPlaintextRooms func(context.Context, string) error
+}
+
+func (m WorkerHandoffMatrix) Validate(ctx context.Context, w *v1beta1.Worker, target string) error {
+	if target != backend.RuntimeCodex && target != backend.RuntimeDeepSeekHarness {
+		return nil
+	}
+	value := w.Spec.Env["AGENTTEAMS_MATRIX_E2EE"]
+	if m.E2EEEnabled || value == "1" || strings.EqualFold(value, "true") {
+		return fmt.Errorf("%w: target Harness %s does not support Matrix E2EE", ErrWorkerStateConflict, target)
+	}
+	if m.CheckPlaintextRooms == nil {
+		return errors.New("cannot verify Worker Matrix room encryption")
+	}
+	// Credentials are keyed by the Worker CR, even when spec.workerName differs.
+	return m.CheckPlaintextRooms(ctx, w.Name)
+}
+
+func (p *Provisioner) HandoffMatrix() WorkerHandoffMatrix {
+	return WorkerHandoffMatrix{E2EEEnabled: p.matrixConfig.E2EEEnabled, CheckPlaintextRooms: p.checkPlaintextWorkerRooms}
+}
+
+func (p *Provisioner) checkPlaintextWorkerRooms(ctx context.Context, credentialName string) error {
+	creds, err := p.loadWorkerCredentials(ctx, credentialName)
+	if err != nil {
+		return err
+	}
+	if creds == nil || creds.MatrixToken == "" {
+		return errors.New("Worker Matrix token unavailable for handoff preflight")
+	}
+	rooms, err := p.matrix.ListJoinedRooms(ctx, creds.MatrixToken)
+	if err != nil {
+		return err
+	}
+	if rooms == nil {
+		return errors.New("missing Worker Matrix room membership list")
+	}
+	for _, room := range rooms {
+		state, err := p.matrix.GetRoomState(ctx, room, "m.room.encryption", "", creds.MatrixToken)
+		if err != nil {
+			return err
+		}
+		if state != nil {
+			return fmt.Errorf("%w: joined room %s requires Matrix E2EE", ErrWorkerStateConflict, room)
+		}
+	}
+	return nil
+}
+
 // HandoffTargetImage is shared by declarative and operator-initiated switches.
 func HandoffTargetImage(w *v1beta1.Worker, wb backend.WorkerBackend, actualRuntime, target string) (string, error) {
 	fenced, ok := wb.(backend.RuntimeHandoffSource)

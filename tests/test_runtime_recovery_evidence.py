@@ -58,6 +58,39 @@ class SubmissionHistoryTests(unittest.TestCase):
                 assert_native_submission(task)
 
 
+class OpenHumanCacheTests(unittest.TestCase):
+    def test_native_tool_history_must_match_task_worker_and_latest_checkpoint(self):
+        import copy
+        import hashlib
+        import json
+        import time
+        from runtime_recovery_e2e import assert_openhuman_native_cache
+        cp = {"version": 4, "completed_steps": ["one"]}
+        history = [{"role": "user", "content": "继续 task-a"},
+                   {"role": "assistant", "content": "执行步骤一"},
+                   {"role": "tool", "content": "产物已持久化"}]
+        cache = {"format_version": 1, "runtime": "openhuman", "scope": ["recovery-team", "task-a"],
+                 "authority": "worker-a", "session_id": "native-thread", "expires_at": time.time() + 60,
+                 "checkpoint_digest": hashlib.sha256(json.dumps(cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                 "history": history,
+                 "native_digest": hashlib.sha256(json.dumps(history, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()}
+        proof = {"cache": cache, "authority": "worker-a"}
+        assert_openhuman_native_cache(proof, cp, "task-a")
+        for change in [{"runtime": "hermes"}, {"scope": ["foreign-team", "task-a"]},
+                       {"scope": ["recovery-team", "task-b"]}, {"authority": "worker-b"},
+                       {"checkpoint_digest": "old"}, {"expires_at": 1}, {"session_id": ""},
+                       {"native_digest": "changed"}, {"history": []}]:
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                assert_openhuman_native_cache({**proof, "cache": {**cache, **change}}, cp, "task-a")
+        for history in [[{"role": "user", "content": "task-a but no tools"}],
+                        [{"role": "tool", "content": "a different task"}]]:
+            changed = copy.deepcopy(cache)
+            changed["history"] = history
+            changed["native_digest"] = hashlib.sha256(json.dumps(history, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+            with self.subTest(history=history), self.assertRaises(AssertionError):
+                assert_openhuman_native_cache({**proof, "cache": changed}, cp, "task-a")
+
+
 class OpenClawCacheTests(unittest.TestCase):
     def test_actual_native_session_and_latest_checkpoint_are_required(self):
         import hashlib

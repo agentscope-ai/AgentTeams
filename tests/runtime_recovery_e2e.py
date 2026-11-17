@@ -252,7 +252,7 @@ def refresh_controller():
 
 
 def native_sessions():
-    code = '''import hashlib,json,pathlib,sys,sqlite3
+    code = '''import hashlib,json,pathlib,sys,sqlite3,os
 task_id=sys.argv[1]; home=pathlib.Path("/root/agentteams-fs/agents/agent-a")
 events=pathlib.Path("/var/log/agentteams/workers/agent-a/events.jsonl")
 rows=[json.loads(x) for x in events.read_text().splitlines()] if events.exists() else []
@@ -270,6 +270,9 @@ digest=lambda value: hashlib.sha256(json.dumps(value,sort_keys=True,separators=(
 qwen=json.loads(qwen_cache.read_text()).get(digest(['recovery-team',task_id])) if qwen_cache.exists() else None
 openclaw_file=home/"runtime/openclaw-task-sessions.json"
 openclaw_cache=json.loads(openclaw_file.read_text()).get(digest(['recovery-team',task_id])) if openclaw_file.exists() else None
+openhuman_file=home/"runtime/openhuman-task-sessions"/(digest(['recovery-team',task_id])+'.json')
+openhuman_cache=json.loads(openhuman_file.read_text()) if openhuman_file.exists() else None
+openhuman_authority=hashlib.sha256(json.dumps([os.getenv('AGENTTEAMS_CONTROLLER_URL'),os.getenv('AGENTTEAMS_WORKER_NAME')],ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 qwen_native=[]
 if qwen:
  for path in (qwen_dir/"agentteams_matrix").glob('*.json'):
@@ -278,7 +281,8 @@ if qwen:
    qwen_native.append({'file':path.name,'native_digest':digest(native),'agent_state_present':bool(native.get('agent')),'task_mentioned':task_id in json.dumps(native)})
 print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,
     "hermes_cache":[r for r in rows if r.get("event")=="task.recovery.cache" and r.get("task_id")==task_id],"codex":cache,
-    "qwenpaw":qwen,"qwenpaw_native":qwen_native,"openclaw_cache":openclaw_cache}))
+    "qwenpaw":qwen,"qwenpaw_native":qwen_native,"openclaw_cache":openclaw_cache,
+    "openhuman":{"cache":openhuman_cache,"authority":openhuman_authority}}))
 '''
     result = json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
     if api("GET", "workers/agent-a").get("runtime") == "openclaw":
@@ -528,6 +532,12 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     labels = next(row["Actor"]["Attributes"] for row in events if row["Action"] == ("create" if MODE == "replace" else "start") and
         ((row["Actor"]["ID"] != old) if MODE == "replace" else (row["Actor"]["ID"] == old)))
     native = native_sessions()
+    if SOURCE == "openhuman":
+        assert_openhuman_native_cache(before["native_sessions"]["openhuman"], before["task"]["execution"]["checkpoint"], TASK_ID)
+    if TARGET == "openhuman":
+        assert_openhuman_native_cache(native["openhuman"], cp, TASK_ID)
+        if MODE == "restart":
+            assert native["openhuman"]["cache"]["session_id"] == before["native_sessions"]["openhuman"]["cache"]["session_id"], "valid native Task session was not reused"
     if SOURCE == "qwenpaw":
         source_native = before["native_sessions"]
         source_cp = before["task"]["execution"]["checkpoint"]
@@ -587,6 +597,21 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     path = Path("/tmp/1631-live-" + CASE + "-verified.json")
     path.write_text(json.dumps(proof, indent=2))
     print(json.dumps({"passed": True, "evidence": str(path), **proof}))
+
+
+def assert_openhuman_native_cache(proof, checkpoint, task_id):
+    cache = proof["cache"]
+    assert cache and cache["format_version"] == 1 and cache["runtime"] == "openhuman"
+    assert cache["scope"] == ["recovery-team", task_id] and cache["authority"] == proof["authority"], "native Task/Worker scope changed"
+    assert cache["session_id"] and cache["expires_at"] > time.time()
+    assert cache["checkpoint_digest"] == hashlib.sha256(json.dumps(checkpoint, sort_keys=True, separators=(",", ":")).encode()).hexdigest(), "native history is behind the shared checkpoint"
+    history = cache["history"]
+    assert history and all(row["role"] in {"user", "assistant", "tool"} and isinstance(row["content"], str) for row in history)
+    assert any(row["role"] == "tool" for row in history), "native tool history is absent"
+    # Rust serde_json persists native UTF-8, unlike Python's default ASCII escaping.
+    transcript = json.dumps(history, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    assert cache["native_digest"] == hashlib.sha256(transcript.encode()).hexdigest(), "native history changed after checkpoint binding"
+    assert task_id in transcript, "native history belongs to a different Task"
 
 
 def assert_openclaw_native_cache(proof, checkpoint):

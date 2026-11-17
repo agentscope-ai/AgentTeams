@@ -73,7 +73,7 @@ func recoveryCaller(caller *authpkg.CallerIdentity) bool {
 }
 
 func (h *TaskRecoveryHandler) currentInstance(ctx context.Context, caller *authpkg.CallerIdentity) (string, string, error) {
-	if h.deps.Backend == nil || !recoveryCaller(caller) {
+	if h.deps.Backend == nil || caller == nil || (caller.Role != authpkg.RoleWorker && caller.Role != authpkg.RoleTeamLeader) {
 		return "", "", fmt.Errorf("managed worker backend required")
 	}
 	w, err := NewCoordinationHandler(h.deps).worker(ctx, caller.Username)

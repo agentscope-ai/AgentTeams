@@ -93,7 +93,11 @@ func coordinationMap(x map[string]any, key string) map[string]any {
 
 func (h *CoordinationHandler) worker(ctx context.Context, name string) (*v1beta1.Worker, error) {
 	var list v1beta1.WorkerList
-	if err := h.deps.Client.List(ctx, &list, client.InNamespace(h.deps.Namespace)); err != nil {
+	var reader client.Reader = h.deps.Client
+	if h.deps.APIReader != nil {
+		reader = h.deps.APIReader
+	}
+	if err := reader.List(ctx, &list, client.InNamespace(h.deps.Namespace)); err != nil {
 		return nil, err
 	}
 	var found *v1beta1.Worker

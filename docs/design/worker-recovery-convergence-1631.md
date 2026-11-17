@@ -61,7 +61,7 @@ Controller 发布 YAML 时不能将未声明覆盖的持久个性内容清空。
 | --- | --- | --- |
 | `runtime.yaml` | 保持现有 `MemberRuntimeConfig`，含 `apiVersion`、`metadata.generation`、`member`、`desired`、`matrix`、`storage`、`credentials`。Skills／MCP 从该记录及公共资产生成原生配置。 | Controller 从现有配置 API／CR 发布；原生 UI 修改公共设置也必须写回该入口。 |
 | `runtime/state.json` | `schema_version:1`、`kind:WorkerRuntimeState`、`member_prefix`、`active_start:{instance_id,process_id,runtime}`；`handoff:{id,phase,source,target,checkpoint_refs,error}`。没有切换时 `handoff` 可为空。 | Controller；supervisor 注册实际启动身份，不能把随机 HTTP header 当作旧进程已停止的证明。 |
-| `matrix/state.json` | `schema_version:1`、`kind:WorkerMatrixState`、`member_prefix`；`rooms` 保存覆盖锚点与未补齐的分页缺口；`consumers` 保存带 Harness／账户／设备／格式身份的原生游标；`pending` 只保存未完成工作对应的 event-key。 | 公共消息模块通过 Controller 的自身作用域条件提交接口写入；Harness 不直接 mirror 覆盖。 |
+| `matrix/state.json` | `schema_version:1`、`kind:WorkerMatrixState`、`member_prefix`、`active_start`；`rooms` 保存 `through` 锚点与 `gaps` 分页缺口；`consumers` 保存带 Harness／账户／设备／格式身份的原生游标；`pending` 只保存未完成工作对应的 event-key。 | 公共消息模块通过 Controller 的自身作用域条件提交接口写入；Harness 不直接 mirror 覆盖。 |
 | `events/<event-key>.json` | 标准输入与上下文、原生写入证据，以及 Task 引用或非 Task 执行记录，见下例。 | 公共模块持久化；适配器只提交原生事实。 |
 | Task `execution` | 保持已有 `generation`、`instance_id`、`process_id`、`runtime`、`state`、`checkpoint`。检查点保持已有步骤、operation/evidence、artifact、result、delivery、reply 字段。 | 现有执行 API 校验归属、进程和 ETag；Worker 消息索引不复制权威检查点。 |
 | session 描述 | `schema_version:1`、`kind:WorkerSessionCache`、Worker／团队／工作身份、`runtime`、`native_ref`、`native_digest`、`checkpoint_version`／`checkpoint_digest`、`config_generation`、`expires_at`。 | 公共缓存模块写统一描述；适配器保存／读取真实原生会话，并给出最终持久内容摘要。 |
@@ -127,6 +127,31 @@ task_notification 或 control；Task 通知继续验证 #1646 的 receipt，不�
 
 Controller 是提交边界，MinIO／OSS 是持久载体；本地 JSON／SQLite 是缓存。
 不新增独立数据库，不将“本地 rename 成功”或“后台同步稍后会上传”视为远端提交成功。
+
+### 阶段 A：首批实现边界
+
+已实现公共 Matrix 存储、Worker 自身作用域 API 与 Python／JSON-stdin facade：
+
+- `GET /api/v1/runtime/matrix`：返回自身状态、ETag、实际 instance／Harness。
+- `POST /api/v1/runtime/matrix`：`action=start` 登记实际启动；`action=ingest`
+  先持久化事件，再条件提交 pending／房间覆盖／原生游标。
+- `GET /api/v1/runtime/matrix/events/{key}`：读取自身持久输入；不能指定其他 Worker 前缀。
+
+首次登记用 `If-None-Match: *`，后续写入用已读 ETag；进程请求头与请求体必须一致。
+消费索引的 `active_start` 与游标在同一 CAS 对象内，启动换代直接使旧提交失效，
+避免跨对象“先检查进程、再无条件写游标”的竞态。生命周期 `runtime/state.json`
+仍待实现，其启动描述不能替代消费索引的提交 fence。
+
+原生逐事件 callback 可不带 consumer，先保存输入而不虚构 batch token。
+有 consumer 时，提交格式为 `{runtime,account,device,format,token,from_token}`；
+runtime／账户／设备／格式共同确定消费者，`from_token`
+必须匹配共享记录的上次 token。它是请求条件，不作为另一个游标持久化。
+普通增量 sync 会保留已有 gaps；显式补页完成及缺口关闭入口仍待实现。
+
+同事件再次接收时只比较不可变输入和工作身份，保留较新的执行／native-commit
+证据。输入持久化、未知格式拒绝、严格 CAS、同实例竞争进程、替换后的晚到提交、
+并发批次与旧 Harness 游标回归已有确定性测试；不代表真实 Harness 续跑验收。
+H/Q 原生接入、普通消息执行／回复更新、session 描述与完整交接仍在后续实施范围。
 
 ## 三、统一恢复与切换机制
 

@@ -21,6 +21,48 @@ Dashboard and `agt` must submit changes to the same Controller orchestration
 and read back the same operation state. They must not implement separate
 container replacement or Matrix replay flows.
 
+## Phase A: shared Matrix input persistence
+
+The confirmed [Worker contract and implementation plan](../design/worker-recovery-convergence-1631.md)
+now has a first shared storage/API implementation. `WorkerMatrixStore` writes
+accepted inputs beneath the authenticated Worker's stable prefix before a
+strict conditional commit advances its pending index and native cursor.
+The cursor and startup fence share one CAS object. Replacing that start
+rejects late old commits; event redelivery retains newer execution/native
+facts, and `from_token` rejects a native cursor based on older private state.
+Incremental sync retains outstanding timeline gaps. This is not native
+session migration or Task execution acceptance.
+
+The authenticated `/api/v1/runtime/matrix` read/start/ingest API derives its
+Worker storage identity and actual backend runtime on the server, uses the
+uncached reader when supplied, and supports standalone Workers. The existing
+Task/Project authorization gates remain in place. Native callers use
+`shared/lib/worker_matrix_state.py` or the `matrix.*` JSON/stdin actions in
+`task_recovery_rpc.py`. Native callbacks may persist an input without inventing
+a batch cursor. MinIO policies reject direct writes to common control objects;
+the result/artifact upload paths remain separate.
+
+Local validation for this change:
+
+- Five Go packages passed: service, server, oss, backend and controller.
+- Fifteen new Matrix store/API tests passed with the race detector, including
+  concurrent batches, replacement during an in-flight commit, failed upload,
+  strict-CAS refusal, old-cursor return, preserved gaps, UTF-8 identities and
+  the authenticated HTTP routes with Project listing still denied.
+- Shared Matrix/Task client/RPC suite:29 passed plus6 subtests.
+- Build-workflow contracts:14 passed. CI/release-tool contracts:23 passed
+  in an offline Linux container using Bash5.2 and the installed Python venv.
+  The first host attempt had2 missing-submodule errors and1 Bash3.2 failure;
+  pinned submodules were initialized and the suite rerun in its Linux shell
+  environment. Product behavior and assertions were not changed for that.
+- Rename contract and whitespace checks passed.
+
+No new real Harness lane is accepted. H/Q adapter hooks, message execution/
+reply transitions, explicit gap completion, unified session metadata and
+durable lifecycle handoff remain implementation work. Native snapshot evidence
+must not be inferred from these object-store/HTTP/client tests. Historical
+normal-restart and directed-lane counts remain3/6 and7/30 at their recorded SHAs.
+
 ## Verified boundary
 
 `TestWorkerConfigurationSurvivesHarnessChanges` exercises all six Harnesses

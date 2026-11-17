@@ -20,6 +20,18 @@ def execute(request):
         raise RecoveryConflict('Worker process recovery is not configured')
     recovery = Recovery()
     action = request['action']
+    if action.startswith('matrix.'):
+        from worker_matrix_state import WorkerMatrix
+        matrix = WorkerMatrix(request['runtime'], recovery=recovery)
+        if action == 'matrix.load':
+            return matrix.load()
+        if action == 'matrix.start':
+            return matrix.start()
+        if action == 'matrix.ingest':
+            return matrix.ingest(request['snapshot'], request.get('consumer'), request['inputs'], request.get('rooms'))
+        if action == 'matrix.pending':
+            return matrix.pending(request['snapshot'])
+        raise ValueError('Unsupported Matrix state action')
     if action == 'discover':
         return recovery.discover()
     if action == 'claim':

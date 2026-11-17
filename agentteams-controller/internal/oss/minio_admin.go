@@ -275,6 +275,10 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 		Resource: []string{
 			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/runtime.yaml", bucket),
 			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/compat-config.json*", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/state.json", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/matrix/state.json", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/matrix/events/*", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/sessions/*", bucket),
 			fmt.Sprintf("arn:aws:s3:::%s/shared/tasks/*/meta.json", bucket),
 			fmt.Sprintf("arn:aws:s3:::%s/teams/*/shared/tasks/*/meta.json", bucket),
 		},

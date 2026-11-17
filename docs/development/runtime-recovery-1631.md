@@ -599,7 +599,7 @@ not reset the Task/effect count or be called a clean two-generation acceptance.
 | From / to | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | normal restart + valid session case 08 passed; other scenarios incomplete | replacement cases 06/09/13 passed; other scenarios incomplete | untested | untested | untested | untested |
-| Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | strict replacement case28 passed; case25 failed,26 partial retained | replacement case 20 passed; other scenarios incomplete | untested | untested |
+| Hermes | replacement case 07 passed; other scenarios incomplete | normal restart + valid session case 11 passed; other scenarios incomplete | strict replacement case28 passed; case25 failed,26 partial retained | replacement case 20 passed; other scenarios incomplete | case33 execution/delivery/cache passed; tracing/full smoke open | untested |
 | QwenPaw | untested | strict replacement case30 passed; case24 failed and case27 partial retained | normal restart + valid session case29 passed; other scenarios incomplete | untested | untested | untested |
 | DeepSeek | untested | replacement case 21 passed; other scenarios incomplete | untested | untested | untested | untested |
 | OpenClaw | untested | untested | untested | untested | untested | untested |
@@ -870,3 +870,33 @@ No cache or verifier assertion was rewritten to pass. Task trace/UI acceptance
 also remains open. The driver now captures and exclusively persists its source
 boundary before lifecycle mutation, with a regression test. SDK-based native
 cache/transcript readback is required for future OpenClaw acceptance.
+
+### Case33: Hermes→OpenClaw execution/delivery/cache passed; tracing open
+
+[Case33 proof](evidence/runtime-recovery-1631-case33-verified.json) records
+Hermes965b612a/shared05967bf6 → OpenClaw7828fc2/shared1a364763, with the
+unchanged Controller Go binary774d6285 and the revised driver at its recorded
+hash. OpenClaw used its canonical local Dockerfile build, with an explicit
+local test Controller image; the image was not published. Its independent
+test/image CI passed at7828fc2; the prior34c4fb8 image CI also passed.
+
+Before lifecycle mutation, the driver persisted checkpoint4/step one with a
+matching Hermes cache and29 actual native messages, no helper processes and no
+target Task cache. Old die/destroy preceded target creation. Without new
+external Matrix input, OpenClaw claimed generation2 and its real native
+model/exec/MCP tools continued steps two/three. The independent oracle contains
+exactly three accepted effects at generations1/2/2. Checkpoint10 is delivered;
+all artifacts and the canonical report match, with exactly one Matrix reply
+`$FRlAffwpT0s1VgqtcXs7joEHZsaqIpZDLIeoIono2EU`. Actual SDK SQLite session
+`498957cf-ec03-4434-ac91-aefd27e009f5`, transcript digest and latest checkpoint
+matched the native cache at verification. Source read/receipt and zero external
+Matrix messages after stop were read back. The Task later completed through
+native Leader review. This adds a seventh direction with bounded real Task
+execution/delivery evidence; normal OpenClaw restart and other fault scenarios
+are still untested.
+
+Full smoke acceptance remains open: tracing was configured before Workers,
+but Controller readback returned no OpenClaw traces. The Controller currently
+projects observability WorkerEnv only for QwenPaw/Hermes, and this OpenClaw
+native config has no diagnostics exporter. Trace collection/correlation and
+Dashboard UI must be implemented and verified, not inferred from saved settings.

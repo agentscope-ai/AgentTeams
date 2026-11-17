@@ -335,12 +335,12 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		}
 		name = worker.Spec.EffectiveWorkerName(worker.Name)
 	}
-	op, err := executionHandoff(r.Context(), h.project.oss, name)
+	start := service.WorkerStart{InstanceID: instance, ProcessID: input.ProcessID, Runtime: runtime}
+	op, err := executionHandoff(r.Context(), h.project.oss, name, start)
 	if err != nil {
 		writeError(w, 503, "Worker handoff state unavailable")
 		return
 	}
-	start := service.WorkerStart{InstanceID: instance, ProcessID: input.ProcessID, Runtime: runtime}
 	if err := checkHandoffExecution(op, start, input.Action, execution.Checkpoint, input.Checkpoint); err != nil {
 		writeError(w, 409, err.Error())
 		return
@@ -462,7 +462,7 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		}
 		return
 	}
-	if input.Action == "claim" && !handoffClaimStillOpen(w, r, h.project.oss, name) {
+	if input.Action == "claim" && !handoffClaimStillOpen(w, r, h.project.oss, name, start) {
 		return
 	}
 	w.Header().Set("ETag", contentETag(body))

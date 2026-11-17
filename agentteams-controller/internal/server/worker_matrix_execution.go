@@ -137,7 +137,7 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		httputil.WriteJSON(w, 200, map[string]any{"input": input, "execution": execution, "etag": etag, "recovery": "done"})
 		return
 	}
-	op, err := executionHandoff(r.Context(), h.deps.OSS, name)
+	op, err := executionHandoff(r.Context(), h.deps.OSS, name, start)
 	if err != nil {
 		writeError(w, 503, "Worker handoff state unavailable")
 		return
@@ -245,7 +245,7 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		}
 		return
 	}
-	if request.Action == "claim" && !handoffClaimStillOpen(w, r, h.deps.OSS, name) {
+	if request.Action == "claim" && !handoffClaimStillOpen(w, r, h.deps.OSS, name, start) {
 		return
 	}
 	if matrixRecoveryMode(execution) == "done" {

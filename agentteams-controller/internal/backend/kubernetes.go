@@ -492,6 +492,7 @@ func (k *K8sBackend) Status(ctx context.Context, name string) (*WorkerResult, er
 		Status:         status,
 		InstanceID:     podInstanceID(pod),
 		Runtime:        pod.Labels[v1beta1.LabelRuntime],
+		HandoffLabel:   pod.Labels[RuntimeHandoffLabel],
 		Message:        message,
 		RawStatus:      rawStatus,
 	}, nil

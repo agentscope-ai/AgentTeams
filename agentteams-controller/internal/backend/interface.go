@@ -310,6 +310,7 @@ type WorkerResult struct {
 	// InstanceID changes on every actual container start, including a restart
 	// of the same container/Pod. Recovery must not use CR generation or a
 	// notification delivery lease as an execution generation.
+	HandoffLabel    string `json:"handoff_label,omitempty"`
 	InstanceID      string `json:"instance_id,omitempty"`
 	Runtime         string `json:"runtime,omitempty"` // Runtime recorded on the actual backend instance.
 	AppID           string `json:"app_id,omitempty"`

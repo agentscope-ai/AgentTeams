@@ -25,7 +25,7 @@ func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(
 	store := ossfake.NewMemory()
 	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "member-cr", Namespace: "test-ns"}, Spec: v1beta1.WorkerSpec{WorkerName: "stable-name", Runtime: "qwenpaw"}}
 	k8s := fake.NewClientBuilder().WithScheme(newProjectTestScheme(t)).WithObjects(worker).Build()
-	b := mocks.NewMockWorkerBackend()
+	b := &operatorHandoffBackend{MockWorkerBackend: mocks.NewMockWorkerBackend()}
 	live := "current"
 	b.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
 		if live == "" {
@@ -123,7 +123,7 @@ func TestRuntimeHandoffDrainsMatrixAtPersistedBoundary(t *testing.T) {
 	f.expect("claim", nil, 200)
 	f.expect("checkpoint", &taskCheckpoint{Version: 1, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two", "three"}}, 200)
 	store := service.WorkerRuntimeStore{Storage: f.storage}
-	if _, _, err := store.Preflight(t.Context(), "runtime-alice", "switch", "codex", f.start, ""); err != nil {
+	if _, _, err := store.Preflight(t.Context(), "runtime-alice", "switch", "codex", "codex:fixture", f.start, ""); err != nil {
 		t.Fatal(err)
 	}
 	f.expect("claim", nil, 409)
@@ -151,7 +151,7 @@ func TestRuntimeHandoffBlocksClaimStraddlingHandoffWrite(t *testing.T) {
 	storage := &matrixExecutionCASStore{Memory: f.storage, eventKey: f.objectKey()}
 	f.h.deps.OSS = storage
 	storage.before = func() {
-		_, _, err := (service.WorkerRuntimeStore{Storage: f.storage}).Preflight(t.Context(), "runtime-alice", "switch", "codex", f.start, "")
+		_, _, err := (service.WorkerRuntimeStore{Storage: f.storage}).Preflight(t.Context(), "runtime-alice", "switch", "codex", "codex:fixture", f.start, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +184,7 @@ func TestRuntimeHandoffDrainsTaskAfterSideEffectVerification(t *testing.T) {
 	}
 	call("claim", nil, 200)
 	call("checkpoint", &taskCheckpoint{Version: 1, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two", "three"}, Operation: &taskOperation{ID: "external", State: "started"}}, 200)
-	_, _, err := (service.WorkerRuntimeStore{Storage: store}).Preflight(ctx, "alpha-dev", "switch", "codex", start, "")
+	_, _, err := (service.WorkerRuntimeStore{Storage: store}).Preflight(ctx, "alpha-dev", "switch", "codex", "codex:fixture", start, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,4 +214,16 @@ func TestRuntimeHandoffPreflightWithMissingBackend(t *testing.T) {
 	if _, _, err := h.runningWorkerInstance(t.Context(), &v1beta1.Worker{}); err == nil {
 		t.Fatal("missing backend provided source identity")
 	}
+}
+
+type operatorHandoffBackend struct{ *mocks.MockWorkerBackend }
+
+func (b *operatorHandoffBackend) HandoffTargetImage(runtime string) string {
+	return runtime + ":fixture"
+}
+func (b *operatorHandoffBackend) StopRuntimeInstance(context.Context, string, string) (bool, error) {
+	panic("operator request must not directly stop containers")
+}
+func (b *operatorHandoffBackend) RemoveStoppedRuntime(context.Context, string, string) (bool, error) {
+	panic("operator request must not directly remove containers")
 }

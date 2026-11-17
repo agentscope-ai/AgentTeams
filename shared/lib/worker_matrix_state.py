@@ -46,6 +46,56 @@ class WorkerMatrix:
         }, snapshot["etag"])
         return {**snapshot, **saved}
 
+    def consumer(self, snapshot, *, account, format, device=""):
+        """Restore only this native account/device/format's shared cursor."""
+        start = snapshot["state"]["active_start"]
+        if (snapshot["runtime"] != self.runtime or start["runtime"] != self.runtime
+                or start["instance_id"] != snapshot["instance_id"]
+                or start["process_id"] != self.recovery.process):
+            raise RecoveryConflict("Matrix consumer belongs to another native start")
+        identity = {"runtime": self.runtime, "account": account, "device": device, "format": format}
+        for saved in snapshot["state"]["consumers"].values():
+            if all(saved.get(key, "") == value for key, value in identity.items()):
+                return {**identity, "token": saved["token"]}
+        return {**identity, "token": ""}
+
+    def sync(self, snapshot, consumer, next_batch, timelines):
+        """Commit decoded, policy-classified timelines before native dispatch.
+
+        Adapters supply inputs in server order, including retained context.
+        No accepted-event hash or timestamp sorting substitutes for that order.
+        A new native consumer reconnects shared room coverage through backfill;
+        it never imports another SDK's token or discards its initial timeline.
+        """
+        current = self.consumer(snapshot, account=consumer["account"],
+                                device=consumer.get("device", ""), format=consumer["format"])
+        if consumer["runtime"] != self.runtime or consumer["token"] != current["token"]:
+            raise RecoveryConflict("Sync response started from a different native cursor")
+        if not isinstance(next_batch, str) or not next_batch:
+            raise ValueError("A complete native sync response needs its next_batch token")
+        inputs, rooms = [], {}
+        for timeline in timelines:
+            room = timeline["room_id"]
+            batch = timeline["inputs"]
+            if room in rooms or any(item["room_id"] != room for item in batch):
+                raise ValueError("One ordered timeline per Matrix room is required")
+            if not batch:
+                if timeline.get("limited"):
+                    raise RecoveryConflict("Limited timeline has no retained backfill anchor")
+                continue
+            previous = snapshot["state"]["rooms"].get(room, {})
+            gaps = list(previous.get("gaps", []))
+            overlap = any(item["event_id"] == previous.get("through") for item in batch)
+            if not overlap and (timeline.get("limited") or (not current["token"] and previous.get("through"))):
+                gap = timeline.get("prev_batch")
+                if not gap:
+                    raise RecoveryConflict("Unconnected Matrix timeline needs a backfill token")
+                if gap not in gaps:
+                    gaps.append(gap)
+            inputs.extend(batch)
+            rooms[room] = {"through": batch[-1]["event_id"], "gaps": gaps}
+        return self.ingest(snapshot, {**current, "from_token": current["token"], "token": next_batch}, inputs, rooms)
+
     def pending(self, snapshot):
         # The server resolves the Worker prefix from authenticated identity.
         # Native adapters cannot supply another Worker's storage path.

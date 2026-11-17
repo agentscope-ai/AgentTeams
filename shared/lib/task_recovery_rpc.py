@@ -42,6 +42,11 @@ def execute(request):
             return matrix.start()
         if action == 'matrix.ingest':
             return matrix.ingest(request['snapshot'], request.get('consumer'), request['inputs'], request.get('rooms'))
+        if action == 'matrix.consumer':
+            return matrix.consumer(request['snapshot'], account=request['account'],
+                                   device=request.get('device', ''), format=request['format'])
+        if action == 'matrix.sync':
+            return matrix.sync(request['snapshot'], request['consumer'], request['next_batch'], request['timelines'])
         if action == 'matrix.pending':
             return matrix.pending(request['snapshot'])
         if action == 'matrix.backfill':

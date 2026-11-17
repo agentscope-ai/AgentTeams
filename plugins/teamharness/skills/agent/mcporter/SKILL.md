@@ -5,7 +5,15 @@ description: Discover and call MCP Server tools via the mcporter CLI. Use when y
 
 # mcporter — MCP Tool CLI
 
-You call MCP Server tools via `mcporter`. Your config is at `./config/mcporter.json` (mcporter's default path — no `--config` flag needed).
+First check your current runtime tool list. If your runtime exposes a configured
+MCP server natively (including QwenPaw), call that native tool directly. Your
+Controller synchronizes assigned MCP servers into your runtime; you do not need
+to create a separate CLI configuration or copy gateway credentials.
+
+Use `mcporter` only when your workspace already has `./config/mcporter.json`.
+An empty mcporter list does not mean a native MCP server is missing. If a newly
+assigned native tool is not visible yet, report that runtime synchronization is
+pending and retry on the next turn; do not extract credentials or invent config.
 
 ## Commands
 

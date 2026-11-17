@@ -113,6 +113,11 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 	switch e.Kind {
 	case "handoff":
 		meta["teamharness_coordinator_route"] = map[string]any{"channel": "matrix", "target_user": e.Actor, "target_session": e.RoomID}
+		if len(e.Tasks) > 0 {
+			requests, _ := json.Marshal(e.Tasks)
+			text += "\nThese main Tasks are already assigned to you in planned (pending analysis) state. Preserve each taskId, original spec and requester; use start_task on the SAME taskId to attach your execution plan, never create replacement main Tasks: " + string(requests)
+			meta["teamharness_main_tasks"] = e.Tasks
+		}
 		text += "\nUse taskflow start_task to create one main Task with complete execution subtasks, owners and dependencies. Do not create a Project unless the user explicitly requested a Project. A task may optionally join an existing Project; do not invent one. End after dispatch; do not poll or send duplicate assignments."
 		roster, _ := json.Marshal(e.EligibleAssignees)
 		text += "\nRegistered assignees with native notification support: " + string(roster) + ". Select execution owners from this list; other team members cannot receive this transport yet."

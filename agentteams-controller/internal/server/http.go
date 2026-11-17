@@ -155,12 +155,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// stable while specs are, so it is ETag/304-protected (#1475 PR-3).
 	mux.Handle("GET /api/v1/mcp-servers", mw.RequireAuthz(authpkg.ActionList, "mcp-server", nil)(httputil.ETagMiddleware(http.HandlerFunc(rh.ListMCPServers))))
 
-	probe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL}
+	probe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, gateway: deps.Gateway}
 	if deps.Provisioner != nil {
 		probe.key = deps.Provisioner.WorkerGatewayKey
 	}
 	mux.Handle("POST /api/v1/workers/{name}/gateway-probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(probe))
-	managerProbe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, manager: true}
+	managerProbe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, manager: true, gateway: deps.Gateway}
 	if deps.Provisioner != nil {
 		managerProbe.key = deps.Provisioner.ManagerGatewayKey
 	}
@@ -530,6 +530,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)
+	assets := &gatewayAssets{gateway: deps.Gateway, resources: rh, gatewayURL: deps.GatewayURL}
+	mux.Handle("GET /api/v1/gateway/assets/{asset}", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(assets))
+	mux.Handle("POST /api/v1/gateway/assets/{asset}", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(assets))
 	mux.Handle("GET /api/v1/gateway/consumers", mw.RequireAuthz(authpkg.ActionList, "gateway", nil)(http.HandlerFunc(gh.ListConsumers)))
 	mux.Handle("POST /api/v1/gateway/consumers", mw.RequireAuthz(authpkg.ActionCreate, "gateway", nil)(http.HandlerFunc(gh.CreateConsumer)))
 	mux.Handle("POST /api/v1/gateway/consumers/{id}/bind", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(http.HandlerFunc(gh.BindConsumer)))

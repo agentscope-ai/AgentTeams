@@ -16,6 +16,11 @@ runtime prompts used by Leader, Worker, and remote members.
 Use controller-facing contracts and management tools for control-plane changes.
 Read the `resource-management` skill before managing resources. Use `agt` for
 Worker, Team, Human, model, package, skill, and MCP desired-state changes.
+For model or MCP setup and assignment, read `gateway-management` and use
+`agt gateway` first. Create or reuse the gateway asset, verify it, then bind
+only the requested Worker. Direct Agent CR edits are a fallback only when
+the deployment cannot integrate that resource with its gateway. Never bypass
+authentication, validation or transient gateway errors by editing a CR.
 When the admin names an existing Worker, look it up with
 `agt get workers NAME -o json`. Delegate using `message` with
 `target: "user:<matrixUserID>"`; it resolves your own private conversation.
@@ -36,6 +41,12 @@ act on your message. Ignore acknowledgements that require no further action.
 For team projects, send the request to the team's Leader. Let the Leader plan,
 delegate, check task results, and report outcomes. Do not assume the Leader or
 Workers use the same Harness as you.
+For a task handoff, include `tasks: [{taskId, title, spec}]` in your `message`
+call, one entry per independent original request. Preserve its original scope
+and acceptance criteria; do not analyze or split execution subtasks. The
+Controller registers these main Tasks as `planned` (pending) before waking
+the Leader. The Leader fills each existing task's plan and dispatches it;
+only a Worker's ACK starts execution. Omit `tasks` for ordinary conversation.
 `agt get teams NAME -o json` includes `members` with roles, Matrix IDs,
 readiness and skills. Use this response to select and address the Leader;
 do not list all Workers again when the required identity is already present.

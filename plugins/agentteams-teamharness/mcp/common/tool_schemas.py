@@ -494,8 +494,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "taskflow": {
         "description": (
             "Create ordinary team work with start_task (one main Task and executable subtasks); use complete_task for its final report. Project is optional existing membership, never created implicitly. "
+            "For advance_task pass mainTaskId; for accept_task_result pass payload {mainTaskId, taskId, submissionId, resultStatus, accepted}. "
             "leader delegates and checks tasks; worker or remote-member "
-            "acknowledges and submits results; worker or leader raises in-flight "
+            "acknowledges and submits results; a leader can also ACK and submit its own assigned subtasks. worker or leader raises in-flight "
             "attention (approval / decision / escalation) with request_attention. "
             "Do not use for direct questions, readiness checks, or ordinary "
             "conversation."
@@ -568,8 +569,12 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "payload": {
                     "type": "object",
-                    "description": "Task payload; flat arguments are also accepted.",
+                    "description": "Task payload; flat arguments are also accepted. advance_task requires mainTaskId. accept_task_result requires mainTaskId (the coordinating main), taskId (the execution subtask), submissionId, resultStatus and accepted.",
                     "additionalProperties": True,
+                },
+                "mainTaskId": {
+                    "type": "string",
+                    "description": "Coordinating main Task ID, required for advance_task and accept_task_result; distinct from the execution taskId.",
                 },
                 "spec": {
                     "type": "string",

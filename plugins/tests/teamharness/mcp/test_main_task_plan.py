@@ -20,7 +20,19 @@ def plan(tmp_path, monkeypatch):
         "AGENTTEAMS_CONTROLLER_URL",
     ):
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(server, "_sync_task", lambda *a, **k: True)
+    def sync_task(arguments, task_id, **kwargs):
+        # The live Controller advances the parent after the child's durable ACK.
+        path = Path(arguments["workspaceDir"]) / "shared/tasks" / task_id / "meta.json"
+        task = json.loads(path.read_text()) if path.exists() else {}
+        if task.get("main_task_id") and task.get("status") == "in_progress":
+            parent = path.parent.parent / task["main_task_id"] / "meta.json"
+            main = json.loads(parent.read_text())
+            if main["status"] == "assigned":
+                main["status"] = "in_progress"
+                parent.write_text(json.dumps(main))
+        return True
+
+    monkeypatch.setattr(server, "_sync_task", sync_task)
     monkeypatch.setattr(server, "_pull_task", lambda *a, **k: True)
     monkeypatch.setattr(server, "_sync_project", lambda *a, **k: True)
     monkeypatch.setattr(server, "_pull_project", lambda *a, **k: True)
@@ -87,7 +99,7 @@ def test_main_task_starts_without_any_project(plan):
     assert not (root / "projects").exists()
     main = json.loads((root / "tasks/main-a/meta.json").read_text())
     child = json.loads((root / "tasks/analysis-a/meta.json").read_text())
-    assert main["task_id"] == "main-a" and main["status"] == "in_progress"
+    assert main["task_id"] == "main-a" and main["status"] == "assigned"
     assert not main.get("project_id") and not child.get("project_id")
     assert child["main_task_id"] == child["parent_task_id"] == "main-a"
     assert child["task_kind"] == "execution" and child["team_id"] == "alpha"
@@ -101,6 +113,22 @@ def test_main_task_starts_without_any_project(plan):
     )
     assert not (root / "tasks/dev-a/meta.json").exists()
     assert rooms[0]["payload"]["taskId"] == "main-a"
+
+
+def test_leader_plans_the_existing_pending_main_task(plan):
+    args, _ = plan
+    root = Path(args["workspaceDir"]) / "shared/tasks/main-a"
+    root.mkdir(parents=True)
+    original = {"task_id": "main-a", "task_kind": "main", "status": "planned",
+                "spec": args["payload"]["spec"], "tasks": [], "created_at": "2026-11-17T00:00:00Z",
+                "source_room_id": "!source:test", "requester": "@human:test", "reply_route": args["payload"]["replyRoute"]}
+    (root / "meta.json").write_text(json.dumps(original))
+    result = invoke(args)
+    assert result["ok"], result
+    main = json.loads((root / "meta.json").read_text())
+    assert main["created_at"] == original["created_at"]
+    assert main["status"] == "assigned"
+    assert len(main["tasks"]) == 2
 
 
 def test_main_task_retry_preserves_assignments_and_uses_same_room(plan):
@@ -278,6 +306,7 @@ def test_main_plan_commit_merges_only_one_node_and_preserves_other_decisions(
     path = Path(args["workspaceDir"]) / "shared/tasks/main-a/meta.json"
     local = json.loads(path.read_text())
     remote = json.loads(path.read_text())
+    remote["status"] = "in_progress"
     local["tasks"][0]["status"] = "completed"
     remote["tasks"][1]["status"] = "completed"
     path.write_text(json.dumps(local))
@@ -340,6 +369,7 @@ def test_main_completion_uses_shared_submit_then_accept_lifecycle(plan, monkeypa
     remote = json.loads(path.read_text())
     for node in remote["tasks"]:
         node["status"] = "completed"
+    remote["status"] = "in_progress"  # Workers have ACKed before acceptance.
     local = {
         **remote,
         "status": "completed",

@@ -102,6 +102,23 @@ def test_verified_task_input_is_saved_before_task_recovery(channel_module, monke
     asyncio.run(run())
 
 
+def test_coordination_handoff_does_not_create_ordinary_message_execution(channel_module, monkeypatch):
+    import task_coordination
+    async def run():
+        ch = channel(channel_module)
+        event = source()
+        meta = {"sender_id": event.sender, "agent_matrix_user_id": ch._user_id,
+            "room_id": "!room:test", "teamharness_coordination": {"kind": "handoff", "id": "a" * 32}}
+        event.source["content"]["org.agentteams.coordination"] = {
+            "channel_meta": meta, "session_id": "coordination-handoff:" + "a" * 32,
+            "input": [{"content": [{"text": "Canonical handoff"}]}]}
+        monkeypatch.setattr(task_coordination, "notification", lambda *a: {"meta": meta})
+        await ch._on_room_event(SimpleNamespace(room_id="!room:test"), event)
+        assert ch._task_execution.accept_input.await_args.args[2] == "control"
+        ch._enqueue.assert_called_once()
+    asyncio.run(run())
+
+
 def test_unmentioned_context_is_durable_before_history_cache(channel_module):
     async def run():
         ch = channel(channel_module)

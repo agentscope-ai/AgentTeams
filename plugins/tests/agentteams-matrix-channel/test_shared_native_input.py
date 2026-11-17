@@ -141,3 +141,34 @@ def test_redelivery_keeps_original_work_and_input_read_failure_is_not_absence(mo
             await execution.accept_input("!room:test", event, "message")
         assert execution.matrix.ingest.call_count == 1
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("adapter_present", [True, False])
+def test_required_input_guard_does_not_depend_on_receipt_service(modules, adapter_present):
+    async def run():
+        _, receipts = modules
+        order = []
+        state = {}
+        agent = SimpleNamespace(state=SimpleNamespace(middle_context=state),
+            state_dict=lambda: {"state": {"middle_context": state}})
+        execution = SimpleNamespace(commit_inputs=AsyncMock(side_effect=lambda *a: order.append("fact"))) if adapter_present else None
+        channel = SimpleNamespace(_session_receipts=None, _task_execution=execution)
+        ctx = SimpleNamespace(session_id="native", mode_state={},
+            request=SimpleNamespace(channel="agentteams_matrix", user_id="!room:test", channel_meta={
+                "room_id": "!room:test", "session_source_event_ids": ["$input"], "shared_input_keys": ["required"]}),
+            workspace=SimpleNamespace(session=SimpleNamespace(save_session_state=AsyncMock(side_effect=lambda **k: order.append("save"))),
+                channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel))))
+        async def reply(**kwargs):
+            yield SimpleNamespace(type="REPLY_START")
+            order.append("model")
+        async def consume():
+            async for _ in receipts.SessionReceiptMiddleware(ctx).on_reply(agent, {}, reply):
+                pass
+        if adapter_present:
+            await consume()
+            assert order == ["save", "fact", "model"]
+        else:
+            with pytest.raises(RuntimeError, match="persistence adapter"):
+                await consume()
+            assert not order
+    asyncio.run(run())

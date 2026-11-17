@@ -1093,3 +1093,14 @@ Full-batch consumer cursor/backfill integration, initial/legacy import and ordin
 message execution/result recovery remain open. Existing Task recovery still
 runs independently of incoming Matrix events. A new packaged image and real
 Task must validate these hooks before updating real Harness acceptance.
+
+
+The required-input guard is independent of the read-receipt delivery service.
+During channel reload, an absent receipt service must not skip the native save
+or common persistence fact. With the persistence adapter present, save/fact
+still precede inference; without the adapter, a required input fails closed.
+A four-case native regression failed both compatibility paths before this fix.
+Verified coordination handoffs remain control inputs rather than creating an
+ordinary-message execution alongside their coordination authority. The focused
+installed-SDK suite now passes111 tests. This follow-up is later than the case41
+image: its native regression is not a new real-model/fault-matrix acceptance.

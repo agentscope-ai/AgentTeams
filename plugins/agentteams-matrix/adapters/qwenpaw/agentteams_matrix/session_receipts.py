@@ -120,7 +120,11 @@ class SessionReceiptMiddleware(MiddlewareBase):
             return
         channel = await ctx.workspace.channel_manager.get_channel("agentteams_matrix")
         delivery = getattr(channel, "_session_receipts", None)
-        if delivery is None:
+        required = meta.get("shared_input_keys") or []
+        execution = getattr(channel, "_task_execution", None)
+        if required and execution is None:
+            raise RuntimeError("Managed Matrix input persistence adapter is unavailable")
+        if delivery is None and not required:
             return
         pending = agent.state.middle_context.setdefault(PENDING_KEY, [])
         added = []
@@ -132,8 +136,6 @@ class SessionReceiptMiddleware(MiddlewareBase):
         snapshot = agent.state_dict()
         snapshot["mode_state"] = ctx.mode_state
         proxy = SimpleNamespace(state_dict=lambda: snapshot)
-        required = meta.get("shared_input_keys") or []
-        execution = getattr(channel, "_task_execution", None)
         try:
             await ctx.workspace.session.save_session_state(
                 session_id=ctx.session_id,
@@ -153,4 +155,5 @@ class SessionReceiptMiddleware(MiddlewareBase):
             if required and execution is not None:
                 raise  # A managed accepted input must not enter inference unrecorded.
             return
-        await delivery.submit(room_id, event_ids, pending)
+        if delivery is not None:
+            await delivery.submit(room_id, event_ids, pending)

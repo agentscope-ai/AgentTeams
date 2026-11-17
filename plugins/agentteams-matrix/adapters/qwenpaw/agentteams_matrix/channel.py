@@ -2964,7 +2964,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
             if self._task_execution:
-                intent = "control" if control_text is not None or cmd in _SLASH_COMMANDS else "message"
+                intent = "control" if (control_text is not None or cmd in _SLASH_COMMANDS
+                    or "org.agentteams.coordination" in content) else "message"
                 key = await self._task_execution.accept_input(room_id, event, intent)
                 payload["meta"]["shared_input_keys"] = [key]
             self._enqueue(payload)

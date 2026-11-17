@@ -415,6 +415,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     uses_manager_queue: bool = True
     _session_receipts = None
     _task_execution = None
+    _managed_sync = None
     _task_recovery_loop = None
 
     def __init__(
@@ -1534,22 +1535,23 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 )
                 return False
             logger.info("MatrixChannel: E2E keys uploaded component=matrix")
-        # Encrypted media events (decrypted by nio, delivered as
-        # RoomEncrypted* types)
-        self._client.add_event_callback(
-            self._schedule_room_encrypted_media_event,
-            (
-                RoomEncryptedImage,
-                RoomEncryptedAudio,
-                RoomEncryptedVideo,
-                RoomEncryptedFile,
-            ),
-        )
-        # Undecryptable events (missing session key)
-        self._client.add_event_callback(
-            self._schedule_megolm_event,
-            (MegolmEvent,),
-        )
+        if not self._managed_sync:
+            # Encrypted media events (decrypted by nio, delivered as
+            # RoomEncrypted* types)
+            self._client.add_event_callback(
+                self._schedule_room_encrypted_media_event,
+                (
+                    RoomEncryptedImage,
+                    RoomEncryptedAudio,
+                    RoomEncryptedVideo,
+                    RoomEncryptedFile,
+                ),
+            )
+            # Undecryptable events (missing session key)
+            self._client.add_event_callback(
+                self._schedule_megolm_event,
+                (MegolmEvent,),
+            )
         self._client.add_to_device_callback(
             self._on_key_verification_event,
             (KeyVerificationEvent,),
@@ -1606,7 +1608,19 @@ class AgentTeamsMatrixChannel(BaseChannel):
             logger.error("MatrixChannel: no credentials configured component=matrix")
             return
 
-        self._register_plain_room_callbacks()
+        if os.getenv("AGENTTEAMS_CONTROLLER_URL") and os.getenv("AGENTTEAMS_PROCESS_ID"):
+            from task_recovery import enabled
+        else:
+            enabled = lambda: False
+        if enabled():
+            from .task_execution import TaskExecution
+            from qwenpaw_matrix_sync import ManagedNioSync
+
+            self._task_execution = TaskExecution(self)
+            self._managed_sync = ManagedNioSync(self, self._task_execution)
+        else:
+            self._managed_sync = None
+            self._register_plain_room_callbacks()
         if not await self._setup_e2ee_after_login():
             return
 
@@ -1621,15 +1635,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
             self, (self._workspace_dir or Path(WORKING_DIR)) / "sessions"
         )
         await self._session_receipts.start()
-        if os.getenv("AGENTTEAMS_CONTROLLER_URL") and os.getenv("AGENTTEAMS_PROCESS_ID"):
-            from task_recovery import enabled
-        else:
-            enabled = lambda: False
-        if enabled():
-            from .task_execution import TaskExecution
-            self._task_execution = TaskExecution(self)
+        if self._managed_sync:
             self._task_recovery_loop = asyncio.create_task(self._recover_owned_tasks())
-        self._sync_task = asyncio.create_task(self._sync_loop())
+        self._sync_task = (asyncio.create_task(self._managed_sync.run()) if self._managed_sync
+                           else asyncio.create_task(self._sync_loop()))
         logger.info("MatrixChannel: sync loop started component=matrix")
 
     async def stop(self) -> None:
@@ -3155,7 +3164,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self,
         room: MatrixRoom,
         event: Any,
-    ) -> None:
+        *,
+        prepare=None, input_key=None,
+    ):
         """Handle decrypted encrypted media (RoomEncryptedImage, etc.).
 
         Delivered by matrix-nio after Megolm decrypt. File bytes are still
@@ -3173,7 +3184,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if self._is_channel_disabled(sender_id, room_id, is_dm):
             return
 
-        await self._announce_session_receipts(room_id, event.event_id)
+        if prepare is None:
+            await self._announce_session_receipts(room_id, event.event_id)
 
         if not is_dm:
             if self._require_mention(room_id) and not self._was_mentioned(
@@ -3206,7 +3218,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         if body
                         else "[sent an encrypted file]"
                     )
-                if self._task_execution:
+                if prepare:
+                    return await prepare(room_id, event, "context")
+                if self._task_execution and not input_key:
                     await self._task_execution.accept_input(room_id, event, "context")
                 self._record_history(
                     room_id,
@@ -3225,6 +3239,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
         key = getattr(event, "key", {}) or {}
         hashes = getattr(event, "hashes", {}) or {}
         iv = getattr(event, "iv", "") or ""
+
+        if prepare:
+            if mxc_url and key and iv:
+                return await prepare(room_id, event, "message")
+            return
 
         content_parts: list[Any] = []
 
@@ -3344,14 +3363,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
             if self._task_execution:
-                key = await self._task_execution.accept_input(room_id, event, "message")
+                key = input_key or await self._task_execution.accept_input(room_id, event, "message")
                 payload["meta"]["shared_input_keys"] = [key]
             self._enqueue(payload)
             self._mark_event_callback_accepted()
             if not is_dm:
                 self._clear_history(room_id)
 
-        if self._session_receipts is None and self._task_execution is None:
+        if prepare is None and self._session_receipts is None and self._task_execution is None:
             await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
@@ -3615,7 +3634,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self,
         room: MatrixRoom,
         event: RoomMessageText,
-    ) -> None:
+        *,
+        prepare=None, input_key=None,
+    ):
         if (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.progress_only") is True:
             return
         content = (getattr(event, "source", {}) or {}).get("content", {})
@@ -3626,8 +3647,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
             except IgnoredNotification:
                 return
             if canonical["meta"]["teamharness_coordination"]["kind"] == "task_assigned":
-                await self._task_execution.accept_input(room.room_id, event, "task_notification",
-                    task_id=canonical["meta"]["teamharness_coordination"]["task_id"])
+                if prepare:
+                    return await prepare(room.room_id, event, "task_notification",
+                        task_id=canonical["meta"]["teamharness_coordination"]["task_id"])
+                if not input_key:
+                    await self._task_execution.accept_input(room.room_id, event, "task_notification",
+                        task_id=canonical["meta"]["teamharness_coordination"]["task_id"])
                 await self._task_execution.recover(canonical["meta"]["teamharness_coordination"]["task_id"], event, source_room=room.room_id)
                 self._mark_event_callback_accepted()
                 return
@@ -3664,7 +3689,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if self._is_channel_disabled(sender_id, room_id, is_dm):
             return
 
-        await self._announce_session_receipts(room_id, event.event_id)
+        if prepare is None:
+            await self._announce_session_receipts(room_id, event.event_id)
 
         if teamharness_self_trigger is None and _is_teamharness_tool_display(text):
             logger.info(
@@ -3681,6 +3707,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Readiness probe: reply directly without enqueuing to the agent
         readiness_reply = self._targeted_readiness_probe_reply(event, text)
         if readiness_reply:
+            if prepare:
+                return await prepare(room_id, event, "control")
             await self._send_plain_text(room_id, readiness_reply)
             return
 
@@ -3700,7 +3728,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     sender_id,
                     event.event_id,
                 )
-                if self._task_execution:
+                if prepare:
+                    return await prepare(room_id, event, "context")
+                if self._task_execution and not input_key:
                     await self._task_execution.accept_input(room_id, event, "context")
                 self._record_history(
                     room_id,
@@ -3727,7 +3757,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 sender_id,
                 room_id,
             )
-            await self._send_typing(room_id, False)
+            if prepare is None:
+                await self._send_typing(room_id, False)
             return
 
         control_text = self._control_command_text(stripped)
@@ -3752,6 +3783,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     text,
                     command_text,
                 )
+
+        intent = "control" if (control_text is not None or cmd in _SLASH_COMMANDS
+            or "org.agentteams.coordination" in content) else "message"
+        if prepare:
+            return await prepare(room_id, event, intent)
 
         # Build content parts, prepending accumulated history for group rooms.
         # Skip history prepend for slash commands — QwenPaw's command parser
@@ -3815,9 +3851,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
             if self._task_execution:
-                intent = "control" if (control_text is not None or cmd in _SLASH_COMMANDS
-                    or "org.agentteams.coordination" in content) else "message"
-                key = await self._task_execution.accept_input(room_id, event, intent)
+                key = input_key or await self._task_execution.accept_input(room_id, event, intent)
                 payload["meta"]["shared_input_keys"] = [key]
             if await self._handle_direct_control(payload, event):
                 self._mark_event_callback_accepted()
@@ -3829,7 +3863,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # These are best-effort UX operations.  Enqueue first so a slow
         # homeserver cannot prevent an accepted message from reaching QwenPaw.
-        if self._session_receipts is None and self._task_execution is None:
+        if prepare is None and self._session_receipts is None and self._task_execution is None:
             await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
@@ -3845,7 +3879,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # ------------------------------------------------------------------
 
     # pylint: disable=too-many-branches,too-many-statements
-    async def _on_room_media_event(self, room: MatrixRoom, event: Any) -> None:
+    async def _on_room_media_event(self, room: MatrixRoom, event: Any, *, prepare=None, input_key=None):
         """Handle incoming media messages (image, file, audio, video)."""
         if event.sender == self._user_id:
             return
@@ -3859,7 +3893,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if self._is_channel_disabled(sender_id, room_id, is_dm):
             return
 
-        await self._announce_session_receipts(room_id, event.event_id)
+        if prepare is None:
+            await self._announce_session_receipts(room_id, event.event_id)
 
         is_thread_event = self._is_thread_event(event)
 
@@ -3878,7 +3913,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     sender_id,
                     event.event_id,
                 )
-                if self._task_execution:
+                if prepare:
+                    return await prepare(room_id, event, "context")
+                if self._task_execution and not input_key:
                     await self._task_execution.accept_input(room_id, event, "context")
                 await self._record_media_history(
                     room,
@@ -3890,6 +3927,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         mxc_url: str = getattr(event, "url", "") or ""
         body: str = event.body or ""  # filename or caption
+
+        if prepare:
+            if mxc_url:
+                return await prepare(room_id, event, "message")
+            return
 
         content_parts: list[Any] = []
 
@@ -4011,14 +4053,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
             if self._task_execution:
-                key = await self._task_execution.accept_input(room_id, event, "message")
+                key = input_key or await self._task_execution.accept_input(room_id, event, "message")
                 payload["meta"]["shared_input_keys"] = [key]
             self._enqueue(payload)
             self._mark_event_callback_accepted()
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
 
-        if self._session_receipts is None and self._task_execution is None:
+        if prepare is None and self._session_receipts is None and self._task_execution is None:
             await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,

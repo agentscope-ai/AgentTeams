@@ -706,3 +706,130 @@ def test_started_operation_monitor_still_rejects_uncertainty_or_changed_authorit
         task["execution"][changed] = 3 if changed == "generation" else "successor"
     with pytest.raises(RecoveryConflict):
         recovery.verify(identity, monitoring=True)
+
+
+def test_nio_sync_retries_from_authority_and_dispatches_after_ordered_commit(native_channel):
+    from urllib.parse import parse_qs, urlsplit
+    import nio
+    from qwenpaw_matrix_sync import ManagedNioSync
+    from worker_matrix_state import WorkerMatrix, matrix_event_key
+
+    worker, room = "@worker:hs", "!room:hs"
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None, matrix_user_id=worker)
+    channel._user_id = worker
+    client = nio.AsyncClient("https://hs", worker, "DEVICE")
+    client.user_id, client.access_token = worker, "token"
+    client.next_batch = client.loaded_sync_token = "stale-private"
+    channel._client = client
+    channel._is_dm_room = AsyncMock(return_value=True)
+    channel._announce_session_receipts = AsyncMock()
+    channel._send_typing = AsyncMock()
+    channel._e2ee_maintenance = AsyncMock()
+    channel._mark_channel_ready = lambda: None
+    order, queries, commits = [], [], []
+    accepted = {}
+    matrix = WorkerMatrix("qwenpaw", recovery=SimpleNamespace(process="process"))
+    state = {"runtime": "qwenpaw", "instance_id": "instance", "state": {
+        "active_start": {"instance_id": "instance", "process_id": "process", "runtime": "qwenpaw"},
+        "consumers": {"another-device": {"account": worker, "device": "other", "format": "matrix-nio/sync-v3",
+                                         "runtime": "qwenpaw", "token": "foreign"}},
+        "rooms": {}, "pending": []}}
+    matrix.load = lambda: copy.deepcopy(state)
+    matrix.input = accepted.get
+    def ingest(snapshot, consumer, inputs, rooms):
+        commits.append([entry["event_id"] for entry in inputs])
+        if len(commits) == 1:
+            raise RecoveryConflict("batch CAS failed")
+        state["state"]["consumers"]["own"] = dict(consumer)
+        state["state"]["rooms"].update(rooms)
+        for entry in inputs:
+            key = matrix_event_key(room, entry["event_id"])
+            if key not in accepted:
+                state["state"]["pending"].append(key)
+            accepted[key] = entry
+        order.append("commit")
+        return copy.deepcopy(state)
+    matrix.ingest = ingest
+    channel._task_execution = SimpleNamespace(matrix=matrix, lock=asyncio.Lock())
+    channel._enqueue = lambda payload: order.append(payload["meta"]["event_id"])
+    runner = ManagedNioSync(channel, channel._task_execution)
+    def event(event_id, body):
+        return {"type": "m.room.message", "sender": "@human:hs", "event_id": event_id,
+                "origin_server_ts": 1, "content": {"msgtype": "m.text", "body": body}}
+    async def send(response_type, method, path, **kwargs):
+        queries.append(parse_qs(urlsplit(path).query))
+        events = [event("$z", "first"), event("$ignored", "NO_REPLY"), event("$a", "second")]
+        response = nio.SyncResponse.from_dict({"next_batch": "n1", "rooms": {"join": {room: {
+            "timeline": {"events": events, "limited": False, "prev_batch": "p"}}}}})
+        await client.receive_response(response)
+        return response
+    client._send = send
+    async def scenario():
+        with pytest.raises(RecoveryConflict, match="batch CAS"):
+            await runner.poll()
+        assert client.next_batch == "n1" and order == []
+        channel._announce_session_receipts.assert_not_awaited()
+        channel._send_typing.assert_not_awaited()
+        assert await runner.poll()
+        assert order == ["commit", "$z", "$a"]
+        assert commits == [["$z", "$a"], ["$z", "$a"]]
+        assert "since" not in queries[0] and "since" not in queries[1]
+        assert await runner.poll()
+        assert queries[-1]["since"] == ["n1"]
+        assert order.count("$z") == order.count("$a") == 1
+        await client.close()
+    asyncio.run(scenario())
+
+
+def test_nio_history_page_uses_immutable_anchor_and_native_policy(native_channel):
+    import nio
+    from qwenpaw_matrix_sync import ManagedNioSync
+    from worker_matrix_state import WorkerMatrix, matrix_event_key
+
+    room, worker = "!room:hs", "@worker:hs"
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None, matrix_user_id=worker)
+    channel._user_id = worker
+    client = nio.AsyncClient("https://hs", worker, "DEVICE")
+    channel._client = client
+    client.rooms[room] = nio.MatrixRoom(room, worker)
+    matrix = WorkerMatrix("qwenpaw", recovery=SimpleNamespace())
+    channel._task_execution = SimpleNamespace(matrix=matrix, lock=asyncio.Lock())
+    runner = ManagedNioSync(channel, channel._task_execution)
+    channel._is_dm_room = AsyncMock(return_value=True)
+    channel._announce_session_receipts = AsyncMock()
+    channel._send_typing = AsyncMock()
+    queued = []
+    channel._enqueue = lambda payload: queued.append(payload["meta"]["event_id"])
+    def event(event_id, body):
+        return nio.Event.parse_event({"type": "m.room.message", "sender": worker if event_id == "$anchor" else "@human:hs",
+            "event_id": event_id, "origin_server_ts": 1, "content": {"msgtype": "m.text", "body": body}})
+    anchor = event("$anchor", "already accepted by the previous Harness")
+    older, newer = event("$older", "older"), event("$later", "later")
+    anchor_key = matrix_event_key(room, anchor.event_id)
+    matrix.input = lambda key: {"intent": "context"} if key == anchor_key else None
+    client.room_messages = AsyncMock(return_value=nio.RoomMessagesResponse(
+        room, [newer, event("$ignore", "NO_REPLY"), older, anchor, event("$outside", "outside boundary")], "page", "next"))
+    async def scenario():
+        events, token = await runner.fetch_page(room, "page")
+        client.room_messages.assert_awaited_once_with(room, start="page")
+        assert token == "next"
+        prepared = await runner.inputs(room, events, "$anchor")
+        assert [(item["event_id"], item["intent"]) for item in prepared] == [
+            ("$later", "message"), ("$older", "message"), ("$anchor", "context")]
+        channel._announce_session_receipts.assert_not_awaited()
+        channel._send_typing.assert_not_awaited()
+        assert not queued
+        snapshot = {"state": {"rooms": {room: {"gaps": ["page"]}},
+                              "pending": [anchor_key, matrix_event_key(room, "$older"), matrix_event_key(room, "$later")]}}
+        await runner.dispatch(snapshot)
+        assert not queued
+        snapshot["state"]["rooms"][room]["gaps"] = []
+        await runner.dispatch(snapshot)
+        assert queued == ["$older", "$later"]
+        encrypted = nio.Event.parse_event({"type": "m.room.encrypted", "sender": "@human:hs",
+            "event_id": "$encrypted", "origin_server_ts": 2, "content": {"algorithm": "m.megolm.v1.aes-sha2",
+            "sender_key": "key", "session_id": "id", "device_id": "D", "ciphertext": "no-key"}})
+        with pytest.raises(RecoveryConflict, match="undecrypted"):
+            await runner.inputs(room, [encrypted])
+        await client.close()
+    asyncio.run(scenario())

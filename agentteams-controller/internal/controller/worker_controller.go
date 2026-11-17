@@ -203,7 +203,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 			return reconcile.Result{}, err
 		}
 		op := record.Handoff
-		if op != nil {
+		if op != nil && op.Phase != "completed" {
 			switch op.Phase {
 			case "stopping", "stopped":
 				return r.reconcileHandoffSource(ctx, w, op, etag, state)

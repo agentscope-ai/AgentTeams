@@ -1,0 +1,539 @@
+{
+  "timestamp": "2026-11-17T23:17:16.523390+00:00",
+  "fixture": "v24",
+  "task_id": "live-hermes-qwenpaw-44",
+  "harness_sdk": {
+    "hermes": "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19",
+    "mautrix": "0.21.1",
+    "qwenpaw": "2.2.2.post1",
+    "matrix-nio": "0.26.0"
+  },
+  "installed_sync_adapter_sha256": {
+    "hermes": "5e1624ad12d720cc6ab8470fac3e4aff608847ed5665173fa31191d1a6f578f0",
+    "qwenpaw": "c3329362bc213998220ffcd0d4ef95d8e01a1be579d8b30cb0683574de2d80ed"
+  },
+  "fixture_driver_sha256": "f0025f2a8ef4201426aea58d7a9e3b71c6f617044468e7076a1bf75d77a1f907",
+  "images": {
+    "controller": {
+      "ref": "recovery-1631/v24-controller:aa07fa4a",
+      "id": "sha256:4c3e179cb9f420870c0e58fa83af4e410ed2e251e26dc5021b7259e6c8bc746c"
+    },
+    "hermes": {
+      "ref": "recovery-1631/v24-hermes:5800335",
+      "id": "sha256:bade28c71ef2b5a39245f0bfe3f370fd998e25252b563dbae2a69213d3dab5df"
+    },
+    "qwenpaw": {
+      "ref": "recovery-1631/v24-qwenpaw:86a64fb",
+      "id": "sha256:fb168839a811d91bd4a73792ff72d9e68f1626a9695f6a896467786662c862c7"
+    }
+  },
+  "recipe_sha256": {
+    "controller": "0aae3393e18cf2a64a28e3e033a4487ffc99873717fe47dcfa29e95336119f91",
+    "qwenpaw": "9d30c19c312d772a8e4dd202d643e311e48c908660ee0506080ac1cddaa10dbc",
+    "final": "cb457b4e7f16a0ed1761593001b016f7b7058efe159d99775d6ad468a4853a7c",
+    "hermes": "15cf83b03c73eff4ad7de3fcf9201f0769951b56823d970be13c7dc890956bf1"
+  },
+  "observed_result": "failed after QwenPaw had resumed the same Task in generation 2",
+  "entrypoint": "generic Worker PUT with target runtime/image",
+  "driver_matrix_inputs_after_assignment": 0,
+  "target_task": {
+    "same_task_id": true,
+    "runtime": "qwenpaw",
+    "process_id": "1:1794957669782946133:6b05b25ed8114ea2826cef10ef2c9913",
+    "generation": 2,
+    "checkpoint_version": 3,
+    "completed_steps": [
+      "one"
+    ],
+    "remaining_steps": [
+      "two",
+      "three"
+    ],
+    "execution_state": "needs_verification",
+    "status": "in_progress"
+  },
+  "matrix_capture": [
+    {
+      "at": "2026-11-17T23:18:46.992126+00:00",
+      "runtime": "hermes",
+      "gaps": 1,
+      "pending_count": 0,
+      "room_through": "",
+      "consumer_runtimes": [
+        "hermes"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:19:26.574113+00:00",
+      "runtime": "hermes",
+      "gaps": 1,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:19:44.979289+00:00",
+      "runtime": "hermes",
+      "gaps": 0,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:21:20.349894+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 0,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:21:37.744911+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 1,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes",
+        "qwenpaw"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:22:05.827815+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 2,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes",
+        "qwenpaw"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:22:17.778016+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 1,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes",
+        "qwenpaw"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:22:32.753262+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 2,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes",
+        "qwenpaw"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:23:38.161707+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 1,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes",
+        "qwenpaw"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:24:42.836082+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 2,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes",
+        "qwenpaw"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:24:48.908318+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 1,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes",
+        "qwenpaw"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:25:50.398808+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 2,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes",
+        "qwenpaw"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:28:10.941121+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 3,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes",
+        "qwenpaw"
+      ]
+    },
+    {
+      "at": "2026-11-17T23:28:17.437825+00:00",
+      "runtime": "qwenpaw",
+      "gaps": 2,
+      "pending_count": 1,
+      "room_through": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+      "consumer_runtimes": [
+        "hermes",
+        "qwenpaw"
+      ]
+    }
+  ],
+  "process_order": [
+    {
+      "id": "2ccb9f13b2e54a9aab0068f7876a83b6292a65c7451bc9cddb5c4e701a89d36d",
+      "action": "die",
+      "time_ns": 1794957667050167248
+    },
+    {
+      "id": "2ccb9f13b2e54a9aab0068f7876a83b6292a65c7451bc9cddb5c4e701a89d36d",
+      "action": "destroy",
+      "time_ns": 1794957667246372915
+    },
+    {
+      "id": "58d13dfd68f4287b9eca372ee70d7295955f0bb936467d2aa0b7b784559b8fa8",
+      "action": "create",
+      "time_ns": 1794957669592794763
+    },
+    {
+      "id": "58d13dfd68f4287b9eca372ee70d7295955f0bb936467d2aa0b7b784559b8fa8",
+      "action": "start",
+      "time_ns": 1794957669714738915
+    }
+  ],
+  "source_tool_processes": [],
+  "effects": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794957657748314297,
+      "generation": 1,
+      "instance_id": "docker/2ccb9f13b2e54a9aab0068f7876a83b6292a65c7451bc9cddb5c4e701a89d36d/2026-11-17T23:18:35.448546769Z",
+      "process_id": "1:1794957515563991286:9fa2483fe6aa4c86961001c9771d7fdb",
+      "step": "one",
+      "task_id": "live-hermes-qwenpaw-44",
+      "team_id": "recovery-team"
+    }
+  ],
+  "oracle_calls": [
+    {
+      "method": "REGISTER",
+      "step": "one",
+      "accepted": true,
+      "at_ns": 1794957651150165879
+    },
+    {
+      "method": "POST",
+      "step": "one",
+      "accepted": true,
+      "at_ns": 1794957657748305714
+    },
+    {
+      "method": "GET",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794957748349750897
+    },
+    {
+      "method": "GET",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794957841949233377
+    },
+    {
+      "method": "REGISTER",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794957844549427395
+    },
+    {
+      "method": "GET",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794957870148004051
+    },
+    {
+      "method": "REGISTER",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794957872350159447
+    },
+    {
+      "method": "GET",
+      "step": "one",
+      "accepted": false,
+      "at_ns": 1794957891349578516
+    },
+    {
+      "method": "GET",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794957893549882262
+    },
+    {
+      "method": "GET",
+      "step": "three",
+      "accepted": false,
+      "at_ns": 1794957895548444866
+    },
+    {
+      "method": "REGISTER",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794958001748766963
+    },
+    {
+      "method": "REGISTER",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794958023149502655
+    },
+    {
+      "method": "REGISTER",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794958025349237949
+    },
+    {
+      "method": "GET",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794958039550177802
+    },
+    {
+      "method": "REGISTER",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794958041151525207
+    },
+    {
+      "method": "GET",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794958079358165129
+    },
+    {
+      "method": "REGISTER",
+      "step": "two",
+      "accepted": false,
+      "at_ns": 1794958081749740396
+    },
+    {
+      "method": "GET",
+      "step": "one",
+      "accepted": false,
+      "at_ns": 1794958110549328650
+    },
+    {
+      "method": "GET",
+      "step": "three",
+      "accepted": false,
+      "at_ns": 1794958112749749029
+    },
+    {
+      "method": "REGISTER",
+      "step": "three",
+      "accepted": false,
+      "at_ns": 1794958114749064920
+    }
+  ],
+  "native_tool_order": [
+    {
+      "model_turn_seq": 3,
+      "tool": "teamharness__taskflow",
+      "time": "2026-11-17T23:21:42.409357",
+      "end": null,
+      "action": "checkpoint_task",
+      "has_fixture_step_two_id": true,
+      "has_started_state": true,
+      "invokes_acceptance_helper": false,
+      "input_sha256": "8ec304e96d09a675096100b274e296a5d4986921688d43781bdde308a682b040"
+    },
+    {
+      "model_turn_seq": 3,
+      "tool": "teamharness__taskflow",
+      "time": "2026-11-17T23:21:45.821479",
+      "end": null,
+      "action": "checkpoint_task",
+      "has_fixture_step_two_id": true,
+      "has_started_state": true,
+      "invokes_acceptance_helper": false,
+      "input_sha256": "201fba7ad5f225a8a1615f937df804fbfee34cd8ac27939e14ef07712d4efb61"
+    },
+    {
+      "model_turn_seq": 3,
+      "tool": "teamharness__taskflow",
+      "time": "2026-11-17T23:21:54.051580",
+      "end": null,
+      "action": "checkpoint_task",
+      "has_fixture_step_two_id": true,
+      "has_started_state": true,
+      "invokes_acceptance_helper": false,
+      "input_sha256": "222ca1c4d924581dbf2062046d37a8b7d6e6905da78ab2b8beb809912474311f"
+    },
+    {
+      "model_turn_seq": 3,
+      "tool": "execute_shell_command",
+      "time": "2026-11-17T23:22:11.533350",
+      "end": null,
+      "action": null,
+      "has_fixture_step_two_id": false,
+      "has_started_state": false,
+      "invokes_acceptance_helper": false,
+      "input_sha256": "6e2f0e125173da1350098e68b655d687c679b7cb47964bbef2c21d4c98bae855"
+    },
+    {
+      "model_turn_seq": 3,
+      "tool": "execute_shell_command",
+      "time": "2026-11-17T23:22:14.940857",
+      "end": null,
+      "action": null,
+      "has_fixture_step_two_id": false,
+      "has_started_state": false,
+      "invokes_acceptance_helper": false,
+      "input_sha256": "67cffc9ec86365b5c0df008f40411d2e93a42b86b9b805ae4a9ecf5ae0482197"
+    },
+    {
+      "model_turn_seq": 3,
+      "tool": "execute_shell_command",
+      "time": "2026-11-17T23:22:20.651491",
+      "end": null,
+      "action": null,
+      "has_fixture_step_two_id": false,
+      "has_started_state": false,
+      "invokes_acceptance_helper": true,
+      "input_sha256": "041a995fad03b4e018c56c90e9d0f2f64e5a7feba138a0719d911e5017baafe7"
+    },
+    {
+      "model_turn_seq": 3,
+      "tool": "teamharness__taskflow",
+      "time": "2026-11-17T23:22:45.761368",
+      "end": null,
+      "action": "checkpoint_task",
+      "has_fixture_step_two_id": false,
+      "has_started_state": false,
+      "invokes_acceptance_helper": false,
+      "input_sha256": "2262e162bc3a4dc9d04ec4b5a66daee874f22d29d6999416b023aa854559b814"
+    },
+    {
+      "model_turn_seq": 3,
+      "tool": "execute_shell_command",
+      "time": "2026-11-17T23:23:40.834085",
+      "end": null,
+      "action": null,
+      "has_fixture_step_two_id": false,
+      "has_started_state": true,
+      "invokes_acceptance_helper": true,
+      "input_sha256": "097cd14c58f24fe42ce4bc5deaa3d0bc7ee9fd1a12a525a663fdafce555902d3"
+    },
+    {
+      "model_turn_seq": 3,
+      "tool": "execute_shell_command",
+      "time": "2026-11-17T23:23:54.301690",
+      "end": null,
+      "action": null,
+      "has_fixture_step_two_id": false,
+      "has_started_state": false,
+      "invokes_acceptance_helper": true,
+      "input_sha256": "438406bd17797f8a903edf6982bbfc58df46315949594386e802ba3394b82172"
+    },
+    {
+      "model_turn_seq": 3,
+      "tool": "execute_shell_command",
+      "time": "2026-11-17T23:24:07.812754",
+      "end": null,
+      "action": null,
+      "has_fixture_step_two_id": false,
+      "has_started_state": false,
+      "invokes_acceptance_helper": false,
+      "input_sha256": "20e506cd46c37f0e9a9bd6a8d78db7344ade80b2f9f00a40e694e384023bd634"
+    }
+  ],
+  "verified_at": "2026-11-17T23:28:46.699177+00:00",
+  "strict_verifier_passed": false,
+  "causal_evidence": "The QwenPaw native session invoked checkpoint_task with the helper-owned step-two identity before its first invocation of acceptance.py. The oracle had no admitted step-two intent or effect and refused its subsequent verification requests.",
+  "test_limits": [
+    "Task execution reached the target, but did not finish steps two and three or publish a verified final reply.",
+    "Worker PUT was exercised; the explicit runtime-handoff supervisor was not selected."
+  ],
+  "source_task": {
+    "runtime": "hermes",
+    "generation": 1,
+    "step": [
+      "one"
+    ],
+    "remaining": [
+      "two",
+      "three"
+    ],
+    "checkpoint_version": 2,
+    "native_input": [
+      {
+        "event_id": "$tmkNR_i3NM2wu37YCas7uTCbwcxLhgFtB7FK2XQX6Hg",
+        "intent": "task_notification",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-hermes-qwenpaw-44"
+        },
+        "native_commit": {
+          "runtime": "hermes",
+          "start": {
+            "instance_id": "docker/2ccb9f13b2e54a9aab0068f7876a83b6292a65c7451bc9cddb5c4e701a89d36d/2026-11-17T23:18:35.448546769Z",
+            "process_id": "1:1794957515563991286:9fa2483fe6aa4c86961001c9771d7fdb",
+            "runtime": "hermes"
+          },
+          "native_ref": "20261117_231954_462adc1a",
+          "native_digest": "84a1a6a8e3216b2c0968afa23aad3f95f5f494f81e9e3b8b45c0839108db4ae2",
+          "saved_at": "2026-11-17T23:20:01Z"
+        }
+      }
+    ],
+    "read_ids": [
+      "$xa8qxMIO6HM8xrgKBdFeGGZfUFaCe8oMQiWVvXQ4q54"
+    ],
+    "history_actions": [
+      "ack_task"
+    ],
+    "task_status": "in_progress",
+    "target_session_before": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    }
+  },
+  "source": {
+    "controller": "aa07fa4a46e0130eb0c4d6538a4642b475a5f2f4",
+    "hermes": "58003357d36baefe1367cea8c055d7c92df4cd93",
+    "qwenpaw": "86a64fbc8f06ac826e57dc780ea9ec0face2ec05",
+    "embedded_common_core": "aa07fa4a46e0130eb0c4d6538a4642b475a5f2f4",
+    "harness_pins": {
+      "hermes_pinned_core": "aa07fa4a46e0130eb0c4d6538a4642b475a5f2f4",
+      "qwenpaw_pinned_core": "525eb10ad61908b4c335bcc229187cb5c67c8028"
+    }
+  }
+}

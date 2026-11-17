@@ -107,6 +107,7 @@ func (r *WorkerReconciler) reconcileHandoffTarget(ctx context.Context, w *v1beta
 			m.PodLabels = make(map[string]string)
 		}
 		m.PodLabels[backend.RuntimeHandoffLabel] = op.TargetLabel()
+		m.PodLabels[backend.RuntimeHandoffSpecLabel] = m.AppliedSpecHash
 		_, err := createMemberContainer(ctx, d, m, state, wb)
 		return wait, err
 	}
@@ -126,12 +127,22 @@ func (r *WorkerReconciler) reconcileHandoffTarget(ctx context.Context, w *v1beta
 	if start.Runtime != op.TargetRuntime || start.InstanceID != wb.Name()+"/"+status.InstanceID || start.ProcessID == "" {
 		return wait, nil
 	}
+	// Persist the hash of the actual Create before opening target admission.
+	// Otherwise an immediately-ready idle target could complete before the
+	// status write and be deleted again by the ordinary spec-change path.
+	if status.HandoffSpecHash != "" && w.Status.SpecHash != status.HandoffSpecHash {
+		w.Status.SpecHash = status.HandoffSpecHash
+		return wait, nil
+	}
 	if op.Target == nil || *op.Target != start {
 		_, _, err = r.RuntimeStore.AdvanceLifecycle(ctx, name, op.ID, op.Phase, "recovering", etag, "", &start)
 		return wait, err
 	}
 	// The normal reconcile may maintain services and token projection again.
 	// The original request label still protects adoption after a Controller crash.
+	if status.HandoffSpecHash != "" && m.AppliedSpecHash != status.HandoffSpecHash {
+		return wait, nil // A later edit can reconcile once this handoff finishes.
+	}
 	m.SpecChanged = false
 	return ReconcileMemberContainer(ctx, d, m, state)
 }

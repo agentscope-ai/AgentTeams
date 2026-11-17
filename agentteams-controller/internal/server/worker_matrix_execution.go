@@ -139,7 +139,7 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 	}
 	op, err := executionHandoff(r.Context(), h.deps.OSS, name, start)
 	if err != nil {
-		writeError(w, 503, "Worker handoff state unavailable")
+		writeHandoffAdmissionError(w, err)
 		return
 	}
 	if err := checkHandoffExecution(op, start, request.Action, execution.Checkpoint, request.Checkpoint); err != nil {

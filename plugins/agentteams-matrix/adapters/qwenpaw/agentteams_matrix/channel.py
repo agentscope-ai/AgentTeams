@@ -647,6 +647,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         while True:
             try:
                 await self._task_execution.recover()
+                if self._managed_sync:
+                    self._managed_sync.task_scan_complete()
             except (RecoveryConflict, RecoveryUnavailable):
                 logger.warning("Task startup recovery deferred; authority is unavailable or changed")
             except Exception:

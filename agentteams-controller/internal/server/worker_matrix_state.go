@@ -155,6 +155,9 @@ func (h *WorkerMatrixHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "unsupported Matrix state action")
 		return
 	}
+	if err == nil && input.Action == "start" {
+		_, _, err = (service.WorkerRuntimeStore{Storage: h.deps.OSS}).SyncRegisteredStart(r.Context(), name, instance, runtime)
+	}
 	if err != nil {
 		h.writeError(w, err)
 		return

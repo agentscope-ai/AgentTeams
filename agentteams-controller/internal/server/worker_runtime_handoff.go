@@ -105,7 +105,7 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 		h.writeError(w, err)
 		return
 	}
-	if op := current.Handoff; op != nil {
+	if op := current.Handoff; op != nil && (op.Phase != "completed" || op.ID == input.RequestID) {
 		if op.ID != input.RequestID || op.TargetRuntime != input.Target {
 			writeError(w, 409, "another handoff is already in progress")
 			return
@@ -167,11 +167,11 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 
 // The source learns about draining even when there is no new Matrix input.
 func (h *WorkerMatrixHandler) SelfHandoff(w http.ResponseWriter, r *http.Request) {
-	name, _, _, _, ok := h.identity(w, r)
+	name, instance, runtime, _, ok := h.identity(w, r)
 	if !ok {
 		return
 	}
-	state, etag, err := (service.WorkerRuntimeStore{Storage: h.deps.OSS}).Load(r.Context(), name)
+	state, etag, err := (service.WorkerRuntimeStore{Storage: h.deps.OSS}).SyncRegisteredStart(r.Context(), name, instance, runtime)
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -186,6 +186,12 @@ func executionHandoff(ctx context.Context, store oss.StorageClient, name string,
 	state, _, err := (service.WorkerRuntimeStore{Storage: store}).Load(ctx, name)
 	if err != nil {
 		return nil, err
+	}
+	if state.Handoff == nil || state.Handoff.Phase == "completed" {
+		if state.ActiveStart != nil && *state.ActiveStart != start {
+			return nil, fmt.Errorf("%w: register this actual Worker start before execution", service.ErrWorkerStateConflict)
+		}
+		return nil, nil
 	}
 	if op := state.Handoff; op != nil && op.Phase == "recovering" && op.Target != nil && *op.Target == start {
 		// The backend and native-consumption registration both confirmed this
@@ -231,12 +237,20 @@ func checkHandoffExecution(op *service.WorkerHandoff, start service.WorkerStart,
 	return errors.New("draining requires a completed step, saved result, verified effect, or explicit release at a recorded boundary")
 }
 
+func writeHandoffAdmissionError(w http.ResponseWriter, err error) {
+	if errors.Is(err, service.ErrWorkerStateConflict) {
+		writeError(w, 409, err.Error())
+		return
+	}
+	writeError(w, 503, "Worker handoff state unavailable")
+}
+
 // Recheck after the per-execution CAS. A claim whose write straddled preflight
 // must never return permission to start a native turn.
 func handoffClaimStillOpen(w http.ResponseWriter, r *http.Request, store oss.StorageClient, name string, start service.WorkerStart) bool {
 	op, err := executionHandoff(r.Context(), store, name, start)
 	if err != nil {
-		writeError(w, 503, "Worker handoff state unavailable")
+		writeHandoffAdmissionError(w, err)
 		return false
 	}
 	if op != nil {

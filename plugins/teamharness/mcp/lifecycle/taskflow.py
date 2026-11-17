@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import datetime
 
+import json
+
 import os
+
+import urllib.error
 
 import uuid
 
@@ -21,7 +25,7 @@ from mcp.common.errors import (
     _sync_failure_result,
     _uncommitted_state_failure_result,
 )
-from mcp.common.identity import _canonical_account, _canonical_assignee
+from mcp.common.identity import _canonical_account, _canonical_assignee, _canonical_room_id
 from mcp.common.io import _atomic_write_text, _read_json, _safe_read_bytes, _utc_timestamp
 
 from mcp.common.payload import _first_text, _payload, _safe_id
@@ -86,6 +90,7 @@ _send_delegate_notification = refs.proxy("_send_delegate_notification")
 _sync_task = refs.proxy("_sync_task")
 _update_project_task = refs.proxy("_update_project_task")
 _validate_assignee_membership = refs.proxy("_validate_assignee_membership")
+_matrix_room_member_user_ids = refs.proxy("_matrix_room_member_user_ids")
 _write_json = refs.proxy("_write_json")
 _role = refs.proxy("_role")
 _transition_task = refs.proxy("_transition_task")
@@ -156,6 +161,27 @@ def _normalize_conclusions(value: Any) -> list[str]:
             text = text[:500] + "..."
         normalized.append(text)
     return normalized
+
+
+def _invited_room_user_ids(room_id: str) -> set[str] | None:
+    """Matrix user ids currently invited (not yet joined) to the room.
+
+    Returns None when the room membership state cannot be read
+    (standalone runs without a Matrix environment, transport failure)
+    so the caller keeps the fail-closed unknown-recipient behavior.
+    """
+    try:
+        invited = _matrix_room_member_user_ids(_canonical_room_id(room_id), {"invite"})
+    except (
+        ValueError,
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        json.JSONDecodeError,
+    ):
+        return None
+    return set(invited)
 
 
 def _load_task(arguments: dict[str, Any], task_id: str) -> dict[str, Any]:
@@ -470,6 +496,32 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     if candidate and candidate != assigned_to:
                         matrix_id = candidate
                 if not matrix_id:
+                    # Invited-but-not-joined: the room knows the recipient
+                    # with membership "invite" — same retryable "not a
+                    # joined member" failure as the membership gate below
+                    # (no notification, no assignment) instead of a
+                    # dead-end unknown-recipient error. Anything the room
+                    # does not know about (or a membership lookup that
+                    # failed) keeps the fail-closed unknown-recipient path.
+                    invited = _invited_room_user_ids(room_id)
+                    if invited is not None and assigned_to in invited:
+                        return {
+                            "ok": False,
+                            "tool": "taskflow",
+                            "action": action,
+                            "task": existing_task,
+                            "error": (
+                                f"assignee {assigned_to} is not a joined "
+                                f"member of room {_canonical_room_id(room_id)}"
+                            ),
+                            "retryable": True,
+                            "notificationNeeded": _notification_needed(
+                                "delegate_task",
+                                project or {"project_id": project_id},
+                                existing_task,
+                                summary=f"delegate_task: {task_id} blocked before assignment",
+                            ),
+                        }
                     if not _team_roster_name_seen(assigned_to):
                         available = ", ".join(sorted(by_id)) or "(none)"
                         raise ValueError(

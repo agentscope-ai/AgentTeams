@@ -1059,3 +1059,37 @@ cursor advancement; this helper alone is not a completed native integration.
 The common/evidence regression suite passes80 tests plus52 subtests, including
 all six cursor identities, cross-device/format isolation, stale cursor rejection,
 limited/initial gaps, exact ordering, old-start fencing and the shared facade.
+
+
+### QwenPaw accepted-input and native persistence hooks
+
+The packaged channel and the compatibility adapter now commit accepted text,
+media, control and buffered group-context inputs through the Worker-self Matrix
+API before enqueue/history admission. Verified Task assignments are linked to
+an unambiguous owned team/Task/room identity; their execution authority remains
+the existing Task. Redelivery retains the original input/work classification;
+a read failure cannot be treated as an absent record. These are per-callback
+commits without a consumer/token, not a fabricated native batch checkpoint.
+The compatibility adapter retains its distinct SyncEngine implementation rather
+than being replaced with the packaged channel. Its awaited Task callback no
+longer calls the packaged channel's nonexistent acceptance-future method.
+
+At REPLY_START, a required accepted input is saved by the native SDK, then read
+back through SafeJSONSession. The stored pending source identities and actual
+state digest precede a current-start/input-ETag-bound native persistence fact;
+only then may read acknowledgement and reasoning proceed. Failure stops before
+reasoning/read. These facts do not complete work, advance Task checkpoints or
+publish a result. Legacy context without a common input receives no new-standard
+persistence claim. Native session readback is not a claim that every native
+file has already been uploaded by workspace sync.
+
+Focused installed-SDK tests pass105 cases, including both adapter paths, real
+SafeJSONSession serialization/readback, input-before-queue/history, no callback
+acceptance/token save on persistence failure, fact-before-read/model, Task scope,
+redelivery and unavailable-read rejection. Controller/model authority is mocked;
+this is not a new real-model E2E pass. Common/evidence Python tests pass83 plus52
+subtests. The earlier native callback regression failed6 cases before the fix.
+Full-batch consumer cursor/backfill integration, initial/legacy import and ordinary
+message execution/result recovery remain open. Existing Task recovery still
+runs independently of incoming Matrix events. A new packaged image and real
+Task must validate these hooks before updating real Harness acceptance.

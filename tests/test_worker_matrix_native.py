@@ -2,6 +2,7 @@
 import copy
 from pathlib import Path
 import sys
+import urllib.error
 from unittest.mock import Mock, patch
 
 import pytest
@@ -44,6 +45,19 @@ def test_native_commit_preserves_the_input_etag_and_does_not_complete_work():
     with pytest.raises(RecoveryConflict):
         matrix.native_committed(matrix_event_key("!room:test", "$other"), view(), "session/row1", "a" * 64)
     assert recovery.request.call_count == 1
+
+
+@pytest.mark.parametrize("status", [403, 404, 409])
+def test_input_lookup_only_treats_exact_not_found_as_absent(status):
+    cause = urllib.error.HTTPError("http://controller", status, "input lookup", {}, None)
+    error = RecoveryConflict("input read failed")
+    error.__cause__ = cause
+    matrix = WorkerMatrix("hermes", recovery=Mock(request=Mock(side_effect=error)))
+    if status == 404:
+        assert matrix.input("event-key") is None
+    else:
+        with pytest.raises(RecoveryConflict):
+            matrix.input("event-key")
 
 
 def test_backfill_rpc_keeps_original_page_and_pagination_snapshot():

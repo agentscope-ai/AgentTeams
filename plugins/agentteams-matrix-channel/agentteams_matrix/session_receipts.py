@@ -132,6 +132,8 @@ class SessionReceiptMiddleware(MiddlewareBase):
         snapshot = agent.state_dict()
         snapshot["mode_state"] = ctx.mode_state
         proxy = SimpleNamespace(state_dict=lambda: snapshot)
+        required = meta.get("shared_input_keys") or []
+        execution = getattr(channel, "_task_execution", None)
         try:
             await ctx.workspace.session.save_session_state(
                 session_id=ctx.session_id,
@@ -139,11 +141,16 @@ class SessionReceiptMiddleware(MiddlewareBase):
                 channel="agentteams_matrix",
                 agent=proxy,
             )
+            if required and execution is not None:
+                await execution.commit_inputs(ctx.session_id,
+                    getattr(ctx.request, "user_id", "") or ctx.session_id, room_id, event_ids, required)
         except Exception:
             # A later turn-end save must not publish a read whose checkpoint
-            # failed. Leave the response path running and omit its receipt.
+            # failed. Required managed inputs also stop before native inference.
             for entry in added:
                 pending.remove(entry)
             logger.warning("Session input checkpoint failed; read receipt omitted", exc_info=True)
+            if required and execution is not None:
+                raise  # A managed accepted input must not enter inference unrecorded.
             return
         await delivery.submit(room_id, event_ids, pending)

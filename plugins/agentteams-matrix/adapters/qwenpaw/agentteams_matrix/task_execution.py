@@ -7,7 +7,7 @@ import time
 from uuid import uuid4
 
 from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
-from worker_matrix_state import WorkerMatrix
+from worker_matrix_state import WorkerMatrix, matrix_event_key
 from worker_sessions import WorkerSessions
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,61 @@ class TaskExecution:
         self.lock = tracker._agentteams_task_admission_lock
         self.sessions = WorkerSessions("qwenpaw", recovery=self.recovery)
         self.matrix = WorkerMatrix("qwenpaw", recovery=self.recovery)
+
+    async def accept_input(self, room, event, intent, *, task_id=None):
+        """Persist an accepted native callback without inventing a batch token."""
+        async with self.lock:
+            snapshot = await asyncio.to_thread(self.matrix.start)
+            work = {"kind": "message"} if intent == "message" else None
+            if task_id is not None:
+                tasks = await asyncio.to_thread(self.recovery.discover)
+                matches = [entry for entry in tasks["tasks"]
+                    if entry["task"]["task_id"] == task_id and entry["task"].get("room_id") == room]
+                if len(matches) != 1:
+                    raise RecoveryConflict("Task input has no unambiguous Worker/team/room identity")
+                work = {"kind": "task", "team_id": matches[0]["team_id"], "task_id": task_id}
+            source = event.source
+            input_ = {"room_id": room, "event_id": event.event_id, "intent": intent,
+                "input": {"sender": event.sender, "type": source.get("type", "m.room.message"),
+                    "origin_server_ts": source.get("origin_server_ts", getattr(event, "server_timestamp", 0)),
+                    "content": source["content"]}}
+            if work:
+                input_["work"] = work
+            key = matrix_event_key(room, event.event_id)
+            previous = await asyncio.to_thread(self.matrix.input, key)
+            if previous:
+                # Sender/mention policies and Task status can change after the
+                # original acceptance. Keep its immutable work classification;
+                # the Controller still compares the actual input bytes.
+                input_["intent"] = previous["intent"]
+                if previous.get("work"):
+                    input_["work"] = previous["work"]
+                else:
+                    input_.pop("work", None)
+            await asyncio.to_thread(self.matrix.ingest, snapshot, None, [input_])
+            return key
+
+    async def commit_inputs(self, session_id, user_id, room, event_ids, required_keys):
+        """Publish facts from the SDK's saved bytes, before reasoning/read ACK."""
+        keys = {matrix_event_key(room, event_id) for event_id in event_ids}
+        if not set(required_keys) <= keys:
+            raise RecoveryConflict("Native input facts belong to another Matrix source")
+        native = await self.channel._workspace.session.get_session_state_dict(
+            session_id=session_id, user_id=user_id, channel=self.channel.channel, allow_not_exist=False)
+        pending = native.get("agent", {}).get("state", {}).get("middle_context", {}).get("agentteams_session_receipts", [])
+        if any({"room_id": room, "event_id": event_id} not in pending for event_id in event_ids):
+            raise RecoveryConflict("Actual native state does not retain these accepted Matrix inputs")
+        digest = Recovery.digest(native)
+        for event_id in dict.fromkeys(event_ids):
+            key = matrix_event_key(room, event_id)
+            input_ = await asyncio.to_thread(self.matrix.input, key)
+            if input_ is None:
+                if key in required_keys:
+                    raise RecoveryConflict("Required Matrix input is not durable")
+                continue  # Legacy context has no new-standard persistence claim.
+            snapshot = await asyncio.to_thread(self.matrix.native_input, key)
+            if not self.matrix.native_current(snapshot, session_id, digest):
+                await asyncio.to_thread(self.matrix.native_committed, key, snapshot, session_id, digest)
 
     @staticmethod
     def key(team, task_id):
@@ -157,6 +212,7 @@ class TaskExecution:
                              "room_id": task["room_id"], "sender_id": self.channel.matrix_user_id,
                              "event_id": f"recovery:{team}/{task_id}:{identity['generation']}",
                              "session_source_event_ids": [source_event.event_id] if source_event else [],
+                             "shared_input_keys": [matrix_event_key(task["room_id"], source_event.event_id)] if source_event else [],
                              "is_group": True, "is_dm": False},
                 })
                 self.admitted.add(admission)

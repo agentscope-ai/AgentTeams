@@ -3206,6 +3206,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         if body
                         else "[sent an encrypted file]"
                     )
+                if self._task_execution:
+                    await self._task_execution.accept_input(room_id, event, "context")
                 self._record_history(
                     room_id,
                     HistoryEntry(
@@ -3341,12 +3343,15 @@ class AgentTeamsMatrixChannel(BaseChannel):
             # consume it.
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
+            if self._task_execution:
+                key = await self._task_execution.accept_input(room_id, event, "message")
+                payload["meta"]["shared_input_keys"] = [key]
             self._enqueue(payload)
             self._mark_event_callback_accepted()
             if not is_dm:
                 self._clear_history(room_id)
 
-        if self._session_receipts is None:
+        if self._session_receipts is None and self._task_execution is None:
             await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
@@ -3621,6 +3626,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
             except IgnoredNotification:
                 return
             if canonical["meta"]["teamharness_coordination"]["kind"] == "task_assigned":
+                await self._task_execution.accept_input(room.room_id, event, "task_notification",
+                    task_id=canonical["meta"]["teamharness_coordination"]["task_id"])
                 await self._task_execution.recover(canonical["meta"]["teamharness_coordination"]["task_id"], event, source_room=room.room_id)
                 self._mark_event_callback_accepted()
                 return
@@ -3693,6 +3700,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     sender_id,
                     event.event_id,
                 )
+                if self._task_execution:
+                    await self._task_execution.accept_input(room_id, event, "context")
                 self._record_history(
                     room_id,
                     HistoryEntry(
@@ -3805,6 +3814,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
             # consume it.
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
+            if self._task_execution:
+                intent = "control" if control_text is not None or cmd in _SLASH_COMMANDS else "message"
+                key = await self._task_execution.accept_input(room_id, event, intent)
+                payload["meta"]["shared_input_keys"] = [key]
             if await self._handle_direct_control(payload, event):
                 self._mark_event_callback_accepted()
                 return
@@ -3815,7 +3828,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # These are best-effort UX operations.  Enqueue first so a slow
         # homeserver cannot prevent an accepted message from reaching QwenPaw.
-        if self._session_receipts is None:
+        if self._session_receipts is None and self._task_execution is None:
             await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
@@ -3864,6 +3877,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     sender_id,
                     event.event_id,
                 )
+                if self._task_execution:
+                    await self._task_execution.accept_input(room_id, event, "context")
                 await self._record_media_history(
                     room,
                     event,
@@ -3994,12 +4009,15 @@ class AgentTeamsMatrixChannel(BaseChannel):
             # consume it.
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
+            if self._task_execution:
+                key = await self._task_execution.accept_input(room_id, event, "message")
+                payload["meta"]["shared_input_keys"] = [key]
             self._enqueue(payload)
             self._mark_event_callback_accepted()
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
 
-        if self._session_receipts is None:
+        if self._session_receipts is None and self._task_execution is None:
             await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,

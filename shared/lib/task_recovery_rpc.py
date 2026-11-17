@@ -49,6 +49,8 @@ def execute(request):
             return matrix.sync(request['snapshot'], request['consumer'], request['next_batch'], request['timelines'])
         if action == 'matrix.pending':
             return matrix.pending(request['snapshot'])
+        if action == 'matrix.input':
+            return matrix.input(request['event_key'])
         if action == 'matrix.backfill':
             return matrix.backfill(request['snapshot'], request['page'])
         if action == 'matrix.native.get':

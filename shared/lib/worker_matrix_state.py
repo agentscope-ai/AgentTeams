@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import subprocess
+import urllib.error
 
 from task_recovery import Recovery, RecoveryConflict
 
@@ -101,6 +102,14 @@ class WorkerMatrix:
         # Native adapters cannot supply another Worker's storage path.
         return [self.recovery.request("GET", "runtime/matrix/events/" + key)
                 for key in snapshot["state"]["pending"]]
+
+    def input(self, key):
+        try:
+            return self.recovery.request("GET", "runtime/matrix/events/" + key)
+        except RecoveryConflict as error:
+            if isinstance(error.__cause__, urllib.error.HTTPError) and error.__cause__.code == 404:
+                return None
+            raise  # Unavailable/forbidden/changed state is not a missing input.
 
     def backfill(self, snapshot, page):
         start = snapshot["state"]["active_start"]

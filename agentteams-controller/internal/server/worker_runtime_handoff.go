@@ -12,6 +12,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
@@ -135,10 +136,29 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 		writeError(w, 409, "the running Worker must register its current source start")
 		return
 	}
+	backendName, _, _ := strings.Cut(instance, "/")
+	wb, err := h.deps.Backend.GetWorkerBackend(r.Context(), backendName)
+	if err != nil {
+		writeError(w, 503, "source backend unavailable")
+		return
+	}
+	fenced, ok := wb.(backend.RuntimeHandoffSource)
+	if !ok {
+		writeError(w, 409, "backend does not support verified runtime replacement")
+		return
+	}
+	image := fenced.HandoffTargetImage(input.Target)
+	if worker.Spec.Image != "" && (worker.Spec.Runtime == input.Target || (worker.Spec.Runtime == "" && runtime == input.Target)) {
+		image = worker.Spec.Image
+	}
+	if image == "" {
+		writeError(w, 409, "no Worker image configured for the target Harness")
+		return
+	}
 	if !enroll() {
 		return
 	}
-	if _, _, err := store.Preflight(r.Context(), name, input.RequestID, input.Target, start, expected); err != nil {
+	if _, _, err := store.Preflight(r.Context(), name, input.RequestID, input.Target, image, start, expected); err != nil {
 		h.writeError(w, err)
 		return
 	}
@@ -162,10 +182,15 @@ func (h *WorkerMatrixHandler) SelfHandoff(w http.ResponseWriter, r *http.Request
 	httputil.WriteJSON(w, http.StatusOK, state)
 }
 
-func executionHandoff(ctx context.Context, store oss.StorageClient, name string) (*service.WorkerHandoff, error) {
+func executionHandoff(ctx context.Context, store oss.StorageClient, name string, start service.WorkerStart) (*service.WorkerHandoff, error) {
 	state, _, err := (service.WorkerRuntimeStore{Storage: store}).Load(ctx, name)
 	if err != nil {
 		return nil, err
+	}
+	if op := state.Handoff; op != nil && op.Phase == "recovering" && op.Target != nil && *op.Target == start {
+		// The backend and native-consumption registration both confirmed this
+		// replacement. It uses the normal task and message claim path.
+		return nil, nil
 	}
 	return state.Handoff, nil
 }
@@ -174,7 +199,7 @@ func checkHandoffExecution(op *service.WorkerHandoff, start service.WorkerStart,
 	if op == nil {
 		return nil
 	}
-	if op.Source != start || op.Phase == "checkpointed" || action == "claim" {
+	if op.Source != start || (op.Phase != "preflight" && op.Phase != "draining") || action == "claim" {
 		return fmt.Errorf("Worker handoff %s is draining; new execution is closed", op.ID)
 	}
 	if next == nil || action == "cancel" {
@@ -208,8 +233,8 @@ func checkHandoffExecution(op *service.WorkerHandoff, start service.WorkerStart,
 
 // Recheck after the per-execution CAS. A claim whose write straddled preflight
 // must never return permission to start a native turn.
-func handoffClaimStillOpen(w http.ResponseWriter, r *http.Request, store oss.StorageClient, name string) bool {
-	op, err := executionHandoff(r.Context(), store, name)
+func handoffClaimStillOpen(w http.ResponseWriter, r *http.Request, store oss.StorageClient, name string, start service.WorkerStart) bool {
+	op, err := executionHandoff(r.Context(), store, name, start)
 	if err != nil {
 		writeError(w, 503, "Worker handoff state unavailable")
 		return false

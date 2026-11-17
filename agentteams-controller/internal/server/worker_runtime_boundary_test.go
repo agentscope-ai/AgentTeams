@@ -17,7 +17,7 @@ func TestRuntimeHandoffConfirmationScansTaskAndMessageBeforeCheckpointing(t *tes
 	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alice", Team: "alpha-team"}
 	f.expect("claim", nil, 200)
 	store := service.WorkerRuntimeStore{Storage: f.storage}
-	if _, _, err := store.Preflight(t.Context(), "runtime-alice", "switch", "codex", f.start, ""); err != nil {
+	if _, _, err := store.Preflight(t.Context(), "runtime-alice", "switch", "codex", "codex:fixture", f.start, ""); err != nil {
 		t.Fatal(err)
 	}
 	_, etag, err := store.BeginDrain(t.Context(), "runtime-alice")
@@ -66,4 +66,33 @@ func TestRuntimeHandoffConfirmationScansTaskAndMessageBeforeCheckpointing(t *tes
 	}
 	ack(f.start.ProcessID, 200) // Original drain ETag after a lost response.
 	f.expect("claim", nil, 409)
+	_, rev, err := store.Load(t.Context(), "runtime-alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, transition := range [][2]string{{"checkpointed", "stopping"}, {"stopping", "stopped"}, {"stopped", "creating"}} {
+		_, rev, err = store.AdvanceLifecycle(t.Context(), "runtime-alice", "switch", transition[0], transition[1], rev, "codex:fixture", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, matrixRev, err := f.h.store.Load(t.Context(), "runtime-alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.start = service.WorkerStart{InstanceID: "actual/target/start", ProcessID: "target-process", Runtime: "codex"}
+	if _, _, err = f.h.store.Start(t.Context(), "runtime-alice", f.start, matrixRev); err != nil {
+		t.Fatal(err)
+	}
+	f.expect("claim", nil, 409)
+	_, _, err = store.AdvanceLifecycle(t.Context(), "runtime-alice", "switch", "creating", "recovering", rev, "", &f.start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed := f.expect("claim", nil, 200)
+	var targetExecution taskExecution
+	if err := json.Unmarshal(claimed["execution"], &targetExecution); err != nil || targetExecution.Generation != 2 || targetExecution.State != "active" || targetExecution.HandoffID != "" || targetExecution.Checkpoint.Version != 1 {
+		t.Fatalf("target claim did not preserve source checkpoint: %+v %v", targetExecution, err)
+	}
+
 }

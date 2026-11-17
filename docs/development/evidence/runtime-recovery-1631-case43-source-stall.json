@@ -1,0 +1,115 @@
+{
+  "timestamp": "2026-11-17T23:13:49.812120+00:00",
+  "fixture": "recovery-1631-live-20261118-v23",
+  "task_id": "live-hermes-qwenpaw-43",
+  "source": {
+    "controller": "68f97cea4f6ce20532cbb744dfd59179f2e744d7",
+    "hermes": "4542c51b10dbee056d733e8fc139cce75b450225",
+    "qwenpaw": "980cc78fd65269f0f983930952a544afed36ca25",
+    "embedded_common_core": "68f97cea4f6ce20532cbb744dfd59179f2e744d7",
+    "harness_pins": {
+      "hermes_pinned_core": "0169598f0cc502c06ebc2ba320651e982a69033c",
+      "qwenpaw_pinned_core": "525eb10ad61908b4c335bcc229187cb5c67c8028"
+    }
+  },
+  "harness_sdk": {
+    "hermes": "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19",
+    "mautrix": "0.21.1",
+    "qwenpaw": "2.2.2.post1",
+    "matrix-nio": "0.26.0"
+  },
+  "installed_sync_adapter_sha256": {
+    "hermes": "5e1624ad12d720cc6ab8470fac3e4aff608847ed5665173fa31191d1a6f578f0",
+    "qwenpaw": "74ec17280b930148c25e8e79c151177844168c2a75900a0590d30d83153b6d70"
+  },
+  "fixture_driver_sha256": "f0025f2a8ef4201426aea58d7a9e3b71c6f617044468e7076a1bf75d77a1f907",
+  "images": {
+    "controller": {
+      "ref": "recovery-1631/v23-controller:68f97cea",
+      "id": "sha256:47688c782848823f4cf6f46265f29b580dad120a1b0fa8021984a7adbebf5236"
+    },
+    "hermes": {
+      "ref": "recovery-1631/v23-hermes:4542c51",
+      "id": "sha256:68724397ad455fbe32fd4503649e4b7ee5d8dd3e09a040eb1d0b96fbefe99fd3"
+    },
+    "qwenpaw": {
+      "ref": "recovery-1631/v23-qwenpaw:980cc78",
+      "id": "sha256:3937d7557a6d6c5951fccf9e945374c9ae723b53b337f234fcdd1c6d43f6386c"
+    }
+  },
+  "recipe_sha256": {
+    "controller": "161a8b7347bafbf5d8ee91cc2811cb159f28cb53504f3cf1a728287ace0d07af",
+    "qwenpaw": "427152717be8bc8c0b2d16fbc8877cc3b36ea82c6a43194e34aa3e8aee76f66e",
+    "final": "54e73c4cccdabb391cf63e59e3e477ca771e265baa968390498c282ba2f43635",
+    "hermes": "508121bb48414fff29d9d412af89f154e687354160cddfcd5a00af9ada0b977e"
+  },
+  "observed_result": "failed before source execution and cutover",
+  "switch_requested": false,
+  "new_external_room_messages_after_assignment_from_driver": 0,
+  "recovery_e2e_passed": false,
+  "observed_until": "2026-11-17T23:14:36.499787+00:00",
+  "worker_id": "cd62da9c25c972522efe8d7aee2ac9dbff8c1edb845c019e719b9e6711ba6707",
+  "process_start": {
+    "instance_id": "docker/cd62da9c25c972522efe8d7aee2ac9dbff8c1edb845c019e719b9e6711ba6707/2026-11-17T23:08:20.561742863Z",
+    "process_id": "1:1794956900728787929:4635317553ca40bcaeaf53c606825f7c",
+    "runtime": "hermes"
+  },
+  "consumer_count": 1,
+  "room_id": "!JZt9GWOQXTIyJH3hVe:recovery-1631.test",
+  "room_gaps": [],
+  "next_room_anchor": "$HHOaUaezQNPtYM0aVce08U36epQCCqhBYKUfw1fE0mk",
+  "retained_task_inputs": [
+    {
+      "event_id": "$HHOaUaezQNPtYM0aVce08U36epQCCqhBYKUfw1fE0mk",
+      "intent": "task_notification",
+      "work": {
+        "kind": "task",
+        "team_id": "recovery-team",
+        "task_id": "live-hermes-qwenpaw-43"
+      },
+      "native_commit": null
+    }
+  ],
+  "source_room_event_ids": [
+    "$HHOaUaezQNPtYM0aVce08U36epQCCqhBYKUfw1fE0mk"
+  ],
+  "native_read_events": [],
+  "authoritative_task": {
+    "id": "live-hermes-qwenpaw-43",
+    "status": "assigned",
+    "history_actions": [],
+    "generation": null,
+    "checkpoint_version": null
+  },
+  "oracle_effects": [],
+  "unverified": [
+    "The original /sync JSON and its transient gap flags were not captured.",
+    "No source step or container cutover was reached; target continuation and delivery were not exercised."
+  ],
+  "observed_room_events": {
+    "total_visible": 44,
+    "assignment": [
+      {
+        "type": "m.room.message",
+        "event_id": "$HHOaUaezQNPtYM0aVce08U36epQCCqhBYKUfw1fE0mk",
+        "timestamp": 1794956926142,
+        "sender": "@leader:recovery-1631.test",
+        "source_task_text": true,
+        "receipt_status": null,
+        "related": null
+      }
+    ],
+    "source_receipts": [
+      {
+        "type": "com.agentteams.session_receipt",
+        "event_id": "$l2LqQj3vb2qbgpFHdAzBI4_eRILpLnwSUIp3XCSGL2k",
+        "timestamp": 1794956927346,
+        "sender": "@agent-a:recovery-1631.test",
+        "source_task_text": false,
+        "receipt_status": "received",
+        "related": "$HHOaUaezQNPtYM0aVce08U36epQCCqhBYKUfw1fE0mk"
+      }
+    ],
+    "read_count": 0
+  }
+}

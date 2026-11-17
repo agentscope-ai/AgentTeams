@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +33,8 @@ type WorkerHandoff struct {
 	Phase          string                `json:"phase"`
 	Source         WorkerStart           `json:"source"`
 	TargetRuntime  string                `json:"target_runtime"`
+	Target         *WorkerStart          `json:"target,omitempty"`
+	TargetImage    string                `json:"target_image,omitempty"`
 	CheckpointRefs []WorkerCheckpointRef `json:"checkpoint_refs,omitempty"`
 }
 
@@ -66,8 +70,19 @@ func (s WorkerRuntimeStore) Load(ctx context.Context, name string) (*WorkerRunti
 	if !json.Valid(data) || dec.Decode(&state) != nil || state.SchemaVersion != 1 || state.Kind != "WorkerRuntimeState" || state.MemberPrefix != prefix || state.ActiveStart == nil || !validRuntimeStart(*state.ActiveStart) {
 		return nil, "", fmt.Errorf("%w: unsupported or foreign runtime state", ErrWorkerStateInvalid)
 	}
-	if h := state.Handoff; h != nil && ((h.Phase != "preflight" && h.Phase != "draining" && h.Phase != "checkpointed") || !validHandoffID(h.ID) || h.Source != *state.ActiveStart || !validHandoffTarget(h.TargetRuntime)) {
-		return nil, "", fmt.Errorf("%w: unsupported handoff record", ErrWorkerStateInvalid)
+	if op := state.Handoff; op != nil {
+		valid := validHandoffID(op.ID) && validRuntimeStart(op.Source) && validHandoffTarget(op.TargetRuntime)
+		switch op.Phase {
+		case "preflight", "draining", "checkpointed", "stopping", "stopped", "creating":
+			valid = valid && op.Source == *state.ActiveStart && op.Target == nil
+		case "recovering":
+			valid = valid && op.Target != nil && validRuntimeStart(*op.Target) && *op.Target == *state.ActiveStart && op.Target.Runtime == op.TargetRuntime && op.Target.InstanceID != op.Source.InstanceID
+		default:
+			valid = false
+		}
+		if !valid {
+			return nil, "", fmt.Errorf("%w: unsupported handoff record", ErrWorkerStateInvalid)
+		}
 	}
 	return &state, workerMatrixETag(data), nil
 }
@@ -86,15 +101,15 @@ func validHandoffTarget(runtime string) bool {
 
 // Preflight records a planned switch before either instance is modified. An
 // exact retry after a lost response returns the current phase of that operation.
-func (s WorkerRuntimeStore) Preflight(ctx context.Context, name, id, target string, source WorkerStart, expected string) (*WorkerRuntimeState, string, error) {
-	if !validRuntimeStart(source) || !validHandoffTarget(target) || !validHandoffID(id) {
+func (s WorkerRuntimeStore) Preflight(ctx context.Context, name, id, target, image string, source WorkerStart, expected string) (*WorkerRuntimeState, string, error) {
+	if !validRuntimeStart(source) || !validHandoffTarget(target) || !validHandoffID(id) || image == "" {
 		return nil, "", fmt.Errorf("%w: a registered source start, request ID and supported target Harness are required", ErrWorkerStateInvalid)
 	}
 	state, etag, err := s.Load(ctx, name)
 	if err != nil {
 		return nil, "", err
 	}
-	handoff := WorkerHandoff{ID: id, Phase: "preflight", Source: source, TargetRuntime: target}
+	handoff := WorkerHandoff{ID: id, Phase: "preflight", Source: source, TargetRuntime: target, TargetImage: image}
 	if h := state.Handoff; h != nil {
 		if h.ID == id && h.Source == source && h.TargetRuntime == target {
 			return state, etag, nil
@@ -142,6 +157,38 @@ func (s WorkerRuntimeStore) ConfirmCheckpoint(ctx context.Context, name, id stri
 		return nil, "", ErrWorkerStateConflict
 	}
 	op.CheckpointRefs, op.Phase = refs, "checkpointed"
+	return s.save(ctx, state, etag)
+}
+
+// TargetLabel identifies this operation on the actual replacement resource.
+func (h *WorkerHandoff) TargetLabel() string {
+	key, _ := json.Marshal([]string{h.ID, h.Source.InstanceID, h.Source.ProcessID, h.TargetRuntime})
+	digest := sha256.Sum256(key)
+	return hex.EncodeToString(digest[:16])
+}
+
+// AdvanceLifecycle persists intent before any destructive backend action.
+// Only a backend-matched and registered target may become the active process.
+func (s WorkerRuntimeStore) AdvanceLifecycle(ctx context.Context, name, id, from, to, expected, image string, target *WorkerStart) (*WorkerRuntimeState, string, error) {
+	state, etag, err := s.Load(ctx, name)
+	if err != nil {
+		return nil, "", err
+	}
+	op := state.Handoff
+	if op == nil || op.ID != id || op.Phase != from || etag != expected {
+		return nil, "", ErrWorkerStateConflict
+	}
+	switch {
+	case from == "checkpointed" && to == "stopping" && image != "":
+		op.TargetImage = image
+	case from == "stopping" && to == "stopped", from == "stopped" && to == "creating":
+	case (from == "creating" || from == "recovering") && to == "recovering" && target != nil && validRuntimeStart(*target) && target.Runtime == op.TargetRuntime && target.InstanceID != op.Source.InstanceID:
+		op.Target = target
+		state.ActiveStart = target
+	default:
+		return nil, "", ErrWorkerStateInvalid
+	}
+	op.Phase = to
 	return s.save(ctx, state, etag)
 }
 

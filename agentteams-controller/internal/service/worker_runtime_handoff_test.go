@@ -16,7 +16,7 @@ func TestHandoffPreflightConcurrentRequestsKeepOneOperation(t *testing.T) {
 	results := make(chan error, 8)
 	for i := range cap(results) {
 		go func() {
-			_, _, err := store.Preflight(t.Context(), "agent", fmt.Sprintf("op-%d", i), "codex", source, etag)
+			_, _, err := store.Preflight(t.Context(), "agent", fmt.Sprintf("op-%d", i), "codex", "codex:fixture", source, etag)
 			results <- err
 		}()
 	}
@@ -32,14 +32,14 @@ func TestHandoffPreflightConcurrentRequestsKeepOneOperation(t *testing.T) {
 	if err != nil || winners != 1 || after.Handoff.TargetRuntime != "codex" || newETag == etag {
 		t.Fatalf("winners=%d after=%+v err=%v", winners, after, err)
 	}
-	if _, _, err = store.Preflight(t.Context(), "agent", "different", "qwenpaw", source, newETag); !errors.Is(err, ErrWorkerStateConflict) {
+	if _, _, err = store.Preflight(t.Context(), "agent", "different", "qwenpaw", "qwenpaw:fixture", source, newETag); !errors.Is(err, ErrWorkerStateConflict) {
 		t.Fatalf("fresh ETag replaced an in-flight operation: %v", err)
 	}
 	draining, drainETag, err := store.BeginDrain(t.Context(), "agent")
 	if err != nil || draining.Handoff.Phase != "draining" || drainETag == newETag {
 		t.Fatalf("begin drain %v %v", draining, err)
 	}
-	retried, retryETag, err := store.Preflight(t.Context(), "agent", after.Handoff.ID, "codex", source, "")
+	retried, retryETag, err := store.Preflight(t.Context(), "agent", after.Handoff.ID, "codex", "codex:fixture", source, "")
 	if err != nil || retried.Handoff.Phase != "draining" || retryETag != drainETag {
 		t.Fatalf("lost-response retry %v %v", retried, err)
 	}
@@ -59,7 +59,7 @@ func TestHandoffPreflightPreservesUnreadableFutureOrForeignState(t *testing.T) {
 		if err := storage.PutObject(t.Context(), key, []byte(data)); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := store.Preflight(t.Context(), "agent", "op", "codex", source, workerMatrixETag([]byte(data))); !errors.Is(err, ErrWorkerStateInvalid) {
+		if _, _, err := store.Preflight(t.Context(), "agent", "op", "codex", "codex:fixture", source, workerMatrixETag([]byte(data))); !errors.Is(err, ErrWorkerStateInvalid) {
 			t.Fatalf("unexpected result %v", err)
 		}
 		saved, err := storage.GetObject(t.Context(), key)

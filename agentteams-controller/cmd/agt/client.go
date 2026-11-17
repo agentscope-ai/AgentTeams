@@ -72,6 +72,10 @@ func discoverToken() string {
 // Do sends an HTTP request and returns the raw response.
 // body may be nil for methods that have no request body.
 func (c *APIClient) Do(method, path string, body interface{}) (*http.Response, error) {
+	return c.doWithHeaders(method, path, body, nil)
+}
+
+func (c *APIClient) doWithHeaders(method, path string, body interface{}, headers http.Header) (*http.Response, error) {
 	url := c.BaseURL + path
 
 	var bodyReader io.Reader
@@ -88,6 +92,11 @@ func (c *APIClient) Do(method, path string, body interface{}) (*http.Response, e
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
+	for k, values := range headers {
+		for _, value := range values {
+			req.Header.Add(k, value)
+		}
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -105,6 +114,10 @@ func (c *APIClient) DoJSON(method, path string, body, result interface{}) error 
 	if err != nil {
 		return err
 	}
+	return decodeJSONResponse(resp, result)
+}
+
+func decodeJSONResponse(resp *http.Response, result interface{}) error {
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)

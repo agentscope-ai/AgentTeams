@@ -724,6 +724,9 @@ def test_nio_sync_retries_from_authority_and_dispatches_after_ordered_commit(nat
     channel._is_dm_room = AsyncMock(return_value=True)
     channel._announce_session_receipts = AsyncMock()
     channel._send_typing = AsyncMock()
+    channel.access_control_dm = True
+    channel._get_acl_store = lambda: SimpleNamespace(is_whitelisted=lambda _channel, sender: sender == "@human:hs")
+    channel._access_control_gate = AsyncMock(return_value=True)
     channel._e2ee_maintenance = AsyncMock()
     channel._mark_channel_ready = lambda: None
     order, queries, commits = [], [], []
@@ -759,6 +762,9 @@ def test_nio_sync_retries_from_authority_and_dispatches_after_ordered_commit(nat
     async def send(response_type, method, path, **kwargs):
         queries.append(parse_qs(urlsplit(path).query))
         events = [event("$z", "first"), event("$ignored", "NO_REPLY"), event("$a", "second")]
+        blocked = event("$denied", "denied sender")
+        blocked["sender"] = "@unapproved:hs"
+        events.append(blocked)
         response = nio.SyncResponse.from_dict({"next_batch": "n1", "rooms": {"join": {room: {
             "timeline": {"events": events, "limited": False, "prev_batch": "p"}}}}})
         await client.receive_response(response)
@@ -770,8 +776,10 @@ def test_nio_sync_retries_from_authority_and_dispatches_after_ordered_commit(nat
         assert client.next_batch == "n1" and order == []
         channel._announce_session_receipts.assert_not_awaited()
         channel._send_typing.assert_not_awaited()
+        channel._access_control_gate.assert_not_awaited()
         assert await runner.poll()
         assert order == ["commit", "$z", "$a"]
+        channel._access_control_gate.assert_awaited_once()
         assert commits == [["$z", "$a"], ["$z", "$a"]]
         assert "since" not in queries[0] and "since" not in queries[1]
         assert await runner.poll()
@@ -839,4 +847,193 @@ def test_nio_history_page_uses_immutable_anchor_and_native_policy(native_channel
         with pytest.raises(RecoveryConflict, match="undecrypted"):
             await runner.inputs(room, [encrypted])
         await client.close()
+    asyncio.run(scenario())
+
+
+def test_pending_ordinary_message_rebuilds_then_retries_only_saved_reply(native_channel, tmp_path, monkeypatch):
+    import nio
+    from qwenpaw.app.chats.session import SafeJSONSession
+    from qwenpaw_matrix_sync import ManagedNioSync
+    from qwenpaw_message_execution import MessageExecution
+    from worker_matrix_state import matrix_event_key
+
+    worker, room, event_id = "@worker:hs", "!room:hs", "$original"
+    key = matrix_event_key(room, event_id)
+    identity = {"event_key": key, "process_id": "process", "instance_id": "instance", "generation": 2}
+    record = {"room_id": room, "event_id": event_id, "intent": "message", "input": {"sender": "@human:hs",
+              "type": "m.room.message", "origin_server_ts": 1, "content": {"msgtype": "m.text", "body": "Continue."}}}
+    state = {"mode": "resume", "checkpoint": {"version": 1, "completed_steps": ["step one"]}}
+    order = []
+    def claim(_key):
+        assert _key == key
+        return {"execution": {"checkpoint": state["checkpoint"], "generation": 2}, "input": record,
+                "identity": identity, "checkpoint_digest": Recovery.digest(state["checkpoint"]),
+                "recovery": state["mode"], "resume_text": "step one already done. Continue step two.",
+                "saved_result": "saved second step"}
+    def store(actual, text):
+        assert actual == identity and text == "saved second step" and state["mode"] == "resume"
+        order.append("save")
+        state.update(mode="deliver", checkpoint={"version": 2, "reply_txn": "stable"})
+        return claim(key)
+    def delivered(actual, event):
+        assert actual == identity and event == "$reply"
+        order.append("ack")
+        state.update(mode="done", checkpoint={"version": 3, "reply_event": event})
+        return claim(key)
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None, matrix_user_id=worker)
+    channel._user_id = worker
+    client = nio.AsyncClient("https://hs", worker, "D")
+    channel._client = client
+    client.rooms[room] = nio.MatrixRoom(room, worker)
+    def event(identifier, body):
+        return nio.Event.parse_event({"type": "m.room.message", "sender": "@human:hs", "event_id": identifier,
+              "origin_server_ts": 1, "content": {"msgtype": "m.text", "body": body}})
+    previous = event("$accepted-context", "existing workspace discussion")
+    client.room_context = AsyncMock(return_value=nio.RoomContextResponse(room, "p", "n",
+        event(event_id, "Continue."), [event("$never-accepted", "unrelated instruction"), previous], [], []))
+    previous_key = matrix_event_key(room, previous.event_id)
+    channel._workspace = SimpleNamespace(session=SafeJSONSession(str(tmp_path / "sessions")), task_tracker=SimpleNamespace())
+    channel._is_dm_room = AsyncMock(return_value=True)
+    channel._announce_session_receipts = AsyncMock()
+    channel._send_typing = AsyncMock()
+    channel._publish_direct_execution = AsyncMock()
+    async def send(_room, _type, content, *, tx_id):
+        assert (_room, _type, content["body"], tx_id) == (room, "m.room.message", "saved second step", "stable")
+        assert content["m.relates_to"]["m.in_reply_to"]["event_id"] == event_id
+        order.append("send")
+        if order.count("send") == 1:
+            raise TimeoutError("Matrix may already have accepted this transaction")
+        return SimpleNamespace(event_id="$reply")
+    channel._room_send_with_retry = send
+    stored = {key: record, previous_key: {"intent": "context", "input": previous.source}}
+    matrix = SimpleNamespace(input=stored.get, message=lambda _key: claim(_key),
+        message_claim=claim, message_current=lambda actual: claim(actual["event_key"]),
+        message_save_reply=store, message_delivered=delivered)
+    sessions = SimpleNamespace(load=lambda work: {"generation": 2, "checkpoint_digest": Recovery.digest(state["checkpoint"]),
+        "cache": {"native_ref": "matrix:message:" + key + ":lost"}})
+    execution = SimpleNamespace(matrix=matrix, sessions=sessions, lock=asyncio.Lock())
+    execution.messages = MessageExecution(channel, execution)
+    channel._task_execution = execution
+    runner = ManagedNioSync(channel, execution)
+    queued = []
+    channel._enqueue = queued.append
+    async def native_stream(_self, payload):
+        req = channel.build_agent_request_from_native(payload)
+        order.append("inference")
+        await channel._on_process_completed(req, room, {**req.channel_meta,
+            native_channel._MATRIX_STREAMING_FINAL_TEXT_KEY: "saved second step"})
+        yield "done"
+    monkeypatch.setattr(native_channel.BaseChannel, "_stream_with_tracker", native_stream)
+    snapshot = {"state": {"pending": [key], "rooms": {room: {}}}}
+    async def scenario():
+        # No typed event, live callback or new Matrix message.
+        await runner.dispatch(snapshot)
+        await runner.dispatch(snapshot)
+        assert len(queued) == 1
+        payload = queued.pop()
+        req = channel.build_agent_request_from_native(payload)
+        assert req.session_id.startswith("matrix:message:" + key + ":") and not req.session_id.endswith(":lost")
+        assert req.channel_meta["message_execution"] == identity
+        assert "step one already done" in payload["content_parts"][-1].text
+        assert "existing workspace discussion" in payload["content_parts"][0].text
+        assert "unrelated instruction" not in payload["content_parts"][0].text
+        with pytest.raises(TimeoutError):
+            async for _ in channel._stream_with_tracker(payload):
+                pass
+        assert order == ["inference", "save", "send"]
+        assert not execution.messages.turns
+        # A replacement with an empty local session store sees only pending delivery.
+        await ManagedNioSync(channel, execution).dispatch(snapshot)
+        await runner.dispatch(snapshot)
+        assert order == ["inference", "save", "send", "send", "ack"] and not queued
+        state["mode"] = "verify"
+        await runner.dispatch(snapshot)
+        assert not queued
+        await client.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("outcome", ["success", "timeout", "late_timeout", "error"])
+def test_qwenpaw_native_tool_hook_holds_unknown_effects(native_channel, outcome):
+    from agentscope.agent import Agent
+    from agentscope.message import TextBlock, ToolCallBlock
+    from agentscope.tool import ToolResponse
+    path = Path(native_channel.__file__).with_name("session_receipts.py")
+    spec = importlib.util.spec_from_file_location("_native_message_hook", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    order = []
+    identity = {"event_key": "key", "generation": 2, "instance_id": "i", "process_id": "p"}
+    call = ToolCallBlock(id="call-one", name="write_artifact", input='{"path":"output"}')
+    def begin(actual, calls):
+        assert actual == identity and calls == [{"id": "call-one", "name": "write_artifact", "arguments": {"path": "output"}}]
+        order.append("started")
+        return "operation"
+    def finish(actual, operation, results):
+        assert actual == identity and operation == "operation" and results[0]["content"][0]["text"] == "saved"
+        order.append("verified")
+        return {"checkpoint_digest": "v2"}
+    turn = {"identity": identity, "lock": asyncio.Lock()}
+    matrix = SimpleNamespace(message_begin_tools=begin, message_finish_tools=finish)
+    messages = SimpleNamespace(matrix=matrix, turns={"key": turn})
+    channel = SimpleNamespace(_task_execution=SimpleNamespace(messages=messages))
+    ctx = SimpleNamespace(request=SimpleNamespace(channel_meta={"message_execution": identity}),
+        workspace=SimpleNamespace(channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel))))
+    async def invoke(_call):
+        assert _call is call
+        order.append("effect")
+        if outcome == "timeout":
+            raise TimeoutError("outcome unknown")
+        yield ToolResponse(state="success" if outcome == "late_timeout" else outcome, content=[TextBlock(text="saved")])
+        if outcome == "late_timeout":
+            raise TimeoutError("tool stream disconnected during finalization")
+    agent = SimpleNamespace(_acting_middlewares=[module.SessionReceiptMiddleware(ctx)], _acting_impl=invoke)
+    async def scenario():
+        if outcome == "success":
+            results = [r async for r in Agent._acting(agent, call)]
+            assert len(results) == 1 and turn["checkpoint_digest"] == "v2"
+            assert order == ["started", "effect", "verified"]
+        else:
+            with pytest.raises(TimeoutError if "timeout" in outcome else RecoveryConflict):
+                async for _ in Agent._acting(agent, call):
+                    pass
+            assert order == ["started", "effect"]
+        messages.turns.clear()
+        with pytest.raises(RecoveryConflict, match="replaced"):
+            async for _ in Agent._acting(agent, call):
+                pass
+    asyncio.run(scenario())
+
+
+def test_ordinary_message_cache_requires_native_bytes_and_latest_shared_version(native_channel, tmp_path):
+    from qwenpaw.app.chats.session import SafeJSONSession
+    from qwenpaw_message_execution import MessageExecution
+    from worker_sessions import WorkerSessions
+
+    channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None)
+    store = SafeJSONSession(str(tmp_path / "sessions"))
+    channel._workspace = SimpleNamespace(session=store, task_tracker=SimpleNamespace())
+    key, room = "a" * 64, "!room:hs"
+    session = "matrix:message:" + key + ":original"
+    identity = {"event_key": key, "process_id": "process", "instance_id": "instance", "generation": 2}
+    view = {"generation": 2, "checkpoint_version": 1, "checkpoint_digest": "digest",
+            "config_generation": 3, "runtime": "qwenpaw", "compatible": True}
+    claim = {"identity": identity, "input": {"room_id": room}, "execution": {"checkpoint": {}},
+             "recovery": "resume", "checkpoint_digest": "digest", "resume_text": "continue"}
+    matrix = SimpleNamespace(message=lambda _: claim, message_claim=lambda _: claim, message_current=lambda _: claim)
+    sessions = WorkerSessions("qwenpaw", recovery=SimpleNamespace())
+    sessions.load = lambda _: view
+    messages = MessageExecution(channel, SimpleNamespace(matrix=matrix, sessions=sessions))
+    async def scenario():
+        await store.save_session_state(session_id=session, user_id=room, channel=channel.channel,
+                                       agent=SimpleNamespace(state_dict=lambda: {"native": "saved"}))
+        saved = await messages.native_state(session, room)
+        cache = {**view, "runtime": "qwenpaw", "native_ref": session, "native_digest": Recovery.digest(saved),
+                 "expires_at": 9999999999}
+        for changes, reused in [({}, True), ({"expires_at": 1}, False), ({"checkpoint_version": 0}, False),
+                                ({"config_generation": 1}, False), ({"native_digest": "changed"}, False)]:
+            view["cache"] = {**cache, **changes}
+            turn = await messages.admit(key)
+            assert (turn["session_id"] == session) is reused
+            assert turn["rebuild"] is not reused
     asyncio.run(scenario())

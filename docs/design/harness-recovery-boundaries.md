@@ -77,13 +77,15 @@ prove its tools are registered in the Agent's native runtime.
 | Real case27 | QwenPaw5272ce2/Core4c680c6c source session/cache/checkpoint4 consistency passed after the ordering fix. Hermes965b612/Shared05967bf6 continued steps once at generations1/2/2 and delivered the authoritative report; Leader accepted the Task | Strict no-new-room-message check failed: nine automatic Leader tool-status events arrived before the Worker's final report. No event was discarded and the check remains in place. This is partial evidence, not a third accepted direction. |
 | Real case28 | Hermes→QwenPaw on the pinned candidates passed the complete three-step checks: absent target Task cache, fresh native session, generation1→2, checkpoint4→10, effects once, artifact/report hashes, one final reply and no external Matrix input after stop. Final QwenPaw session and cache digests match | This adds the third accepted directed lane, not a complete Harness scenario set. Local source overlays, plaintext Matrix and the configured quiet test Leader are explicit fixture boundaries. |
 | Real case29 | QwenPaw normal restart passed: same container with a new actual process start/generation, same valid native session reused, checkpoint4→10, effects once, matching artifacts/report, one final reply and no external Matrix input | Does not prove abnormal exit, same-Harness container replacement, missing/expired sessions, saved-result-only delivery or uncertain-effect verification. |
+| Real case30 | QwenPaw→Hermes passed: source QwenPawe0bc7bb/shared67dba059 had a valid native cache at checkpoint4; Hermes965b612/shared05967bf6 had no Task session, claimed generation2 and rebuilt from authority. Checkpoint4→12, steps once at generations1/2/2, matching artifacts/report, one final reply and no external Matrix input. Controller and Langfuse trace readback passed | This adds the fourth directed lane. It uses local source overlays, plaintext Matrix and a quiet test Leader; it does not cover saved-reply faults, full fault/session coverage or Dashboard UI. |
 
 Evidence is under [the recovery record](../development/runtime-recovery-1631.md)
 and its adjacent `evidence/` directory. Configuration and protocol test counts
 must never be presented as the six-Harness execution matrix.
 
-Accepted directed lanes are currently3/30: case20 Hermes→DSH, case21
-DSH→Hermes and case28 Hermes→QwenPaw, each at its recorded sources. Case29 is
+Accepted directed lanes are currently4/30: case20 Hermes→DSH, case21
+DSH→Hermes, case28 Hermes→QwenPaw and case30 QwenPaw→Hermes, each at its
+recorded sources. Case29 is
 a same-Harness normal-restart/valid-session scenario and adds no cross-Harness
 direction. No Harness has completed its full required scenario set. Recorded
 live fixtures use `AGENTTEAMS_MATRIX_E2EE=0`; they do not validate encrypted
@@ -105,6 +107,14 @@ native session and eight model observations. Dashboardv1.4.1 on the isolated
 fixture reached the workspace with token login, but navigating to Tracing
 returned to a rejected-login page. That UI path remains failed/unaccepted;
 the underlying authentication cause is not established.
+
+Case30 Hermes traces `74acad0de8d6cef9a6ecbd2ff1e9461d` and
+`64e484a76834eca50ef1032442769af1` were read through both Controller and
+Langfuse with explicit Task/team/generation2, room/event and native session
+`20261117_095017_66399845`. This confirms those fields on the new fixture;
+it does not retroactively validate the earlier case27 Controller query or the
+Dashboard UI. QwenPaw's candidate pin now consumes shared67dba059 after its
+independent test/image/native-smoke CI passed.
 
 Before full acceptance, complete six same-Harness and30 directed lanes, normal
 and abnormal restart/replacement, valid reuse, lost/expired/stale sessions,

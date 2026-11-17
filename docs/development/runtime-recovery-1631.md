@@ -788,3 +788,34 @@ around the real launch preamble with both clean-shutdown marker values, retain
 device/cursor/synthetic crypto snapshot, and isolate a different device. This
 does not prove a real SIGKILL/WAL crash, encrypted traffic, replacement snapshot
 or native Task recovery. The candidate remains Draft and unpinned by Core.
+
+### Case30: QwenPaw→Hermes strict continuation passed
+
+[Case30 proof](evidence/runtime-recovery-1631-case30-verified.json) uses
+QwenPaw`e0bc7bb5`/shared`67dba059` → Hermes`965b612a`/shared`05967bf6`,
+Controller binary`774d6285` and the recorded driver hash. QwenPaw's new
+independent test/image/native-smoke CI passed; Core's candidate pin now selects
+that revision. The local source overlay initially lacked the canonical
+`chmod +x mc-wrapper.sh`, and failed before any Task was assigned. A new image
+restored the executable mode and passed actual `mc`/SDK/entrypoint preflight;
+the failed overlay and startup evidence remain recorded separately.
+
+Task`live-qwenpaw-hermes-30` had a native read/ACK and checkpoint4 with step one
+complete, a matching QwenPaw cache/transcript and no running helper. The target
+had no Hermes Task session. Docker die/destroy preceded target creation.
+Without external Matrix input, Hermes claimed generation2, created its native
+conversation and continued steps two/three. The independent ledger contains
+exactly three effects at generations1/2/2. Checkpoint12 is submitted/delivered;
+artifacts and the canonical report match, and final event
+`$k2Qv6pxJaqQa1wDtpm_G6tNQ_dcc9MZVHxuY_hrxL_4` appears exactly once.
+The strict query found zero external room messages between stop and that reply.
+The Worker and main Task subsequently reached completed. Native Leader review
+remained enabled; its effective tool-progress setting was verified off before
+cutover. No Matrix backlog or old native session was cleared.
+
+Controller and direct Langfuse readback both verified traces
+`74acad0de8d6cef9a6ecbd2ff1e9461d` and
+`64e484a76834eca50ef1032442769af1`, including Task/team/generation2,
+room/event and native session`20261117_095017_66399845`. Dashboard UI was not
+tested on this fixture. This accepts the fourth directed lane (4/30), not the
+full Harness scenario set. Real saved-result delivery fault testing is separate.

@@ -73,3 +73,11 @@ def test_self_execution_uses_controller_without_opt_in(tmp_path, monkeypatch, ki
     result = coordination.deliver_event(kind, recipient="@leader:test", task_id="t")
     assert result["sent"]
     assert captured[0].full_url == "http://controller:8090/api/v1/coordination/events"
+
+
+@pytest.mark.parametrize("kind", ["task_assigned", "task_submitted"])
+def test_missing_identities_do_not_enable_self_execution_transport(monkeypatch, kind):
+    monkeypatch.delenv("TEAMHARNESS_COORDINATION_URL", raising=False)
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller:8090")
+    monkeypatch.setattr(coordination, "_matrix_user_id", lambda: "")
+    assert coordination.deliver_event(kind, recipient="", task_id="t") is None

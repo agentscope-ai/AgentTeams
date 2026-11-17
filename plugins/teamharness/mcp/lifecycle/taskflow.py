@@ -1292,7 +1292,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
         if action == "report_progress":
             if role not in {"worker", "remote-member", "leader"}:
                 raise ValueError(
-                    "report_progress requires worker or remote-member role"
+                    "report_progress requires an execution role"
                 )
             task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
             # W2 round 11 (#1467): authoritative task, fail closed — the

@@ -1544,12 +1544,14 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         "payload": {
             "taskId": task_id,
             "status": "SUCCESS",
-            "summary": "This should be rejected for leader role.",
+            "summary": "A completed task cannot be submitted again.",
             "deliverables": ["shared/tasks/t-001/result.md"],
         },
     })
-    if forbidden_submit.get("ok") or "worker or remote-member role" not in forbidden_submit.get("error", ""):
-        raise AssertionError(f"leader role should not submit: {forbidden_submit!r}")
+    if (forbidden_submit.get("ok")
+            or forbidden_submit.get("error") != "illegal_transition"
+            or forbidden_submit.get("from") != "completed"):
+        raise AssertionError(f"leader must not resubmit a completed task: {forbidden_submit!r}")
 
     os.environ["AGENTTEAMS_WORKER_ROLE"] = "worker"
     remote_ack = payload("taskflow", {

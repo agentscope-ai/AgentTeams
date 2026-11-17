@@ -30,9 +30,10 @@ def native_team_members(team_id: str) -> list[dict[str, Any]]:
 
 
 def deliver_event(kind: str, **event: Any) -> dict[str, Any] | None:
+    actor = _matrix_user_id()
     endpoint = os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip().rstrip("/")
     if not endpoint and ((kind == "handoff" and event.get("tasks")) or
-                         (kind in {"task_assigned", "task_submitted"} and event.get("recipient") == _matrix_user_id())):
+                         (kind in {"task_assigned", "task_submitted"} and actor and event.get("recipient") == actor)):
         controller = os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip().rstrip("/")
         if controller:
             endpoint = controller + "/api/v1/coordination"
@@ -47,7 +48,7 @@ def deliver_event(kind: str, **event: Any) -> dict[str, Any] | None:
         except ImportError:
             pass
         request = urllib.request.Request(endpoint + "/events", method="POST",
-            data=json.dumps({**event, "kind": kind, "actor": _matrix_user_id()}).encode(), headers=headers)
+            data=json.dumps({**event, "kind": kind, "actor": actor}).encode(), headers=headers)
         with urllib.request.urlopen(request, timeout=5) as response:
             data = json.load(response)
         if isinstance(data, dict) and data.get("external"):

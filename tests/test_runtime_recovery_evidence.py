@@ -110,6 +110,27 @@ class OpenClawCacheTests(unittest.TestCase):
             assert_openclaw_native_cache({"cache": cache, "native": native}, {**cp, "version": 11})
 
 
+class HermesSharedCacheTests(unittest.TestCase):
+    def test_common_descriptor_requires_matching_native_and_authoritative_state(self):
+        import hashlib
+        import json
+        import time
+        from runtime_recovery_e2e import assert_hermes_native_cache
+        cp = {"version": 4, "completed_steps": ["one"]}
+        cache = {"schema_version": 1, "kind": "WorkerSessionCache", "member_prefix": "agents/agent-a", "runtime": "hermes",
+                 "work": {"kind": "task", "team_id": "recovery-team", "task_id": "T"}, "native_ref": "native-session",
+                 "native_digest": "a"*64, "expires_at": time.time()+60, "checkpoint_version": 4, "config_generation": 3,
+                 "checkpoint_digest": hashlib.sha256(json.dumps(cp,sort_keys=True,separators=(",", ":")).encode()).hexdigest()}
+        proof = {"cache": cache, "native_digest": "a"*64, "message_count": 4, "tool_count": 1, "task_mentioned": True, "config_generation": 3}
+        assert_hermes_native_cache(proof, cp, "T")
+        for changed in [{"native_digest": "other"}, {"tool_count": 0}, {"task_mentioned": False}, {"config_generation": 4}, {"cache": None}]:
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                assert_hermes_native_cache({**proof, **changed}, cp, "T")
+        for changed in [{"checkpoint_version": 3}, {"checkpoint_digest": "old"}, {"member_prefix": "agents/other"}, {"expires_at": 1}]:
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                assert_hermes_native_cache({**proof, "cache": {**cache, **changed}}, cp, "T")
+
+
 class CutoverBoundaryTests(unittest.TestCase):
     def test_source_snapshot_is_persisted_before_any_lifecycle_mutation(self):
         import json

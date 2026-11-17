@@ -260,6 +260,31 @@ journal=home/"runtime/codex-bridge-state.json"
 cache=json.loads(journal.read_text()).get("task_sessions",{}).get("recovery-team/"+task_id) if journal.exists() else None
 hermes=[r for r in rows if r.get("event")=="task.recovery.session" and r.get("task_id")==task_id]
 counts={}; db=home/".hermes/state.db"
+hermes_shared=None
+try:
+ from hermes_matrix.session_cache import session_fingerprint
+except ImportError:
+ pass # Historical SDK images keep their original evidence boundary.
+else:
+ import subprocess
+ from gateway.config import GatewayConfig
+ from gateway.session import SessionStore
+ work_key=hashlib.sha256(json.dumps(['agents/agent-a','task','recovery-team',task_id],ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+ object_key='agents/agent-a/runtime/sessions/hermes/'+work_key+'.json'
+ fetched=subprocess.run(['mc','cat',os.environ['AGENTTEAMS_STORAGE_PREFIX'].rstrip('/')+'/'+object_key],capture_output=True,text=True)
+ descriptor=json.loads(fetched.stdout) if fetched.returncode==0 else None
+ hermes_shared={'cache':descriptor,'native_digest':None,'message_count':0,'tool_count':0,'task_mentioned':False}
+ if descriptor:
+  store=SessionStore(home/'.hermes/sessions',GatewayConfig())
+  entry=next((s for s in store.list_sessions() if s.session_id==descriptor['native_ref']),None)
+  if entry:
+   fingerprint=session_fingerprint(store,entry)
+   native_db=store._db_for_key(entry.session_key)
+   tip=native_db.get_compression_tip(entry.session_id) or entry.session_id
+   messages=native_db.get_messages(tip,include_ancestors=True)
+   hermes_shared.update(native_digest=fingerprint,message_count=len(messages),tool_count=sum(r.get('role')=='tool' for r in messages),task_mentioned=task_id in json.dumps(messages))
+  config=__import__('yaml').safe_load((home/'runtime/runtime.yaml').read_text())
+  hermes_shared['config_generation']=config['metadata'].get('generation',0)
 if db.exists():
  with sqlite3.connect('file:'+str(db)+'?mode=ro',uri=True) as connection:
   for r in hermes:
@@ -279,7 +304,7 @@ if qwen:
   native=json.loads(path.read_text())
   if digest(native)==qwen['native_digest']:
    qwen_native.append({'file':path.name,'native_digest':digest(native),'agent_state_present':bool(native.get('agent')),'task_mentioned':task_id in json.dumps(native)})
-print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,
+print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,"hermes_shared":hermes_shared,
     "hermes_cache":[r for r in rows if r.get("event")=="task.recovery.cache" and r.get("task_id")==task_id],"codex":cache,
     "qwenpaw":qwen,"qwenpaw_native":qwen_native,"openclaw_cache":openclaw_cache,
     "openhuman":{"cache":openhuman_cache,"authority":openhuman_authority}}))
@@ -394,6 +419,8 @@ def cutover():
     before["tool_processes"] = fixture_tool_processes()
     if before["instances"][1]["id"] != old["Id"] or before["task"]["execution"] != task["execution"]:
         raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
+    if MODE == "restart" and SOURCE == "hermes":
+        assert_hermes_native_cache(before["native_sessions"]["hermes_shared"], cp, TASK_ID)
     with boundary_path.open("x") as stream:
         json.dump(before, stream, indent=2)
     started = int(time.time())
@@ -575,6 +602,8 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         assert cache["expires_at"] > before["recorded_at"]
         digest = hashlib.sha256(json.dumps(before["task"]["execution"]["checkpoint"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         assert cache["checkpoint_digest"] == digest
+        assert_hermes_native_cache(before["native_sessions"]["hermes_shared"],
+            before["task"]["execution"]["checkpoint"], TASK_ID)
         resumed = native["hermes"][-1]
         assert resumed["session_id"] == cache["session_id"] and resumed["reused"] is True
     controller = json.loads(docker("inspect", CONTROLLER))[0]
@@ -597,6 +626,20 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     path = Path("/tmp/1631-live-" + CASE + "-verified.json")
     path.write_text(json.dumps(proof, indent=2))
     print(json.dumps({"passed": True, "evidence": str(path), **proof}))
+
+
+def assert_hermes_native_cache(proof, checkpoint, task_id):
+    assert proof and proof.get("cache"), "shared Hermes session descriptor must be durable before a valid-reuse cutover"
+    cache = proof["cache"]
+    assert cache["schema_version"] == 1 and cache["kind"] == "WorkerSessionCache"
+    assert cache["member_prefix"] == "agents/agent-a" and cache["runtime"] == "hermes"
+    assert cache["work"] == {"kind": "task", "team_id": "recovery-team", "task_id": task_id}
+    assert cache["expires_at"] > time.time() and cache["native_ref"]
+    assert cache["checkpoint_version"] == checkpoint["version"]
+    assert cache["checkpoint_digest"] == hashlib.sha256(json.dumps(checkpoint, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert cache["config_generation"] == proof["config_generation"]
+    assert proof["native_digest"] and cache["native_digest"] == proof["native_digest"]
+    assert proof["message_count"] > 0 and proof["tool_count"] > 0 and proof["task_mentioned"]
 
 
 def assert_openhuman_native_cache(proof, checkpoint, task_id):

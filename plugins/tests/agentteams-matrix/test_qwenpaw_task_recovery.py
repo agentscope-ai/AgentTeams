@@ -777,6 +777,13 @@ def test_nio_sync_retries_from_authority_and_dispatches_after_ordered_commit(nat
         assert await runner.poll()
         assert queries[-1]["since"] == ["n1"]
         assert order.count("$z") == order.count("$a") == 1
+        # The replacement SDK has no in-memory rooms. A quiet full-state
+        # response can have exactly the same token as the previous process.
+        runner.ready = False
+        client.rooms.clear()
+        assert await runner.poll()
+        assert room in client.rooms
+        assert order.count("$z") == order.count("$a") == 1
         await client.close()
     asyncio.run(scenario())
 

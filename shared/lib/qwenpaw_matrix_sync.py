@@ -87,7 +87,10 @@ class ManagedNioSync:
                                         format="matrix-nio/sync-v3")
         # nio falls back to either private field when 'since' is empty and
         # suppresses decoding a response whose token equals its in-memory token.
-        self.client.next_batch = self.client.loaded_sync_token = consumer["token"]
+        # A new SDK still needs full room state when the server has no new
+        # events and returns exactly the already durable token.
+        self.client.next_batch = consumer["token"] if self.ready else ""
+        self.client.loaded_sync_token = ""
         response = await self.client.sync(since=consumer["token"] or None, full_state=not self.ready,
                                           timeout=self.channel.sync_timeout_ms if self.ready else 0)
         if not isinstance(response, SyncResponse):

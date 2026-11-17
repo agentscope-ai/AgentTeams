@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
@@ -79,6 +80,14 @@ func (h *TaskRecoveryHandler) currentInstance(ctx context.Context, caller *authp
 	if err != nil {
 		return "", "", err
 	}
+	return h.runningWorkerInstance(ctx, w)
+}
+
+func (h *TaskRecoveryHandler) runningWorkerInstance(ctx context.Context, w *v1beta1.Worker) (string, string, error) {
+	if h.deps.Backend == nil {
+		return "", "", fmt.Errorf("worker backend unavailable")
+	}
+	var err error
 	recorded := w.Status.BackendRuntime
 	if recorded == "" {
 		recorded = w.Spec.GetBackendRuntime()

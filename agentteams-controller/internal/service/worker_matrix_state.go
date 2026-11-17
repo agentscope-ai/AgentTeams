@@ -208,9 +208,17 @@ func (s *WorkerMatrixStore) commit(ctx context.Context, state *WorkerMatrixState
 		return nil, "", err
 	}
 	key := state.MemberPrefix + "/runtime/matrix/state.json"
+	if err := putWorkerRuntimeJSON(ctx, s.Storage, key, data, etag); err != nil {
+		return nil, "", err
+	}
+	return state, workerMatrixETag(data), nil
+}
+
+func putWorkerRuntimeJSON(ctx context.Context, storage oss.StorageClient, key string, data []byte, etag string) error {
+	var err error
 	if etag == "" {
-		err = s.Storage.PutObjectIfAbsent(ctx, key, data)
-	} else if strict, ok := s.Storage.(interface {
+		err = storage.PutObjectIfAbsent(ctx, key, data)
+	} else if strict, ok := storage.(interface {
 		PutObjectIfMatchStrict(context.Context, string, []byte, string) error
 	}); ok {
 		err = strict.PutObjectIfMatchStrict(ctx, key, data, etag)
@@ -218,12 +226,9 @@ func (s *WorkerMatrixStore) commit(ctx context.Context, state *WorkerMatrixState
 		err = oss.ErrConditionalUnsupported
 	}
 	if errors.Is(err, oss.ErrPreconditionFailed) {
-		return nil, "", ErrWorkerStateConflict
+		return ErrWorkerStateConflict
 	}
-	if err != nil {
-		return nil, "", err
-	}
-	return state, workerMatrixETag(data), nil
+	return err
 }
 
 func (s *WorkerMatrixStore) Start(ctx context.Context, name string, start WorkerStart, expected string) (*WorkerMatrixState, string, error) {

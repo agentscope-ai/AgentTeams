@@ -5,7 +5,9 @@ description: "Use when you act as Worker: receive TASK_ASSIGNED, acknowledge the
 
 # Task Execution
 
-Use this skill when executing assigned work as a Worker or remote member.
+Use this skill when executing assigned work as a Worker, remote member, or
+Leader executing your own subtask. Keep your runtime identity; acknowledge
+and submit only tasks assigned to you, including when you are the Leader.
 
 Claim only tasks assigned to you. Read the task spec, keep deliverables in the
 task directory, ask focused blocker questions, and submit a structured result.

@@ -23,6 +23,7 @@ from mcp.common.errors import (
 )
 from mcp.common.identity import _canonical_account, _canonical_assignee
 from mcp.common.io import _atomic_write_text, _read_json, _safe_read_bytes, _utc_timestamp
+
 from mcp.common.payload import _first_text, _payload, _safe_id
 from mcp.common.paths import _project_state_path, _task_dir, _task_state_path, _task_result_path
 from mcp.artifact.publish import (
@@ -32,7 +33,16 @@ from mcp.artifact.publish import (
 )
 from mcp.artifact.sync import _load_authoritative_task, _load_authoritative_task_optional
 from mcp.project.state import _loop_pause_state
-from mcp.room.matrix import _assignee_matrix_id, _matrix_user_id, _team_human_matrix_ids, _team_leader_matrix_id
+from mcp.room.matrix import (
+    _assignee_matrix_id,
+    _matrix_user_id,
+    _team_human_matrix_ids,
+    _team_leader_matrix_id,
+    _team_member_lookup,
+    _team_roster_configured,
+    _team_roster_name_seen,
+)
+
 from mcp.room.notify import _send_attention_notification, _task_completion_notification
 from .review import (
     ProtocolGuardError,
@@ -104,6 +114,7 @@ def _require_task_assignee(task: dict[str, Any]) -> None:
 
 _TASKFLOW_MUTATING_ACTIONS = frozenset({
     "delegate_task",
+    "register_delegated_task",
     "ack_task",
     "submit_task",
     "cancel_task",
@@ -448,8 +459,41 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     if isinstance(item, dict) and item.get("task_id") == task_id:
                         assigned_to = str(item.get("assigned_to") or "").strip()
                         break
+            # Roster gate (C-2): the recipient must resolve against the team
+            # roster BEFORE any write or notification. A short name that
+            # exactly equals a members[].name is resolved to its mxid; any
+            # other unknown recipient fails closed (no case/fuzzy match).
+            # Standalone runs have no roster and keep the legacy
+            # pass-through.
+            by_id, by_name = _team_member_lookup()
+            if by_id or by_name:
+                matrix_id = ""
+                if assigned_to in by_id:
+                    matrix_id = assigned_to
+                elif assigned_to in by_name:
+                    matrix_id = str(by_name[assigned_to].get("matrixUserId") or "").strip()
+                    if matrix_id and not _assignee_matrix_id(assigned_to):
+                        matrix_id = ""
+                else:
+                    candidate = _assignee_matrix_id(assigned_to)
+                    if candidate and candidate != assigned_to:
+                        matrix_id = candidate
+                if not matrix_id:
+                    if not _team_roster_name_seen(assigned_to):
+                        available = ", ".join(sorted(by_id)) or "(none)"
+                        raise ValueError(
+                            f"unknown recipient: {assigned_to}; available: {available}"
+                        )
+                    # A roster-known but ambiguous name falls through to
+                    # the Matrix identity guard below ("cannot resolve an
+                    # assignee to one Matrix identity").
+                elif assigned_to in by_name:
+                    # An exact members[].name match records the resolved
+                    # mxid on the task; names resolved through the
+                    # broader identity lookup keep the given name.
+                    assigned_to = matrix_id
             assignment_mxid = _assignee_matrix_id(assigned_to)
-            if assigned_to and not assignment_mxid and os.getenv("AGENTTEAMS_MATRIX_URL", "").strip() and os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "").strip():
+            if assigned_to and not assignment_mxid and _team_roster_configured() and os.getenv("AGENTTEAMS_MATRIX_URL", "").strip() and os.getenv("AGENTTEAMS_WORKER_MATRIX_TOKEN", "").strip():
                 raise ValueError(
                     f"cannot resolve assignee {assigned_to!r} to one Matrix identity; "
                     "use a full Matrix user ID or an unambiguous team roster name"
@@ -796,6 +840,50 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     task,
                     summary=f"delegate_task: {task_id} assigned to {assigned_to}",
                 ),
+            }
+        if action == "register_delegated_task":
+            # Runtime-callable receipt registration: start from shared state
+            # and publish the receipt before reporting registration success.
+            if role not in {"worker", "remote-member"}:
+                raise ValueError("register_delegated_task requires worker or remote-member role")
+            task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
+            task = _load_authoritative_task_optional(arguments, task_id)
+            if not task:
+                return {
+                    "ok": False,
+                    "tool": "taskflow",
+                    "action": action,
+                    "reason": "unknown_task",
+                }
+            _require_task_mutable(arguments, task, task_id, action)
+            if not task.get("task_id") and task.get("taskId"):
+                task["task_id"] = str(task["taskId"])
+            delegation_id = str(
+                payload.get("delegationId")
+                or payload.get("delegation_id")
+                or arguments.get("delegationId")
+                or arguments.get("delegation_id")
+                or f"delegate-{task_id}"
+            ).strip() or f"delegate-{task_id}"
+            already_registered = bool(_first_text(task.get("ack_received_at")))
+            if not already_registered:
+                task["delegation_id"] = delegation_id
+            task["ack_received_at"] = _utc_timestamp()
+            _write_task(arguments, task)
+            if not _sync_task(arguments, task_id, exclude=["spec.md", "base/"]):
+                return _sync_failure_result({
+                    "tool": "taskflow",
+                    "action": action,
+                    "taskId": task_id,
+                }, "register_delegated_task")
+            return {
+                "ok": True,
+                "tool": "taskflow",
+                "action": action,
+                "taskId": str(task.get("task_id") or task_id),
+                "registered": True,
+                "ackReceivedAt": task["ack_received_at"],
+                "alreadyRegistered": already_registered,
             }
         if action == "ack_task":
             if role not in {"worker", "remote-member", "leader"}:

@@ -1176,3 +1176,39 @@ the turn after turn-start compaction. Its persistence helper logs failures.
 The remaining native guard must therefore verify actual saved SDK rows and
 propagate failure before any inference, including compaction, rather than
 equating a hook callback, receipt scan or session routing ID with that fact.
+
+### Hermes native input guard and independent read delivery
+
+The companion now wraps the pinned SDK prologue call site directly, outside
+the fail-open plugin dispatcher. It uses the actual SDK writer, then reads the
+current user row back by its SDK row ID and platform event ID before submitting
+the common native fact. Missing shared input, disabled/failed persistence,
+unreadable rows or failed common CAS stop the turn before plugin hooks,
+turn-start compaction or inference. Startup without a real Matrix source does
+not manufacture input facts. Repeated native flushes retain one user row.
+
+Five actual-SDK tests pass, including a full native turn against a deterministic
+local streaming model endpoint and a CAS-failure turn making no inference or
+compaction call. The constructor's model-name-only `/api/show` capability query
+is recorded separately from inference. These are fixture-authority/model tests,
+not a new real-model Task continuation pass. Initial verification mistakes
+(non-streaming fixture and classifying `/api/show` as inference) were corrected
+without weakening the native ordering assertions.
+
+The independent managed Hermes read scanner also waits for a current common
+native fact matching the actual SDK session row. An SDK row alone cannot race
+ahead of a pending/failed common commit. Legacy or unconfigured installations
+retain their previous read boundary. Common/receipt recovery tests pass90,
+with1 optional native-OpenClaw skip and15 subtests.
+
+Hermes e803 CI44179805992 failed its upgrade fixture because a random seed's
+numeric suffix plus `:` and nonce matched the SDK Telegram-token redactor.
+Actual native inference and Matrix delivery retained history but masked the
+nonce. c628197 changes the synthetic proof separator to `|`, retains exact
+seed+nonce assertions and leaves egress redaction enabled. Matching
+CI44181973721 passed including plain/encrypted cold restore, second restart
+and old-key decryption; publication skipped. QwenPaw66e image CI44180199934
+failed a localhost custom-provider API timeout in its managed-model smoke.
+Local exact-image reproduction passed with zero catalog/model calls; cause
+remains unconfirmed. d5ee25f adds failure diagnostics without changing timeout,
+assertions or product behavior; matching CI44183066683 is running.

@@ -144,9 +144,30 @@ def scan_inputs(receipts, runtime, offsets):
         path = workspace / ".hermes/state.db"
         if path.exists():
             with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
-                rows = db.execute("""SELECT platform_message_id FROM messages m JOIN sessions s
+                rows = db.execute("""SELECT platform_message_id,m.session_id FROM messages m JOIN sessions s
                     ON m.session_id=s.id WHERE s.source='matrix' AND m.role='user'
                     AND platform_message_id IS NOT NULL""").fetchall()
+            from task_recovery import enabled
+            if enabled():
+                from worker_matrix_state import WorkerMatrix, matrix_event_key
+                matrix = WorkerMatrix("hermes")
+                with receipts.connect() as db:
+                    pending = db.execute("""SELECT DISTINCT room,event FROM receipts
+                        WHERE status='received' AND event NOT IN (SELECT event FROM committed)""").fetchall()
+                native_rows = set(rows)
+                committed = []
+                for room, event in pending:
+                    key = matrix_event_key(room, event)
+                    if matrix.input(key) is None:
+                        continue  # Legacy rows have no new-standard fact.
+                    view = matrix.native_input(key)
+                    fact = view["input"].get("native_commit") or {}
+                    if (view.get("current") and fact.get("runtime") == "hermes"
+                            and (event, fact.get("native_ref")) in native_rows
+                            and fact.get("native_digest")):
+                        committed.append(event)
+                receipts.committed(committed)
+                return
             receipts.committed([row[0] for row in rows])
     elif runtime in {"openhuman", "deepseek"}:
         directory = "matrix-sessions" if runtime == "openhuman" else "dsh-checkpoints"

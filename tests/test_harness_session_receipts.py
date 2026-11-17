@@ -9,7 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shared/lib"))
@@ -127,6 +127,39 @@ class HarnessReceiptTests(unittest.TestCase):
         scan_inputs(self.receipts, "hermes", {})
         self.assertTrue({("$input", "read"), ("$retained", "read")} <= self.states())
         self.assertNotIn(("$truncated", "read"), self.states())
+
+    def test_managed_hermes_read_waits_for_matching_common_native_fact(self):
+        path = self.root / ".hermes/state.db"
+        path.parent.mkdir(parents=True)
+        with sqlite3.connect(path) as db:
+            db.executescript("CREATE TABLE sessions(id TEXT,source TEXT); CREATE TABLE messages(session_id TEXT,role TEXT,platform_message_id TEXT);")
+            db.execute("INSERT INTO sessions VALUES('native-session','matrix')")
+            db.execute("INSERT INTO messages VALUES('native-session','user','$input')")
+        matrix = Mock()
+        fact = {"runtime": "hermes", "native_ref": "native-session", "native_digest": "a" * 64}
+        with patch("task_recovery.enabled", return_value=True), \
+                patch("worker_matrix_state.WorkerMatrix", return_value=matrix):
+            for case in ["legacy", "pending", "old-start", "foreign", "wrong-session", "empty-digest", "unavailable"]:
+                with self.subTest(case=case):
+                    matrix.input.return_value = None if case == "legacy" else {}
+                    proof = dict(fact)
+                    if case == "foreign": proof["runtime"] = "qwenpaw"
+                    if case == "wrong-session": proof["native_ref"] = "older-session"
+                    if case == "empty-digest": proof["native_digest"] = ""
+                    view = {"current": case != "old-start", "input": {"native_commit": proof}}
+                    if case == "pending": view["input"] = {}
+                    matrix.native_input.return_value = view
+                    matrix.native_input.side_effect = OSError("common fact unavailable") if case == "unavailable" else None
+                    if case == "unavailable":
+                        with self.assertRaises(OSError):
+                            scan_inputs(self.receipts, "hermes", {})
+                    else:
+                        scan_inputs(self.receipts, "hermes", {})
+                    self.assertNotIn(("$input", "read"), self.states())
+            matrix.native_input.side_effect = None
+            matrix.native_input.return_value = {"current": True, "input": {"native_commit": fact}}
+            scan_inputs(self.receipts, "hermes", {})
+            self.assertIn(("$input", "read"), self.states())
 
     def test_deepseek_and_openhuman_require_saved_input_checkpoints(self):
         for runtime, directory in [("deepseek", "dsh-checkpoints"), ("openhuman", "matrix-sessions")]:

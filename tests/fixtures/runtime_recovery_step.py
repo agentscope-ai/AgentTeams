@@ -27,7 +27,9 @@ done = cp.get("completed_steps", [])
 if done == steps:
     print("ALL_STEPS_DONE: submit the same task ID with output/step-*.json")
     sys.exit(0)
-if done == ["one"] and task["execution"]["generation"] == 1:
+generation = task["execution"]["generation"]
+if ((done == ["one"] and generation == 1) or
+        (task["recovery_fixture"].get("return_to_source") and done == ["one", "two"] and generation == 2)):
     print("PAUSED_AT_STEP_BOUNDARY: end this turn. Keep Task in_progress; a replacement will continue without a new message.")
     sys.exit(0)
 step = steps[len(done)]

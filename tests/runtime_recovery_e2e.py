@@ -37,6 +37,7 @@ HARNESS_IMAGES.update(image_overrides)
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
 OPERATOR_HANDOFF = os.getenv("RECOVERY_E2E_HANDOFF") == "1"
+RETURN_TO_SOURCE = os.getenv("RECOVERY_E2E_RETURN") == "1"
 FAULT = os.getenv("RECOVERY_E2E_FAULT", "")
 if FAULT not in {"", "after-effect"}:
     raise ValueError("Unknown recovery fault injection")
@@ -46,6 +47,8 @@ if (MODE == "restart") != (SOURCE == TARGET):
     raise ValueError("Restart keeps the Harness; replacement switches between packaged Harnesses")
 if OPERATOR_HANDOFF and MODE != "replace":
     raise ValueError("The operator handoff requires a target Harness")
+if RETURN_TO_SOURCE and (not OPERATOR_HANDOFF or (SOURCE, TARGET) != ("qwenpaw", "hermes") or FAULT):
+    raise ValueError("The stale QwenPaw session regression needs two operator handoffs via Hermes")
 CASE = os.getenv("RECOVERY_E2E_CASE", "01")
 if len(CASE) != 2 or not CASE.isdecimal():
     raise ValueError("RECOVERY_E2E_CASE must be two decimal digits")
@@ -194,6 +197,12 @@ print(json.dumps(any(row.get('event')=='runtime.ready' and datetime.datetime.fro
         task["recovery_fixture"]["pause_after_effect"] = "one"
     if oracle_proof()["effects"]:
         raise RuntimeError("This Task already has independent effects; retain its proof")
+    continuation = "When recovered in generation 2 or later, continue remaining steps two and three"
+    if RETURN_TO_SOURCE:
+        task["recovery_fixture"]["return_to_source"] = True
+        continuation = ("In generation 2 run only step two, verify PAUSED_AT_STEP_BOUNDARY and finish with a short "
+                        "progress report, keeping this task in_progress. After returning to the original Harness "
+                        "in generation 3 continue step three")
     spec = f"""You are executing a bounded real runtime-recovery acceptance task {task_id} in team {team}.
 Use your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.
 Pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/{team}/shared/tasks/{task_id}/acceptance.py into your task scratch directory using mc cp.
@@ -201,7 +210,7 @@ The acceptance.py helper owns the fixture:* operation identities and records bot
 Use your native terminal tool to run python3 acceptance.py {task_id} {team}. Each invocation executes ONE real persisted side effect and commits its checkpoint through the real Controller.
 Read the authoritative completed_steps. Never repeat a completed step or edit the fixture, ledger or checkpoint outside the helper.
 In execution generation 1, run only step one. Then call the helper once more to verify PAUSED_AT_STEP_BOUNDARY and end your turn with a short progress report. Leave task status in_progress. Do not submit, wait, poll or request a new message.
-When recovered in generation 2 or later, continue remaining steps two and three with the same helper, then use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/{task_id}/output/step-one.json, shared/tasks/{task_id}/output/step-two.json, shared/tasks/{task_id}/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.
+{continuation} with the same helper, then use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/{task_id}/output/step-one.json, shared/tasks/{task_id}/output/step-two.json, shared/tasks/{task_id}/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.
 Outputs are durable in the task's shared object-storage output/ directory; pull them to your task output/ directory before submission. Do not create a new task or send messages to other members.
 The external test driver will replace your container at a step boundary without sending any new Matrix message.
 """
@@ -255,7 +264,7 @@ def refresh_controller():
     print(json.dumps({"controller_image": CORE_IMAGE, "replaced_only_owned_fixture": True}))
 
 
-def native_sessions():
+def native_sessions(previous_qwen_ref=""):
     runtime = api("GET", "workers/agent-a").get("runtime")
     task = api("GET", "tasks/"+TASK_ID+"/meta?team=recovery-team")
     routes = []
@@ -323,6 +332,7 @@ if sys.argv[4]=='qwenpaw':
  qwen_shared['config_generation']=config['metadata'].get('generation',0)
  store=SafeJSONSession(str(qwen_dir))
  refs={r['session_id'] for r in qwen_shared['routes']}
+ if sys.argv[5]: refs.add(sys.argv[5])
  if qwen_descriptor: refs.add(qwen_descriptor['native_ref'])
  for ref in sorted(refs):
   # Avoid the SDK's missing-file directory creation or legacy migration while
@@ -358,7 +368,7 @@ print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,"hermes_shared"
     "openhuman":{"cache":openhuman_cache,"authority":openhuman_authority}}))
 '''
     interpreter = {"hermes": "/opt/venv/hermes/bin/python", "qwenpaw": "/opt/venv/qwenpaw/bin/python"}.get(runtime, "python3")
-    result = json.loads(docker("exec", PREFIX + "-worker-agent-a", interpreter, "-c", code, TASK_ID, task["room_id"], json.dumps(routes), runtime))
+    result = json.loads(docker("exec", PREFIX + "-worker-agent-a", interpreter, "-c", code, TASK_ID, task["room_id"], json.dumps(routes), runtime, previous_qwen_ref))
     if runtime == "openclaw":
         # Use the pinned SDK's actual SQLite APIs, not a guessed session filename.
         probe = '''import fs from "node:fs";
@@ -460,8 +470,12 @@ def evidence(*, emit=True):
     return result
 
 
-def cutover():
-    boundary_path = Path("/tmp/1631-live-" + CASE + "-before-cutover.json")
+def cutover(*, watch_return=False):
+    if watch_return and not RETURN_TO_SOURCE:
+        raise ValueError("watch-return requires the two-handoff scenario")
+    suffix = "-return" if watch_return else ""
+    source, target = (TARGET, SOURCE) if watch_return else (SOURCE, TARGET)
+    boundary_path = Path("/tmp/1631-live-" + CASE + suffix + "-before-cutover.json")
     if boundary_path.exists():
         raise RuntimeError("Cutover already has a boundary snapshot; inspect it instead of replacing it")
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
@@ -471,11 +485,12 @@ def cutover():
                 or cp.get("operation", {}).get("state") != "started"
                 or len(step_ledger(task)) != 1 or not fixture_tool_processes()):
             raise RuntimeError("Requires an in-flight tool after its durable external effect and before checkpoint completion")
-    elif task["status"] != "in_progress" or cp.get("completed_steps") != ["one"] or cp.get("remaining_steps") != ["two", "three"]:
-        raise RuntimeError("Requires an actual durable step-one checkpoint on the active Task")
+    elif (task["status"] != "in_progress" or cp.get("completed_steps") != (["one", "two"] if watch_return else ["one"])
+            or cp.get("remaining_steps") != (["three"] if watch_return else ["two", "three"])):
+        raise RuntimeError("Requires the expected durable step boundary on the active Task")
     name = PREFIX + "-worker-agent-a"
     old = json.loads(docker("inspect", name))[0]
-    if old["Config"]["Image"] != HARNESS_IMAGES[SOURCE]:
+    if old["Config"]["Image"] != HARNESS_IMAGES[source]:
         raise RuntimeError("The cutover requires this fixture's selected source image")
     # Capture the source while it still exists; post-cutover reads cannot prove
     # the source native session or absence of the target Task session.
@@ -485,18 +500,29 @@ def cutover():
         raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
     if MODE == "restart" and SOURCE == "hermes":
         assert_hermes_native_cache(before["native_sessions"]["hermes_shared"], cp, TASK_ID)
-    if SOURCE == "qwenpaw":
+    if source == "qwenpaw":
         assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"], cp, TASK_ID)
+    if RETURN_TO_SOURCE:
+        before["matrix"] = matrix_cursors(task)
+    if watch_return:
+        first = json.loads(agt("worker", "runtime-status", "--name", "agent-a", "-o", "json"))["handoff"]
+        if first["id"] != TASK_ID or first["phase"] != "completed" or first["target"]["process_id"] != task["execution"]["process_id"]:
+            raise RuntimeError("First handoff is not complete on the measured middle process")
+        before["first_handoff"] = first
     with boundary_path.open("x") as stream:
         json.dump(before, stream, indent=2)
     started = int(time.time())
-    if MODE == "restart":
+    if watch_return:
+        subprocess.Popen([sys.executable, __file__, "observe-return-cursors"], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("Captured second boundary; switch agent-a back to the original Harness through the Dashboard.", flush=True)
+    elif MODE == "restart":
         api("POST", "workers/agent-a/restart", {})
     elif OPERATOR_HANDOFF:
-        result = json.loads(agt("worker", "switch-runtime", "--name", "agent-a", "--runtime", TARGET,
+        result = json.loads(agt("worker", "switch-runtime", "--name", "agent-a", "--runtime", target,
             "--request-id", TASK_ID, "-o", "json"))
         op = result["handoff"]
-        if op["id"] != TASK_ID or op["target_runtime"] != TARGET or op["target_image"] != HARNESS_IMAGES[TARGET]:
+        if op["id"] != TASK_ID or op["target_runtime"] != target or op["target_image"] != HARNESS_IMAGES[target]:
             raise RuntimeError("Handoff selected a different request or target image")
     else:
         api("PUT", "workers/agent-a", {"runtime": TARGET, "image": HARNESS_IMAGES[TARGET]})
@@ -514,7 +540,7 @@ def cutover():
         time.sleep(1)
     events = docker("events", "--since", str(started), "--until", str(int(time.time()) + 1),
         "--filter", "type=container", "--filter", "container=" + name, "--format", "{{json .}}")
-    path = Path("/tmp/1631-live-" + CASE + "-cutover-events.jsonl")
+    path = Path("/tmp/1631-live-" + CASE + suffix + "-cutover-events.jsonl")
     path.write_text(events + "\n")
     if replacement is None:
         raise RuntimeError("Replacement not observed; retained Docker event evidence")
@@ -546,11 +572,97 @@ def assert_native_submission(task):
         raise ValueError("Completed Task lacks subsequent Leader acceptance")
 
 
+def cutover_lifecycle(before, suffix):
+    rows = [json.loads(row) for row in Path("/tmp/1631-live-" + CASE + suffix + "-cutover-events.jsonl").read_text().splitlines() if row]
+    old = before["instances"][1]["id"]
+    died = next(row for row in rows if row["Action"] == "die" and row["Actor"]["ID"] == old)
+    if MODE == "restart":
+        target = next(row for row in rows if row["Action"] == "start" and row["Actor"]["ID"] == old)
+        assert died["timeNano"] <= target["timeNano"]
+        order = {"die": died["timeNano"], "start": target["timeNano"]}
+    else:
+        destroyed = next(row for row in rows if row["Action"] == "destroy" and row["Actor"]["ID"] == old)
+        target = next(row for row in rows if row["Action"] == "create" and row["Actor"]["ID"] != old)
+        assert died["timeNano"] <= destroyed["timeNano"] <= target["timeNano"]
+        order = {"die": died["timeNano"], "destroy": destroyed["timeNano"], "create": target["timeNano"]}
+    return order, died["Actor"], target["Actor"]
+
+
+def verify_handoff(op, before, execution, runtime):
+    assert op["phase"] == "completed" and op["target_image"] == HARNESS_IMAGES[runtime]
+    source = before["task"]["execution"]
+    for field in ("instance_id", "process_id", "runtime"):
+        assert op["source"][field] == source[field]
+        assert op["target"][field] == execution[field]
+    refs = [r for r in op["checkpoint_refs"] if r.get("team_id") == "recovery-team" and r.get("task_id") == TASK_ID]
+    assert len(refs) == 1 and refs[0]["generation"] == source["generation"]
+    assert refs[0]["checkpoint_version"] >= source["checkpoint"]["version"]
+    times = [datetime.fromisoformat(op[field].replace("Z", "+00:00"))
+             for field in ("source_stop_observed_at", "target_registered_at", "completed_at")]
+    assert times[0] <= times[1] <= times[2]
+
+
+def observe_return_cursors():
+    """Save only sync cursor hashes from the isolated Controller's HTTP listener."""
+    path = Path("/tmp/1631-live-" + CASE + "-return-sync.jsonl")
+    filter_ = "tcp and (dst port 6167 or dst port 8080) and tcp[((tcp[12] & 0xf0) >> 2):4] = 0x47455420"
+    run = ["docker", "exec", CONTROLLER, "timeout", "300", "tcpdump", "-l", "-nn", "-tt", "-s", "1024", "-A", "-i", "any", filter_]
+    endpoint = re.compile(rb"^(\d+\.\d+) .*?IP (\d+\.\d+\.\d+\.\d+)\.\d+ > ")
+    request = re.compile(rb"GET (/_matrix/client/(?:v3|r0)/sync(?:\?[^ ]*)?) HTTP/")
+    with path.open("x") as output, subprocess.Popen(run, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as capture:
+        header = None
+        for line in capture.stdout:
+            if match := endpoint.match(line):
+                header = match
+            elif header and (match := request.search(line)):
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(match[1].decode()).query)
+                since = query.get("since", [""])[0]
+                row = {"epoch": float(header[1]), "ip": header[2].decode(),
+                       "full_state": query.get("full_state", [""])[0].lower() == "true",
+                       "since_sha256": hashlib.sha256(since.encode()).hexdigest() if since else None}
+                print(json.dumps(row), file=output, flush=True)
+
+
+def verify_return_cursor(middle, final_state, container):
+    code = '''import json,os,urllib.request
+req=urllib.request.Request(os.environ["AGENTTEAMS_MATRIX_URL"].rstrip("/")+"/_matrix/client/v3/account/whoami",
+    headers={"Authorization":"Bearer "+os.environ["AGENTTEAMS_WORKER_MATRIX_TOKEN"]})
+with urllib.request.urlopen(req,timeout=15) as response:
+    identity=json.load(response)
+print(json.dumps([identity["user_id"],identity["device_id"]]))
+'''
+    account, device = json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", code))
+    previous = [row for row in middle["matrix"]["cursors"].values() if
+                (row["runtime"], row["account"], row["device"], row["format"]) == (SOURCE, account, device, "matrix-nio/sync-v3")]
+    assert len(previous) <= 1
+    assert any(row["runtime"] == SOURCE and row["account"] == account and row["device"] == device
+               for row in final_state["cursors"].values()), "returning device has no committed cursor"
+    started = datetime.fromisoformat(container["State"]["StartedAt"].replace("Z", "+00:00")).timestamp()
+    ip = container["NetworkSettings"]["Networks"][NETWORK]["IPAddress"]
+    lines = Path("/tmp/1631-live-" + CASE + "-return-sync.jsonl").read_text().splitlines()
+    requests = [row for row in map(json.loads, lines) if row["epoch"] >= started and row["ip"] == ip]
+    assert requests and requests[0]["full_state"], "returning SDK's initial sync request was not observed"
+    expected = previous[0]["token_sha256"] if previous else None
+    assert requests[0]["since_sha256"] == expected, "returning SDK used a cursor from a different consumer"
+    return {"account": account, "device": device, "expected_since_sha256": expected, "initial_request": requests[0]}
+
+
+def matrix_cursors(task):
+    state = json.loads(docker("exec", CONTROLLER, "mc", "cat", "agentteams/recovery-1631/agents/agent-a/runtime/matrix/state.json"))
+    cursors = {}
+    for key, consumer in state["consumers"].items():
+        cursors[key] = {field: consumer.get(field) for field in ("runtime", "account", "device", "format")}
+        cursors[key]["token_sha256"] = hashlib.sha256(consumer["token"].encode()).hexdigest()
+    return {"start": state["active_start"], "cursors": cursors, "through": state["rooms"][task["room_id"]]["through"]}
+
+
 def verify():
     """Read back real task, storage, native receipt and Matrix evidence."""
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     execution, before = task["execution"], json.loads(Path("/tmp/1631-live-" + CASE + "-before-cutover.json").read_text())
     cp = execution["checkpoint"]
+    middle = json.loads(Path("/tmp/1631-live-" + CASE + "-return-before-cutover.json").read_text()) if RETURN_TO_SOURCE else None
+    final_runtime = SOURCE if middle else TARGET
     assert task["task_id"] == before["task"]["task_id"] == TASK_ID
     assert before["task"]["status"] == "in_progress"
     if FAULT == "after-effect":
@@ -570,9 +682,22 @@ def verify():
 
     ledger = step_ledger(task)
     assert [row["step"] for row in ledger] == ["one", "two", "three"]
-    assert [row["generation"] for row in ledger] == [1, 2, 2]
+    assert [row["generation"] for row in ledger] == ([1, 2, 3] if middle else [1, 2, 2])
+    if middle:
+        middle_task = middle["task"]
+        assert middle_task["task_id"] == TASK_ID and middle_task["status"] == "in_progress"
+        assert middle_task["execution"]["checkpoint"]["completed_steps"] == ["one", "two"]
+        for effect, owner in zip(ledger, (before["task"]["execution"], middle_task["execution"], execution)):
+            assert (effect["instance_id"], effect["process_id"]) == (owner["instance_id"], owner["process_id"])
+        assert len({entry["process_id"] for entry in ledger}) == 3
+        assert len({entry["instance_id"] for entry in ledger}) == 3
     if task.get("recovery_fixture", {}).get("oracle_version") in {2, 3, 4}:
-        assert_step_boundaries(ledger, before["task"]["execution"]["checkpoint"]["version"])
+        if middle:
+            assert ledger[0]["checkpoint_version"] == 1
+            assert ledger[1]["checkpoint_version"] > before["task"]["execution"]["checkpoint"]["version"]
+            assert ledger[2]["checkpoint_version"] > middle["task"]["execution"]["checkpoint"]["version"]
+        else:
+            assert_step_boundaries(ledger, before["task"]["execution"]["checkpoint"]["version"])
     if task.get("recovery_fixture", {}).get("oracle_version") in {3, 4}:
         proof = oracle_proof()
         calls = proof["calls"]
@@ -591,18 +716,11 @@ def verify():
         assert len(data) == artifact["size"] and hashlib.sha256(data).hexdigest() == artifact["sha256"]
     report = stored("teams/recovery-team/" + task["result_path"])
     assert stored(cp["result"]["key"]) == report, "final reply differs from the authoritative submitted report"
-    events = [json.loads(row) for row in Path("/tmp/1631-live-" + CASE + "-cutover-events.jsonl").read_text().splitlines() if row]
-    old = before["instances"][1]["id"]
-    died = next(row["timeNano"] for row in events if row["Action"] == "die" and row["Actor"]["ID"] == old)
-    if MODE == "replace":
-        destroyed = next(row["timeNano"] for row in events if row["Action"] == "destroy" and row["Actor"]["ID"] == old)
-        created = next(row["timeNano"] for row in events if row["Action"] == "create" and row["Actor"]["ID"] != old)
-        assert died <= destroyed <= created
-        order = {"die": died, "destroy": destroyed, "create": created}
-    else:
-        started = next(row["timeNano"] for row in events if row["Action"] == "start" and row["Actor"]["ID"] == old)
-        assert died <= started
-        order = {"die": died, "start": started}
+    order, old_source, first_target = cutover_lifecycle(before, "")
+    last_target = first_target
+    if middle:
+        return_order, middle_source, last_target = cutover_lifecycle(middle, "-return")
+        assert first_target["ID"] == middle_source["ID"] and order["create"] < return_order["die"]
     code = '''import hashlib,json,pathlib,sys,urllib.parse
 from agentteams_receipts import credentials,matrix_request,RECEIPT_TYPE
 p=json.load(sys.stdin); request=matrix_request(*credentials(pathlib.Path("/root/agentteams-fs/agents/agent-a")))
@@ -629,22 +747,25 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
 '''
     matrix = json.loads(docker("exec", "-i", "-e", "PYTHONPATH=/opt/agentteams/scripts/lib", PREFIX + "-worker-agent-a", "python3", "-c", code,
         text=json.dumps({"room": task["room_id"], "event": cp["reply_event"], "sha256": cp["result"]["sha256"],
-            "stopped_ms": died // 1000000, "task_id": TASK_ID})))
-    old_source = next(row["Actor"]["Attributes"] for row in events if row["Action"] == "die" and row["Actor"]["ID"] == old)
-    labels = next(row["Actor"]["Attributes"] for row in events if row["Action"] == ("create" if MODE == "replace" else "start") and
-        ((row["Actor"]["ID"] != old) if MODE == "replace" else (row["Actor"]["ID"] == old)))
-    native = native_sessions()
+            "stopped_ms": order["die"] // 1000000, "task_id": TASK_ID})))
+    old_ref = before["native_sessions"]["qwenpaw_shared"]["cache"]["native_ref"] if middle else ""
+    native = native_sessions(old_ref)
     if SOURCE == "openhuman":
         assert_openhuman_native_cache(before["native_sessions"]["openhuman"], before["task"]["execution"]["checkpoint"], TASK_ID)
-    if TARGET == "openhuman":
+    if final_runtime == "openhuman":
         assert_openhuman_native_cache(native["openhuman"], cp, TASK_ID)
         if MODE == "restart":
             assert native["openhuman"]["cache"]["session_id"] == before["native_sessions"]["openhuman"]["cache"]["session_id"], "valid native Task session was not reused"
     if SOURCE == "qwenpaw":
         assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"],
             before["task"]["execution"]["checkpoint"], TASK_ID)
-    if TARGET == "qwenpaw":
+    if final_runtime == "qwenpaw":
         selected = assert_qwenpaw_native_route(native["qwenpaw_shared"], TASK_ID, execution["generation"])
+        if middle:
+            assert selected["session_id"] != old_ref, "the stale first-generation session was reused"
+            retained = _qwenpaw_native(native["qwenpaw_shared"], TASK_ID, old_ref)
+            assert retained["native_digest"] == before["native_sessions"]["qwenpaw_shared"]["cache"]["native_digest"]
+            assert len(matrix["read_receipt_events"]) == 1, "the initial assignment was marked read more than once"
         if MODE == "restart":
             source = before["native_sessions"]["qwenpaw_shared"]
             assert_qwenpaw_native_cache(source, before["task"]["execution"]["checkpoint"], TASK_ID)
@@ -652,10 +773,10 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     if SOURCE == "hermes":
         selected = before["native_sessions"]["hermes"][-1]["session_id"]
         assert before["native_sessions"]["hermes_message_counts"].get(selected, 0) > 0, "new route still used a different warm native Agent"
-    if TARGET == "hermes":
+    if final_runtime == "hermes":
         selected = native["hermes"][-1]["session_id"]
         assert native["hermes_message_counts"].get(selected, 0) > 0, "recovered input was not persisted in the selected native session"
-    if TARGET == "openclaw":
+    if final_runtime == "openclaw":
         assert_openclaw_native_cache(native["openclaw"], cp)
         if MODE == "restart":
             source_cache = before["native_sessions"]["openclaw"]
@@ -678,14 +799,12 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         assert resumed["session_id"] == cache["session_id"] and resumed["reused"] is True
     controller = json.loads(docker("inspect", CONTROLLER))[0]
     current = json.loads(docker("inspect", PREFIX + "-worker-agent-a"))[0]
-    assert current["Id"] == next(row["Actor"]["ID"] for row in events
-        if row["Action"] == ("create" if MODE == "replace" else "start")
-        and ((row["Actor"]["ID"] != old) if MODE == "replace" else row["Actor"]["ID"] == old)), "additional replacement requires separate evidence"
+    assert current["Id"] == last_target["ID"], "additional replacement requires separate evidence"
     assert current["Id"] in execution["instance_id"]
     assert current["State"]["StartedAt"] in execution["instance_id"], "execution must bind the actual process start, including automatic retries"
     sources = {"core": controller["Config"]["Labels"]["io.agentteams.recovery.core-sha"],
-        "shared_contract": labels["io.agentteams.recovery.core-sha"],
-        SOURCE: old_source["io.agentteams.recovery.harness-sha"], TARGET: labels["io.agentteams.recovery.harness-sha"]}
+        "shared_contract": first_target["Attributes"]["io.agentteams.recovery.core-sha"],
+        SOURCE: old_source["Attributes"]["io.agentteams.recovery.harness-sha"], TARGET: first_target["Attributes"]["io.agentteams.recovery.harness-sha"]}
     proof = {"task_id": TASK_ID, "case": CASE, "scope": f"one real {SOURCE}-to-{TARGET} in-progress continuation", "mode": MODE,
         "fixture_prefix": PREFIX, "authoritative_report_verified": True,
         "sources": sources, "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "native_recovery_sessions": native,
@@ -695,16 +814,23 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         "docker_order_ns": order, "matrix": matrix}
     if OPERATOR_HANDOFF:
         op = json.loads(agt("worker", "runtime-status", "--name", "agent-a", "-o", "json"))["handoff"]
-        assert op["id"] == TASK_ID and op["phase"] == "completed" and op["target_image"] == HARNESS_IMAGES[TARGET]
-        for field in ("instance_id", "process_id", "runtime"):
-            assert op["source"][field] == before["task"]["execution"][field]
-            assert op["target"][field] == execution[field]
-        refs = [r for r in op["checkpoint_refs"] if r.get("team_id") == "recovery-team" and r.get("task_id") == TASK_ID]
-        assert len(refs) == 1 and refs[0]["generation"] == proof["generation_before"]
-        assert refs[0]["checkpoint_version"] >= proof["checkpoint_before"]
-        times = [datetime.fromisoformat(op[field].replace("Z", "+00:00"))
-                 for field in ("source_stop_observed_at", "target_registered_at", "completed_at")]
-        assert times[0] <= times[1] <= times[2]
+        if middle:
+            assert op["id"] != TASK_ID and middle["first_handoff"]["id"] == TASK_ID
+            verify_handoff(middle["first_handoff"], before, middle["task"]["execution"], TARGET)
+            verify_handoff(op, middle, execution, SOURCE)
+            assert last_target["Attributes"]["io.agentteams.recovery.harness-sha"] == sources[SOURCE]
+            cursor_snapshots = [before["matrix"], middle["matrix"], matrix_cursors(task)]
+            for sample, start in zip(cursor_snapshots, (before["task"]["execution"], middle["task"]["execution"], execution)):
+                assert sample["start"]["process_id"] == start["process_id"]
+            first_keys = {key for key, row in cursor_snapshots[0]["cursors"].items() if row["runtime"] == SOURCE}
+            assert first_keys and all(first_keys <= set(sample["cursors"]) for sample in cursor_snapshots[1:])
+            proof.update(scope=f"one real {SOURCE}-to-{TARGET}-to-{SOURCE} in-progress continuation",
+                         first_handoff=middle["first_handoff"], return_docker_order_ns=return_order,
+                         first_native_ref=old_ref, matrix_cursor_snapshots=cursor_snapshots,
+                         initial_return_sync=verify_return_cursor(middle, cursor_snapshots[-1], current))
+        else:
+            assert op["id"] == TASK_ID
+            verify_handoff(op, before, execution, TARGET)
         proof["operator_handoff"] = op
     path = Path("/tmp/1631-live-" + CASE + "-verified.json")
     path.write_text(json.dumps(proof, indent=2))
@@ -825,6 +951,8 @@ def setup(*, restore=False):
         target_image_env = ("AGENTTEAMS_WORKER_IMAGE" if TARGET == "openclaw" else
                             "AGENTTEAMS_" + TARGET.upper().replace("-", "_") + "_WORKER_IMAGE")
         env[target_image_env] = HARNESS_IMAGES[TARGET]
+        if RETURN_TO_SOURCE:
+            env["AGENTTEAMS_QWENPAW_WORKER_IMAGE"] = HARNESS_IMAGES[SOURCE]
     private = PRIVATE_BOOTSTRAP
     if restore and private.exists():
         env = json.loads(private.read_text())
@@ -898,4 +1026,5 @@ def members():
 
 if __name__ == "__main__":
     {"setup": setup, "restore": lambda: setup(restore=True), "status": status, "members": members, "prepare": prepare, "oracle": oracle, "tracing": tracing, "seed": seed,
-     "refresh-controller": refresh_controller, "evidence": evidence, "cutover": cutover, "verify": verify}[sys.argv[1]]()
+     "refresh-controller": refresh_controller, "evidence": evidence, "cutover": cutover, "watch-return": lambda: cutover(watch_return=True),
+     "observe-return-cursors": observe_return_cursors, "verify": verify}[sys.argv[1]]()

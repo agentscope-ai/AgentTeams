@@ -212,3 +212,30 @@ class CutoverBoundaryTests(unittest.TestCase):
                 driver.cutover()
             with self.assertRaisesRegex(RuntimeError, "already has a boundary"):
                 driver.cutover()
+
+
+class ReturnCursorTests(unittest.TestCase):
+    def test_real_initial_sync_uses_only_the_same_native_consumer(self):
+        import json
+        import runtime_recovery_e2e as driver
+
+        def cursor(device, value):
+            return {"runtime": "qwenpaw", "account": "@worker:test", "device": device,
+                    "format": "matrix-nio/sync-v3", "token_sha256": value}
+
+        middle = {"matrix": {"cursors": {"old": cursor("old", "old-cursor")}}}
+        container = {"State": {"StartedAt": "1970-01-01T00:00:10Z"},
+                     "NetworkSettings": {"Networks": {driver.NETWORK: {"IPAddress": "10.0.0.5"}}}}
+        for device, since, valid in [("old", "old-cursor", True), ("new", None, True),
+                                     ("old", None, False), ("new", "old-cursor", False)]:
+            req = {"epoch": 11, "since_sha256": since, "full_state": True, "ip": "10.0.0.5"}
+            lines = [dict(req, epoch=9, since_sha256="predecessor"), dict(req, ip="10.0.0.6"), req]
+            with self.subTest(device=device, since=since), patch.object(driver, "SOURCE", "qwenpaw"), \
+                    patch.object(driver, "docker", return_value=json.dumps(["@worker:test", device])), \
+                    patch.object(driver.Path, "read_text", return_value="\n".join(map(json.dumps, lines))):
+                final = {"cursors": {"actual": cursor(device, "current")}}
+                if valid:
+                    self.assertEqual(driver.verify_return_cursor(middle, final, container)["initial_request"], req)
+                else:
+                    with self.assertRaisesRegex(AssertionError, "different consumer"):
+                        driver.verify_return_cursor(middle, final, container)

@@ -108,6 +108,17 @@ class EffectReceiptTests(unittest.TestCase):
         self.assertEqual([entry["generation"] for entry in self.receipts()], [1, 2, 2])
         self.assertEqual(self.task["execution"]["checkpoint"]["completed_steps"], ["one", "two", "three"])
 
+    def test_returning_runtime_cannot_run_the_next_generation_step_early(self):
+        self.task["recovery_fixture"]["return_to_source"] = True
+        for number, process in enumerate(("first", "second", "third"), 1):
+            self.task["execution"]["generation"] = number
+            self.process = process
+            self.invoke()
+            if number < 3:
+                self.assertIn("PAUSED_AT_STEP_BOUNDARY", self.invoke())
+        self.assertEqual([entry["generation"] for entry in self.receipts()], [1, 2, 3])
+        self.assertEqual([entry["step"] for entry in self.receipts()], ["one", "two", "three"])
+
     def test_uncertain_effect_is_verified_without_executing_it_again(self):
         self.fail_output = True
         with self.assertRaises(subprocess.CalledProcessError):

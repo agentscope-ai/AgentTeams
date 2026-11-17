@@ -112,21 +112,20 @@ class WorkerMatrix:
             batch = timeline["inputs"]
             if room in rooms or any(item["room_id"] != room for item in batch):
                 raise ValueError("One ordered timeline per Matrix room is required")
-            if not batch:
-                if timeline.get("limited"):
-                    raise RecoveryConflict("Limited timeline has no retained backfill anchor")
-                continue
             previous = snapshot["state"]["rooms"].get(room, {})
+            needs_bridge = timeline.get("limited") or (not current["token"] and previous.get("through"))
+            if not batch and not needs_bridge:
+                continue
             gaps = list(previous.get("gaps", []))
             overlap = any(item["event_id"] == previous.get("through") for item in batch)
-            if not overlap and (timeline.get("limited") or (not current["token"] and previous.get("through"))):
+            if needs_bridge and not overlap:
                 gap = timeline.get("prev_batch")
                 if not gap:
                     raise RecoveryConflict("Unconnected Matrix timeline needs a backfill token")
                 if gap not in gaps:
                     gaps.append(gap)
             inputs.extend(batch)
-            rooms[room] = {"through": batch[-1]["event_id"], "gaps": gaps}
+            rooms[room] = {"through": batch[-1]["event_id"] if batch else previous.get("through", ""), "gaps": gaps}
         return self.ingest(snapshot, {**current, "from_token": current["token"], "token": next_batch}, inputs, rooms)
 
     def pending(self, snapshot):

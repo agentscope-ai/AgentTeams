@@ -342,8 +342,17 @@ func (s *WorkerMatrixStore) Ingest(ctx context.Context, name string, start Worke
 	if err != nil {
 		return nil, "", err
 	}
-	for _, key := range keys {
+	for i, key := range keys {
 		if !slices.Contains(state.Pending, key) {
+			// A filtered limited window has no right-hand queue anchor until
+			// the next accepted input arrives in its room.
+			room := state.Rooms[inputs[i].RoomID]
+			for id, gap := range room.Backfill {
+				if gap.Before == "" {
+					gap.Before = key
+					room.Backfill[id] = gap
+				}
+			}
 			state.Pending = append(state.Pending, key)
 		}
 	}
@@ -356,46 +365,45 @@ func (s *WorkerMatrixStore) Ingest(ctx context.Context, name string, start Worke
 		if room.Backfill == nil {
 			room.Backfill = map[string]WorkerMatrixGap{}
 		}
-		room.Gaps = slices.Clone(room.Gaps)
-		input, err := s.Input(ctx, name, WorkerMatrixEventKey(roomID, room.Through))
-		if err != nil {
-			return nil, "", fmt.Errorf("%w: room anchor must reference retained input: %v", ErrWorkerStateInvalid, err)
+		requestedGaps := room.Gaps
+		// Preserve the chronology of existing gaps when a native consumer
+		// reports only a new gap, including consecutive filtered windows.
+		room.Gaps = slices.Clone(previous.Gaps)
+		first := ""
+		for i, input := range inputs {
+			if input.RoomID == roomID {
+				first = keys[i]
+				break
+			}
 		}
-		if input.RoomID != roomID {
-			return nil, "", fmt.Errorf("%w: room anchor scope", ErrWorkerStateInvalid)
+		filtered := hasCursor && first == "" && room.Through == previous.Through && len(requestedGaps) > 0 && strings.HasPrefix(roomID, "!")
+		if !filtered {
+			input, err := s.Input(ctx, name, WorkerMatrixEventKey(roomID, room.Through))
+			if err != nil {
+				return nil, "", fmt.Errorf("%w: room anchor must reference retained input: %v", ErrWorkerStateInvalid, err)
+			}
+			if input.RoomID != roomID {
+				return nil, "", fmt.Errorf("%w: room anchor scope", ErrWorkerStateInvalid)
+			}
 		}
-		for _, id := range room.Gaps {
+		for _, id := range requestedGaps {
 			if id == "" {
 				return nil, "", fmt.Errorf("%w: gap pagination token required", ErrWorkerStateInvalid)
 			}
-			if slices.Contains(previous.Gaps, id) {
+			if slices.Contains(room.Gaps, id) {
 				continue // Preserve legacy holes without inventing missing bounds.
 			}
 			overlaps := slices.ContainsFunc(inputs, func(input WorkerMatrixInput) bool {
 				return input.RoomID == roomID && previous.Through != "" && input.EventID == previous.Through
 			})
 			if overlaps {
-				room.Gaps = slices.DeleteFunc(slices.Clone(room.Gaps), func(gap string) bool { return gap == id })
 				continue // This actual timeline already reconnects the old anchor.
 			}
-			before := ""
-			for _, input := range inputs {
-				if input.RoomID == roomID {
-					before = WorkerMatrixEventKey(roomID, input.EventID)
-					break
-				}
-			}
-			if before == "" {
+			if first == "" && !filtered {
 				return nil, "", fmt.Errorf("%w: limited timeline inputs required", ErrWorkerStateInvalid)
 			}
-			room.Backfill[id] = WorkerMatrixGap{FromToken: id, Until: previous.Through, Before: before}
-		}
-		// An ordinary incremental batch cannot prove that an earlier limited
-		// timeline was backfilled. Keep holes until explicit backfill completion.
-		for _, gap := range state.Rooms[roomID].Gaps {
-			if !slices.Contains(room.Gaps, gap) {
-				room.Gaps = append(room.Gaps, gap)
-			}
+			room.Backfill[id] = WorkerMatrixGap{FromToken: id, Until: previous.Through, Before: first}
+			room.Gaps = append(room.Gaps, id)
 		}
 		state.Rooms[roomID] = room
 	}

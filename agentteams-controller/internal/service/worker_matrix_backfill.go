@@ -25,9 +25,12 @@ func (s *WorkerMatrixStore) Backfill(ctx context.Context, name string, start Wor
 	if page.NextToken != "" && page.NextToken == page.FromToken {
 		return nil, "", fmt.Errorf("%w: pagination did not advance", ErrWorkerStateInvalid)
 	}
-	before := slices.Index(state.Pending, gap.Before)
-	if before < 0 {
-		return nil, "", fmt.Errorf("%w: missing gap ordering anchor requires verification", ErrWorkerStateConflict)
+	before := len(state.Pending)
+	if gap.Before != "" {
+		before = slices.Index(state.Pending, gap.Before)
+		if before < 0 {
+			return nil, "", fmt.Errorf("%w: missing gap ordering anchor requires verification", ErrWorkerStateConflict)
+		}
 	}
 	inputs := slices.Clone(page.Inputs)
 	reached := false
@@ -52,13 +55,24 @@ func (s *WorkerMatrixStore) Backfill(ctx context.Context, name string, start Wor
 		}
 	}
 	state.Pending = slices.Insert(state.Pending, before, insert...)
-	if reached {
+	if len(insert) > 0 {
+		// Consecutive filtered windows can share a right-hand anchor.
+		// Older pages belong before this page, whichever gap is filled first.
+		for _, id := range room.Gaps[:slices.Index(room.Gaps, page.GapID)] {
+			if older, ok := room.Backfill[id]; ok && older.Before == gap.Before {
+				older.Before = insert[0]
+				room.Backfill[id] = older
+			}
+		}
+		if gap.Before == "" && room.Gaps[len(room.Gaps)-1] == page.GapID && room.Through == gap.Until {
+			room.Through = inputs[len(inputs)-1].EventID
+		}
+		gap.Before = insert[0]
+	}
+	if reached || (gap.Until == "" && page.NextToken == "") {
 		room.Gaps = slices.DeleteFunc(room.Gaps, func(id string) bool { return id == page.GapID })
 		delete(room.Backfill, page.GapID)
 	} else {
-		if len(insert) > 0 {
-			gap.Before = insert[0]
-		}
 		if page.NextToken != "" {
 			gap.FromToken, gap.Boundary = page.NextToken, false
 		} else {

@@ -78,7 +78,7 @@ def test_timeline_overlap_does_not_invent_a_new_gap():
 
 
 @pytest.mark.parametrize("timeline", [
-    {"room_id": "!room:test", "inputs": [], "limited": True, "prev_batch": "history"},
+    {"room_id": "!room:test", "inputs": [], "limited": True},
     {"room_id": "!room:test", "inputs": [event("$new")], "limited": True},
     {"room_id": "!room:test", "inputs": [event("$new", "!foreign:test")]},
 ])
@@ -88,6 +88,20 @@ def test_incomplete_or_mis_scoped_timeline_cannot_advance_native_cursor(timeline
     with pytest.raises((ValueError, RecoveryConflict)):
         matrix.sync(snapshot, consumer, "next", [timeline])
     recovery.request.assert_not_called()
+
+
+@pytest.mark.parametrize("previous,limited", [("", True), ("$old", True), ("$old", False)])
+def test_filtered_window_keeps_pagination_without_inventing_an_input(previous, limited):
+    matrix, snapshot, recovery = fixture()
+    room = "!room:test"
+    snapshot["state"]["rooms"][room] = {"through": previous}
+    consumer = matrix.consumer(snapshot, account="@worker:test", format="native/v1")
+    matrix.sync(snapshot, consumer, "next", [{"room_id": room, "inputs": [],
+        "limited": limited, "prev_batch": "older"}])
+    body = recovery.request.call_args.args[2]
+    assert body["inputs"] == []
+    assert body["rooms"] == {room: {"through": previous, "gaps": ["older"]}}
+    assert body["consumer"]["token"] == "next"
 
 
 def test_old_native_cursor_cannot_be_relabelled_with_a_new_etag():

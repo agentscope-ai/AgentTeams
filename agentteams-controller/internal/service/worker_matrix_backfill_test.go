@@ -123,3 +123,94 @@ func TestWorkerMatrixLimitedTimelineOverlapDoesNotCreateAnUnreachableGap(t *test
 		t.Fatalf("overlapping timeline forced backfill behind an already covered anchor: %+v %v", state, err)
 	}
 }
+
+func TestWorkerMatrixFilteredInitialWindowBackfillsAtQueuePosition(t *testing.T) {
+	const roomID = "!room:test"
+	s, start, etag := startMatrixStore(t, ossfake.NewMemory())
+	state, etag, err := s.Ingest(t.Context(), "worker", start, etag, matrixConsumer("hermes", "first"), nil,
+		map[string]WorkerMatrixRoom{roomID: {Gaps: []string{"older"}}})
+	if err != nil || len(state.Pending) != 0 || state.Rooms[roomID].Through != "" {
+		t.Fatalf("filtered window failed to commit cursor and gap together: %+v %v", state, err)
+	}
+	state, etag, err = s.Backfill(t.Context(), "worker", start, etag, WorkerMatrixBackfill{
+		RoomID: roomID, GapID: "older", FromToken: "older", NextToken: "next-page"})
+	if err != nil || len(state.Rooms[roomID].Gaps) != 1 {
+		t.Fatalf("empty intermediate page closed history: %+v %v", state, err)
+	}
+	_, etag, err = s.Ingest(t.Context(), "worker", start, etag, matrixConsumer("hermes", "live", "first"),
+		[]WorkerMatrixInput{matrixInput("$live")}, map[string]WorkerMatrixRoom{roomID: {Through: "$live"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err = s.Backfill(t.Context(), "worker", start, etag, WorkerMatrixBackfill{
+		RoomID: roomID, GapID: "older", FromToken: "next-page",
+		Inputs: []WorkerMatrixInput{matrixInput("$middle"), matrixInput("$oldest")}})
+	want := []string{WorkerMatrixEventKey(roomID, "$oldest"), WorkerMatrixEventKey(roomID, "$middle"), WorkerMatrixEventKey(roomID, "$live")}
+	if err != nil || !reflect.DeepEqual(state.Pending, want) || len(state.Rooms[roomID].Gaps) != 0 || state.Rooms[roomID].Through != "$live" {
+		t.Fatalf("first visibility boundary lost ordering/coverage: %+v %v", state, err)
+	}
+}
+
+func TestWorkerMatrixFilteredFreshRoomAdoptsNewestVisibleInput(t *testing.T) {
+	const roomID = "!room:test"
+	s, start, etag := startMatrixStore(t, ossfake.NewMemory())
+	_, etag, err := s.Ingest(t.Context(), "worker", start, etag, matrixConsumer("hermes", "first"), nil,
+		map[string]WorkerMatrixRoom{roomID: {Gaps: []string{"gap"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err := s.Backfill(t.Context(), "worker", start, etag, WorkerMatrixBackfill{RoomID: roomID,
+		GapID: "gap", FromToken: "gap", Inputs: []WorkerMatrixInput{matrixInput("$newest"), matrixInput("$oldest")}})
+	if err != nil || state.Rooms[roomID].Through != "$newest" || len(state.Rooms[roomID].Gaps) != 0 {
+		t.Fatalf("missing reconnect anchor after visible history exhausted: %+v %v", state, err)
+	}
+}
+
+func TestWorkerMatrixFilteredWindowStillRequiresKnownAnchor(t *testing.T) {
+	const roomID = "!room:test"
+	s, start, etag := startMatrixStore(t, ossfake.NewMemory())
+	_, etag, err := s.Ingest(t.Context(), "worker", start, etag, matrixConsumer("hermes", "first"),
+		[]WorkerMatrixInput{matrixInput("$old")}, map[string]WorkerMatrixRoom{roomID: {Through: "$old"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, etag, err = s.Ingest(t.Context(), "worker", start, etag, matrixConsumer("hermes", "next", "first"), nil,
+		map[string]WorkerMatrixRoom{roomID: {Through: "$old", Gaps: []string{"gap"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err := s.Backfill(t.Context(), "worker", start, etag, WorkerMatrixBackfill{
+		RoomID: roomID, GapID: "gap", FromToken: "gap"})
+	if err != nil || !state.Rooms[roomID].Backfill["gap"].Boundary || len(state.Rooms[roomID].Gaps) != 1 {
+		t.Fatalf("exhaustion erased missing known anchor: %+v %v", state, err)
+	}
+}
+
+func TestWorkerMatrixConsecutiveFilteredWindowsKeepRoomOrder(t *testing.T) {
+	const roomID = "!room:test"
+	for _, pages := range [][]string{{"gap-one", "gap-two"}, {"gap-two", "gap-one"}} {
+		t.Run(pages[0]+"-first", func(t *testing.T) {
+			s, start, etag := startMatrixStore(t, ossfake.NewMemory())
+			var err error
+			for _, window := range []struct{ from, token, gap string }{{"", "one", "gap-one"}, {"one", "two", "gap-two"}} {
+				_, etag, err = s.Ingest(t.Context(), "worker", start, etag, matrixConsumer("hermes", window.token, window.from), nil,
+					map[string]WorkerMatrixRoom{roomID: {Gaps: []string{window.gap}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			var state *WorkerMatrixState
+			for _, gap := range pages {
+				state, etag, err = s.Backfill(t.Context(), "worker", start, etag, WorkerMatrixBackfill{
+					RoomID: roomID, GapID: gap, FromToken: gap, Inputs: []WorkerMatrixInput{matrixInput("$" + gap)}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := []string{WorkerMatrixEventKey(roomID, "$gap-one"), WorkerMatrixEventKey(roomID, "$gap-two")}
+			if !reflect.DeepEqual(state.Pending, want) || state.Rooms[roomID].Through != "$gap-two" {
+				t.Fatalf("filtered windows lost chronological order: %+v", state)
+			}
+		})
+	}
+}

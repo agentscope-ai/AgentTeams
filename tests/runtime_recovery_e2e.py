@@ -123,7 +123,7 @@ def prepare():
         if not worker.get("roomID"):
             raise RuntimeError("Wait for the disposable member's personal room before preparation")
         env = worker.get("env", {})
-        desired = {**env, "MATRIX_HOME_ROOM": worker["roomID"]}
+        desired = {**env, "MATRIX_HOME_ROOM": worker["roomID"], "RECOVERY_E2E_PREFIX": PREFIX}
         if name == "leader":
             # Native review remains enabled. Its tool-status bubbles would
             # otherwise inject extra room messages into the no-input test.

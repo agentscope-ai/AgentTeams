@@ -6,7 +6,7 @@
     "core": "0f36d4c389aa2207bdd042521f126f7b8aae753f",
     "openclaw": "f0874a0f027d6d1567c3e3ab92bc2bdce833550b"
   },
-  "failure": "Traceback (most recent call last):\n  File \"/tmp/1631-case34-observe.py\", line 13, in <module>\n    m.verify();break\n    ~~~~~~~~^^\n  File \"/Users/nov11/github/HiClaw/output/worker-config-recovery-1631-20261117/tests/runtime_recovery_e2e.py\", line 555, in verify\n    assert_openclaw_native_cache(source_cache, before[\"task\"][\"execution\"][\"checkpoint\"])\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/nov11/github/HiClaw/output/worker-config-recovery-1631-20261117/tests/runtime_recovery_e2e.py\", line 597, in assert_openclaw_native_cache\n    assert native[\"native_digest\"] == cache[\"native_digest\"], \"native transcript changed after checkpoint binding\"\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: native transcript changed after checkpoint binding\n",
+  "failure": "Traceback (most recent call last):\n  File \"/tmp/1631-case34-observe.py\", line 13, in <module>\n    m.verify();break\n    ~~~~~~~~^^\n  File \"/workspace/AgentTeams/tests/runtime_recovery_e2e.py\", line 555, in verify\n    assert_openclaw_native_cache(source_cache, before[\"task\"][\"execution\"][\"checkpoint\"])\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/AgentTeams/tests/runtime_recovery_e2e.py\", line 597, in assert_openclaw_native_cache\n    assert native[\"native_digest\"] == cache[\"native_digest\"], \"native transcript changed after checkpoint binding\"\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: native transcript changed after checkpoint binding\n",
   "source_boundary": {
     "recorded_at": 1794916417.020999,
     "task": {
@@ -630,5 +630,7 @@
       }
     ],
     "volumes_retained": true
-  }
+  },
+  "original_failure_sha256": "32962f9844409c3338edfa93cf56c85cd6ec10738589d7362d2c2e82b6950a76",
+  "diagnostic_paths": "Developer-specific checkout paths normalized; original failure retained locally."
 }

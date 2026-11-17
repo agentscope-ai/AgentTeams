@@ -462,10 +462,6 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 			logger.Error(err, "worker coordination context injection failed (non-fatal)", "worker", rm.runtimeName)
 		}
 	}
-	if err := r.deployTeamRuntimeConfigs(ctx, derivedTeam, members, leaderRef.Name, teamRuntimeName, leaderRuntimeName, rooms); err != nil {
-		return r.failTeam(ctx, t, patchBase, err.Error())
-	}
-
 	// 6. Channel authorization
 	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() {
 		managerMatrixID := r.ManagerConfig.MatrixUserID("manager")
@@ -526,6 +522,11 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 				logger.Error(err, "channel policy injection failed (non-fatal)", "worker", rm.runtimeName)
 			}
 		}
+	}
+
+	// Publish the standard transport after the current Team policy is applied.
+	if err := r.deployTeamRuntimeConfigs(ctx, derivedTeam, members, leaderRef.Name, teamRuntimeName, leaderRuntimeName, rooms); err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
 
 	// 7. Status aggregation
@@ -674,7 +675,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if member.worker.Spec.DeployMode != nil {
 			deployMode = *member.worker.Spec.DeployMode
 		}
-		if !backend.UsesMemberRuntimeConfig(runtime) && runtime != backend.RuntimeCopaw && runtime != backend.RuntimeHermes && deployMode != v1beta1.DeployModeEdge {
+		if !backend.ValidRuntime(runtime) && deployMode != v1beta1.DeployModeEdge {
 			continue
 		}
 		role := RoleTeamWorker
@@ -842,6 +843,24 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		}
 	}
 
+	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() && !backend.UsesMemberRuntimeConfig(runtime) {
+		if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
+			logger.Error(err, "failed to revoke Manager groupAllowFrom for detached member (non-fatal)", "worker", runtimeName)
+		}
+		var systemAdminID string
+		if r.SystemAdminUser != "" {
+			systemAdminID = r.ManagerConfig.MatrixUserID(r.SystemAdminUser)
+		}
+		standaloneAllowFrom := uniqueTeamStrings([]string{r.ManagerConfig.MatrixUserID("manager"), systemAdminID, teamAdminMatrixID(t)})
+		if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
+			WorkerName:     runtimeName,
+			GroupAllowFrom: standaloneAllowFrom,
+			DMAllowFrom:    standaloneAllowFrom,
+		}); err != nil {
+			logger.Error(err, "failed to reset worker channel policy (non-fatal)", "worker", runtimeName)
+		}
+	}
+
 	aiGatewayURL, resolveErr := r.runtimeConfigAIGatewayURL(ctx, w.Spec, w.Name)
 	if resolveErr != nil {
 		logger.Error(resolveErr, "failed to resolve worker model provider for runtime config reset", "worker", runtimeName)
@@ -870,24 +889,6 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		if err := r.Provisioner.InviteToRoom(ctx, w.Status.RoomID, managerMatrixID); err != nil {
 			return fmt.Errorf("restore Manager to Worker %q personal room: %w", w.Name, err)
 		}
-	}
-	if backend.UsesMemberRuntimeConfig(runtime) {
-		return nil
-	}
-	if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
-		logger.Error(err, "failed to revoke Manager groupAllowFrom for detached member (non-fatal)", "worker", runtimeName)
-	}
-	var systemAdminID string
-	if r.SystemAdminUser != "" {
-		systemAdminID = r.ManagerConfig.MatrixUserID(r.SystemAdminUser)
-	}
-	standaloneAllowFrom := uniqueTeamStrings([]string{managerMatrixID, systemAdminID, teamAdminMatrixID(t)})
-	if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
-		WorkerName:     runtimeName,
-		GroupAllowFrom: standaloneAllowFrom,
-		DMAllowFrom:    standaloneAllowFrom,
-	}); err != nil {
-		logger.Error(err, "failed to reset worker channel policy (non-fatal)", "worker", runtimeName)
 	}
 	return nil
 }

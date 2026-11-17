@@ -9,6 +9,11 @@ copying a previous Harness's private directory is not the configuration
 recovery contract. Credentials retain their scoped bindings. Native session
 formats stay Harness-specific. Task checkpoints remain team/Task-scoped.
 
+All six Harnesses must use the same Worker directory and YAML field contract:
+[Member Runtime Config Contract](../design/member-runtime-config-contract.md).
+`agents/<workerIdentity>/runtime/runtime.yaml` is canonical; a Harness switch
+must not create a second authority under the target's private directory.
+
 Dashboard and `agt` must submit changes to the same Controller orchestration
 and read back the same operation state. They must not implement separate
 container replacement or Matrix replay flows.
@@ -46,9 +51,21 @@ native bridge. Missing bindings fail before falling back to an old token.
 Controllers without the optional snapshot retain the compatibility path.
 Models not declared in the standard record retain their compatibility model;
 this does not yet standardize every native-owned configuration setting.
-The Controller projection and Hermes loader/bridge have unit coverage;
-real storage, transport startup and execution continuation remain unverified
-for this new path.
+Controller reconciliation now also publishes the standard record after
+generating compatibility assets for standalone Hermes, OpenClaw and OpenHuman;
+QwenPaw, Codex and DSH keep their existing standard-record branch. Team records
+are published after channel-policy injection, including policy reset on detach.
+Actual Deployer + in-memory storage regressions cover standalone create/update,
+Team create/update and detach; the Hermes cases failed before these call-path
+fixes. These tests do not execute native Harnesses.
+
+Hermes #11 additionally has a passing real-MinIO/mc loader-to-native-SDK check
+in two independent containers, with no compatibility object. The second
+container has no native directory and restores previously persisted personality
+and shared artifacts. Records are seeded by the test, with synthetic root S3
+credentials; no running Controller, production Worker IAM, Matrix/model
+connection or Task execution is covered. Full startup and continuation remain
+unverified for the new path.
 
 ## Remaining implementation and acceptance
 

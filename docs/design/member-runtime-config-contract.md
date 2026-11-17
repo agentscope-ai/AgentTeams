@@ -1,23 +1,67 @@
 # Member Runtime Config Contract
 
-This document defines the YAML config snapshot that the AgentTeams controller writes
-to object storage for a managed runtime member. Managed runtime workers and
-TeamHarness plugin adapters read this file instead of querying the `agt` CLI for
-team and member facts.
+This document defines the Worker-owned standard configuration directory and
+YAML format shared by Codex, Hermes, QwenPaw, DeepSeek Harness, OpenClaw and
+OpenHuman. The selected Harness does not change the directory or field names.
+Controller publishes the record; Harness adapters consume it and generate their
+native configuration. Dashboard and `agt` use the same Controller write path.
 
-The config is for runtime consumption only. It carries non-secret desired state
-and team facts. Secrets stay in environment variables, mounted files, or service
-account tokens.
+The record carries desired state, Worker identity and team facts. Credentials
+normally use environment/file bindings. Existing remote-managed compatibility
+fields may carry explicitly projected credentials; consumers must not copy a
+native device token into the standard transport policy.
 
 ## Storage Path
 
-Recommended object path:
+Canonical object path (relative to the tenant/installation storage root):
 
 ```text
-shared/runtime/members/{memberName}/runtime.yaml
+agents/{workerIdentity}/runtime/runtime.yaml
 ```
 
-## Scope
+`workerIdentity` is the stable Controller-resolved Worker storage identity
+(`member.runtimeName`), not the Harness name or Project ID. The old proposed
+`shared/runtime/members/...` path is not the implemented contract.
+
+Worker-level files remain under the same root:
+
+```text
+agents/{workerIdentity}/
+  runtime/runtime.yaml       # shared configuration record
+  SOUL.md                   # persisted personality
+  AGENTS.md                 # instructions and projected role context
+  skills/                   # assigned skill assets
+  config/                   # projected tool configuration and Worker settings
+```
+
+Native session/cache directories may retain Harness-specific formats. Derived
+native configuration is rebuilt from the Worker record and assets; it must not
+be the only persistent copy of a user setting. Task execution checkpoints and
+delivery records remain in the Task system, not in this configuration record.
+`metadata.generation` tracks configuration, not process execution ownership.
+
+## Authority and compatibility
+
+- All six Harnesses must follow this directory and YAML contract. Switching
+  changes `member.runtime` and configuration metadata, while retaining Worker
+  identity, settings, credential bindings and asset locations.
+- Controller is the publisher of resolved desired state and authorization.
+  Adapters must not overwrite a newer record with their local native config.
+- At startup, resolve credentials through the declared bindings and apply the
+  latest record before admitting work. Missing bindings must not select stale
+  native credentials. Restart and replacement use the same loading contract.
+- Consumers must preserve compatible fields they do not own and must not treat
+  missing optional fields as an instruction to erase existing user settings.
+- Compatibility readers support older Controllers during migration. They are
+  not a substitute for completing standard-record support in every Harness.
+
+Implementation status: Controller projection and all-Harness configuration
+tests do not prove every native consumer conforms. See
+[Worker configuration recovery acceptance](../development/worker-config-recovery-1631.md)
+for current gaps and evidence. Six-Harness startup, switching and Task recovery
+acceptance remains incomplete.
+
+## Existing runtime application behavior
 
 - Controller writes this file whenever the member's non-secret desired state or
   team facts change.
@@ -106,82 +150,90 @@ non-built-in runtime id), never a QwenPaw built-in provider id.**
 ## Field Contract
 
 ```yaml
-apiVersion: agentteams.io/v1beta1 # master current: no runtime yaml protocol yet
-kind: MemberRuntimeConfig # master current: no runtime yaml protocol yet
+apiVersion: agentteams.io/v1beta1
+kind: MemberRuntimeConfig
 
-# Config snapshot metadata. QwenPaw uses this section to detect whether the
-# config changed since the last poll.
+# Configuration metadata; this generation does not grant Task execution ownership.
 metadata:
-  generation: 12 # master current: controller/status has CR generation, but it is not written to worker
-  updatedAt: "2026-06-03T12:00:00Z" # master current: no corresponding worker injection
+  generation: 12
+  updatedAt: "2026-06-03T12:00:00Z"
 
 # Team facts. This replaces runtime/plugin calls that would otherwise query
 # team information through the agt CLI.
 team:
-  name: demo-team # master current: controller derives this from Team.spec.teamName or Team.metadata.name, but does not inject it to worker
-  storageId: demo-team # master current: no independent field
-  teamRoomId: "!team:matrix.local" # master current: stored in Team.status.teamRoomID, but not injected to worker
+  name: demo-team
+  storageId: demo-team
+  teamRoomId: "!team:matrix.local"
   leaderName: leader # controller derives this from the Team workerMembers entry whose role is team_leader
-  leaderRuntimeName: leader # master current: controller can derive this from leader.workerName or leader.name, but does not inject it to worker
-  leaderDmRoomId: "!dm:matrix.local" # master current: stored in Team.status.leaderDMRoomID, but not injected to worker
+  leaderRuntimeName: leader
+  leaderDmRoomId: "!dm:matrix.local"
   admin:
-    name: admin # master current: controller derives this from Team.spec.admin.name or default admin, but does not inject it to worker
-    matrixUserId: "@admin:matrix.local" # master current: controller resolves this for rooms and policy, but does not inject it to worker
+    name: admin
+    matrixUserId: "@admin:matrix.local"
 
 # Current member facts. This tells the runtime who it is and which role/runtime
 # adapter should be applied.
 member:
-  name: worker-a # master current: controller management name, not injected as a field
-  runtimeName: worker-a # master current: injected through AGENTTEAMS_WORKER_NAME
-  role: worker # master current: controller knows the member role internally, but does not inject it to worker
-  runtime: qwenpaw # master current: comes from spec.runtime and is passed to backend runtime/image selection, not injected as env
-  matrixUserId: "@worker-a:matrix.local" # master current: stored in Worker or Team member status; worker receives token but not user id
-  personalRoomId: "!worker-dm:matrix.local" # master current: stored in Worker.status.roomID or Team.status.members[].roomID, but not injected to worker
+  name: worker-a
+  runtimeName: worker-a
+  role: worker
+  runtime: qwenpaw
+  matrixUserId: "@worker-a:matrix.local"
+  personalRoomId: "!worker-dm:matrix.local"
+
+# Optional during compatibility migration. Controller-resolved transport and
+# authorization; device/session state and tokens are excluded from transport.
+matrix:
+  transport:
+    homeserver: https://matrix.local
+    encryption: true
+    groupPolicy: allowlist
+    groupAllowFrom: ["@leader:matrix.local"]
+    dm:
+      policy: allowlist
+      allowFrom: ["@leader:matrix.local"]
 
 # Desired state projected from CRD. Controller writes what should be true;
 # QwenPaw runtime applies it to local QwenPaw/TeamHarness configuration.
 desired:
   model:
-    providerId: agentteams-gateway # master current: implicit in generated openclaw.json
-    model: qwen-plus # master current: comes from spec.model and is written to openclaw.json, not directly injected to worker
-    gatewayUrl: http://aigw-local.agentteams.io:8080 # master current: injected through AGENTTEAMS_AI_GATEWAY_URL
+    providerId: agentteams-gateway
+    model: qwen-plus
+    gatewayUrl: http://aigw-local.agentteams.io:8080
 
   agentPackage:
-    ref: nacos://market.agentteams.io:80/public/dev-worker?version=1.2.0 # master current: comes from spec.package; controller resolves and deploys it directly to OSS
-    name: dev-worker # master current: not written to worker
-    version: 1.2.0 # master current: not written to worker
-    digest: "sha256:..." # master current: not written to worker
+    ref: nacos://market.agentteams.io:80/public/dev-worker?version=1.2.0
 
   mcpServers:
-    - name: github # master current: comes from spec.mcpServers and is written to mcporter-servers.json
-      url: https://aigw.example.com/mcp-servers/github/mcp # master current: comes from spec.mcpServers and is written to mcporter-servers.json
-      transport: http # master current: comes from spec.mcpServers and is written to mcporter-servers.json
+    - name: github
+      url: https://aigw.example.com/mcp-servers/github/mcp
+      transport: http
 
   channelPolicy:
-    groupAllowExtra: [] # master current: controller merges policies and writes the result to openclaw.json
-    groupDenyExtra: [] # master current: controller merges policies and writes the result to openclaw.json
-    dmAllowExtra: [] # master current: controller merges policies and writes the result to openclaw.json
-    dmDenyExtra: [] # master current: controller merges policies and writes the result to openclaw.json
+    groupAllowExtra: []
+    groupDenyExtra: []
+    dmAllowExtra: []
+    dmDenyExtra: []
 
-  state: Running # master current: controller consumes spec.state to create, stop, or sleep the container; it is not injected to worker
+  state: Running
 
 # Object storage location facts. This section has remote storage coordinates
 # only. It does not contain access keys or local runtime paths.
 storage:
-  provider: oss # master current: worker infers provider from env and available CLI, no independent field
-  bucket: agentteams-storage # master current: injected through AGENTTEAMS_FS_BUCKET
-  endpoint: http://minio:9000 # master current: injected through AGENTTEAMS_FS_ENDPOINT
-  teamPrefix: teams/demo-team # master current: no standard field
-  sharedPrefix: teams/demo-team/shared # master current: no standard field
-  globalSharedPrefix: shared # master current: no standard field
-  memberPrefix: agents/worker-a # master current: controller implicitly uses agents/{runtimeName}; it is not injected as a field
+  provider: oss
+  bucket: agentteams-storage
+  endpoint: http://minio:9000
+  teamPrefix: teams/demo-team
+  sharedPrefix: teams/demo-team/shared
+  globalSharedPrefix: shared
+  memberPrefix: agents/worker-a
 
 # Secret locations. The YAML stores where to read secrets, never the secret
 # values themselves.
 credentials:
-  matrixTokenEnv: AGENTTEAMS_WORKER_MATRIX_TOKEN # master current: real token is injected into this env
-  gatewayKeyEnv: AGENTTEAMS_WORKER_GATEWAY_KEY # master current: real gateway key is injected into this env
-  storageAccessKeyEnv: AGENTTEAMS_FS_ACCESS_KEY # master current: real storage access key is injected into this env
-  storageSecretKeyEnv: AGENTTEAMS_FS_SECRET_KEY # master current: real storage secret key is injected into this env
-  serviceAccountTokenPath: /var/run/secrets/kubernetes.io/serviceaccount/token # master current: provided by Kubernetes service account mount, not env injection
+  matrixTokenEnv: AGENTTEAMS_WORKER_MATRIX_TOKEN
+  gatewayKeyEnv: AGENTTEAMS_WORKER_GATEWAY_KEY
+  storageAccessKeyEnv: AGENTTEAMS_FS_ACCESS_KEY
+  storageSecretKeyEnv: AGENTTEAMS_FS_SECRET_KEY
+  serviceAccountTokenPath: /var/run/secrets/agentteams/token
 ```

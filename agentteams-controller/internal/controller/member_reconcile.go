@@ -446,33 +446,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	}
 
 	if backend.UsesMemberRuntimeConfig(effectiveRuntime) || m.DeployMode == v1beta1.DeployModeEdge {
-		runtime := effectiveRuntime
-		var matrixAccessToken, gatewayKey string
-		skillRegistryURL, skillRegistryAuthType := runtimeSkillRegistryConfig(d, m, state)
-		if m.DeployMode == v1beta1.DeployModeEdge {
-			runtime = runtimeRemoteManagedLocal
-			matrixAccessToken = state.ProvResult.MatrixToken
-			gatewayKey = state.ProvResult.GatewayKey
-		}
-		if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
-			Name:                  m.Name,
-			RuntimeName:           m.RuntimeName,
-			Runtime:               runtime,
-			Role:                  m.Role.String(),
-			Generation:            m.Generation,
-			Spec:                  m.Spec,
-			SubagentModel:         resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
-			MatrixUserID:          state.MatrixUserID,
-			PersonalRoomID:        state.RoomID,
-			MatrixAccessToken:     matrixAccessToken,
-			GatewayKey:            gatewayKey,
-			AIGatewayURL:          aiGatewayURL,
-			SkillRegistryURL:      skillRegistryURL,
-			SkillRegistryAuthType: skillRegistryAuthType,
-		}); err != nil {
-			return fmt.Errorf("deploy runtime config: %w", err)
-		}
-		return nil
+		return deployMemberRuntimeConfig(ctx, d, m, state, effectiveRuntime, aiGatewayURL)
 	}
 
 	if err := d.Deployer.DeployPackage(ctx, m.RuntimeName, m.Spec.Package, m.IsUpdate); err != nil {
@@ -502,7 +476,41 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	}); err != nil {
 		return fmt.Errorf("deploy worker config: %w", err)
 	}
+	if effectiveRuntime == backend.RuntimeHermes || effectiveRuntime == backend.RuntimeOpenClaw || effectiveRuntime == backend.RuntimeOpenHuman {
+		// Retain compatibility assets while publishing the same Worker record
+		// for every supported Harness, after its current policy is resolved.
+		return deployMemberRuntimeConfig(ctx, d, m, state, effectiveRuntime, aiGatewayURL)
+	}
 
+	return nil
+}
+
+func deployMemberRuntimeConfig(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState, runtime, aiGatewayURL string) error {
+	var matrixAccessToken, gatewayKey string
+	skillRegistryURL, skillRegistryAuthType := runtimeSkillRegistryConfig(d, m, state)
+	if m.DeployMode == v1beta1.DeployModeEdge {
+		runtime = runtimeRemoteManagedLocal
+		matrixAccessToken = state.ProvResult.MatrixToken
+		gatewayKey = state.ProvResult.GatewayKey
+	}
+	if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
+		Name:                  m.Name,
+		RuntimeName:           m.RuntimeName,
+		Runtime:               runtime,
+		Role:                  m.Role.String(),
+		Generation:            m.Generation,
+		Spec:                  m.Spec,
+		SubagentModel:         resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
+		MatrixUserID:          state.MatrixUserID,
+		PersonalRoomID:        state.RoomID,
+		MatrixAccessToken:     matrixAccessToken,
+		GatewayKey:            gatewayKey,
+		AIGatewayURL:          aiGatewayURL,
+		SkillRegistryURL:      skillRegistryURL,
+		SkillRegistryAuthType: skillRegistryAuthType,
+	}); err != nil {
+		return fmt.Errorf("deploy runtime config: %w", err)
+	}
 	return nil
 }
 

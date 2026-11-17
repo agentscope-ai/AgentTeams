@@ -1,0 +1,257 @@
+{
+  "passed": true,
+  "scope": "case24 generation3 repair after missing-MCP dependency; not the strict two-generation switching acceptance",
+  "strict_two_generation_case_passed": false,
+  "task_id": "live-qwenpaw-hermes-24",
+  "before_generation": 2,
+  "after_generation": 3,
+  "before_checkpoint": 9,
+  "after_checkpoint": 11,
+  "effect_generations": [
+    1,
+    2,
+    2
+  ],
+  "effects_unchanged_during_repair": true,
+  "oracle_proof": {
+    "calls": [
+      {
+        "accepted": true,
+        "at_ns": 1794893460016814074,
+        "method": "REGISTER",
+        "process_id": "1:1794893398575710634:47daf29009cd456cb1b50b623705d5a8",
+        "step": "one",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1794893460054813111,
+        "method": "POST",
+        "process_id": "1:1794893398575710634:47daf29009cd456cb1b50b623705d5a8",
+        "step": "one",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1794893605345762810,
+        "method": "REGISTER",
+        "process_id": "1:1794893563099727145:11a8c28107ae4ccda46cc2ff7a376342",
+        "step": "two",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1794893605365932112,
+        "method": "POST",
+        "process_id": "1:1794893563099727145:11a8c28107ae4ccda46cc2ff7a376342",
+        "step": "two",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1794893609951616718,
+        "method": "REGISTER",
+        "process_id": "1:1794893563099727145:11a8c28107ae4ccda46cc2ff7a376342",
+        "step": "three",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1794893609973556896,
+        "method": "POST",
+        "process_id": "1:1794893563099727145:11a8c28107ae4ccda46cc2ff7a376342",
+        "step": "three",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      }
+    ],
+    "effects": [
+      {
+        "checkpoint_version": 1,
+        "executed_at_ns": 1794893460054822194,
+        "generation": 1,
+        "instance_id": "docker/bc479839c6a64010d863b7e9e38a1548d791d3eb5451b85b7412d4136af1a361/2026-11-17T05:29:57.807549334Z",
+        "process_id": "1:1794893398575710634:47daf29009cd456cb1b50b623705d5a8",
+        "step": "one",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      },
+      {
+        "checkpoint_version": 5,
+        "executed_at_ns": 1794893605365940861,
+        "generation": 2,
+        "instance_id": "docker/35e28f4e73867bafbc9ea971256b008b8ba3e26898c3e0944deed426f989d97c/2026-11-17T05:32:42.89811132Z",
+        "process_id": "1:1794893563099727145:11a8c28107ae4ccda46cc2ff7a376342",
+        "step": "two",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      },
+      {
+        "checkpoint_version": 7,
+        "executed_at_ns": 1794893609973565811,
+        "generation": 2,
+        "instance_id": "docker/35e28f4e73867bafbc9ea971256b008b8ba3e26898c3e0944deed426f989d97c/2026-11-17T05:32:42.89811132Z",
+        "process_id": "1:1794893563099727145:11a8c28107ae4ccda46cc2ff7a376342",
+        "step": "three",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      }
+    ],
+    "intents": [
+      {
+        "checkpoint_version": 1,
+        "generation": 1,
+        "instance_id": "docker/bc479839c6a64010d863b7e9e38a1548d791d3eb5451b85b7412d4136af1a361/2026-11-17T05:29:57.807549334Z",
+        "process_id": "1:1794893398575710634:47daf29009cd456cb1b50b623705d5a8",
+        "step": "one",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      },
+      {
+        "checkpoint_version": 5,
+        "generation": 2,
+        "instance_id": "docker/35e28f4e73867bafbc9ea971256b008b8ba3e26898c3e0944deed426f989d97c/2026-11-17T05:32:42.89811132Z",
+        "process_id": "1:1794893563099727145:11a8c28107ae4ccda46cc2ff7a376342",
+        "step": "two",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      },
+      {
+        "checkpoint_version": 7,
+        "generation": 2,
+        "instance_id": "docker/35e28f4e73867bafbc9ea971256b008b8ba3e26898c3e0944deed426f989d97c/2026-11-17T05:32:42.89811132Z",
+        "process_id": "1:1794893563099727145:11a8c28107ae4ccda46cc2ff7a376342",
+        "step": "three",
+        "task_id": "live-qwenpaw-hermes-24",
+        "team_id": "recovery-team"
+      }
+    ]
+  },
+  "execution": {
+    "generation": 3,
+    "instance_id": "docker/0a7cc268723bc053105deb3416f138bc13e729aff1f2fe8e3d724e1f792a99d0/2026-11-17T05:46:15.682950781Z",
+    "process_id": "1:1794894375994847523:ee45303a060247889d446cada6eb4ae5",
+    "runtime": "hermes",
+    "state": "active",
+    "checkpoint": {
+      "version": 11,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-qwenpaw-hermes-24:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=4caee2877e66a9ef837fd24a6fc89da83677cf54b8b8cc585fa0fd3cda3ddac4; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-24/output/step-one.json",
+          "sha256": "dc203d2a475a804af30e666f90eabf5dc82507be1d67a1ace79a06308bc58627",
+          "size": 354
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-24/output/step-two.json",
+          "sha256": "6a45ee1700d063d4588d4b7eb939be7388b72f7e65eb5fffb26b7bda4a65a0fe",
+          "size": 353
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-24/output/step-three.json",
+          "sha256": "4caee2877e66a9ef837fd24a6fc89da83677cf54b8b8cc585fa0fd3cda3ddac4",
+          "size": 355
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-24/result.md",
+        "sha256": "90dfcbb80b22bf3758afa5c81e21898e8b3fcc9f7eef308c85937f1788d8036d",
+        "size": 641
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:c158d1c77ac0ca425a0d2cb069357573d907750e4fc260e92df4ca452becc176",
+      "reply_event": "$bYG7eC8kMiNymv3AOd6iB6mn6Bb9DBb9boY9WSBr8_c",
+      "saved_at": "2026-11-17T05:47:12.001394248Z"
+    }
+  },
+  "matrix": {
+    "reply_event": "$bYG7eC8kMiNymv3AOd6iB6mn6Bb9DBb9boY9WSBr8_c",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$CH6NbH6_paVuh8dWvraL9ED58iaD8qmmSxR8yTx-ooI"
+    ],
+    "read_receipt_events": [
+      "$PnjxUzkeUcoEIyUVn9Z9yWBGHwMuYfLeY0ZbLUJ2J5I"
+    ]
+  },
+  "artifact_digests_verified": true,
+  "matrix_verifier_source": "Core f96f9dda verify() Matrix fragment, unchanged",
+  "matrix_verifier_sha256": "b23557f2b42bcfa52612b44e376714e5f84955b1e112a0d905007a3ba272161f",
+  "recorded_at": "2026-11-17T05:49:11.913929+00:00",
+  "native_submission": {
+    "session_id": "20261117_054626_7a433996",
+    "generation": 3,
+    "native_submit_results": [
+      {
+        "action": "submit_task",
+        "ok": true,
+        "synced": true,
+        "error": null
+      }
+    ],
+    "old_qwenpaw_sessions_retained": true
+  },
+  "source_labels": {},
+  "images": {
+    "controller": {
+      "tag": "recovery-1631/controller:local-20261117124854",
+      "id": "sha256:af5d46f503d63aba7f1f1e0a56bb65d3c6f725e4f7fafa10888f5532d5da5dc0",
+      "labels": {
+        "io.agentteams.recovery.core-sha": "774d628568c227ea041f90c14a56138ae2c91493",
+        "io.agentteams.recovery.kind": "local-source-overlay",
+        "io.agentteams.recovery.owner": "1631"
+      }
+    },
+    "worker-agent-a": {
+      "tag": "recovery-1631/hermes:local-20261117134800",
+      "id": "sha256:c45f05d4bfe148e4681643efa06bf5e1123b109f8b91c02da1ab42c7d311c6b4",
+      "labels": {
+        "io.agentteams.recovery.core-sha": "f96f9ddacf0d6fca362edb33d5172d0687f05963",
+        "io.agentteams.recovery.harness-sha": "8f4a789a3f1b6e1515a0d33e9938e09c9d44a9b1",
+        "io.agentteams.recovery.kind": "local-source-overlay"
+      }
+    }
+  },
+  "validation_harness_commit": "4cb4e6a87c58e74eeb540a4ec32319e853b62d28",
+  "hermes_mcp_version": "2.3.0",
+  "mcp_version_source": "Pinned Hermes SDK uv.lock, matched package version; local overlay dependency repair, not a canonical full image build",
+  "native_mcp_preflight": {
+    "before": "ModuleNotFoundError: mcp",
+    "after": "real ClientSession handshake and native registry exposes mcp__teamharness__taskflow",
+    "log_sha256": "0aefc3983726cbf4a3a14ce29e80199e6488be4204c541f0fa128d1a94b18183",
+    "model_calls": 0,
+    "task_effects": 0
+  },
+  "trace": {
+    "id": "0ffaca7c7a73215c408cf2362c71d29c",
+    "controller_readback": true,
+    "event_id": "recovery:recovery-team/live-qwenpaw-hermes-24:3",
+    "native_session_id": "20261117_054626_7a433996",
+    "explicit_task_id_present": false,
+    "explicit_execution_generation_present": false,
+    "dashboard_ui_verified": false,
+    "limits": "Hermes callback currently retains recovery event/native session correlation but does not export explicit Task/team/generation fields. Do not claim complete trace correlation."
+  },
+  "limits": [
+    "Not the strict two-generation cutover acceptance; the generation2 failure is preserved.",
+    "Not a saved-result-only retry: generation3 still entered native inference to submit the completed Task.",
+    "Not proof of all session/cancellation/unknown-effect/fault or six/30-direction scenarios.",
+    "Old QwenPaw files retained, but active switch back to that session has not been exercised."
+  ]
+}

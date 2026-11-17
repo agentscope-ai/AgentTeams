@@ -71,10 +71,16 @@ prove its tools are registered in the Agent's native runtime.
 | Real case20 and21, exact sources in their JSON records | Hermes→DSH and DSH→Hermes, same Task, no new external Matrix input, effects once, artifact/report and final-event checks | Other directions, the new configuration candidate, complete fault/session/cancellation coverage |
 | Real case23 | Actual startup inference and diagnosis of missing QwenPaw MCP boot identity | ACK/step execution/cutover failed; effects0/0/0 |
 | Real case24 | Fixed QwenPaw native ACK, source native read, checkpoint4; Hermes fresh session; effects once across generations1/2/2; old stop before create | Native submission/final reply failed because the local overlay omitted the MCP SDK; not a third accepted direction |
+| Case24 generation3 repair | With the missing MCP dependency installed and native discovery preflight passed, the same Task automatically submitted through native MCP and delivered one authoritative final reply, without new external Matrix input or additional effects; old QwenPaw sessions retained | Does not retroactively pass the two-generation case, saved-result-only retry, active return to QwenPaw or complete fault matrix |
 
 Evidence is under [the recovery record](../development/runtime-recovery-1631.md)
 and its adjacent `evidence/` directory. Configuration and protocol test counts
 must never be presented as the six-Harness execution matrix.
+
+Trace acceptance is also separate. QwenPaw case23 exported explicit Task/team/
+generation fields. Hermes case24 repair exported its recovery event ID and
+native session, but explicit Task/team/generation callback fields remain to be
+wired. Dashboard trace UI readback remains unverified for these fixtures.
 
 Before full acceptance, complete six same-Harness and30 directed lanes, normal
 and abnormal restart/replacement, valid reuse, lost/expired/stale sessions,

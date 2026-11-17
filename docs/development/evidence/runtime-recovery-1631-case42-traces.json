@@ -1,0 +1,392 @@
+{
+  "target_traces": [
+    {
+      "trace_id": "bbe1987ef347e4ee84293f328b7d40e2",
+      "task_id": "live-hermes-hermes-42",
+      "controller_readback": true,
+      "direct_langfuse_readback": true,
+      "metadata": {
+        "agentteams.event.id": "recovery:recovery-team/live-hermes-hermes-42:2",
+        "agentteams.execution.generation": 2,
+        "agentteams.message.dispatch_delay_ms": 90615.396705,
+        "agentteams.message.received_at_ns": 1794953079004040200,
+        "agentteams.outcome": "ok",
+        "agentteams.room.id": "!8OLwoa7QdyvA2KdMPT:recovery-1631.test",
+        "agentteams.runtime": "hermes",
+        "agentteams.runtime.parent_session_id": "20261117_220131_a8ff56ae",
+        "agentteams.runtime.session_id": "20261117_220131_a8ff56ae",
+        "agentteams.runtime.task_id": "20261117_220131_a8ff56ae",
+        "agentteams.session.id": "agent-a:18f76d37c706b87ac64cb297",
+        "agentteams.task.correlation": "explicit request context",
+        "agentteams.task.id": "live-hermes-hermes-42",
+        "agentteams.team.id": "recovery-team",
+        "agentteams.telemetry.adapter": "hermes",
+        "agentteams.telemetry.adapter_errors": [],
+        "agentteams.telemetry.capture_content": false,
+        "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+        "agentteams.telemetry.field_limit_bytes": 262144,
+        "agentteams.telemetry.schema": 1,
+        "agentteams.telemetry.versions": "{'hermes-agent': '0.0.0', 'openai': '2.54.0'}",
+        "agentteams.turn.id": "0699b7a5049d452c84271452f7f97b7d",
+        "agentteams.worker.name": "agent-a",
+        "attributes": {
+          "agentteams.event.id": "recovery:recovery-team/live-hermes-hermes-42:2",
+          "agentteams.execution.generation": "2",
+          "agentteams.message.dispatch_delay_ms": "90615.396705",
+          "agentteams.message.received_at_ns": "1794953079004040200",
+          "agentteams.outcome": "ok",
+          "agentteams.room.id": "!8OLwoa7QdyvA2KdMPT:recovery-1631.test",
+          "agentteams.runtime": "hermes",
+          "agentteams.runtime.parent_session_id": "20261117_220131_a8ff56ae",
+          "agentteams.runtime.session_id": "20261117_220131_a8ff56ae",
+          "agentteams.runtime.task_id": "20261117_220131_a8ff56ae",
+          "agentteams.session.id": "agent-a:18f76d37c706b87ac64cb297",
+          "agentteams.task.correlation": "explicit request context",
+          "agentteams.task.id": "live-hermes-hermes-42",
+          "agentteams.team.id": "recovery-team",
+          "agentteams.telemetry.adapter": "hermes",
+          "agentteams.telemetry.adapter_errors": "[]",
+          "agentteams.telemetry.capture_content": "false",
+          "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+          "agentteams.telemetry.field_limit_bytes": "262144",
+          "agentteams.telemetry.schema": "1",
+          "agentteams.telemetry.versions": "{'hermes-agent': '0.0.0', 'openai': '2.54.0'}",
+          "agentteams.turn.id": "0699b7a5049d452c84271452f7f97b7d",
+          "agentteams.worker.name": "agent-a",
+          "gen_ai.agent.id": "agent-a",
+          "gen_ai.agent.name": "agent-a",
+          "gen_ai.operation.name": "enter",
+          "gen_ai.session.id": "agent-a:18f76d37c706b87ac64cb297",
+          "gen_ai.span.kind": "ENTRY",
+          "gen_ai.turn.id": "0699b7a5049d452c84271452f7f97b7d",
+          "langfuse.observation.type": "agent",
+          "langfuse.session.id": "agent-a:18f76d37c706b87ac64cb297",
+          "langfuse.trace.name": "agent-a / turn",
+          "langfuse.trace.tags": "[\"agentteams\",\"hermes\",\"worker-turn\",\"task:live-hermes-hermes-42\",\"team:recovery-team\",\"room:!8OLwoa7QdyvA2KdMPT:recovery-1631.test\"]",
+          "langfuse.user.id": "agent-a"
+        },
+        "events": [
+          {
+            "attributes": {
+              "log.logger": "agent.tool_executor",
+              "log.message": "\"Tool skill_manage returned error (0.01s): {\\\"error\\\": \\\"operations[0] (patch on 'task-progress'): Pass EITHER content (full SKILL.md rewrite) OR old_string/new_string (targeted replacement), not both.\\\", \\\"success\\\": false}\"",
+              "log.severity": "WARNING"
+            },
+            "name": "log",
+            "timestamp": "1794953217624631224"
+          },
+          {
+            "attributes": {
+              "log.logger": "agent.tool_executor",
+              "log.message": "\"Tool skill_manage returned error (0.02s): {\\\"error\\\": \\\"operations[0] (patch on 'task-progress'): Pass EITHER content (full SKILL.md rewrite) OR old_string/new_string (targeted replacement), not both.\\\", \\\"success\\\": false}\\n\\n[Tool loop warning: rep\"",
+              "log.severity": "WARNING"
+            },
+            "name": "log",
+            "timestamp": "1794953252727199292"
+          },
+          {
+            "attributes": {
+              "log.logger": "agent.tool_executor",
+              "log.message": "\"Tool skill_manage returned error (0.03s): {\\\"success\\\": false, \\\"error\\\": \\\"operations[0] (patch on 'task-progress') failed: Description is 253 chars; a skill description must fit the 60-char skill index (one sentence, trigger first, ends with a p\"",
+              "log.severity": "WARNING"
+            },
+            "name": "log",
+            "timestamp": "1794953276642044443"
+          },
+          {
+            "attributes": {
+              "log.logger": "agent.tool_executor",
+              "log.message": "\"Tool skill_manage returned error (0.03s): {\\\"success\\\": false, \\\"error\\\": \\\"operations[0] (patch on 'task-progress') failed: Description is 64 chars; a skill description must fit the 60-char skill index (one sentence, trigger first, ends with a pe\"",
+              "log.severity": "WARNING"
+            },
+            "name": "log",
+            "timestamp": "1794953298783020727"
+          }
+        ],
+        "resourceAttributes": {
+          "agentteams.runtime": "hermes",
+          "agentteams.telemetry.config_revision": "22af03e6-fdb3-4746-8146-b4f85ffdbdb8",
+          "agentteams.worker.name": "agent-a",
+          "service.instance.id": "9bed193d-0155-412b-9617-e52366425858",
+          "service.name": "agentteams-worker-agent-a",
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.45.2"
+        },
+        "scope": {
+          "attributes": {},
+          "name": "agentteams.worker",
+          "version": "0.63.0"
+        }
+      },
+      "generation_observations": 8,
+      "tool_observations": 7,
+      "usage": {
+        "input": 378757,
+        "output": 8706,
+        "total": 387463
+      },
+      "timings_present": true,
+      "native_input_http": [],
+      "first_model_start": "2026-11-17T22:06:09.639Z",
+      "outcome": "ok",
+      "dashboard_ui": "not separately accepted: SDK background review",
+      "scope": "target Task turn readback; source stage has a separate telemetry gap"
+    },
+    {
+      "trace_id": "54d884897397e288992f5335c11aaaf9",
+      "task_id": "live-hermes-hermes-42",
+      "controller_readback": true,
+      "direct_langfuse_readback": true,
+      "metadata": {
+        "agentteams.event.id": "recovery:recovery-team/live-hermes-hermes-42:2",
+        "agentteams.execution.generation": 2,
+        "agentteams.message.dispatch_delay_ms": 378.278115,
+        "agentteams.message.received_at_ns": 1794953079004040200,
+        "agentteams.outcome": "ok",
+        "agentteams.room.id": "!8OLwoa7QdyvA2KdMPT:recovery-1631.test",
+        "agentteams.runtime": "hermes",
+        "agentteams.runtime.session_id": "20261117_220131_a8ff56ae",
+        "agentteams.runtime.task_id": "20261117_220131_a8ff56ae",
+        "agentteams.session.id": "agent-a:18f76d37c706b87ac64cb297",
+        "agentteams.task.correlation": "explicit request context",
+        "agentteams.task.id": "live-hermes-hermes-42",
+        "agentteams.team.id": "recovery-team",
+        "agentteams.telemetry.adapter": "hermes",
+        "agentteams.telemetry.adapter_errors": [],
+        "agentteams.telemetry.capture_content": false,
+        "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+        "agentteams.telemetry.field_limit_bytes": 262144,
+        "agentteams.telemetry.schema": 1,
+        "agentteams.telemetry.versions": "{'hermes-agent': '0.0.0', 'openai': '2.54.0'}",
+        "agentteams.turn.id": "0cdd5ae5656e4b68b5eecba24fba975c",
+        "agentteams.worker.name": "agent-a",
+        "attributes": {
+          "agentteams.event.id": "recovery:recovery-team/live-hermes-hermes-42:2",
+          "agentteams.execution.generation": "2",
+          "agentteams.message.dispatch_delay_ms": "378.278115",
+          "agentteams.message.received_at_ns": "1794953079004040200",
+          "agentteams.outcome": "ok",
+          "agentteams.room.id": "!8OLwoa7QdyvA2KdMPT:recovery-1631.test",
+          "agentteams.runtime": "hermes",
+          "agentteams.runtime.session_id": "20261117_220131_a8ff56ae",
+          "agentteams.runtime.task_id": "20261117_220131_a8ff56ae",
+          "agentteams.session.id": "agent-a:18f76d37c706b87ac64cb297",
+          "agentteams.task.correlation": "explicit request context",
+          "agentteams.task.id": "live-hermes-hermes-42",
+          "agentteams.team.id": "recovery-team",
+          "agentteams.telemetry.adapter": "hermes",
+          "agentteams.telemetry.adapter_errors": "[]",
+          "agentteams.telemetry.capture_content": "false",
+          "agentteams.telemetry.coverage": "turn,model,tool,http_attempt,matrix_send,warning,error,cancel",
+          "agentteams.telemetry.field_limit_bytes": "262144",
+          "agentteams.telemetry.schema": "1",
+          "agentteams.telemetry.versions": "{'hermes-agent': '0.0.0', 'openai': '2.54.0'}",
+          "agentteams.turn.id": "0cdd5ae5656e4b68b5eecba24fba975c",
+          "agentteams.worker.name": "agent-a",
+          "gen_ai.agent.id": "agent-a",
+          "gen_ai.agent.name": "agent-a",
+          "gen_ai.operation.name": "enter",
+          "gen_ai.session.id": "agent-a:18f76d37c706b87ac64cb297",
+          "gen_ai.span.kind": "ENTRY",
+          "gen_ai.turn.id": "0cdd5ae5656e4b68b5eecba24fba975c",
+          "langfuse.observation.type": "agent",
+          "langfuse.session.id": "agent-a:18f76d37c706b87ac64cb297",
+          "langfuse.trace.name": "agent-a / turn",
+          "langfuse.trace.tags": "[\"agentteams\",\"hermes\",\"worker-turn\",\"task:live-hermes-hermes-42\",\"team:recovery-team\",\"room:!8OLwoa7QdyvA2KdMPT:recovery-1631.test\"]",
+          "langfuse.user.id": "agent-a"
+        },
+        "resourceAttributes": {
+          "agentteams.runtime": "hermes",
+          "agentteams.telemetry.config_revision": "22af03e6-fdb3-4746-8146-b4f85ffdbdb8",
+          "agentteams.worker.name": "agent-a",
+          "service.instance.id": "9bed193d-0155-412b-9617-e52366425858",
+          "service.name": "agentteams-worker-agent-a",
+          "telemetry.sdk.language": "python",
+          "telemetry.sdk.name": "opentelemetry",
+          "telemetry.sdk.version": "1.45.2"
+        },
+        "scope": {
+          "attributes": {},
+          "name": "agentteams.worker",
+          "version": "0.63.0"
+        }
+      },
+      "generation_observations": 11,
+      "tool_observations": 14,
+      "usage": {
+        "input": 379521,
+        "output": 3128,
+        "total": 382649
+      },
+      "timings_present": true,
+      "native_input_http": [],
+      "first_model_start": "2026-11-17T22:04:39.578Z",
+      "outcome": "ok",
+      "dashboard_ui": "verified",
+      "scope": "target Task turn readback; source stage has a separate telemetry gap"
+    }
+  ],
+  "source_trace_gap": {
+    "id": "8564b835f993fad7f0da9badaf14e9ef",
+    "observations": 0,
+    "generation_count": 0,
+    "task": null,
+    "generation": null,
+    "http_errors": []
+  },
+  "expected_non_inference_http": [
+    {
+      "status": "405",
+      "path": "/api/show",
+      "method": "POST"
+    },
+    {
+      "status": "405",
+      "path": "/api/show",
+      "method": "POST"
+    },
+    {
+      "status": "405",
+      "path": "/api/show",
+      "method": "POST"
+    }
+  ],
+  "source_native_input_fact": {
+    "active_start": {
+      "instance_id": "docker/bb16bf5fac5715ee8b88307fe1410f6ca2c4eca282297f7694fc54621f0c9c56/2026-11-17T21:54:08.680718414Z",
+      "process_id": "1:1794952448888965778:082a087c5a6349ac8c6283d7259005a1",
+      "runtime": "hermes"
+    },
+    "consumer_count": 0,
+    "task_inputs": [
+      {
+        "room_id": "!8OLwoa7QdyvA2KdMPT:recovery-1631.test",
+        "event_id": "$AWQ8_mjUoUOcGSx3H5fFvBM1u8u3VSQNzrY9fz4RdeQ",
+        "intent": "task_notification",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-hermes-hermes-42"
+        },
+        "input_state": "native_committed",
+        "native": {
+          "current": true,
+          "etag": "f05135970878f59d437112f4d9824226",
+          "input": {
+            "schema_version": 1,
+            "kind": "WorkerMatrixEvent",
+            "member_prefix": "agents/agent-a",
+            "room_id": "!8OLwoa7QdyvA2KdMPT:recovery-1631.test",
+            "event_id": "$AWQ8_mjUoUOcGSx3H5fFvBM1u8u3VSQNzrY9fz4RdeQ",
+            "input": {
+              "sender": "@leader:recovery-1631.test",
+              "type": "m.room.message",
+              "origin_server_ts": 1794952884971,
+              "content": {
+                "body": "@agent-a:recovery-1631.test 任务已分配。请继续开始「live-hermes-hermes-42」任务，按任务要求完成并提交结果。",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<a href=\"https://matrix.to/#/@agent-a:recovery-1631.test\">@agent-a</a> 任务已分配。请继续开始「live-hermes-hermes-42」任务，按任务要求完成并提交结果。",
+                "m.mentions": {
+                  "user_ids": [
+                    "@agent-a:recovery-1631.test"
+                  ]
+                },
+                "msgtype": "m.text",
+                "org.agentteams.coordination": {
+                  "channel_meta": {
+                    "agent_matrix_user_id": "@agent-a:recovery-1631.test",
+                    "api_projection": true,
+                    "event_id": "71204cc4b1c443a337ad995585c06fba",
+                    "main_task_id": "live-main-42",
+                    "project_id": "",
+                    "room_id": "!8OLwoa7QdyvA2KdMPT:recovery-1631.test",
+                    "sender_id": "@leader:recovery-1631.test",
+                    "task_id": "live-hermes-hermes-42",
+                    "teamharness_coordination": {
+                      "delivery_id": "live-assignment-42",
+                      "dispatch_mode": "manual",
+                      "id": "71204cc4b1c443a337ad995585c06fba",
+                      "kind": "task_assigned",
+                      "main_task_id": "live-main-42",
+                      "plan_type": "dag",
+                      "project_id": "",
+                      "submission_id": "",
+                      "task_id": "live-hermes-hermes-42"
+                    },
+                    "teamharness_requester_route": null
+                  },
+                  "input": [
+                    {
+                      "content": [
+                        {
+                          "text": "TASK_ASSIGNED: live-hermes-hermes-42\nUse a synchronized runtime ACK receipt when supplied; otherwise first call taskflow ack_task after checking the current assignee and execution identity. Write outputs only in this task. Use a fresh isolated test directory instead of pre-deleting an old directory. Upstream inputs are read-only: disable test caches beside imported inputs or copy inputs to your own workspace; do not clean upstream task directories.\nYou are executing a bounded real runtime-recovery acceptance task live-hermes-hermes-42 in team recovery-team.\nUse your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.\nPull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/recovery-team/shared/tasks/live-hermes-hermes-42/acceptance.py into your task scratch directory using mc cp.\nThe acceptance.py helper owns the fixture:* operation identities and records both started and verified checkpoints itself. Invoke it as one native terminal tool call; do not pre-register a checkpoint for the helper or duplicate its operation IDs.\nUse your native terminal tool to run python3 acceptance.py live-hermes-hermes-42 recovery-team. Each invocation executes ONE real persisted side effect and commits its checkpoint through the real Controller.\nRead the authoritative completed_steps. Never repeat a completed step or edit the fixture, ledger or checkpoint outside the helper.\nIn execution generation 1, run only step one. Then call the helper once more to verify PAUSED_AT_STEP_BOUNDARY and end your turn with a short progress report. Leave task status in_progress. Do not submit, wait, poll or request a new message.\nWhen recovered in generation 2 or later, continue remaining steps two and three with the same helper, then use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/live-hermes-hermes-42/output/step-one.json, shared/tasks/live-hermes-hermes-42/output/step-two.json, shared/tasks/live-hermes-hermes-42/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.\nOutputs are durable in the task's shared object-storage output/ directory; pull them to your task output/ directory before submission. Do not create a new task or send messages to other members.\nThe external test driver will replace your container at a step boundary without sending any new Matrix message.\n",
+                          "type": "text"
+                        }
+                      ],
+                      "role": "user"
+                    }
+                  ],
+                  "request_context": {
+                    "teamharness_coordination": {
+                      "agent_matrix_user_id": "@agent-a:recovery-1631.test",
+                      "api_projection": true,
+                      "event_id": "71204cc4b1c443a337ad995585c06fba",
+                      "main_task_id": "live-main-42",
+                      "project_id": "",
+                      "room_id": "!8OLwoa7QdyvA2KdMPT:recovery-1631.test",
+                      "sender_id": "@leader:recovery-1631.test",
+                      "task_id": "live-hermes-hermes-42",
+                      "teamharness_coordination": {
+                        "delivery_id": "live-assignment-42",
+                        "dispatch_mode": "manual",
+                        "id": "71204cc4b1c443a337ad995585c06fba",
+                        "kind": "task_assigned",
+                        "main_task_id": "live-main-42",
+                        "plan_type": "dag",
+                        "project_id": "",
+                        "submission_id": "",
+                        "task_id": "live-hermes-hermes-42"
+                      },
+                      "teamharness_requester_route": null
+                    }
+                  },
+                  "session_id": "coordination-task:live-hermes-hermes-42:live-assignment-42:71204cc4b1c443a337ad995585c06fba",
+                  "user_id": "@leader:recovery-1631.test"
+                },
+                "org.agentteams.progress_only": false
+              }
+            },
+            "input_state": "native_committed",
+            "intent": "task_notification",
+            "work": {
+              "kind": "task",
+              "team_id": "recovery-team",
+              "task_id": "live-hermes-hermes-42"
+            },
+            "native_commit": {
+              "runtime": "hermes",
+              "start": {
+                "instance_id": "docker/bb16bf5fac5715ee8b88307fe1410f6ca2c4eca282297f7694fc54621f0c9c56/2026-11-17T21:54:08.680718414Z",
+                "process_id": "1:1794952448888965778:082a087c5a6349ac8c6283d7259005a1",
+                "runtime": "hermes"
+              },
+              "native_ref": "20261117_220131_a8ff56ae",
+              "native_digest": "4541e1ba684b008b3008a3e90dfa5e57530917a52f590aabc61ddf7747026dd0",
+              "saved_at": "2026-11-17T22:01:35Z"
+            }
+          },
+          "instance_id": "docker/bb16bf5fac5715ee8b88307fe1410f6ca2c4eca282297f7694fc54621f0c9c56/2026-11-17T21:54:08.680718414Z",
+          "runtime": "hermes"
+        }
+      }
+    ]
+  },
+  "coverage_limits": [
+    "Source trace exists with no observations or Task/generation metadata; original stage incomplete after ClickHouse OOM. Do not claim strict source HTTP-before-model trace proof.",
+    "Source native input fact is independently present; consumer_count remains zero because only per-event callbacks are wired.",
+    "Background SDK skill review is separate from Task execution; original unique Task/report/effect assertions remain unchanged."
+  ],
+  "fixture_workers_stopped_after_capture": true,
+  "dashboard_screenshot": "output/runtime-recovery-1631-case42-trace.jpg"
+}

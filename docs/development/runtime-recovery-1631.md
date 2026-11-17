@@ -1212,3 +1212,56 @@ failed a localhost custom-provider API timeout in its managed-model smoke.
 Local exact-image reproduction passed with zero catalog/model calls; cause
 remains unconfirmed. d5ee25f adds failure diagnostics without changing timeout,
 assertions or product behavior; matching CI44183066683 is running.
+
+### Case42: Hermes guarded input and real restart continuation
+
+[Strict Task proof](evidence/runtime-recovery-1631-case42-verified.json) uses
+the actual Core262ecb13 server and Hermes16963d5/shared69538c9a/SDK2bd378ed,
+local image213d6482. The original Matrix input has a current common native
+fact referencing the actual SDK row/session before cutover. Source checkpoint4
+retains completed step one and pending two/three, with a matching shared/native
+session descriptor. Normal restart preserves container ID, changes actual
+process/start and generation1→2, reuses session20261117_220131_a8ff56ae and
+reaches checkpoint10 without any new external Matrix input. The unchanged
+strict verifier checks each irreversible effect once, all artifact/report
+hashes, native submission and one canonical report/reply. Task ID is unchanged.
+
+[Tracing proof and limits](evidence/runtime-recovery-1631-case42-traces.json)
+records Controller/direct-Langfuse readback plus actual Dashboard inspection
+of target54d884897397e288992f5335c11aaaf9: Task/room/generation2 and reused
+SDK session match, with11 generation observations,14 tools,382649 tokens.
+Its57 observations include3 expected405 `/api/show` capability probes, not
+failed inference. SDK background skill review bbe1987ef347e4ee84293f328b7d40e2
+is recorded separately, not another Task execution. Later child activity
+extends trace duration; it is not the Task's execution wall clock.
+
+Source8564b835f993fad7f0da9badaf14e9ef exists but has no observations or
+Task/generation metadata. ClickHouse was OOM-killed before the run and restored
+after diagnosis; source telemetry completeness and exact source native-POST/
+first-model ordering remain unverified. Independent source native-input fact
+and Task execution proof are retained; this gap is not hidden by target tracing
+or fixture SDK tests. Shared consumer count remains0; full-batch integration
+is still open. Both v22 Workers were slept after proof and actually exited.
+
+Docker storage also reached100% before Task assignment, preventing oracle
+volume creation.18 unreferenced recovery-image tags and eligible old build
+cache were removed;19 older owned fixture containers were stopped after their
+logs were saved privately. No containers, Task data, sessions or volumes were
+deleted. The interrupted fresh oracle setup resumed using its original private
+configuration before seeding Task42. Disk pressure and ClickHouse OOM are
+separate observed resource failures, not a sole explanation for project scope.
+
+[Packaged guard proof](evidence/runtime-recovery-1631-hermes-input-guard.json)
+passes16 native/receipt tests plus7 subtests,5 input-guard tests and native
+approval/recovery/tool smokes without product source mounts. Hermes169 image
+CI44183993767 failed because the successful test turn's asynchronous title
+request arrived during the following failed-turn assertion. a815ed0 gives the
+failed turn its own endpoint and still forbids every inference/auxiliary call;
+CI44185945088 passed, publication skipped. Product paths are unchanged from
+the real169 image. QwenPawd5ee25f CI44183066683 passed without a product change;
+the original localhost timeout remains an unreproduced failure, not a claimed
+root-cause fix. QwenPaw7dba11e also passed CI44186624120 with shared69538c9a.
+Core695 Controller44184054560 and earlier f852 integration44175315246 passed.
+Core now pins matching green Hermesa815ed0 and QwenPaw7dba11e/shared69538c9a;
+the new Core head still needs matching checks. Full coverage remains3/6 normal
+restart/reuse and7/30 historical directions, not complete fault suites.

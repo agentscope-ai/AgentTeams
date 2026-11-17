@@ -1,0 +1,25 @@
+{
+  "image": "recovery-1631/hermes-common:local-20261118055050",
+  "harness_sha": "16963d5c512342d7b457c8fb2706c34f9fa75870",
+  "shared_sha": "69538c9a608dcd5050976c652cfc6bea80f3bae1",
+  "sdk_sha": "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19",
+  "compiled_core_sha": "262ecb13684f6fb82f94d8874f9593d88f4092fc",
+  "recipe_sha256": "1df799ce9cb569483d077c224f2e4bc9334208815564e272f6f1a0aab57ee1be",
+  "image_id": "sha256:213d64825b8df06ff0dcfba58584e2b1efb0df835fa68cd49456d0224bd0e1e1",
+  "scope": "Pinned native SDK and deterministic local streaming endpoint, not model E2E",
+  "authority_mocked": true,
+  "product_source_mounted": false,
+  "native_regression_tests_passed": 16,
+  "native_read_subtests_passed": 7,
+  "native_input_guard_tests_passed": 5,
+  "native_approval_tests_passed": 2,
+  "common_tests": {
+    "passed": 90,
+    "skipped": 1,
+    "subtests": 15
+  },
+  "logs": [
+    "/tmp/1631-hermes-input-guard-packaged.log",
+    "/tmp/1631-hermes-native-input-guard-isolated-endpoints.log"
+  ]
+}

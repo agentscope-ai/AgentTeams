@@ -70,6 +70,62 @@ tests do not prove every native consumer conforms. See
 for current gaps and evidence. Six-Harness startup, switching and Task recovery
 acceptance remains incomplete.
 
+## Common startup and consumption boundary (#1631)
+
+The recovery path is source Harness → Worker contract → target Harness. There
+must be no production A-to-B session or configuration converter. Six native
+adapters implement one contract; the 30 directed pairs are regression cases.
+
+Keep desired configuration and mutable consumption state separate, under the
+same stable Worker identity. Controller reconciliation must not overwrite
+consumption state when it republishes `runtime.yaml`.
+
+| Data | Authority and required content |
+| --- | --- |
+| Configuration and assets | The existing Worker YAML, `config/`, `skills/` and prompt assets: model, MCP, Skills, channel policy and credential bindings. Each startup regenerates native inputs from these sources. A native configuration edit must update its owned Worker setting rather than become a private-only authority. |
+| Matrix consumption and handoff | Worker-scoped durable state, independent of a Harness private directory: room/event identity, retained input or retrievable history reference, input-commit evidence, pending handling/reply reference and associated team/Task ID where present. Publishing a sync cursor requires durable retention of its accepted inputs. This common writer/reader and its persistence migration remain to be implemented; merely relocating a native cursor does not implement the contract. |
+| Task execution | Existing `teams/<team>/shared/tasks/<taskID>/meta.json.execution` plus Task description and artifacts. Reuse its actual instance/process generation, versioned completed/remaining steps, operation identity/evidence, artifact digests, saved result and reply transaction/event. Do not duplicate authoritative checkpoints in a Worker-local index. Worker message state may reference a Task and observed checkpoint version, but startup must reread Task authority. |
+| Native session | Optional Harness-owned cache. Reuse only when it exists, is unexpired and matches the latest Task checkpoint and scope; otherwise reconstruct from the Task and retained room context. Preserve the old cache for return-switch checks. |
+
+A Matrix `next_batch` token describes one consumer's sync position; it is not
+proof of task execution. Native SDK/device cursors are transport details and
+must not be replaced with another consumer's token to skip pending inputs.
+Likewise, `received`, native `read`, Task ACK and a progress note do not mean a
+step or reply was completed. Non-Task room inputs also need durable pending
+handling/reply state; a native read alone cannot retire them.
+
+Every normal restart, crash replacement and Harness switch uses this order:
+
+1. Load the current Worker YAML and assets and resolve credential bindings.
+2. Reconcile durable room inputs/handling references and discover assigned
+   recoverable Tasks, even if no new Matrix event arrives.
+3. Reread Task ownership and claim execution for the actual new instance and
+   process. Configuration generation and notification outbox leases grant no
+   execution authority.
+4. Verify the latest checkpoint and persisted artifact/result bytes before
+   considering a compatible local session. The local session cannot advance
+   or replace authoritative state.
+5. Deliver a saved result with its existing transaction without inference;
+   continue only remaining work at a verified boundary; verify an uncertain
+   operation or remain pending verification. Cancellation/reassignment must
+   fence stale model/tool/reply callbacks.
+
+The shared layer owns these decisions and durable commits. An adapter only
+projects native configuration, supplies native session existence/expiry/history
+and input-commit evidence, invokes/cancels native execution, and sends through
+the native transport with the shared reply identity. No additional Task
+database or cross-Harness native transcript format is required.
+
+Source audit at Core `e0bc358b` found the remaining separation explicitly:
+`shared/lib/agentteams_receipts.py` stores a Worker-local
+`.agentteams/message-receipts.sqlite` with received/read evidence and its own
+sync token; it is not an execution inbox. The QwenPaw Matrix channel still
+stores `matrix_sync_state.json`, `matrix_sync_token` and
+`matrix_auth_state.json` beneath its `WORKING_DIR`. Some Harness sync paths
+persist these files, but there is no verified common cross-Harness consumption
+record yet. Passing one pair demonstrates that pair's path, not completion of
+this shared mutable-state boundary.
+
 ## Existing runtime application behavior
 
 - Controller writes this file whenever the member's non-secret desired state or

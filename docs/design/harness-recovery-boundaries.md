@@ -21,6 +21,11 @@ not standardized or migrated between Harnesses. Configuration generation,
 execution generation and notification outbox lease are separate identities.
 An old session or a delayed callback cannot override newer shared state.
 
+Use the [common startup and consumption boundary](member-runtime-config-contract.md#common-startup-and-consumption-boundary-1631)
+for all adapters. Matrix received/read evidence and private SDK cursors are
+not yet one portable execution inbox. Completing that shared boundary takes
+priority over adding source-to-target special cases.
+
 Controller configuration publication covers all six Harnesses. Complete
 standardization of every native setting, user configuration write path and
 asset is still open. In particular, native UI writes must not remain the only
@@ -39,8 +44,8 @@ identified as Core. “Implemented” describes a code path, not full acceptance
 | Hermes | Candidate `src/hermes_worker/sync.py` and `bridge.py` consume the Worker transport/model record; compatibility fields remain when not declared | `src/hermes_matrix/overlay_adapter.py`: real SessionStore row/expiry checks, fresh conversation and warm Agent eviction on checkpoint mismatch | Matrix connect and YAML `mcp_servers` are insufficient: the packaged native MCP client must discover Task tools. Case24's local overlay lacked that client, so its completed steps do not prove native submission/final delivery. |
 | QwenPaw | Existing `qwenpaw_worker` member loader; Core publishes the resolved standard fields | Core Matrix channel `task_execution.py`: self discovery/claim, real SafeJSONSession existence plus native/checkpoint digests, Task-specific queue identities and SDK reload admission sharing | Explicit MCP stdio environment must carry the current process boot identity. Same-process saved-reply retry now distinguishes an active native stream from historical admission;51 recovery/reload regressions passed, but real delivery-fault E2E and initial absent-cursor catch-up remain open. |
 | DeepSeek Harness | Existing standard member loader materializes the `.dsh` profile/workspace | `scripts/matrix_bridge.py`: Task admission, checkpoint-bound session marker, native missing-session fallback and saved-result delivery | First-sync pending input is retained. SDK/MCP credential scrubbing must preserve scoped Task access. Case20/21 cover two specific real lanes; case22 uncertain-effect recovery failed before verification. |
-| OpenClaw | Candidate `scripts/configure-runtime.py` projects the Worker record, validates native configuration and publishes a private derived cache | Native Task/process/session recovery adapter remains to be implemented | Harness candidate `e57b75aa` removes unconditional Matrix deletion/relogin. Real SDK SQLite-store tests retain device/cursor/synthetic crypto snapshot through the launch preamble; actual restart, encrypted backlog and replacement snapshots remain unproved. Core has not pinned that candidate. |
-| OpenHuman | Candidate entrypoint projects the standard Worker record into native TOML and retains Worker-owned shared storage | Native Task/process/session recovery adapter remains to be implemented | Nonempty legacy native shared data is preserved by refusing overwrite; verified migration and actual DM/group policy behavior remain open. Native CLI/config checks are not Matrix/model/Task acceptance. |
+| OpenClaw | Candidate `scripts/configure-runtime.py` projects the Worker record, validates native configuration and publishes a private derived cache | Candidate `f0874a0f` implements native Task recovery through the shared RPC; case33 continued from Hermes | Case34 completed remaining steps and delivered, but failed valid-session reuse because the source transcript/cache diverged. It does not pass the normal-restart/session-reuse case. Core has not pinned this candidate; real tracing/UI and the full fault set remain open. |
+| OpenHuman | Candidate entrypoint projects the standard Worker record into native TOML and retains Worker-owned shared storage | Candidate `4749f632` uses shared RPC for startup discovery/claim, actual native tool history, checkpoint-bound session validation, authority fencing and saved-result delivery through native Matrix | Independent native-controls and image CI passed at `4749f632` with shared Core `e0bc358b`. Native tests include MCP process-group cancellation. Real Controller/Matrix/model Task continuation remains untested; Core has not pinned the candidate. |
 
 All six must implement the same admission and checkpoint semantics. Differences
 above explain native integration work, not permission to weaken the common
@@ -83,11 +88,13 @@ Evidence is under [the recovery record](../development/runtime-recovery-1631.md)
 and its adjacent `evidence/` directory. Configuration and protocol test counts
 must never be presented as the six-Harness execution matrix.
 
-Accepted directed lanes are currently4/30: case20 Hermes→DSH, case21
-DSH→Hermes, case28 Hermes→QwenPaw and case30 QwenPaw→Hermes, each at its
-recorded sources. Case29 is
-a same-Harness normal-restart/valid-session scenario and adds no cross-Harness
-direction. No Harness has completed its full required scenario set. Recorded
+Bounded directed execution/delivery proofs are currently7/30: Codex↔Hermes,
+Hermes↔DSH, Hermes↔QwenPaw and Hermes→OpenClaw (case33), each at its recorded
+sources. These cumulative proofs are not a latest-head unified rerun. Normal
+restart with valid native session reuse has separate proofs for Codex08,
+Hermes11 and QwenPaw29 (3/6); case34 does not add OpenClaw. Case31 is a separate
+saved-result retry, not another execution lane. No Harness has completed its
+full required scenario set. Recorded
 live fixtures use `AGENTTEAMS_MATRIX_E2EE=0`; they do not validate encrypted
 backlog or crypto continuity.
 

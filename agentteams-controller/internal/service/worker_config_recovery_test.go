@@ -57,7 +57,11 @@ func TestWorkerConfigurationSurvivesHarnessChanges(t *testing.T) {
 				before := deploy()
 				req.Runtime, req.Generation = target, 2
 				after := deploy()
-				if after.Member.Runtime != target || after.Metadata.Generation != 2 {
+				wantGeneration := int64(2)
+				if source == target {
+					wantGeneration = before.Metadata.Generation // Identical recreation is not a config change.
+				}
+				if after.Member.Runtime != target || after.Metadata.Generation != wantGeneration {
 					t.Fatal("the target Harness or configuration generation was not projected")
 				}
 				after.Member.Runtime = before.Member.Runtime

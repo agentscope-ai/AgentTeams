@@ -140,6 +140,29 @@ handoff remain implementation work. Native snapshot evidence
 must not be inferred from these object-store/HTTP/client tests. Historical
 normal-restart and directed-lane counts remain3/6 and7/30 at their recorded SHAs.
 
+### First real common-session restart: case36 (partial)
+
+[Case36 evidence](evidence/runtime-recovery-1631-case36-partial.json) uses
+Controller/shared source19eb30c6 and Hermes59b756d with native SDK
+2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19. Before restart, the remote common
+session descriptor matched the actual22 native rows,10 tool rows and checkpoint4.
+The restarted Worker discovered and claimed the same Task without new Matrix
+input, advanced execution generation1→2 and checkpoint4→10, performed each of
+three effects once, verified artifacts and delivered its native submitted report.
+
+The valid-session assertion failed: the target rebuilt instead of reusing.
+Its configuration version changed5→6 solely through the restart's Worker CR
+update, while the source native digest still matched. Case36 remains partial;
+no full fault-set or additional directed lane is accepted. Do not reset its Task
+or relabel this failure after fixing the publisher.
+
+The shared publisher now preserves `metadata.generation` when the effective
+record is unchanged (ignoring generation/update time), and advances it for
+actual configuration changes. Worker publication, team merges and Manager
+policy publication use this rule; raw lifecycle/owner counters cannot regress
+the configuration version. Regression tests cover all six Harnesses plus team
+and Manager policy writes. A fresh real restart is still required.
+
 ## Verified boundary
 
 `TestWorkerConfigurationSurvivesHarnessChanges` exercises all six Harnesses

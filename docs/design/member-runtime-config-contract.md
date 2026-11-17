@@ -39,6 +39,9 @@ native configuration is rebuilt from the Worker record and assets; it must not
 be the only persistent copy of a user setting. Task execution checkpoints and
 delivery records remain in the Task system, not in this configuration record.
 `metadata.generation` tracks configuration, not process execution ownership.
+It remains unchanged when restart/recreation republishes identical effective
+configuration. Model, MCP, skills, policy, identity, role or Harness changes
+advance it monotonically; lifecycle-only CR generations and `updatedAt` do not.
 
 `shared/lib/worker_runtime_config.py` supplies a version/identity/storage-scope
 validator and derives `runtime/compat-config.json` for legacy-shaped native

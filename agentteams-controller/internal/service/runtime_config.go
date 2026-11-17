@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,39 @@ func WorkerRuntimeConfigGeneration(ctx context.Context, store oss.StorageClient,
 		return 0, fmt.Errorf("Worker runtime configuration identity unavailable")
 	}
 	return doc.Metadata.Generation, nil
+}
+
+// A Worker CR generation also changes for lifecycle operations such as restart.
+// The public configuration version changes only when its effective content does.
+func preserveRuntimeConfigGeneration(ctx context.Context, store oss.StorageClient, key string, doc *memberRuntimeConfigDocument) error {
+	data, err := store.GetObject(ctx, key)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var previous memberRuntimeConfigDocument
+	if err := yaml.Unmarshal(data, &previous); err != nil {
+		return err
+	}
+	oldGeneration := previous.Metadata.Generation
+	old, next := previous, *doc
+	old.Metadata, next.Metadata = memberRuntimeConfigMetadata{}, memberRuntimeConfigMetadata{}
+	a, err := json.Marshal(old)
+	if err != nil {
+		return err
+	}
+	b, err := json.Marshal(next)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(a, b) {
+		doc.Metadata.Generation = oldGeneration
+	} else if doc.Metadata.Generation <= oldGeneration {
+		doc.Metadata.Generation = oldGeneration + 1
+	}
+	return nil
 }
 
 // Managers use the same desired-state contract as team members. The CR name
@@ -244,6 +278,9 @@ func (d *Deployer) DeployMemberRuntimeConfig(ctx context.Context, req MemberRunt
 	if err := d.projectRuntimeMatrixTransport(ctx, runtimeName, &doc); err != nil {
 		return err
 	}
+	if err := preserveRuntimeConfigGeneration(ctx, d.oss, memberRuntimeConfigObjectKey(runtimeName), &doc); err != nil {
+		return fmt.Errorf("read runtime config generation: %w", err)
+	}
 	payload, err := yaml.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("marshal runtime config: %w", err)
@@ -306,6 +343,9 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 	applyRuntimeTeamContext(&doc, req)
 	if err := d.projectRuntimeMatrixTransport(ctx, runtimeName, &doc); err != nil {
 		return err
+	}
+	if err := preserveRuntimeConfigGeneration(ctx, d.oss, key, &doc); err != nil {
+		return fmt.Errorf("read runtime config generation: %w", err)
 	}
 
 	payload, err := yaml.Marshal(doc)

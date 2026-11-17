@@ -4,6 +4,10 @@ Status: **incomplete; Draft implementation**. This document records contract
 tests separately from native Harness and real-model acceptance. No existing
 installation was upgraded or deployed for this work.
 
+The historical source/evidence entries below retain their original scope.
+Current 1.2.8 candidate boundaries, including the failed QwenPaw case23 and
+partial case24, are in [the Harness comparison](../design/harness-recovery-boundaries.md).
+
 ## Source baseline
 
 Core base: `8dbf1eae8c8ca33c7a01a84fe6132dc6aaba4238`.

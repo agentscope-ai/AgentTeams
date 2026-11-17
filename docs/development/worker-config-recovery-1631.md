@@ -3,6 +3,9 @@
 Status: incomplete. This follow-up separates configuration authority from
 native session persistence and execution-recovery acceptance.
 
+For the 1.2.8 candidate, use the current
+[per-Harness boundaries and release gates](../design/harness-recovery-boundaries.md).
+
 Non-session settings belong to the stable Worker identity. A replacement
 Harness must reconstruct its native configuration from that Worker record;
 copying a previous Harness's private directory is not the configuration

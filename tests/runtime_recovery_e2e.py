@@ -252,7 +252,20 @@ def refresh_controller():
 
 
 def native_sessions():
-    code = '''import hashlib,json,pathlib,sys,sqlite3,os
+    runtime = api("GET", "workers/agent-a").get("runtime")
+    task = api("GET", "tasks/"+TASK_ID+"/meta?team=recovery-team")
+    routes = []
+    if runtime == "qwenpaw":
+        traces = api("GET", "traces?"+urllib.parse.urlencode({"worker": "agent-a", "task": TASK_ID, "runtime": "qwenpaw", "limit": 100, "hours": 1}))
+        for row in traces.get("data", []):
+            meta = row.get("metadata") or {}
+            if (meta.get("agentteams.task.id") == TASK_ID
+                    and meta.get("agentteams.room.id") == task["room_id"]
+                    and str(meta.get("agentteams.execution.generation")) == str(task["execution"]["generation"])
+                    and meta.get("agentteams.runtime") == "qwenpaw"):
+                routes.append({"trace_id": row["id"], "session_id": meta["agentteams.runtime.session_id"],
+                    "generation": task["execution"]["generation"], "task_id": TASK_ID, "runtime": "qwenpaw"})
+    code = '''import hashlib,json,pathlib,sys,sqlite3,os,subprocess
 task_id=sys.argv[1]; home=pathlib.Path("/root/agentteams-fs/agents/agent-a")
 events=pathlib.Path("/var/log/agentteams/workers/agent-a/events.jsonl")
 rows=[json.loads(x) for x in events.read_text().splitlines()] if events.exists() else []
@@ -293,6 +306,37 @@ qwen_dir=home/".qwenpaw/workspaces/default/sessions"
 qwen_cache=qwen_dir/".agentteams-task-recovery"
 digest=lambda value: hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 qwen=json.loads(qwen_cache.read_text()).get(digest(['recovery-team',task_id])) if qwen_cache.exists() else None
+# Read the common descriptor independently from native session contents.
+work_key=hashlib.sha256(json.dumps(['agents/agent-a','task','recovery-team',task_id],ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+object_key='agents/agent-a/runtime/sessions/qwenpaw/'+work_key+'.json'
+fetched=subprocess.run(['mc','cat',os.environ['AGENTTEAMS_STORAGE_PREFIX'].rstrip('/')+'/'+object_key],capture_output=True,text=True)
+qwen_descriptor=json.loads(fetched.stdout) if fetched.returncode==0 else None
+qwen_shared={'cache':qwen_descriptor,'native':[],'routes':json.loads(sys.argv[3])}
+if sys.argv[4]=='qwenpaw':
+ import asyncio
+ from qwenpaw.app.chats.session import SafeJSONSession,session_filename,sanitize_filename
+ config=__import__('yaml').safe_load((home/'runtime/runtime.yaml').read_text())
+ qwen_shared['config_generation']=config['metadata'].get('generation',0)
+ store=SafeJSONSession(str(qwen_dir))
+ refs={r['session_id'] for r in qwen_shared['routes']}
+ if qwen_descriptor: refs.add(qwen_descriptor['native_ref'])
+ for ref in sorted(refs):
+  # Avoid the SDK's missing-file directory creation or legacy migration while
+  # probing. Existing rows are still decoded through the real SDK reader.
+  path=qwen_dir/sanitize_filename('agentteams_matrix')/session_filename(ref,sys.argv[2])
+  if not path.is_file(): continue
+  native=asyncio.run(store.get_session_state_dict(session_id=ref,user_id=sys.argv[2],channel='agentteams_matrix',allow_not_exist=False))
+  def nodes(value):
+   if isinstance(value,dict):
+    yield value
+    for child in value.values(): yield from nodes(child)
+   elif isinstance(value,list):
+    for child in value: yield from nodes(child)
+  facts=list(nodes(native))
+  qwen_shared['native'].append({'session_id':ref,'native_digest':digest(native),
+   'agent_state_present':bool(native.get('agent')),'task_mentioned':task_id in json.dumps(native),
+   'message_count':sum(r.get('role') in {'user','assistant','tool','system'} for r in facts),
+   'tool_count':sum(r.get('role')=='tool' or r.get('type') in {'tool_use','tool_result'} for r in facts)})
 openclaw_file=home/"runtime/openclaw-task-sessions.json"
 openclaw_cache=json.loads(openclaw_file.read_text()).get(digest(['recovery-team',task_id])) if openclaw_file.exists() else None
 openhuman_file=home/"runtime/openhuman-task-sessions"/(digest(['recovery-team',task_id])+'.json')
@@ -306,12 +350,11 @@ if qwen:
    qwen_native.append({'file':path.name,'native_digest':digest(native),'agent_state_present':bool(native.get('agent')),'task_mentioned':task_id in json.dumps(native)})
 print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,"hermes_shared":hermes_shared,
     "hermes_cache":[r for r in rows if r.get("event")=="task.recovery.cache" and r.get("task_id")==task_id],"codex":cache,
-    "qwenpaw":qwen,"qwenpaw_native":qwen_native,"openclaw_cache":openclaw_cache,
+    "qwenpaw":qwen,"qwenpaw_native":qwen_native,"qwenpaw_shared":qwen_shared,"openclaw_cache":openclaw_cache,
     "openhuman":{"cache":openhuman_cache,"authority":openhuman_authority}}))
 '''
-    runtime = api("GET", "workers/agent-a").get("runtime")
-    interpreter = "/opt/venv/hermes/bin/python" if runtime == "hermes" else "python3"
-    result = json.loads(docker("exec", PREFIX + "-worker-agent-a", interpreter, "-c", code, TASK_ID))
+    interpreter = {"hermes": "/opt/venv/hermes/bin/python", "qwenpaw": "/opt/venv/qwenpaw/bin/python"}.get(runtime, "python3")
+    result = json.loads(docker("exec", PREFIX + "-worker-agent-a", interpreter, "-c", code, TASK_ID, task["room_id"], json.dumps(routes), runtime))
     if runtime == "openclaw":
         # Use the pinned SDK's actual SQLite APIs, not a guessed session filename.
         probe = '''import fs from "node:fs";
@@ -423,6 +466,8 @@ def cutover():
         raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
     if MODE == "restart" and SOURCE == "hermes":
         assert_hermes_native_cache(before["native_sessions"]["hermes_shared"], cp, TASK_ID)
+    if SOURCE == "qwenpaw" and before["native_sessions"].get("qwenpaw_shared", {}).get("cache"):
+        assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"], cp, TASK_ID)
     with boundary_path.open("x") as stream:
         json.dump(before, stream, indent=2)
     started = int(time.time())
@@ -570,17 +615,28 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     if SOURCE == "qwenpaw":
         source_native = before["native_sessions"]
         source_cp = before["task"]["execution"]["checkpoint"]
-        assert source_native["qwenpaw"]["checkpoint_digest"] == hashlib.sha256(json.dumps(source_cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        assert len(source_native["qwenpaw_native"]) == 1
-        assert source_native["qwenpaw_native"][0]["agent_state_present"] and source_native["qwenpaw_native"][0]["task_mentioned"]
+        if source_native.get("qwenpaw_shared", {}).get("cache"):
+            assert_qwenpaw_native_cache(source_native["qwenpaw_shared"], source_cp, TASK_ID)
+        else:
+            assert source_native["qwenpaw"]["checkpoint_digest"] == hashlib.sha256(json.dumps(source_cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            assert len(source_native["qwenpaw_native"]) == 1
+            assert source_native["qwenpaw_native"][0]["agent_state_present"] and source_native["qwenpaw_native"][0]["task_mentioned"]
     if TARGET == "qwenpaw":
-        selected = native["qwenpaw"]
-        assert selected["runtime"] == "qwenpaw" and selected["expires_at"] > time.time()
-        assert selected["checkpoint_digest"] == hashlib.sha256(json.dumps(cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        assert len(native["qwenpaw_native"]) == 1
-        assert native["qwenpaw_native"][0]["agent_state_present"] and native["qwenpaw_native"][0]["task_mentioned"]
-        if MODE == "restart":
-            assert selected["session_id"] == before["native_sessions"]["qwenpaw"]["session_id"], "valid native Task session was not reused"
+        common = native.get("qwenpaw_shared", {})
+        if common.get("routes"):
+            selected = assert_qwenpaw_native_route(common, TASK_ID, execution["generation"])
+            if MODE == "restart":
+                source = before["native_sessions"]["qwenpaw_shared"]
+                assert_qwenpaw_native_cache(source, before["task"]["execution"]["checkpoint"], TASK_ID)
+                assert selected["session_id"] == source["cache"]["native_ref"], "valid native Task session was not reused"
+        else:
+            selected = native["qwenpaw"]
+            assert selected["runtime"] == "qwenpaw" and selected["expires_at"] > time.time()
+            assert selected["checkpoint_digest"] == hashlib.sha256(json.dumps(cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            assert len(native["qwenpaw_native"]) == 1
+            assert native["qwenpaw_native"][0]["agent_state_present"] and native["qwenpaw_native"][0]["task_mentioned"]
+            if MODE == "restart":
+                assert selected["session_id"] == before["native_sessions"]["qwenpaw"]["session_id"], "valid native Task session was not reused"
     if SOURCE == "hermes":
         selected = before["native_sessions"]["hermes"][-1]["session_id"]
         assert before["native_sessions"]["hermes_message_counts"].get(selected, 0) > 0, "new route still used a different warm native Agent"
@@ -642,6 +698,45 @@ def assert_hermes_native_cache(proof, checkpoint, task_id):
     assert cache["config_generation"] == proof["config_generation"]
     assert proof["native_digest"] and cache["native_digest"] == proof["native_digest"]
     assert proof["message_count"] > 0 and proof["tool_count"] > 0 and proof["task_mentioned"]
+
+
+def _qwenpaw_native(proof, task_id, session_id):
+    prefix = "matrix:task:" + hashlib.sha256(json.dumps(["recovery-team", task_id],
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest() + ":"
+    assert session_id.startswith(prefix), "native route belongs to another Task"
+    selected = [row for row in proof["native"] if row["session_id"] == session_id]
+    assert len(selected) == 1, "actual SDK session must be persisted and unambiguous"
+    native = selected[0]
+    assert native["agent_state_present"] and native["task_mentioned"]
+    assert native["message_count"] > 0 and native["tool_count"] > 0
+    assert len(native["native_digest"]) == 64
+    return native
+
+
+def assert_qwenpaw_native_cache(proof, checkpoint, task_id):
+    cache = proof["cache"]
+    assert cache and cache["schema_version"] == 1 and cache["kind"] == "WorkerSessionCache"
+    assert cache["member_prefix"] == "agents/agent-a" and cache["runtime"] == "qwenpaw"
+    assert cache["work"] == {"kind": "task", "team_id": "recovery-team", "task_id": task_id}
+    assert cache["checkpoint_version"] == checkpoint["version"]
+    assert cache["checkpoint_digest"] == hashlib.sha256(json.dumps(checkpoint,
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert cache["config_generation"] == proof["config_generation"] and cache["expires_at"] > time.time()
+    native = _qwenpaw_native(proof, task_id, cache["native_ref"])
+    assert native["native_digest"] == cache["native_digest"]
+    return native
+
+
+def assert_qwenpaw_native_route(proof, task_id, generation):
+    # Submitted Tasks intentionally reject session-cache writes. Their
+    # read-back trace route selects the actual SDK session, while the Task
+    # verifier independently checks its authoritative result and effects.
+    routes = proof["routes"]
+    assert routes and all(row["trace_id"] and row["task_id"] == task_id
+        and row["runtime"] == "qwenpaw" and row["generation"] == generation for row in routes)
+    refs = {row["session_id"] for row in routes}
+    assert len(refs) == 1, "native execution used multiple Task sessions"
+    return _qwenpaw_native(proof, task_id, refs.pop())
 
 
 def assert_openhuman_native_cache(proof, checkpoint, task_id):

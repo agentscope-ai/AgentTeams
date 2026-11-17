@@ -131,6 +131,45 @@ class HermesSharedCacheTests(unittest.TestCase):
                 assert_hermes_native_cache({**proof, "cache": {**cache, **changed}}, cp, "T")
 
 
+class QwenPawSharedCacheTests(unittest.TestCase):
+    def test_current_source_cache_and_final_native_route_are_distinct_proofs(self):
+        import copy
+        import hashlib
+        import json
+        import time
+        from runtime_recovery_e2e import assert_qwenpaw_native_cache, assert_qwenpaw_native_route
+        task_id = "T"
+        session = "matrix:task:"+hashlib.sha256(json.dumps(["recovery-team", task_id],
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()+":native"
+        cp = {"version": 4, "completed_steps": ["one"]}
+        cache = {"schema_version": 1, "kind": "WorkerSessionCache", "member_prefix": "agents/agent-a",
+            "runtime": "qwenpaw", "work": {"kind": "task", "team_id": "recovery-team", "task_id": task_id},
+            "native_ref": session, "native_digest": "a"*64, "config_generation": 3,
+            "checkpoint_version": 4, "checkpoint_digest": hashlib.sha256(json.dumps(cp,
+                sort_keys=True, separators=(",", ":")).encode()).hexdigest(), "expires_at": time.time()+60}
+        native = {"session_id": session, "native_digest": "a"*64, "agent_state_present": True,
+            "task_mentioned": True, "message_count": 8, "tool_count": 2}
+        route = {"trace_id": "actual-trace", "session_id": session, "task_id": task_id,
+            "runtime": "qwenpaw", "generation": 2}
+        proof = {"cache": cache, "native": [native], "routes": [route], "config_generation": 3}
+        assert_qwenpaw_native_cache(proof, cp, task_id)
+        assert_qwenpaw_native_route({**proof, "cache": None}, task_id, 2)
+        for changed in [{"checkpoint_version": 3}, {"config_generation": 2}, {"native_digest": "b"*64},
+                        {"expires_at": 0}, {"member_prefix": "agents/other"}]:
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                assert_qwenpaw_native_cache({**proof, "cache": {**cache, **changed}}, cp, task_id)
+        for changed in [{"tool_count": 0}, {"task_mentioned": False}, {"agent_state_present": False}]:
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                assert_qwenpaw_native_route({**proof, "native": [{**native, **changed}]}, task_id, 2)
+        for changed in [{"task_id": "other"}, {"generation": 1}, {"runtime": "hermes"}, {"trace_id": ""}]:
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                assert_qwenpaw_native_route({**proof, "routes": [{**route, **changed}]}, task_id, 2)
+        for changed in [{"native": []}, {"routes": []}, {"native": [native, copy.deepcopy(native)]},
+                        {"routes": [route, {**route, "session_id": session+"other"}]}]:
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                assert_qwenpaw_native_route({**proof, **changed}, task_id, 2)
+
+
 class CutoverBoundaryTests(unittest.TestCase):
     def test_source_snapshot_is_persisted_before_any_lifecycle_mutation(self):
         import json

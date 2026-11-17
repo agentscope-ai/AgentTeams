@@ -149,6 +149,13 @@ class RecoveryTests(unittest.TestCase):
             self.recovery.prepare_reply("stable-task", "team", "Stale answer")
         claim.assert_not_called()
 
+    def test_interruption_after_durable_submission_keeps_delivery_recoverable(self):
+        self.task.update(status="submitted", result_path="shared/tasks/stable-task/result.md")
+        before = copy.deepcopy(self.task)
+        self.recovery.interrupted("stable-task", "team")
+        self.assertEqual(self.task, before)
+        self.request.assert_called_once_with("GET", "tasks/recoverable")
+
     def test_active_submitted_callback_saves_its_answer_before_delivery_claim(self):
         self.task.update(status="submitted")
         self.task["execution"]["state"] = "active"

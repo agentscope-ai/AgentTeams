@@ -137,6 +137,10 @@ class Recovery:
         operation = cp.get("operation") or {}
         if operation.get("state") in {"started", "unknown"}:
             return  # Already fenced for verification; never replace its identity.
+        if task.get("status") == "submitted" and task.get("result_path"):
+            # Submission already persisted the report. Claim verifies its bytes
+            # and reconstructs delivery; a lost native callback is not new work.
+            return
         for field in ("result", "delivery", "reply_txn", "reply_event"):
             cp.pop(field, None)
         operation = {"id": "native-turn:" + self.process}

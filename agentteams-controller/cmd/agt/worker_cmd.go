@@ -20,6 +20,7 @@ func workerCmd() *cobra.Command {
 	cmd.AddCommand(workerStatusCmd())
 	cmd.AddCommand(workerWaitReadyCmd())
 	cmd.AddCommand(workerReportReadyCmd())
+	cmd.AddCommand(workerRuntimeCmd(true), workerRuntimeCmd(false))
 	return cmd
 }
 

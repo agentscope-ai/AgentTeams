@@ -12,7 +12,6 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
@@ -142,17 +141,9 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 		writeError(w, 503, "source backend unavailable")
 		return
 	}
-	fenced, ok := wb.(backend.RuntimeHandoffSource)
-	if !ok {
-		writeError(w, 409, "backend does not support verified runtime replacement")
-		return
-	}
-	image := fenced.HandoffTargetImage(input.Target)
-	if worker.Spec.Image != "" && (worker.Spec.Runtime == input.Target || (worker.Spec.Runtime == "" && runtime == input.Target)) {
-		image = worker.Spec.Image
-	}
-	if image == "" {
-		writeError(w, 409, "no Worker image configured for the target Harness")
+	image, err := service.HandoffTargetImage(&worker, wb, runtime, input.Target)
+	if err != nil {
+		h.writeError(w, err)
 		return
 	}
 	if !enroll() {

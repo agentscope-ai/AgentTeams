@@ -11,6 +11,9 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestRuntimeHandoffReconcileRecoversInterruptedPreflightBeforeReplacement(t *testing.T) {
@@ -153,5 +156,43 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 	op, _ = phase("recovering")
 	if op.Target == nil || *op.Target != target || len(b.Calls.Create) != 1 {
 		t.Fatalf("target generation or creation count lost: %+v calls=%v", op, b.Calls.Create)
+	}
+}
+
+func TestRuntimeHandoffDeclarativeWorkerUpdateEntersDrainBeforeRecreate(t *testing.T) {
+	ctx := t.Context()
+	scheme := runtime.NewScheme()
+	if err := v1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "ns", Generation: 3}, Spec: v1beta1.WorkerSpec{Runtime: "codex", WorkerName: "stable"}, Status: v1beta1.WorkerStatus{SpecHash: "previous", BackendRuntime: "mock"}}
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(w).Build()
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(w), w); err != nil {
+		t.Fatal(err)
+	}
+	store := &service.WorkerRuntimeStore{Storage: ossfake.NewMemory()}
+	ms := service.WorkerMatrixStore{Storage: store.Storage}
+	start := service.WorkerStart{InstanceID: "mock/source", ProcessID: "source-process", Runtime: "hermes"}
+	b := &runtimeHandoffBackend{MockWorkerBackend: mocks.NewMockWorkerBackend()}
+	b.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+		return &backend.WorkerResult{InstanceID: "source", Status: backend.StatusRunning, Runtime: "hermes"}, nil
+	}
+	r := WorkerReconciler{Client: k8s, RuntimeStore: store, Backend: backend.NewRegistry([]backend.WorkerBackend{b})}
+	mctx := MemberContext{StatusBackendRuntime: "mock", Spec: w.Spec, AppliedSpecHash: "desired"}
+	if handled, err := r.beginDesiredRuntimeHandoff(ctx, w, mctx); err != nil || handled {
+		t.Fatalf("unregistered legacy lifecycle changed %v %v", handled, err)
+	}
+	if _, _, err := ms.Start(ctx, "stable", start, ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		res, err := r.reconcileNormal(ctx, w, &MemberState{})
+		if err != nil || res.RequeueAfter <= 0 {
+			t.Fatalf("missing automatic handoff %v %v", res, err)
+		}
+	}
+	op, _, err := store.Load(ctx, "stable")
+	if err != nil || op.Handoff == nil || op.Handoff.Phase != "draining" || op.Handoff.Source != start || op.Handoff.TargetRuntime != "codex" || len(b.Calls.Delete) != 0 || len(b.Calls.Create) != 0 || b.stops != 0 {
+		t.Fatalf("source was not protected before common reconciliation %+v %v", op, err)
 	}
 }

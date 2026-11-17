@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
@@ -128,6 +129,22 @@ func (s WorkerRuntimeStore) SyncRegisteredStart(ctx context.Context, name, insta
 		return s.Load(ctx, name)
 	}
 	return state, etag, err
+}
+
+// HandoffTargetImage is shared by declarative and operator-initiated switches.
+func HandoffTargetImage(w *v1beta1.Worker, wb backend.WorkerBackend, actualRuntime, target string) (string, error) {
+	fenced, ok := wb.(backend.RuntimeHandoffSource)
+	if !ok {
+		return "", fmt.Errorf("%w: backend does not support verified runtime replacement", ErrWorkerStateConflict)
+	}
+	if w.Spec.Image != "" && (w.Spec.Runtime == target || (w.Spec.Runtime == "" && actualRuntime == target)) {
+		return w.Spec.Image, nil
+	}
+	image := fenced.HandoffTargetImage(target)
+	if image == "" {
+		return "", fmt.Errorf("%w: no Worker image configured for target Harness %s", ErrWorkerStateConflict, target)
+	}
+	return image, nil
 }
 
 func ValidWorkerHandoffRequest(id, target string) bool {

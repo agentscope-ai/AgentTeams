@@ -263,6 +263,12 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		teamLlmTuning = r.owningTeamLlmTuning(ctx, w)
 	}
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy, teamLlmTuning)
+	if targetHandoff == nil && r.RuntimeStore != nil && mctx.SpecChanged && effectiveSpec.DesiredContainerMan() && effectiveSpec.DesiredState() == "Running" && !isEdgeWorker(w) {
+		handled, err := r.beginDesiredRuntimeHandoff(ctx, w, mctx)
+		if err != nil || handled {
+			return reconcile.Result{RequeueAfter: handoffPoll}, err
+		}
+	}
 	mctx.TeamName, err = r.workerTeamName(ctx, w)
 	if err != nil {
 		return reconcile.Result{}, err

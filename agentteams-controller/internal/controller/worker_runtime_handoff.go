@@ -26,6 +26,79 @@ func (r *WorkerReconciler) handoffBackend(ctx context.Context, op *service.Worke
 	return b, instance, err
 }
 
+// A PUT or direct spec edit on a registered Worker selects the same durable
+// operation as the operator endpoint before changing runtime config or deleting
+// the source. Unregistered legacy deployments retain their existing lifecycle.
+func (r *WorkerReconciler) beginDesiredRuntimeHandoff(ctx context.Context, w *v1beta1.Worker, m MemberContext) (bool, error) {
+	if r.Backend == nil || !r.Backend.HasWorkerBackends() {
+		return false, nil
+	}
+	var wb backend.WorkerBackend
+	var err error
+	if m.StatusBackendRuntime != "" {
+		wb, err = resolvePreviousMemberBackend(ctx, r.Backend, m.StatusBackendRuntime)
+	} else {
+		wb, err = resolveBackendForMember(r.Backend, m.BackendRuntime, m)
+	}
+	if err != nil {
+		return false, err
+	}
+	actual, err := wb.Status(ctx, w.Name)
+	if errors.Is(err, backend.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if actual == nil {
+		return false, errors.New("current Worker status unavailable")
+	}
+	target := backend.ResolveRuntime(m.Spec.Runtime, r.DefaultRuntime)
+	if actual.Runtime == target || (actual.Status != backend.StatusRunning && actual.Status != backend.StatusStarting && actual.Status != backend.StatusReady) {
+		return false, nil
+	}
+	name := w.Spec.EffectiveWorkerName(w.Name)
+	matrix := service.WorkerMatrixStore{Storage: r.RuntimeStore.Storage}
+	consumption, _, err := matrix.Load(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	start := consumption.ActiveStart
+	if start.InstanceID == "" || (actual.Runtime == "" && start.Runtime == target) {
+		return false, nil
+	}
+	if actual.InstanceID == "" || start.InstanceID != wb.Name()+"/"+actual.InstanceID || start.Runtime != actual.Runtime {
+		return false, errors.New("waiting for registration of the current Worker start before switching Harness")
+	}
+	image, err := service.HandoffTargetImage(w, wb, actual.Runtime, target)
+	if err != nil {
+		return false, err
+	}
+	state, etag, err := r.RuntimeStore.Load(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	if w.Annotations[service.WorkerRuntimeHandoffAnnotation] == "" {
+		before := w.DeepCopy()
+		if w.Annotations == nil {
+			w.Annotations = map[string]string{}
+		}
+		w.Annotations[service.WorkerRuntimeHandoffAnnotation] = "true"
+		if err := r.Patch(ctx, w, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return false, err
+		}
+	}
+	if state.Handoff == nil || state.Handoff.Phase == "completed" {
+		// Reconciles of one declarative generation coalesce across restarts.
+		id := fmt.Sprintf("spec-%d-%s", w.Generation, m.AppliedSpecHash)
+		if _, _, err := r.RuntimeStore.Preflight(ctx, name, id, target, image, start, etag); err != nil {
+			return false, err
+		}
+	}
+	_, _, err = r.RuntimeStore.BeginDrain(ctx, name)
+	return true, err
+}
+
 func (r *WorkerReconciler) reconcileHandoffSource(ctx context.Context, w *v1beta1.Worker, op *service.WorkerHandoff, etag string, state *MemberState) (reconcile.Result, error) {
 	wait := reconcile.Result{RequeueAfter: handoffPoll}
 	state.Message = "Worker runtime handoff: " + op.Phase
@@ -140,7 +213,7 @@ func (r *WorkerReconciler) reconcileHandoffTarget(ctx context.Context, w *v1beta
 	}
 	// The normal reconcile may maintain services and token projection again.
 	// The original request label still protects adoption after a Controller crash.
-	if status.HandoffSpecHash != "" && m.AppliedSpecHash != status.HandoffSpecHash {
+	if (status.HandoffSpecHash != "" && m.AppliedSpecHash != status.HandoffSpecHash) || (m.StatusBackendRuntime != "" && m.BackendRuntime != "" && m.StatusBackendRuntime != m.BackendRuntime) {
 		return wait, nil // A later edit can reconcile once this handoff finishes.
 	}
 	m.SpecChanged = false

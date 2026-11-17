@@ -40,6 +40,15 @@ be the only persistent copy of a user setting. Task execution checkpoints and
 delivery records remain in the Task system, not in this configuration record.
 `metadata.generation` tracks configuration, not process execution ownership.
 
+`shared/lib/worker_runtime_config.py` supplies a version/identity/storage-scope
+validator and derives `runtime/compat-config.json` for legacy-shaped native
+bridges. With a managed model, materialization does not read old compatibility
+input. This JSON is a local credential-bearing cache (mode 0600), not a second
+authority or a portable session. Workspace sync excludes both files from
+uploads. MinIO member policy denies direct writes/deletes of these paths,
+while retaining reads and existing delivery-state persistence. Equivalent
+external storage-policy enforcement still needs verification.
+
 ## Authority and compatibility
 
 - All six Harnesses must follow this directory and YAML contract. Switching

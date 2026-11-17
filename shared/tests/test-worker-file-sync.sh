@@ -149,6 +149,8 @@ EOF
         fail "large change set did not collapse to one operation"
     grep -Fq "mirror ${workspace}/ ${remote_prefix}/ --overwrite" "${FAKE_MC_LOG}" ||
         fail "large change set did not use mirror"
+    grep -Fq -- '--exclude runtime/compat-config.json' "${FAKE_MC_LOG}" ||
+        fail "bulk mirror would upload derived credentials"
 
     unset AGENTTEAMS_WORKER_SYNC_MIRROR_THRESHOLD
     rm -rf "${tmpdir}"
@@ -232,6 +234,13 @@ test_coding_cli_prefix_is_synced
 if worker_sync_should_push "credentials/.config-pull.fixture/merged.json"; then
     fail "temporary config would be uploaded"
 fi
+for _runtime_file in runtime/runtime.yaml runtime/compat-config.json; do
+    if worker_sync_should_push "${_runtime_file}"; then
+        fail "Controller configuration or derived credentials would be uploaded"
+    fi
+done
+worker_sync_should_push "runtime/matrix-bridge-state.json" ||
+    fail "legacy delivery state must remain durable until its migration"
 python3 "${SCRIPT_DIR}/test-worker-config-pull.py"
 
 echo "PASS: worker file sync"

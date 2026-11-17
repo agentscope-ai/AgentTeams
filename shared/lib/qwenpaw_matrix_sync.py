@@ -23,8 +23,16 @@ class ManagedNioSync:
         self.lock = execution.lock
         self.messages = getattr(execution, "messages", None)
         self.ready = False
+        self.tasks_scanned = False
         # Typed events await their batch/page commit and any prior room gap.
         self.waiting = {}
+
+    def task_scan_complete(self):
+        if not self.tasks_scanned:
+            self.tasks_scanned = True
+            if self.ready:
+                from worker_handoff import recovery_scanned
+                recovery_scanned()
 
     def handler(self, event):
         if isinstance(event, RoomMessageText):
@@ -227,6 +235,9 @@ class ManagedNioSync:
         if not self.ready:
             self.channel._mark_channel_ready()
             self.ready = True
+            if self.tasks_scanned:
+                from worker_handoff import recovery_scanned
+                recovery_scanned()
         return True
 
     async def run(self):

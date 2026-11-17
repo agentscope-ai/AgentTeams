@@ -29,7 +29,7 @@ class Recovery:
         self.request = request or self._request
         self.process = os.environ["AGENTTEAMS_PROCESS_ID"]
 
-    def _request(self, method, path, body=None, etag=None, *, create=False):
+    def _request(self, method, path, body=None, etag=None, *, create=False, response_etag=False):
         token = Path(os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE") or "/var/run/secrets/agentteams/token").read_text().strip()
         headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json",
                    "X-AgentTeams-Process-ID": self.process}
@@ -43,7 +43,8 @@ class Recovery:
             data=json.dumps(body).encode() if body is not None else None, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=15) as response:
-                return json.load(response)
+                payload = json.load(response)
+                return (payload, response.headers.get("ETag")) if response_etag else payload
         except urllib.error.HTTPError as error:
             if error.code in {403, 404, 409, 412}:
                 raise RecoveryConflict(error.read().decode()[:1024]) from error

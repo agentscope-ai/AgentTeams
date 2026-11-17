@@ -32,35 +32,11 @@ class TaskExecution:
     async def accept_input(self, room, event, intent, *, task_id=None):
         """Persist an accepted native callback without inventing a batch token."""
         async with self.lock:
-            snapshot = await asyncio.to_thread(self.matrix.start)
-            work = {"kind": "message"} if intent == "message" else None
-            if task_id is not None:
-                tasks = await asyncio.to_thread(self.recovery.discover)
-                matches = [entry for entry in tasks["tasks"]
-                    if entry["task"]["task_id"] == task_id and entry["task"].get("room_id") == room]
-                if len(matches) != 1:
-                    raise RecoveryConflict("Task input has no unambiguous Worker/team/room identity")
-                work = {"kind": "task", "team_id": matches[0]["team_id"], "task_id": task_id}
             source = event.source
-            input_ = {"room_id": room, "event_id": event.event_id, "intent": intent,
-                "input": {"sender": event.sender, "type": source.get("type", "m.room.message"),
-                    "origin_server_ts": source.get("origin_server_ts", getattr(event, "server_timestamp", 0)),
-                    "content": source["content"]}}
-            if work:
-                input_["work"] = work
-            key = matrix_event_key(room, event.event_id)
-            previous = await asyncio.to_thread(self.matrix.input, key)
-            if previous:
-                # Sender/mention policies and Task status can change after the
-                # original acceptance. Keep its immutable work classification;
-                # the Controller still compares the actual input bytes.
-                input_["intent"] = previous["intent"]
-                if previous.get("work"):
-                    input_["work"] = previous["work"]
-                else:
-                    input_.pop("work", None)
-            await asyncio.to_thread(self.matrix.ingest, snapshot, None, [input_])
-            return key
+            decoded = {"sender": event.sender, "type": source.get("type", "m.room.message"),
+                "origin_server_ts": source.get("origin_server_ts", getattr(event, "server_timestamp", 0)),
+                "content": source["content"]}
+            return await asyncio.to_thread(self.matrix.accept, room, event.event_id, decoded, intent, task_id=task_id)
 
     async def commit_inputs(self, session_id, user_id, room, event_ids, required_keys):
         """Publish facts from the SDK's saved bytes, before reasoning/read ACK."""

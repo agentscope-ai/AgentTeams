@@ -42,6 +42,9 @@ def execute(request):
             return matrix.start()
         if action == 'matrix.ingest':
             return matrix.ingest(request['snapshot'], request.get('consumer'), request['inputs'], request.get('rooms'))
+        if action == 'matrix.accept':
+            return matrix.accept(request['room_id'], request['event_id'], request['source'],
+                                 request['intent'], task_id=request.get('task_id'))
         if action == 'matrix.consumer':
             return matrix.consumer(request['snapshot'], account=request['account'],
                                    device=request.get('device', ''), format=request['format'])

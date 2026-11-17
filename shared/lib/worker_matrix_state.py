@@ -47,6 +47,34 @@ class WorkerMatrix:
         }, snapshot["etag"])
         return {**snapshot, **saved}
 
+    def accept(self, room, event_id, source, intent, *, task_id=None):
+        """Retain one policy-accepted input; the caller serializes native admission.
+
+        Source is the decoded Matrix event, never the rendered model prompt.
+        Per-event callbacks have no sync-batch cursor to commit.
+        """
+        snapshot = self.start()
+        key = matrix_event_key(room, event_id)
+        previous = self.input(key)
+        input_ = {"room_id": room, "event_id": event_id, "intent": intent, "input": source}
+        if previous:
+            # Reassignment/mention policy changes cannot reclassify an input
+            # already accepted. The server still compares immutable bytes.
+            input_["intent"] = previous["intent"]
+            if previous.get("work"):
+                input_["work"] = previous["work"]
+        elif task_id is not None:
+            tasks = self.recovery.discover()
+            matches = [entry for entry in tasks["tasks"]
+                if entry["task"]["task_id"] == task_id and entry["task"].get("room_id") == room]
+            if len(matches) != 1:
+                raise RecoveryConflict("Task input has no unambiguous Worker/team/room identity")
+            input_["work"] = {"kind": "task", "team_id": matches[0]["team_id"], "task_id": task_id}
+        elif intent == "message":
+            input_["work"] = {"kind": "message"}
+        self.ingest(snapshot, None, [input_])
+        return key
+
     def consumer(self, snapshot, *, account, format, device=""):
         """Restore only this native account/device/format's shared cursor."""
         start = snapshot["state"]["active_start"]

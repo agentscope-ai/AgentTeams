@@ -104,7 +104,9 @@ def test_task_callback_uses_authoritative_team_and_never_fabricates_cursor(modul
             {"team_id": "stable-team", "task": {"task_id": "T", "room_id": "!room:test"}}]})
         channel = SimpleNamespace(_workspace=SimpleNamespace(task_tracker=SimpleNamespace()))
         execution = task.TaskExecution(channel, authority)
-        execution.matrix = SimpleNamespace(start=Mock(return_value={"etag": "index"}), input=Mock(return_value=None), ingest=Mock())
+        execution.matrix.start = Mock(return_value={"etag": "index"})
+        execution.matrix.input = Mock(return_value=None)
+        execution.matrix.ingest = Mock()
         event = SimpleNamespace(event_id="$input", sender="@leader:test", server_timestamp=12,
             source={"type": "m.room.message", "content": {"body": "wire input"}})
         await execution.accept_input("!room:test", event, "task_notification", task_id="T")
@@ -129,8 +131,9 @@ def test_redelivery_keeps_original_work_and_input_read_failure_is_not_absence(mo
         task, _ = modules
         channel = SimpleNamespace(_workspace=SimpleNamespace(task_tracker=SimpleNamespace()))
         execution = task.TaskExecution(channel, SimpleNamespace(process="actual-process"))
-        execution.matrix = SimpleNamespace(start=Mock(return_value={"etag": "index"}),
-            input=Mock(return_value={"intent": "message", "work": {"kind": "message"}}), ingest=Mock())
+        execution.matrix.start = Mock(return_value={"etag": "index"})
+        execution.matrix.input = Mock(return_value={"intent": "message", "work": {"kind": "message"}})
+        execution.matrix.ingest = Mock()
         event = SimpleNamespace(event_id="$input", sender="@human:test", server_timestamp=12,
             source={"type": "m.room.message", "content": {"body": "accepted original input"}})
         await execution.accept_input("!room:test", event, "context")

@@ -1135,3 +1135,23 @@ later absent-receipt-service/control-classification fix; the111-test installed
 SDK follow-up does not retroactively change this case's source SHA. Matching
 Corefb8bfd0c Controller CI44168348788 and Q189664f test/image CI44168366402 passed
 (publication skipped); Core9dd2ca4b pins that candidate after its matching CI.
+
+### Shared per-event acceptance reused by Hermes
+
+`WorkerMatrix.accept` now owns the input-key, immutable redelivery classification,
+self-scoped Task/team/room resolution and conditional ingest used by both QwenPaw
+copies and the Hermes candidate. `matrix.accept` exposes the same policy through
+the JSON bridge for non-Python adapters. Existing input identity survives Task
+reassignment; a new input still requires exactly one owned Task/team/room. The
+server continues to compare actual immutable input bytes. A per-event callback
+does not invent a sync token or claim timeline coverage.
+
+Common recovery/session/Matrix tests pass79 plus6 subtests; the new acceptance
+regression failed5 cases before implementation. QwenPaw's installed-SDK focused
+suite passes111 with candidate product source mounted into the existing pinned
+SDK image. That source-mounted check is not a new packaged-image or model E2E
+acceptance. Hermes native accepted-message/context/control/verified-assignment
+hooks are being connected in its companion; its shared native-fact guard, batch
+cursor/backfill, legacy import and ordinary-message execution remain incomplete.
+Historical real coverage remains3/6 and7/30. Core24af3dd3 Controller44176802757
+passed; f852ff57 integration44175315246 was still running at this check.

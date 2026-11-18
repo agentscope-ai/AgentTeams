@@ -829,7 +829,13 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
         assert previous and previous["checkpoint_version"] == cp["version"]
         assert json.loads(docker("exec", CONTROLLER, "mc", "cat", key)) == previous
         expired = {**previous, "expires_at": int(time.time()) - 3600}
-        docker("exec", "-i", CONTROLLER, "mc", "pipe", key, text=json.dumps(expired))
+        # Match the Controller's single-part write. An mc pipe multipart ETag
+        # prevents the recovering Worker from replacing this descriptor by CAS.
+        body = json.dumps(expired)
+        docker("exec", "-i", CONTROLLER, "sh", "-ec",
+            'tmp=$(mktemp); trap \'rm -f "$tmp"\' EXIT; cat > "$tmp"; mc cp --disable-multipart "$tmp" "$1"',
+            "sh", key, text=body)
+        assert json.loads(docker("exec", CONTROLLER, "mc", "stat", "--json", key))["etag"] == hashlib.md5(body.encode()).hexdigest()
         assert json.loads(docker("exec", CONTROLLER, "mc", "cat", key)) == expired
         before["expired_session"] = {"native_ref": expired["native_ref"], "expires_at": expired["expires_at"]}
     with boundary_path.open("x") as stream:

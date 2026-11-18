@@ -2214,3 +2214,13 @@ at the original step boundary. The first verifier compared the shared
 lookup key with the old SDK session ID. The corrected verifier checks
 both identities and passed against the retained live Task without another
 restart or another execution.
+
+[Case178 OpenHuman expiry instrumentation failure](evidence/runtime-recovery-1631-case178-fixture-etag.json)
+created a different native session and proceeded through step two in
+generation 2. The fixture's `mc pipe` call had replaced the expired
+descriptor with a multipart ETag. The Controller's single-part
+conditional write rejected the resulting mismatch, and OpenHuman
+stopped rather than publishing a mismatched descriptor. The fixture
+now uses single-part upload and checks the object ETag against the
+exact input bytes before restarting the Worker. Case178 adds no
+completed expiry pass.

@@ -19,9 +19,9 @@ the image and shared-contract pins actually tested.
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | [Pass 150](evidence/runtime-recovery-1631-case150-verified.json) |
 | OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Pass 138](evidence/runtime-recovery-1631-case138-verified.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | [Pass 159](evidence/runtime-recovery-1631-case159-verified.json) |
-| OpenHuman | [Pass 147](evidence/runtime-recovery-1631-case147-verified.json) | [Pass 152](evidence/runtime-recovery-1631-case152-verified.json) | [Pass 154](evidence/runtime-recovery-1631-case154-verified.json) | [Pass 151](evidence/runtime-recovery-1631-case151-verified.json) | — | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
+| OpenHuman | [Pass 147](evidence/runtime-recovery-1631-case147-verified.json) | [Pass 152](evidence/runtime-recovery-1631-case152-verified.json) | [Pass 154](evidence/runtime-recovery-1631-case154-verified.json) | [Pass 151](evidence/runtime-recovery-1631-case151-verified.json) | [Pass 164](evidence/runtime-recovery-1631-case164-verified.json) | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
 
-**6/6 normal restart lanes and 28/30 directed handoffs have passed.** A dash
+**6/6 normal restart lanes and 29/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -2074,3 +2074,34 @@ reused the matching native session and continued the original Task from
 checkpoint 5 to 12 in generation 2. The independent ledger recorded
 three single effects, four stored hashes and one final Matrix reply
 with no new inputs.
+
+[Case162 Codex expired session](evidence/runtime-recovery-1631-case162-expired-session-verified.json)
+and [case165 DeepSeek expired session](evidence/runtime-recovery-1631-case165-expired-session-verified.json)
+passed on Controller `6421981f`, Codex `28dcf22`, and DeepSeek `6f5aadb`.
+Each case first verified the existing native session against the committed
+checkpoint. After aging the shared descriptor, the same container
+restarted with a new process and a different native Task session.
+Both Tasks continued from step two and finished with three single
+effects and one final Matrix reply, without new incoming messages.
+
+[Case163 QwenPaw → OpenHuman](evidence/runtime-recovery-1631-case163-source-gate-timeout.json)
+timed out when its test helper waited in a native tool call for the first
+read. The source recorded the read after the tool returned and no effects
+ran. The optional fixture gate now returns a pending result without
+reserving an operation until the original assignment is observed as read.
+A subsequent tool call can produce the first effect.
+
+[Case164 OpenHuman → OpenClaw](evidence/runtime-recovery-1631-case164-verified.json)
+passed on Controller `6421981f`, OpenHuman `a7fd8fe` and OpenClaw `c6dcf56`.
+The source stopped and was removed before the target started. OpenClaw
+used a native session for the original Task and advanced it in generation
+2. The independent ledger recorded one effect per step, and Matrix
+recorded one final reply after zero new inputs.
+
+[Case166 Codex uncertain effect](evidence/runtime-recovery-1631-case166-parked-effect.json)
+stopped the original container while its native tool was still running.
+The independent effect had already committed, and the Task checkpoint
+still recorded the operation as started. The restarted process took
+generation 2, kept the same operation identity, and left the Task in
+`needs_verification`. The verifier found no second effect or target
+execution request. This is a live safety result for the parked outcome.

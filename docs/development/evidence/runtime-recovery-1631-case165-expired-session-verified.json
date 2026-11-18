@@ -1,0 +1,268 @@
+{
+  "task_id": "live-deepseek-harness-deepseek-harness-165",
+  "case": "165",
+  "scope": "deepseek-harness restart with an expired shared session descriptor",
+  "mode": "restart",
+  "fixture_prefix": "recovery-1631-live-20261118-v165",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "6421981fcc9255a0b779a04557769650172e290e",
+    "deepseek-harness": "6f5aadb0963092f050202211281ed964ba94d070",
+    "shared_contract": "52a3659b719abb78c17368ce020403c442d4e5db"
+  },
+  "driver_sha256": "7cbe64667c0f12a38f9556175b999cace5add04728bc6f2cb17a0b5af7612993",
+  "native_recovery_sessions": {
+    "hermes": [],
+    "hermes_message_counts": {},
+    "hermes_shared": null,
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "33f642981ab86b69212e809393f9c0180dc81909f69e4ec0eae3b4abbbe35039",
+      "descriptor": null,
+      "config_generation": null
+    },
+    "deepseek": {
+      "native": {
+        "session_id": "session-task-d801f6e0a7d04734b3091fd45968c394",
+        "native_digest": "92dfe70eb633522f99e1564b735f8c4adf1a6b4917d3b3041796048989b29ff4",
+        "turn": 1,
+        "input_id": "matrix-4ae3619ca514a5a9f403e3f67793c741ba0c0df46417e8431db39764d100e2c8",
+        "task_mentioned": true,
+        "tool_calls": 11,
+        "tool_results": 11,
+        "completed": true
+      },
+      "cache": {
+        "schema_version": 1,
+        "kind": "WorkerSessionCache",
+        "member_prefix": "agents/agent-a",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-deepseek-harness-deepseek-harness-165"
+        },
+        "runtime": "deepseek-harness",
+        "start": {
+          "instance_id": "docker/0a0d8e728e0ee1634e4203add9e57666bb5145f02aa4821eb60bea45082cb4dc/2026-11-18T15:36:31.981223469Z",
+          "process_id": "7:1795016192950919449:6ad883f54ed14ae0976e0ae725ac1456",
+          "runtime": "deepseek-harness"
+        },
+        "generation": 1,
+        "native_ref": "session-task-5cb2a8ba920f47868ca97725ed81e3a9",
+        "native_digest": "b88751a97d6063372aa05d9bc1e982169f6862d701de2b95e59be4167f09ea61",
+        "checkpoint_version": 5,
+        "checkpoint_digest": "2a1faecbfc7a3708732236146f958bc9af1edc3b55402fc560947ab83bfce846",
+        "config_generation": 3,
+        "expires_at": 1795012758,
+        "saved_at": "2026-11-18T15:39:14Z"
+      }
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 5,
+  "checkpoint_after": 12,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/0a0d8e728e0ee1634e4203add9e57666bb5145f02aa4821eb60bea45082cb4dc/2026-11-18T15:39:23.364274774Z",
+    "process_id": "7:1795016364395332603:a890c82e44f2498898faeb8c92f43774",
+    "runtime": "deepseek-harness",
+    "state": "active",
+    "checkpoint": {
+      "version": 12,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-deepseek-harness-deepseek-harness-165:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=84be5925ff15938c08360eb43c4adec01789ea7ef85464bff1afca0a59f766ec; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-deepseek-harness-165/output/step-one.json",
+          "sha256": "c530a8464fa8d63b9bc5838d5b94373aad37551a54a15e22cf9e0c13c7b65376",
+          "size": 374
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-deepseek-harness-165/output/step-two.json",
+          "sha256": "e25bc1930ad2914e468ea34d15c6606121a1f71a20e10836e7cc1c7959708a8f",
+          "size": 374
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-deepseek-harness-165/output/step-three.json",
+          "sha256": "84be5925ff15938c08360eb43c4adec01789ea7ef85464bff1afca0a59f766ec",
+          "size": 376
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-deepseek-harness-165/result.md",
+        "sha256": "5b87469fd954815c1631f1ff68eed7ad66ada2dbe2f5faa1d16886c6376cd8a2",
+        "size": 760
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:cef2fc25eb4f56e7c6960db2284da07eeed622b09541e17023c62e7148fde2a7",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "S5hRyPeUp8"
+      },
+      "reply_event": "$gCpsbLp067EcWnM6TXILwN1nsqLptp7K-58CTxo44t0",
+      "saved_at": "2026-11-18T15:41:28.585683896Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T15:37:44Z"
+    },
+    {
+      "action": "progress",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "note": "Step one completed. Helper committed checkpoint v2 with output SHA256=c530a846. Remaining: two, three.",
+      "seq": 2,
+      "to": "in_progress",
+      "ts": "2026-11-18T15:38:56Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 3,
+      "to": "submitted",
+      "ts": "2026-11-18T15:41:07Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795016303189498484,
+      "generation": 1,
+      "instance_id": "docker/0a0d8e728e0ee1634e4203add9e57666bb5145f02aa4821eb60bea45082cb4dc/2026-11-18T15:36:31.981223469Z",
+      "process_id": "7:1795016192950919449:6ad883f54ed14ae0976e0ae725ac1456",
+      "step": "one",
+      "task_id": "live-deepseek-harness-deepseek-harness-165",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1795016427783963566,
+      "generation": 2,
+      "instance_id": "docker/0a0d8e728e0ee1634e4203add9e57666bb5145f02aa4821eb60bea45082cb4dc/2026-11-18T15:39:23.364274774Z",
+      "process_id": "7:1795016364395332603:a890c82e44f2498898faeb8c92f43774",
+      "step": "two",
+      "task_id": "live-deepseek-harness-deepseek-harness-165",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 8,
+      "executed_at_ns": 1795016443985244568,
+      "generation": 2,
+      "instance_id": "docker/0a0d8e728e0ee1634e4203add9e57666bb5145f02aa4821eb60bea45082cb4dc/2026-11-18T15:39:23.364274774Z",
+      "process_id": "7:1795016364395332603:a890c82e44f2498898faeb8c92f43774",
+      "step": "three",
+      "task_id": "live-deepseek-harness-deepseek-harness-165",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-deepseek-harness-165/output/step-one.json",
+      "sha256": "c530a8464fa8d63b9bc5838d5b94373aad37551a54a15e22cf9e0c13c7b65376",
+      "size": 374
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-deepseek-harness-165/output/step-two.json",
+      "sha256": "e25bc1930ad2914e468ea34d15c6606121a1f71a20e10836e7cc1c7959708a8f",
+      "size": 374
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-deepseek-harness-165/output/step-three.json",
+      "sha256": "84be5925ff15938c08360eb43c4adec01789ea7ef85464bff1afca0a59f766ec",
+      "size": 376
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-deepseek-harness-165/result.md",
+      "sha256": "5b87469fd954815c1631f1ff68eed7ad66ada2dbe2f5faa1d16886c6376cd8a2",
+      "size": 760
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1795016363285385761,
+    "start": 1795016364139283271
+  },
+  "matrix": {
+    "reply_event": "$gCpsbLp067EcWnM6TXILwN1nsqLptp7K-58CTxo44t0",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$QhTAowfQT2jF9Ge8lYYSih1UMzfinXDlEJCGxDITrLY"
+    ],
+    "read_receipt_events": [
+      "$XK9y38Gih3bo8XKQQAgzi_645HbNlVMOeNl4skAURWA"
+    ],
+    "first_source_read_ms": 1795016247739
+  },
+  "deepseek_source_session": {
+    "session_id": "session-task-5cb2a8ba920f47868ca97725ed81e3a9",
+    "native_digest": "b88751a97d6063372aa05d9bc1e982169f6862d701de2b95e59be4167f09ea61",
+    "turn": 1,
+    "input_id": "matrix-78f620f6869844773b12536ac5a42b08261c55b954e0163286b0afbb1afa0aaa",
+    "task_mentioned": true,
+    "tool_calls": 10,
+    "tool_results": 10,
+    "completed": true
+  },
+  "expired_session": {
+    "native_ref": "session-task-5cb2a8ba920f47868ca97725ed81e3a9",
+    "expires_at": 1795012758
+  },
+  "images": {
+    "controller": "sha256:ce7df71f3ea9268b3c2282b3e6ee00e2a6a969008d758a3cf95673d68cba5b67",
+    "source": "sha256:15386bc3717ca83f201d5d8cd4e81c3c114376982e995f76eeab8af5e7074725",
+    "target": "sha256:15386bc3717ca83f201d5d8cd4e81c3c114376982e995f76eeab8af5e7074725"
+  },
+  "source_session_descriptor_before_expiry": {
+    "schema_version": 1,
+    "kind": "WorkerSessionCache",
+    "member_prefix": "agents/agent-a",
+    "work": {
+      "kind": "task",
+      "team_id": "recovery-team",
+      "task_id": "live-deepseek-harness-deepseek-harness-165"
+    },
+    "runtime": "deepseek-harness",
+    "start": {
+      "instance_id": "docker/0a0d8e728e0ee1634e4203add9e57666bb5145f02aa4821eb60bea45082cb4dc/2026-11-18T15:36:31.981223469Z",
+      "process_id": "7:1795016192950919449:6ad883f54ed14ae0976e0ae725ac1456",
+      "runtime": "deepseek-harness"
+    },
+    "generation": 1,
+    "native_ref": "session-task-5cb2a8ba920f47868ca97725ed81e3a9",
+    "native_digest": "b88751a97d6063372aa05d9bc1e982169f6862d701de2b95e59be4167f09ea61",
+    "checkpoint_version": 5,
+    "checkpoint_digest": "2a1faecbfc7a3708732236146f958bc9af1edc3b55402fc560947ab83bfce846",
+    "config_generation": 3,
+    "expires_at": 1795102752,
+    "saved_at": "2026-11-18T15:39:14Z"
+  }
+}

@@ -241,6 +241,8 @@ When all three steps are complete, use the native taskflow MCP tool with action=
 Outputs are durable in the task's shared object-storage output/ directory. On OpenHuman, submit the existing relative deliverable paths through TeamHarness as soon as all three steps are committed. The helper has already persisted and verified these files. Do not use native file_read or a shell probe on the shared paths before submission. On the other Harnesses, pull the outputs to your task output/ directory before submission. Do not create a new task or send messages to other members.
 The external test driver will replace your container at a step boundary without sending any new Matrix message.
 """
+    if task["recovery_fixture"].get("wait_for_source_read"):
+        spec += "\nIf the helper returns SOURCE_READ_PENDING, it has executed nothing. Run the same helper again in the current turn to let the native assignment read arrive before the first effect. Only report step one after the helper returns its checkpoint version.\n"
     if FAULT == "after-effect":
         spec += "\nFault scenario: in generation 1 the helper deliberately waits after the external effect, before its artifact/checkpoint. While that invocation runs, do not invoke it again, cancel it or manually finish its checkpoint. The driver will terminate your container. In generation 2 or later, use the same helper to verify the external outcome before continuing; never re-execute the unknown effect.\n"
     objects = {task_id + "/spec.md": spec, task_id + "/attempts.json": "[]",
@@ -657,11 +659,11 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
     before["tool_processes"] = fixture_tool_processes()
     if before["instances"][1]["id"] != old["Id"] or before["task"]["execution"] != task["execution"]:
         raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
-    if MODE == "restart" and SOURCE == "hermes":
+    if MODE == "restart" and SOURCE == "hermes" and not FAULT:
         assert_hermes_native_cache(before["native_sessions"]["hermes_shared"], cp, TASK_ID)
     if source == "openhuman" and MODE == "restart" and not FAULT:
         assert_openhuman_native_cache(before["native_sessions"]["openhuman"], task["execution"], TASK_ID)
-    if source == "codex" and not LEGACY_CODEX and MODE == "restart":
+    if source == "codex" and not LEGACY_CODEX and MODE == "restart" and not FAULT:
         assert_codex_native(before["native_sessions"]["codex_shared"], task, require_cache=True)
     if source == "deepseek-harness" and MODE == "restart" and not FAULT:
         assert_deepseek_native(before["native_sessions"]["deepseek"], task, require_cache=True)
@@ -896,6 +898,44 @@ def matrix_cursors(task):
         cursors[key] = {field: consumer.get(field) for field in ("runtime", "account", "device", "format")}
         cursors[key]["token_sha256"] = hashlib.sha256(consumer["token"].encode()).hexdigest()
     return {"start": state["active_start"], "cursors": cursors, "through": state["rooms"][task["room_id"]]["through"]}
+
+
+def verify_parked_effect():
+    """Verify a real stopped tool and a parked replacement after an uncertain effect."""
+    if FAULT != "after-effect":
+        raise ValueError("Expected the isolated after-effect interruption")
+    before = json.loads(Path(f"/tmp/1631-live-{CASE}-before-cutover.json").read_text())
+    task = api("GET", f"tasks/{TASK_ID}/meta?team=recovery-team")
+    previous, execution = before["task"]["execution"], task["execution"]
+    old_checkpoint, checkpoint = previous["checkpoint"], execution["checkpoint"]
+    order, source, target = cutover_lifecycle(before, "")
+    running = json.loads(docker("inspect", PREFIX + "-worker-agent-a"))[0]
+    assert task["task_id"] == before["task"]["task_id"] == TASK_ID and task["status"] == "in_progress"
+    assert before["source_read_receipt"] and before["tool_processes"] and not fixture_tool_processes()
+    assert running["State"]["Running"] and running["Id"] == target["ID"]
+    assert execution["instance_id"] == "docker/" + running["Id"] + "/" + running["State"]["StartedAt"]
+    assert execution["runtime"] == TARGET and execution["process_id"] != previous["process_id"]
+    assert execution["instance_id"] != previous["instance_id"] and execution["generation"] == previous["generation"] + 1
+    assert execution["state"] == "needs_verification" and old_checkpoint["operation"]["state"] == "started"
+    assert checkpoint["operation"]["id"] == old_checkpoint["operation"]["id"]
+    assert checkpoint["operation"]["state"] in {"started", "unknown"} and not checkpoint["completed_steps"]
+    assert not checkpoint.get("result") and not checkpoint.get("reply_event")
+    oracle = oracle_proof()
+    first, = oracle["effects"]
+    assert (first["step"], first["generation"], first["process_id"]) == ("one", previous["generation"], previous["process_id"])
+    assert_effect_authorization(oracle, first)
+    assert not any(row["method"] in {"REGISTER", "POST"} and row["process_id"] != previous["process_id"] for row in oracle["calls"])
+    assert first["executed_at_ns"] < order["die"]
+    captured = {"case": CASE, "task_id": TASK_ID, "scope": "unknown effect parked without repeat execution",
+                "source_revision": source["Attributes"]["io.agentteams.recovery.harness-sha"],
+                "target_revision": target["Attributes"]["io.agentteams.recovery.harness-sha"],
+                "core_revision": json.loads(docker("inspect", CONTROLLER))[0]["Config"]["Labels"]["io.agentteams.recovery.core-sha"],
+                "source_read_receipt": before["source_read_receipt"], "source_tool_processes": before["tool_processes"],
+                "execution_before": previous, "execution_after": execution, "docker_order_ns": order,
+                "target_image_id": running["Image"], "oracle": oracle, "driver_sha256": DRIVER_SHA256, "passed": True}
+    path = Path(f"/tmp/1631-live-{CASE}-parked-effect.json")
+    path.write_text(json.dumps(captured, indent=2))
+    print(f"Verified parked effect in {path}")
 
 
 def assert_restarted_native(original, resumed, before):
@@ -1439,4 +1479,5 @@ if __name__ == "__main__":
      "refresh-controller": refresh_controller, "evidence": evidence, "cutover": cutover, "watch-return": lambda: cutover(watch_return=True),
      "watch-dashboard-cutover": lambda: cutover(watch_dashboard=True),
      "return-cutover": lambda: cutover(watch_return=True, cli_return=True),
-     "observe-return-cursors": observe_return_cursors, "verify": verify}[sys.argv[1]]()
+     "observe-return-cursors": observe_return_cursors, "verify-parked-effect": verify_parked_effect,
+     "verify": verify}[sys.argv[1]]()

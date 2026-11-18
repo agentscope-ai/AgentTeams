@@ -112,7 +112,10 @@ class EffectReceiptTests(unittest.TestCase):
 
         receipts = SimpleNamespace(RECEIPT_TYPE="receipt", credentials=lambda _: ("server", "key"),
                                    matrix_request=lambda *_: get_events)
-        with patch.dict(sys.modules, {"agentteams_receipts": receipts}), patch("time.sleep"):
+        with patch.dict(sys.modules, {"agentteams_receipts": receipts}):
+            self.assertIn("SOURCE_READ_PENDING", self.invoke())
+            self.assertEqual(self.receipts(), [])
+            self.assertIsNone(self.task["execution"].get("checkpoint"))
             self.invoke()
         self.assertEqual([row["step"] for row in self.receipts()], ["one"])
 

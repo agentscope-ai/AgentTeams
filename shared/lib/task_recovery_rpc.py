@@ -15,6 +15,14 @@ def owned(recovery, identity):
     return task
 
 
+def native_reply_plan(checkpoint, request, bind):
+    from worker_matrix_delivery import plan_saved
+    mode, pending = plan_saved(checkpoint, request['text'], request['sender'], request['device'])
+    if pending is not None:
+        bind(pending)
+    return {'mode': mode, 'reply_txn': checkpoint['reply_txn'], 'legacy': not checkpoint.get('reply_attempt')}
+
+
 def execute(request):
     if not enabled():
         raise RecoveryConflict('Worker process recovery is not configured')
@@ -52,6 +60,32 @@ def execute(request):
         if action == 'matrix.consumer':
             return matrix.consumer(request['snapshot'], account=request['account'],
                                    device=request.get('device', ''), format=request['format'])
+        if action == 'matrix.prepare':
+            from worker_matrix_state import matrix_event_key
+            from task_coordination import IgnoredNotification, notification
+            room = request['room_id']
+            result = []
+            for item in request['events']:
+                event_id, source = item['event_id'], item['input']
+                intent, task_id = item.get('intent'), None
+                previous = matrix.input(matrix_event_key(room, event_id))
+                if previous:
+                    intent = previous['intent']
+                elif source['content'].get('org.agentteams.coordination') is not None:
+                    try:
+                        packet = notification(source['content'], room, source['sender'], request['account'])
+                    except IgnoredNotification:
+                        continue
+                    if not packet:
+                        continue
+                    meta = packet['meta']['teamharness_coordination']
+                    if meta['kind'] == 'task_assigned':
+                        intent, task_id = 'task_notification', meta['task_id']
+                    else:
+                        intent = 'message'
+                if intent:
+                    result.append(matrix.prepare_input(room, event_id, source, intent, task_id=task_id))
+            return result
         if action == 'matrix.sync':
             return matrix.sync(request['snapshot'], request['consumer'], request['next_batch'], request['timelines'])
         if action == 'matrix.pending':
@@ -72,6 +106,17 @@ def execute(request):
             return matrix.message_claim(request['event_key'])
         if action == 'matrix.message.current':
             return matrix.message_current(request['identity'])
+        if action == 'matrix.message.owned':
+            return matrix._message_owned(request['identity'])
+        if action == 'matrix.message.begin_tools':
+            return matrix.message_begin_tools(request['identity'], request['calls'])
+        if action == 'matrix.message.finish_tools':
+            return matrix.message_finish_tools(request['identity'], request['operation_id'], request['results'])
+        if action == 'matrix.message.plan_reply':
+            identity = request['identity']
+            entry = matrix._message_owned(identity)
+            cp = entry['execution'].get('checkpoint') or {}
+            return native_reply_plan(cp, request, lambda pending: matrix.message_checkpoint(identity, pending))
         if action == 'matrix.message.checkpoint':
             return matrix.message_checkpoint(request['identity'], request['checkpoint'], release=request.get('release', False))
         if action == 'matrix.message.save_reply':
@@ -93,12 +138,8 @@ def execute(request):
     if action == 'current':
         return {'task': task, 'checkpoint_digest': Recovery.digest(task['execution'].get('checkpoint'))}
     if action == 'plan_reply':
-        from worker_matrix_delivery import plan_saved
         cp = task['execution'].get('checkpoint') or {}
-        mode, pending = plan_saved(cp, request['text'], request['sender'], request['device'])
-        if pending is not None:
-            recovery.checkpoint(identity['task_id'], identity['team_id'], pending)
-        return {'mode': mode, 'reply_txn': cp['reply_txn'], 'legacy': not cp.get('reply_attempt')}
+        return native_reply_plan(cp, request, lambda pending: recovery.checkpoint(identity['task_id'], identity['team_id'], pending))
     if action == 'prepare_reply':
         text = request['text']
         cp = task['execution'].get('checkpoint') or {}

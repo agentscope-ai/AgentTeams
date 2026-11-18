@@ -45,6 +45,24 @@ class RecoveryRPCTest(unittest.TestCase):
         with self.assertRaises(rpc.RecoveryConflict):
             rpc.execute({'action': 'current', 'identity': self.identity})
 
+    def test_native_sync_verifies_receipts_and_preserves_accepted_input_classification(self):
+        from task_coordination import IgnoredNotification, NotificationUnavailable
+        matrix = Mock()
+        matrix.input.side_effect = [None, {'intent': 'context'}, None, None]
+        matrix.prepare_input.side_effect = lambda room, event, source, intent, task_id=None: (event, intent, task_id)
+        patch('worker_matrix_state.WorkerMatrix', return_value=matrix).start()
+        verify = patch('task_coordination.notification', side_effect=[
+            {'meta': {'teamharness_coordination': {'kind':'task_assigned', 'task_id':'T'}}},
+            IgnoredNotification(), NotificationUnavailable(),
+        ]).start()
+        event = {'event_id':'$one', 'input':{'sender':'@manager:d', 'content':{'org.agentteams.coordination':{}}}}
+        request = dict(action='matrix.prepare', runtime='openhuman', room_id='!r:d', account='@worker:d',
+                       events=[event, dict(event, event_id='$two'), dict(event, event_id='$three')])
+        self.assertEqual(rpc.execute(request), [('$one','task_notification','T'), ('$two','context',None)])
+        self.assertEqual(verify.call_count, 2)
+        with self.assertRaises(NotificationUnavailable):
+            rpc.execute(dict(request, events=[event]))
+
     def test_native_sender_must_bind_device_before_publish_and_verify_after_device_change(self):
         execution = self.task['execution']
         cp = dict(version=4, delivery='pending', reply_txn='txn',

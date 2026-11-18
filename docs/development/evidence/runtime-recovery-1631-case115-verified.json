@@ -1,0 +1,227 @@
+{
+  "task_id": "live-openclaw-hermes-115",
+  "case": "115",
+  "scope": "one real openclaw-to-hermes in-progress continuation",
+  "mode": "replace",
+  "fixture_prefix": "recovery-1631-live-20261118-v115",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "6421981fcc9255a0b779a04557769650172e290e",
+    "openclaw": "c6dcf56695d1e924db750d53c8d3f0001959adee",
+    "hermes": "f5d74a34ae90f470263cab88371ad462b8583eef",
+    "shared_contract_by_runtime": {
+      "openclaw": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6",
+      "hermes": "4fca52d09d8568d6cbf5f5fc35f51b6a2c858db8"
+    }
+  },
+  "driver_sha256": "d248451f6e45af194071b4c2f1c5a1ccaa4c0ce87a7cdb9ee7a3d9fdf3ef1f2f",
+  "native_recovery_sessions": {
+    "hermes": [
+      {
+        "timestamp": "2026-11-18T12:05:53.445504+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "3a9d4c9d7d054741a6cf60fe2b92d3aa",
+        "event": "task.recovery.session",
+        "task_id": "live-openclaw-hermes-115",
+        "team_id": "recovery-team",
+        "generation": 2,
+        "session_id": "20261118_120553_71c5e93b",
+        "checkpoint_version": 4,
+        "reused": false
+      }
+    ],
+    "hermes_message_counts": {
+      "20261118_120553_71c5e93b": 29
+    },
+    "hermes_shared": {
+      "cache": null,
+      "native_digest": null,
+      "message_count": 0,
+      "tool_count": 0,
+      "task_mentioned": false
+    },
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "f00c97090d97e5bf471407da8d56018b51d5ef4f0b6735d1fe7ad7263e0f7edf",
+      "descriptor": null,
+      "config_generation": null
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 4,
+  "checkpoint_after": 12,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/0369b8fa5a4ddc51a52f80775486d62fe59d589b0c548c326202214047efac48/2026-11-18T12:05:12.233905821Z",
+    "process_id": "1:1795003512724624665:3a9d4c9d7d054741a6cf60fe2b92d3aa",
+    "runtime": "hermes",
+    "state": "active",
+    "checkpoint": {
+      "version": 12,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-openclaw-hermes-115:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=1351bddc0185d0ab6c176e1ff7e5cd7f333e8ad59eead71c79a2514ae8990057; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-hermes-115/output/step-one.json",
+          "sha256": "8dbc9d1dbb145ac7eb7714e3d8ed964aac34eb031b5ea85772ccceccbbe20dd5",
+          "size": 356
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-hermes-115/output/step-two.json",
+          "sha256": "ff2aeab86d95bf5ab5d8cdb5801b022d407844f07be12a628658a5434b6e28a6",
+          "size": 356
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-hermes-115/output/step-three.json",
+          "sha256": "1351bddc0185d0ab6c176e1ff7e5cd7f333e8ad59eead71c79a2514ae8990057",
+          "size": 358
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-openclaw-hermes-115/result.md",
+        "sha256": "751da93d2671c238b59c8afdd38d33c2a5fb1c2e8fe1930b005906d71133bf4b",
+        "size": 911
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:cc3bf40c3c8afea587e6591e8b575664105b002a74e0f040f171eaefe5e1f149",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "9S2CffUuo1"
+      },
+      "reply_event": "$yIUb2AkTUVZydwiwOJXJbSKmLs_-0A9HU4iC1f7F1II",
+      "saved_at": "2026-11-18T12:08:29.400804024Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T12:04:21Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 2,
+      "to": "submitted",
+      "ts": "2026-11-18T12:08:08Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795003471998784817,
+      "generation": 1,
+      "instance_id": "docker/187b46915b1b2f93b121a2ce6a5f7a8569f1b4d5343fbd783d2aeda0e3fd0977/2026-11-18T12:02:12.039149373Z",
+      "process_id": "1:1795003332164821715:3af391181ccb43a78055ea129fa7a11b",
+      "step": "one",
+      "task_id": "live-openclaw-hermes-115",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 5,
+      "executed_at_ns": 1795003598799972441,
+      "generation": 2,
+      "instance_id": "docker/0369b8fa5a4ddc51a52f80775486d62fe59d589b0c548c326202214047efac48/2026-11-18T12:05:12.233905821Z",
+      "process_id": "1:1795003512724624665:3a9d4c9d7d054741a6cf60fe2b92d3aa",
+      "step": "two",
+      "task_id": "live-openclaw-hermes-115",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 7,
+      "executed_at_ns": 1795003624197154684,
+      "generation": 2,
+      "instance_id": "docker/0369b8fa5a4ddc51a52f80775486d62fe59d589b0c548c326202214047efac48/2026-11-18T12:05:12.233905821Z",
+      "process_id": "1:1795003512724624665:3a9d4c9d7d054741a6cf60fe2b92d3aa",
+      "step": "three",
+      "task_id": "live-openclaw-hermes-115",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-hermes-115/output/step-one.json",
+      "sha256": "8dbc9d1dbb145ac7eb7714e3d8ed964aac34eb031b5ea85772ccceccbbe20dd5",
+      "size": 356
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-hermes-115/output/step-two.json",
+      "sha256": "ff2aeab86d95bf5ab5d8cdb5801b022d407844f07be12a628658a5434b6e28a6",
+      "size": 356
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-hermes-115/output/step-three.json",
+      "sha256": "1351bddc0185d0ab6c176e1ff7e5cd7f333e8ad59eead71c79a2514ae8990057",
+      "size": 358
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-hermes-115/result.md",
+      "sha256": "751da93d2671c238b59c8afdd38d33c2a5fb1c2e8fe1930b005906d71133bf4b",
+      "size": 911
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1795003509459347280,
+    "destroy": 1795003509588217384,
+    "create": 1795003512178329539
+  },
+  "matrix": {
+    "reply_event": "$yIUb2AkTUVZydwiwOJXJbSKmLs_-0A9HU4iC1f7F1II",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$_OWuy77w4GqjIfuSI3Wknk9YDxTemQLOkEc-10MtdZA"
+    ],
+    "read_receipt_events": [
+      "$SlDoAOQPEHNuuRfFjOM5w_wq3RX2Yg9z8DvDjVpmLBc"
+    ],
+    "first_source_read_ms": 1795003361709
+  },
+  "operator_handoff": {
+    "id": "live-openclaw-hermes-115",
+    "phase": "completed",
+    "source": {
+      "instance_id": "docker/187b46915b1b2f93b121a2ce6a5f7a8569f1b4d5343fbd783d2aeda0e3fd0977/2026-11-18T12:02:12.039149373Z",
+      "process_id": "1:1795003332164821715:3af391181ccb43a78055ea129fa7a11b",
+      "runtime": "openclaw"
+    },
+    "target_runtime": "hermes",
+    "target": {
+      "instance_id": "docker/0369b8fa5a4ddc51a52f80775486d62fe59d589b0c548c326202214047efac48/2026-11-18T12:05:12.233905821Z",
+      "process_id": "1:1795003512724624665:3a9d4c9d7d054741a6cf60fe2b92d3aa",
+      "runtime": "hermes"
+    },
+    "source_stop_observed_at": "2026-11-18T12:05:09.466166308Z",
+    "target_registered_at": "2026-11-18T12:05:30.229873124Z",
+    "completed_at": "2026-11-18T12:06:07.997717343Z",
+    "target_image": "recovery-1631/hermes:local"
+  }
+}

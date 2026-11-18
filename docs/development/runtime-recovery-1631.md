@@ -18,10 +18,10 @@ the image and shared-contract pins actually tested.
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
-| OpenClaw | — | [Source timeout 113](evidence/runtime-recovery-1631-case113-openclaw-source-timeout.json) | — | — | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
+| OpenClaw | — | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | — | — | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
-**5/6 normal restart lanes and 14/30 directed handoffs have passed.** A dash
+**5/6 normal restart lanes and 15/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1693,3 +1693,11 @@ inference on that source, and sent no extra reply. No new input triggered
 the returned Manager. The previous two container identities were absent on
 inspection. The evidence retains the source, reply/edit, and receipt
 relations.
+
+[Case115 OpenClaw → Hermes](evidence/runtime-recovery-1631-case115-verified.json)
+passed on Controller `6421981f`, OpenClaw `c6dcf56` and Hermes `f5d74a3`.
+OpenClaw finished step one before the old instance exited. Hermes claimed
+the original Task in generation 2 after the old container was removed.
+The oracle recorded one effect per step, and Matrix recorded one final
+reply with zero new inputs after cutover. The first attempt's source
+timeout remains in case 113.

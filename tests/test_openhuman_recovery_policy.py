@@ -45,6 +45,10 @@ def test_other_installations_are_rejected_without_changing_files(tmp_path, prefi
 def test_fixture_image_derives_policy_scope_from_the_controller(tmp_path, monkeypatch, host, allowed):
     path = tmp_path / "config.toml"
     path.write_text('[autonomy]\nallowed_commands = ["agt"]\n')
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    prompt = workspace / "SOUL.md"
+    prompt.write_text("Worker role.")
     monkeypatch.delenv("RECOVERY_E2E_PREFIX", raising=False)
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", f"http://{host}:8090")
     monkeypatch.setenv("OPENHUMAN_CONFIG", str(path))
@@ -53,7 +57,9 @@ def test_fixture_image_derives_policy_scope_from_the_controller(tmp_path, monkey
     monkeypatch.setattr(policy.os, "execv", lambda binary, args: calls.append((binary, args)))
 
     runpy.run_path(spec.origin, run_name="__main__")
+    runpy.run_path(spec.origin, run_name="__main__")
 
     commands = tomllib.loads(path.read_text())["autonomy"]["allowed_commands"]
     assert ("agentteams-recovery-step" in commands) is allowed
-    assert calls == [("/usr/local/bin/openhuman-core.native", ["openhuman-core", "serve"])]
+    assert prompt.read_text().count("Your active Harness in this fixture is OpenHuman.") == int(allowed)
+    assert calls == [("/usr/local/bin/openhuman-core.native", ["openhuman-core", "serve"])] * 2

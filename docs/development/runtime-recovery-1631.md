@@ -1886,3 +1886,19 @@ rejects paths outside the native workspace. It reached the ten-iteration
 limit without submitting the Task. The fixture now directs OpenHuman to
 submit the already persisted paths through TeamHarness. The full
 restart and final delivery remain pending in case143.
+
+[Case141 Hermes → OpenHuman](evidence/runtime-recovery-1631-case141-iteration-limit.json)
+completed step two on generation 2 before the native turn exhausted its
+iteration limit. [Case142 OpenHuman → Hermes](evidence/runtime-recovery-1631-case142-iteration-limit.json)
+committed step one but did not reach the original driver's progress-message
+boundary. The fixture now identifies OpenHuman in its own startup prompt,
+where it can select the installed bounded command without shell probes. The
+cross-Harness driver uses the verified shared checkpoint and original native
+read receipt as its boundary. A progress message is optional for that
+boundary. Cases 144 and 145 independently exercise both directions.
+
+Case143 observed OpenHuman's local cache before its matching shared
+descriptor finished publishing. A later read proved the original local
+session and shared descriptor both matched checkpoint 5. The restart uses
+that existing Task. Future valid-reuse checks wait for the matched native
+and shared records before requesting the restart.

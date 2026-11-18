@@ -44,6 +44,20 @@ if __name__ == "__main__":
     hostname = urllib.parse.urlparse(controller).hostname or ""
     prefix = os.getenv("RECOVERY_E2E_PREFIX") or hostname.removesuffix("-controller")
     if sys.argv[1:] == ["serve"] and re.fullmatch(r"recovery-1631-live-\d{8}-v\d+", prefix):
-        configure(Path(os.environ["OPENHUMAN_CONFIG"]), prefix, controller)
+        config = Path(os.environ["OPENHUMAN_CONFIG"])
+        configure(config, prefix, controller)
+        prompt = config.parent / "workspace" / "SOUL.md"
+        fixture_instruction = (
+            "\n## AgentTeams recovery acceptance fixture\n\n"
+            "Your active Harness in this fixture is OpenHuman. For the synthetic recovery Task, "
+            "use your Shell tool to run exactly `agentteams-recovery-step <task_id> recovery-team`, "
+            "substituting the Task ID. The command is installed and allowed. "
+            "Call it directly without probing its path or downloading a script. "
+            "Once all three steps are committed, submit the existing relative artifact paths "
+            "through the TeamHarness taskflow tool. The step command already persists the artifacts.\n"
+        )
+        existing = prompt.read_text()
+        if fixture_instruction not in existing:
+            prompt.write_text(existing + fixture_instruction)
         print("Recovery fixture policy: bounded step command explicitly allowed before native startup", flush=True)
     os.execv("/usr/local/bin/openhuman-core.native", ["openhuman-core", *sys.argv[1:]])

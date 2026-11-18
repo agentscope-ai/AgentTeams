@@ -1,0 +1,64 @@
+{
+  "case": 141,
+  "scope": "native iteration limit reached before the original Task could be submitted",
+  "task_id": "live-hermes-openhuman-141",
+  "task_status": "in_progress",
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/109ccbc7000de56bf6e8a6e81df37d5f379fc4588d424de49adef22c8c0c114a/2026-11-18T14:20:19.672781212Z",
+    "process_id": "1:1795011620244048550:1ac53fe38e0b4edbb674267f75347006",
+    "runtime": "openhuman",
+    "state": "active",
+    "checkpoint": {
+      "version": 7,
+      "completed_steps": [
+        "one",
+        "two"
+      ],
+      "remaining_steps": [
+        "three"
+      ],
+      "operation": {
+        "id": "fixture:live-hermes-openhuman-141:two",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=1444a6d856e5e9e1a60141bc8208233363f99cab4c5d07954ee73acf5c70f88b; step=two; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-openhuman-141/output/step-one.json",
+          "sha256": "a7d92502a9ac4b87d83b4c1544607d4c136e8af887e6519c8a3056688a22ce01",
+          "size": 357
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-openhuman-141/output/step-two.json",
+          "sha256": "1444a6d856e5e9e1a60141bc8208233363f99cab4c5d07954ee73acf5c70f88b",
+          "size": 357
+        }
+      ],
+      "saved_at": "2026-11-18T14:23:31.13513703Z"
+    }
+  },
+  "effects": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795011503582012723,
+      "generation": 1,
+      "instance_id": "docker/241fb247c973a136dc1e2d880730b6451746f2f39564252ae3c31447e40e5b66/2026-11-18T14:15:07.883071628Z",
+      "process_id": "1:1795011311890775498:cbcd700b8b024bf3adc26bc5cfbea9d1",
+      "step": "one",
+      "task_id": "live-hermes-openhuman-141",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1795011805135645380,
+      "generation": 2,
+      "instance_id": "docker/109ccbc7000de56bf6e8a6e81df37d5f379fc4588d424de49adef22c8c0c114a/2026-11-18T14:20:19.672781212Z",
+      "process_id": "1:1795011620244048550:1ac53fe38e0b4edbb674267f75347006",
+      "step": "two",
+      "task_id": "live-hermes-openhuman-141",
+      "team_id": "recovery-team"
+    }
+  ],
+  "full_lane_passed": false
+}

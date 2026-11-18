@@ -611,6 +611,10 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
             break
         if source == "qwenpaw":
             cache = before["native_sessions"]["qwenpaw_shared"]["cache"]
+        elif source == "openhuman" and MODE == "restart" and not FAULT:
+            proof = before["native_sessions"]["openhuman"]
+            local, shared = proof["cache"], proof["descriptor"]
+            cache = shared if local and shared and local["checkpoint_digest"] == shared["checkpoint_digest"] else None
         elif openclaw_restart:
             proof = before["native_sessions"]["openclaw"]
             cache = proof["shared_cache"]

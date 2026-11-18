@@ -993,12 +993,6 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
         log_fail "${container} contains legacy agentteam plugin state"
     fi
 
-    if docker exec "${container}" test -f "${workspace}/TEAMS.md" >/dev/null 2>&1; then
-        log_pass "${container} workspace TeamHarness prompt exists"
-    else
-        log_fail "${container} workspace TeamHarness prompt missing"
-    fi
-
     if _wait_workspace_team_context "${container}" "${workspace}/TEAMS.md" "${role}" 120; then
         log_pass "${container} TEAMS.md contains ${role} team context"
         if docker exec "${container}" test ! -e "${qwenpaw_dir}/teamharness/team-context.json" >/dev/null 2>&1; then

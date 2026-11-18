@@ -1360,3 +1360,31 @@ assignment. Each independent ledger still contains only step one.
   the same fixture, and the patched process registered a current start and
   advanced its checkpoint. A separate case75 is reserved for the controlled
   normal restart with a valid native session.
+
+### Cases76–79: QwenPaw restart and the next directed lanes
+
+[Case77 QwenPaw restart](evidence/runtime-recovery-1631-case77-verified.json)
+verified the same Task and native SDK session after Docker restarted the Worker.
+Generation advanced from 1 to 2 and checkpoint from 5 to 12. The independent
+ledger recorded each step once, and the persisted report matched exactly one
+Matrix reply, with no new external input after shutdown. The source native
+read receipt preceded shutdown but followed step one. This case does not prove
+strict read-before-step ordering. The images used Core/shared contract
+`52a3659b` and QwenPaw `763877d`.
+
+[Partial cases76, 78 and 79](evidence/runtime-recovery-1631-cases76-79-partial.json)
+do not increase the directed switch count:
+
+- Hermes → Codex ran all three steps across two processes with no new Matrix
+  input, but the native TeamHarness connection dropped and submission never
+  happened. Codex [#13](https://github.com/agentteams-group/agentteams-harness-codex/pull/13)
+  commit `77e1215` forwards the packaged Python search path to that MCP
+  subprocess by name. Its image passed the same MCP checkpoint validation
+  request followed by another request on the same connection. Case80 retests
+  the actual handoff and final submission.
+- Hermes → DeepSeek reached generation 2, and native MCP submission completed,
+  but the native shell sandbox could not run the fixture. The independent
+  ledger contains only step one. Case81 uses the isolated fixture with an
+  explicitly configured shell mode.
+- Hermes → OpenClaw stopped the old instance before creating the target.
+  Docker marked the target OOM-killed before it claimed the Task.

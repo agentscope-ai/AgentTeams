@@ -1864,7 +1864,25 @@ policy for Agent A in the disposable fixture before assignment. It permits
 testing headless execution without sending human approval events after
 cutover. The local fixture retains its bounded shell command allowlist.
 Production approval configuration and the default supervised test path are
-unchanged. Cases 140 and 141 are running with the explicit fixture setting.
+unchanged. Cases 140–143 record the explicit fixture setting in their scope.
 The driver now captures its own hash at import and records immutable source,
 target and Controller image IDs in new reports. All 27 focused fixture and
 evidence tests passed with these changes.
+
+[Case139 supervised Hermes → OpenHuman](evidence/runtime-recovery-1631-case139-approval-held.json)
+retained the original Task in progress at checkpoint 5 and generation 2
+while awaiting tool approval. The independent ledger contained only the
+source effect. This confirms the approval gate remained active after the
+actual handoff.
+
+[Case140 preapproved OpenHuman restart](evidence/runtime-recovery-1631-case140-steps-only.json)
+advanced the original Task from checkpoint 5 to 9 after restarting the same
+container. It completed steps two and three without a new Matrix input,
+and each of the three artifact digests and independently recorded effects
+matched. The installed native configuration confirmed full autonomy and the
+bounded fixture command on the restarted instance. The model then spent
+its remaining turns probing shared paths through a native file tool that
+rejects paths outside the native workspace. It reached the ten-iteration
+limit without submitting the Task. The fixture now directs OpenHuman to
+submit the already persisted paths through TeamHarness. The full
+restart and final delivery remain pending in case143.

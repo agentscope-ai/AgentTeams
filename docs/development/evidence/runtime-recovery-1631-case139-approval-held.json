@@ -1,0 +1,122 @@
+{
+  "case": 139,
+  "scope": "supervised target waited for tool approval after handoff",
+  "task_id": "live-hermes-openhuman-139",
+  "target_execution": {
+    "generation": 2,
+    "instance_id": "docker/ee3709247006766eb73f6c792f9fc1b5deaf233a94f16133b09bf5f92b7aa8f5/2026-11-18T14:09:08.005512839Z",
+    "process_id": "1:1795010948761825027:b01b19f9b53c4243bdb83c01386d896d",
+    "runtime": "openhuman",
+    "state": "active",
+    "checkpoint": {
+      "version": 5,
+      "completed_steps": [
+        "one"
+      ],
+      "remaining_steps": [
+        "two",
+        "three"
+      ],
+      "operation": {
+        "id": "fixture:live-hermes-openhuman-139:one",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=6d37e191cb0360c7a250e239604edb19d69e456252d0f28f9618c099f874328f; step=one; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-openhuman-139/output/step-one.json",
+          "sha256": "6d37e191cb0360c7a250e239604edb19d69e456252d0f28f9618c099f874328f",
+          "size": 357
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-hermes-openhuman-139/checkpoints/reply-f8386c18bd7376fb303e41c07624af7b35424fac9cbff54260db6a96bac0adea.txt",
+        "sha256": "f8386c18bd7376fb303e41c07624af7b35424fac9cbff54260db6a96bac0adea",
+        "size": 180
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:a96feab1d8792804b0169c7b8c4420b621c88cd0a2f4888afaa8b996406a03ef",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "woejm4Mbcj"
+      },
+      "reply_event": "$H-vBg_kd-44uv8JsfeZ5JBIHfaZ54MrjapFqRlCzLyw",
+      "saved_at": "2026-11-18T14:08:33.304611256Z"
+    },
+    "reply_generation": 1
+  },
+  "approval_events": [
+    {
+      "event": "$pBNHDAzBY9d9v0C5v_wOh6-fYKkHVGsdzLoaQjogzJ4",
+      "sender": "@agent-a:recovery-1631.test",
+      "time_ms": 1795011275474,
+      "status": "cancelled",
+      "tool_name": "shell",
+      "request_id": "10911c59-cd8a-48fe-bded-87076c27d72c"
+    },
+    {
+      "event": "$vTIVo7xhuBxkWzNBf6jDyXYBTW_DlE7IkqPF2zmg7yM",
+      "sender": "@agent-a:recovery-1631.test",
+      "time_ms": 1795010991339,
+      "status": "pending",
+      "tool_name": "shell",
+      "request_id": "10911c59-cd8a-48fe-bded-87076c27d72c"
+    }
+  ],
+  "ledger": {
+    "calls": [
+      {
+        "accepted": true,
+        "at_ns": 1795010866497899299,
+        "method": "REGISTER",
+        "process_id": "1:1795010732157440430:c8b9b23ed5e04d5b8f7120b0c4cad336",
+        "step": "one",
+        "task_id": "live-hermes-openhuman-139",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1795010872898895483,
+        "method": "POST",
+        "process_id": "1:1795010732157440430:c8b9b23ed5e04d5b8f7120b0c4cad336",
+        "step": "one",
+        "task_id": "live-hermes-openhuman-139",
+        "team_id": "recovery-team"
+      }
+    ],
+    "effects": [
+      {
+        "checkpoint_version": 1,
+        "executed_at_ns": 1795010872898950359,
+        "generation": 1,
+        "instance_id": "docker/8b5b867558f6cb833681cabacdc46177c958adb1383d785379c462cb07115da1/2026-11-18T14:05:31.623114862Z",
+        "process_id": "1:1795010732157440430:c8b9b23ed5e04d5b8f7120b0c4cad336",
+        "step": "one",
+        "task_id": "live-hermes-openhuman-139",
+        "team_id": "recovery-team"
+      }
+    ],
+    "intents": [
+      {
+        "checkpoint_version": 1,
+        "generation": 1,
+        "instance_id": "docker/8b5b867558f6cb833681cabacdc46177c958adb1383d785379c462cb07115da1/2026-11-18T14:05:31.623114862Z",
+        "process_id": "1:1795010732157440430:c8b9b23ed5e04d5b8f7120b0c4cad336",
+        "step": "one",
+        "task_id": "live-hermes-openhuman-139",
+        "team_id": "recovery-team"
+      }
+    ]
+  },
+  "docker_order_ns": {
+    "die": 1795010933286456748,
+    "destroy": 1795010936800037939,
+    "create": 1795010947764666986
+  },
+  "sources": {
+    "hermes": "f5d74a34ae90f470263cab88371ad462b8583eef",
+    "openhuman": "8165de5aaf640370ec92154353dd1e998ca26294"
+  },
+  "full_lane_passed": false
+}

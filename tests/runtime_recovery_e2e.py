@@ -226,7 +226,7 @@ Read the authoritative completed_steps. Never repeat a completed step or edit th
 In generation 1, run the helper only for step one. {paused_turn}
 {continuation}
 When all three steps are complete, use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/{task_id}/output/step-one.json, shared/tasks/{task_id}/output/step-two.json, shared/tasks/{task_id}/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.
-Outputs are durable in the task's shared object-storage output/ directory; pull them to your task output/ directory before submission. Do not create a new task or send messages to other members.
+Outputs are durable in the task's shared object-storage output/ directory. On OpenHuman, submit the existing relative deliverable paths through TeamHarness as soon as all three steps are committed. The helper has already persisted and verified these files. Do not use native file_read or a shell probe on the shared paths before submission. On the other Harnesses, pull the outputs to your task output/ directory before submission. Do not create a new task or send messages to other members.
 The external test driver will replace your container at a step boundary without sending any new Matrix message.
 """
     if FAULT == "after-effect":

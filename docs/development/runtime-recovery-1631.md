@@ -1411,3 +1411,17 @@ used Codex `77e1215` and verified the original App Server thread with a new
 turn, continuing steps two and three after a native restart. The Task ID was
 unchanged, the execution generation increased, and each step and the final
 Matrix reply appeared once with no new incoming message.
+
+[Case85 DeepSeek restart](evidence/runtime-recovery-1631-case85-verified.json)
+passed on DeepSeek `6f5aadb`. The first observation saw a verified step-one
+checkpoint before the native cache descriptor was visible. The harness
+persisted the descriptor later. The same fixture continued at that boundary:
+the restart reused the same native DSH session for a later turn, ran steps
+two and three once, submitted the original Task, and sent one matching Matrix
+reply without new incoming messages.
+
+[Case86 Codex → Hermes CLI handoff](evidence/runtime-recovery-1631-case86-verified.json)
+passed with Codex `77e1215` and Hermes `282c457`. It verifies the original
+Task, independent effect counts, old stop before target creation, new
+execution generation, and one final Matrix reply without a new Matrix input.
+The proof retains the different source/target contract pins.

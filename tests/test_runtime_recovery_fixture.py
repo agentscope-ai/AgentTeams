@@ -157,6 +157,12 @@ class EffectReceiptTests(unittest.TestCase):
         self.assertEqual([entry["generation"] for entry in self.receipts()], [1, 2, 3])
         self.assertEqual([entry["step"] for entry in self.receipts()], ["one", "two", "three"])
 
+    def test_saved_reply_fixture_keeps_the_first_two_steps_in_the_source_generation(self):
+        self.task["recovery_fixture"]["pause_after_submit"] = True
+        self.invoke()
+        self.invoke()
+        self.assertEqual([(entry["step"], entry["generation"]) for entry in self.receipts()], [("one", 1), ("two", 1)])
+
     def test_next_step_retires_delivered_progress_and_its_device_binding(self):
         self.invoke()
         cp = self.task["execution"]["checkpoint"]

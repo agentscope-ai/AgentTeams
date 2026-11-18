@@ -39,7 +39,7 @@ if done == steps:
     print("ALL_STEPS_DONE: submit the same task ID with output/step-*.json")
     sys.exit(0)
 generation = task["execution"]["generation"]
-if ((done == ["one"] and generation == 1) or
+if ((done == ["one"] and generation == 1 and not task["recovery_fixture"].get("pause_after_submit")) or
         (task["recovery_fixture"].get("return_to_source") and done == ["one", "two"] and generation == 2)):
     print("PAUSED_AT_STEP_BOUNDARY: end this turn. Keep Task in_progress; a replacement will continue without a new message.")
     sys.exit(0)
@@ -50,6 +50,47 @@ prefix = os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/"
 
 def write(key, data):
     subprocess.run(["mc", "pipe", prefix + key], input=data, check=True, capture_output=True)
+
+
+def submit_and_wait_for_stop():
+    """Save the canonical report through TeamHarness while the native tool is running."""
+    if team != "recovery-team" or not re.fullmatch(r"recovery-1631-live-\d{8}-v\d+", fixture_prefix):
+        raise ValueError("The saved-reply barrier requires the isolated fixture")
+    home = Path("/root/agentteams-fs/agents/agent-a")
+    os.environ.update(TEAMHARNESS_RUNTIME_CONFIG=str(home / "runtime/runtime.yaml"),
+                      TEAMHARNESS_SHARED_DIR=str(home / "shared"))
+    from task_recovery import RecoveryConflict
+
+    server = Path("/opt/agentteams/plugins/teamharness/mcp/server.py")
+    if not server.is_file():
+        server = Path("/opt/agentteams/qwenpaw-builtin/plugins/teamharness/teamharness/mcp/server.py")
+    report = f"# Task {task_id}\n\nAll three fixture effects were verified.\n"
+    payload = {"taskId": task_id, "mainTaskId": task["main_task_id"], "status": "SUCCESS",
+               "summary": "All three fixture effects verified", "resultMarkdown": report,
+               "conclusions": ["Step one verified", "Step two verified", "Step three verified"]}
+    request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": "taskflow", "arguments": {"action": "submit_task", "payload": payload}}}
+    response = subprocess.run([sys.executable, str(server)], input=json.dumps(request) + "\n",
+                              check=True, capture_output=True, text=True, timeout=35)
+    outcome = json.loads(json.loads(response.stdout)["result"]["content"][0]["text"])
+    if not outcome.get("ok") or not outcome.get("synced"):
+        raise RuntimeError("TeamHarness did not persist the report: " + str(outcome.get("error")))
+    delivery = Recovery(device_delivery=True)
+    for _ in range(3):
+        snapshot = delivery.discover()
+        entry = next(row for row in snapshot["tasks"] if row["team_id"] == team and row["task"]["task_id"] == task_id)
+        try:
+            saved = delivery.claim(snapshot, entry)
+        except RecoveryConflict:
+            continue  # Leader acceptance may have updated the metadata ETag.
+        break
+    else:
+        raise RuntimeError("The fixture could not register the saved reply")
+    if saved["saved_result"] != report or saved["execution"]["checkpoint"]["delivery"] != "pending":
+        raise RuntimeError("The canonical report must be pending delivery")
+    print("FAULT_AFTER_SUBMIT: waiting for process termination before the Matrix reply", flush=True)
+    time.sleep(120)
+    raise RuntimeError("Fault-injection barrier expired without process termination")
 
 
 def source_was_read():
@@ -123,4 +164,6 @@ operation.update(state="verified", evidence="Independent effect ledger; persiste
 cp.update(version=cp["version"] + 1, completed_steps=done + [step], remaining_steps=steps[len(done) + 1:], operation=operation,
     artifacts=(cp.get("artifacts") or []) + [{"key": key, "sha256": digest, "size": len(data)}])
 recovery.checkpoint(task_id, team, cp)
+if cp["completed_steps"] == steps and task["recovery_fixture"].get("pause_after_submit"):
+    submit_and_wait_for_stop()
 print(json.dumps({"step": step, "checkpoint_version": cp["version"], "remaining_steps": cp["remaining_steps"], "sha256": digest}))

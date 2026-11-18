@@ -41,9 +41,9 @@ continuation pending verification.
 | Codex | [Pass 135](evidence/runtime-recovery-1631-case135-abrupt-restart-verified.json) | [Pass 162](evidence/runtime-recovery-1631-case162-expired-session-verified.json) | Case 01, real Matrix | [Parked 166](evidence/runtime-recovery-1631-case166-parked-effect.json) | [Rejected 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Pass 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Old owner denied 182](evidence/runtime-recovery-1631-case182-reassignment-verified.json) |
 | Hermes | [Pass 168](evidence/runtime-recovery-1631-case168-abrupt-restart-verified.json) | [Pass 130](evidence/runtime-recovery-1631-case130-expired-session-verified.json) | [Restart 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | [Verified, then resumed 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | Open | Open | [New owner submitted 182](evidence/runtime-recovery-1631-case182-reassignment-verified.json) |
 | QwenPaw | [Pass 171](evidence/runtime-recovery-1631-case171-abrupt-restart-verified.json) | [Pass 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | [Same-process retry 31](evidence/runtime-recovery-1631-case31-delivery.json) | Open | [Rejected 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | Open | Open |
-| DeepSeek | [Pass 137](evidence/runtime-recovery-1631-case137-abrupt-restart-verified.json) | [Pass 165](evidence/runtime-recovery-1631-case165-expired-session-verified.json) | Open | [Parked 170](evidence/runtime-recovery-1631-case170-parked-effect.json) | Open | Open | Open |
+| DeepSeek | [Pass 137](evidence/runtime-recovery-1631-case137-abrupt-restart-verified.json) | [Pass 165](evidence/runtime-recovery-1631-case165-expired-session-verified.json) | Open | [Parked 170](evidence/runtime-recovery-1631-case170-parked-effect.json) | [Rejected 183](evidence/runtime-recovery-1631-case183-cancelled-restart.json) | [Pass 183](evidence/runtime-recovery-1631-case183-cancelled-restart.json) | Open |
 | OpenClaw | [Pass 176](evidence/runtime-recovery-1631-case176-abrupt-restart-verified.json) | [Pass 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open | [Rejected 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open |
-| OpenHuman | [Pass 161](evidence/runtime-recovery-1631-case161-abrupt-restart-verified.json) | [Pass 181](evidence/runtime-recovery-1631-case181-expired-session-verified.json) | Open | Open | [Rejected 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open |
+| OpenHuman | [Pass 161](evidence/runtime-recovery-1631-case161-abrupt-restart-verified.json) | [Pass 181](evidence/runtime-recovery-1631-case181-expired-session-verified.json) | Open | [Parked 185](evidence/runtime-recovery-1631-case185-parked-effect.json) | [Rejected 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open |
 
 ## Source baseline
 
@@ -2257,3 +2257,30 @@ execution claim was rejected with HTTP 403. The new Hermes Worker
 acknowledged and submitted the same Task. Readback matched the one
 canonical report to the saved artifact, with zero additional room
 messages from other senders before delivery.
+
+
+[Case183 DeepSeek cancellation](evidence/runtime-recovery-1631-case183-cancelled-restart.json)
+passed after the native Worker committed step one and the Leader cancelled
+the Task. A competing process was rejected. The next actual Worker process
+did not discover or claim the cancelled Task, and the independent ledger
+kept exactly the pre-cancellation effect.
+
+[Case185 OpenHuman uncertain effect](evidence/runtime-recovery-1631-case185-parked-effect.json)
+interrupted a native tool after its first external effect and before its
+verified checkpoint. Generation 2 recovered the Task and kept it in
+`needs_verification`, with the original operation ID, one external effect,
+and no execution request from the new process. The driver first saw the
+old process's parked status. A readback after the new generation acquired
+the Task verified the same running replacement without another restart.
+
+`RECOVERY_E2E_FAULT=after-submit` selects a same-Harness restart after the
+native tool has run all three steps, submitted the canonical report through
+the packaged TeamHarness MCP server, and obtained a pending reply. Cutover
+checks there are zero matching Matrix reports and stops the still-running
+tool. The verifier requires the same saved artifact and reply transaction,
+one Matrix report, and no new effects, model-start events or incoming
+messages. [Case184](evidence/runtime-recovery-1631-case184-fixture-import.json)
+completed its effects in the original process after the test helper imported
+the wrong MCP package. It sent its report without a restart. The helper now
+uses the packaged stdio server entry point, including QwenPaw's bundled
+location.

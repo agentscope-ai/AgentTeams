@@ -1,0 +1,82 @@
+{
+  "passed": true,
+  "case": "183",
+  "task_id": "live-deepseek-harness-deepseek-harness-183",
+  "runtime": "deepseek-harness",
+  "core_revision": "cb08ece332da423eabc56204f150de7adee9bf85",
+  "harness_revision": "6f5aadb0963092f050202211281ed964ba94d070",
+  "image_id": "sha256:15386bc3717ca83f201d5d8cd4e81c3c114376982e995f76eeab8af5e7074725",
+  "original_execution": {
+    "generation": 1,
+    "instance_id": "docker/03e2ef26a5800659c57088bb8c23cccb53bf05f695738fe6f238fee9620cd8bd/2026-11-18T17:05:09.049797056Z",
+    "process_id": "7:1795021509354154568:de99ab19ad014fa399f15ec39dc6c22d",
+    "runtime": "deepseek-harness",
+    "state": "active",
+    "checkpoint": {
+      "version": 5,
+      "completed_steps": [
+        "one"
+      ],
+      "remaining_steps": [
+        "two",
+        "three"
+      ],
+      "operation": {
+        "id": "fixture:live-deepseek-harness-deepseek-harness-183:one",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=3a1585138ede79d06a403c1959a4660c6f833795bbbaa9b549230b213ff7c990; step=one; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-deepseek-harness-183/output/step-one.json",
+          "sha256": "3a1585138ede79d06a403c1959a4660c6f833795bbbaa9b549230b213ff7c990",
+          "size": 374
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-deepseek-harness-183/checkpoints/reply-f2cb5fd38a0dff559a514b3267ab9d6e23a84a64080d11dc89598913a73093af.txt",
+        "sha256": "f2cb5fd38a0dff559a514b3267ab9d6e23a84a64080d11dc89598913a73093af",
+        "size": 446
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:81f819d443f7c3e15f4204f042c0b98fa084644e9a0ced6644daed64284aa5a7",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "ic2yGOqWnJ"
+      },
+      "reply_event": "$bsKNh9QZVoZF5GF2jgfLQJEFXNWUIW-F0TL9qYHQPPM",
+      "saved_at": "2026-11-18T17:13:45.807470675Z"
+    },
+    "reply_generation": 1
+  },
+  "final_status": "cancelled",
+  "cancel_reason": "Cancel the disposable recovery Task after its first effect",
+  "competing_claim": {
+    "http_status": 409,
+    "reason": "worker runtime state changed: register this actual Worker start before execution",
+    "attempted_process_id": "fixture-competitor:31d6a565917c424da571b853cb3f49bd",
+    "owner": {
+      "instance_id": "docker/03e2ef26a5800659c57088bb8c23cccb53bf05f695738fe6f238fee9620cd8bd/2026-11-18T17:05:09.049797056Z",
+      "process_id": "7:1795021509354154568:de99ab19ad014fa399f15ec39dc6c22d",
+      "generation": 1
+    }
+  },
+  "restart_readback": {
+    "ready": true,
+    "instance_id": "docker/03e2ef26a5800659c57088bb8c23cccb53bf05f695738fe6f238fee9620cd8bd/2026-11-18T17:13:57.600419932Z",
+    "recoverable": false
+  },
+  "effects": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795022005606588143,
+      "generation": 1,
+      "instance_id": "docker/03e2ef26a5800659c57088bb8c23cccb53bf05f695738fe6f238fee9620cd8bd/2026-11-18T17:05:09.049797056Z",
+      "process_id": "7:1795021509354154568:de99ab19ad014fa399f15ec39dc6c22d",
+      "step": "one",
+      "task_id": "live-deepseek-harness-deepseek-harness-183",
+      "team_id": "recovery-team"
+    }
+  ]
+}

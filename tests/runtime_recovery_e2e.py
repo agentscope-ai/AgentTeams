@@ -47,12 +47,14 @@ EXPIRE_SESSION = any(os.getenv(key) == "1" for key in (
     "RECOVERY_E2E_EXPIRE_SESSION", "RECOVERY_E2E_EXPIRE_HERMES_SESSION"))
 ABRUPT_RESTART = os.getenv("RECOVERY_E2E_ABRUPT_RESTART") == "1"
 OPENHUMAN_PREAPPROVED = os.getenv("RECOVERY_E2E_OPENHUMAN_PREAPPROVED") == "1"
-if FAULT not in {"", "after-effect"}:
+if FAULT not in {"", "after-effect", "after-submit"}:
     raise ValueError("Unknown recovery fault injection")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
     raise ValueError("Select a packaged recovery Harness and replace/restart mode")
 if (MODE == "restart") != (SOURCE == TARGET):
     raise ValueError("Restart keeps the Harness; replacement switches between packaged Harnesses")
+if FAULT == "after-submit" and MODE != "restart":
+    raise ValueError("The saved-result fixture measures same-Harness restart")
 if OPERATOR_HANDOFF and MODE != "replace":
     raise ValueError("The operator handoff requires a target Harness")
 if RETURN_TO_SOURCE and (not OPERATOR_HANDOFF or (SOURCE, TARGET) != ("qwenpaw", "hermes") or FAULT):
@@ -217,6 +219,8 @@ print(json.dumps(any(row.get('event')=='runtime.ready' and datetime.datetime.fro
         "recovery_fixture": {"oracle_version": 4, "oracle_url": "http://" + PREFIX + "-oracle:8091"}}
     if FAULT == "after-effect":
         task["recovery_fixture"]["pause_after_effect"] = "one"
+    if FAULT == "after-submit":
+        task["recovery_fixture"]["pause_after_submit"] = True
     if os.getenv("RECOVERY_E2E_WAIT_SOURCE_READ") == "1":
         task["recovery_fixture"]["wait_for_source_read"] = True
     if oracle_proof()["effects"]:
@@ -228,6 +232,13 @@ print(json.dumps(any(row.get('event')=='runtime.ready' and datetime.datetime.fro
         task["recovery_fixture"]["return_to_source"] = True
         continuation = ("In generation 2, run the helper only for step two. " + paused_turn
                         + "\nIn generation 3, run the helper for step three.")
+    work_plan = f"In generation 1, run the helper only for step one. {paused_turn}\n{continuation}"
+    submit_plan = f"""When all three steps are complete, use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/{task_id}/output/step-one.json, shared/tasks/{task_id}/output/step-two.json, shared/tasks/{task_id}/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.
+Outputs are durable in the task's shared object-storage output/ directory. On OpenHuman, submit the existing relative deliverable paths through TeamHarness as soon as all three steps are committed. The helper has already persisted and verified these files. Do not use native file_read or a shell probe on the shared paths before submission. On the other Harnesses, pull the outputs to your task output/ directory before submission."""
+    if FAULT == "after-submit":
+        work_plan = ("Run the helper separately for steps one, two, and three in generation 1. "
+                     "The third invocation saves the canonical report and deliberately waits for restart before the reply.")
+        submit_plan = "Keep the third invocation running. Do not cancel it, submit again, or send a Matrix reply."
     spec = f"""You are executing a bounded real runtime-recovery acceptance task {task_id} in team {team}.
 Use your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.
 Unless your active Harness is OpenHuman, use mc cp to pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/{team}/shared/tasks/{task_id}/acceptance.py into your task scratch directory.
@@ -235,10 +246,8 @@ The acceptance.py helper owns the fixture:* operation identities and records bot
 Use your native terminal tool to run python3 acceptance.py {task_id} {team}. If your active Harness is OpenHuman, use its Shell tool with the single command agentteams-recovery-step {task_id} {team} instead. Use the command directly without cd, an interpreter, or a shell prefix. This is the same acceptance helper installed in the isolated test image.
 Each invocation executes ONE real persisted side effect and commits its checkpoint through the real Controller.
 Read the authoritative completed_steps. Never repeat a completed step or edit the fixture, ledger or checkpoint outside the helper.
-In generation 1, run the helper only for step one. {paused_turn}
-{continuation}
-When all three steps are complete, use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/{task_id}/output/step-one.json, shared/tasks/{task_id}/output/step-two.json, shared/tasks/{task_id}/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.
-Outputs are durable in the task's shared object-storage output/ directory. On OpenHuman, submit the existing relative deliverable paths through TeamHarness as soon as all three steps are committed. The helper has already persisted and verified these files. Do not use native file_read or a shell probe on the shared paths before submission. On the other Harnesses, pull the outputs to your task output/ directory before submission. Do not create a new task or send messages to other members.
+{work_plan}
+{submit_plan} Do not create a new task or send messages to other members.
 The external test driver will replace your container at a step boundary without sending any new Matrix message.
 """
     if task["recovery_fixture"].get("wait_for_source_read"):
@@ -552,8 +561,9 @@ def evidence(*, emit=True):
             "running": item["State"]["Running"], "pid": item["State"]["Pid"],
             "started_at": item["State"]["StartedAt"], "finished_at": item["State"]["FinishedAt"]})
     ledger = step_ledger(task)
-    result = {"recorded_at": time.time(), "task": task, "ledger": ledger, "instances": instances, "native_sessions": native_sessions()}
-    if FAULT == "after-effect":
+    result = {"recorded_at": time.time(), "task": task, "ledger": ledger, "instances": instances,
+              "native_sessions": {} if FAULT == "after-submit" else native_sessions()}
+    if FAULT:
         result["tool_processes"] = fixture_tool_processes()
     path = Path("/tmp/1631-live-evidence.json")
     path.write_text(json.dumps(result, indent=2))
@@ -595,6 +605,28 @@ while True:
     return json.loads(docker("exec", "-i", "-e", "PYTHONPATH=/opt/agentteams/scripts/lib",
         PREFIX + "-worker-agent-a", "python3", "-c", code,
         text=json.dumps({"room": task["room_id"], "task": TASK_ID})))
+
+
+def report_events(task, digest, since_ms=0):
+    code = '''import hashlib,json,pathlib,sys,urllib.parse
+from agentteams_receipts import credentials,matrix_request
+p=json.load(sys.stdin)
+request=matrix_request(*credentials(pathlib.Path("/root/agentteams-fs/agents/agent-a")))
+room="/_matrix/client/v3/rooms/"+urllib.parse.quote(p["room"],safe="")
+messages=[]; cursor=None
+while True:
+ page=request("GET",room+"/messages?dir=b&limit=100"+("&from="+urllib.parse.quote(cursor,safe="") if cursor else ""))
+ messages.extend(row for row in page["chunk"] if row.get("type")=="m.room.message")
+ if not page["chunk"] or not page.get("end") or page["end"]==cursor: break
+ cursor=page["end"]
+reports=[row for row in messages if hashlib.sha256(row.get("content",{}).get("body","").encode()).hexdigest()==p["digest"]]
+latest=max((row["origin_server_ts"] for row in reports),default=0)
+print(json.dumps({"reports":[{"event_id":row["event_id"],"sender":row["sender"],"timestamp_ms":row["origin_server_ts"]} for row in reports],
+ "external_inputs":[row["event_id"] for row in messages if p["since_ms"]<=row["origin_server_ts"]<=latest and row["sender"]!="@agent-a:recovery-1631.test"]}))
+'''
+    return json.loads(docker("exec", "-i", "-e", "PYTHONPATH=/opt/agentteams/scripts/lib",
+        PREFIX + "-worker-agent-a", "python3", "-c", code,
+        text=json.dumps({"room": task["room_id"], "digest": digest, "since_ms": since_ms})))
 
 
 def same_step_boundary(previous, current):
@@ -726,7 +758,12 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
         raise RuntimeError("Cutover already has a boundary snapshot; inspect it instead of replacing it")
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     cp = task.get("execution", {}).get("checkpoint", {})
-    if FAULT == "after-effect":
+    if FAULT == "after-submit":
+        assert_native_submission(task)
+        if (cp.get("completed_steps") != ["one", "two", "three"] or cp.get("delivery") != "pending"
+                or not cp.get("result") or not fixture_tool_processes()):
+            raise RuntimeError("Requires an unfinished native tool after report persistence")
+    elif FAULT == "after-effect":
         if (task["status"] != "in_progress" or cp.get("completed_steps") != []
                 or cp.get("operation", {}).get("state") != "started"
                 or len(step_ledger(task)) != 1 or not fixture_tool_processes()):
@@ -779,6 +816,9 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
     before["tool_processes"] = fixture_tool_processes()
     if before["instances"][1]["id"] != old["Id"] or before["task"]["execution"] != task["execution"]:
         raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
+    if FAULT == "after-submit":
+        before["matrix"] = report_events(task, cp["result"]["sha256"])
+        assert before["tool_processes"] and not before["matrix"]["reports"]
     if os.getenv("RECOVERY_E2E_VERIFY_COMPETING_CLAIM") == "1":
         before["competing_claim"] = competing_claim()
         assert all(value == task["execution"][key] for key, value in before["competing_claim"]["owner"].items())
@@ -1077,8 +1117,71 @@ def assert_restarted_native(original, resumed, before, *, descriptor_refs=None):
         assert resumed_ref == old_ref and resumed == original, "valid native Task session was not reused"
 
 
+def verify_saved_reply():
+    """Check real reply-only startup after stopping the tool that saved the report."""
+    assert FAULT == "after-submit"
+    before = json.loads(Path(f"/tmp/1631-live-{CASE}-before-cutover.json").read_text())
+    task = api("GET", f"tasks/{TASK_ID}/meta?team=recovery-team")
+    original = before["task"]
+    old, current = original["execution"], task["execution"]
+    pending, delivered = old["checkpoint"], current["checkpoint"]
+    assert task["task_id"] == original["task_id"] == TASK_ID and task["submission_id"] == original["submission_id"]
+    assert_native_submission(task)
+    assert current["generation"] == old["generation"] + 1 and current["process_id"] != old["process_id"]
+    assert current["instance_id"] != old["instance_id"] and current["runtime"] == TARGET
+    assert pending["delivery"] == "pending" and delivered["delivery"] == "delivered"
+    assert delivered["version"] > pending["version"]
+    assert pending["reply_txn"] == delivered["reply_txn"] and pending["result"] == delivered["result"]
+    for key in ("completed_steps", "remaining_steps", "operation", "artifacts"):
+        assert pending[key] == delivered[key]
+    assert before["tool_processes"] and not fixture_tool_processes() and not before["matrix"]["reports"]
+    assert before["source_read_receipt"]
+    proof = oracle_proof()
+    ledger = proof["effects"]
+    assert ledger == before["ledger"] and [row["step"] for row in ledger] == ["one", "two", "three"]
+    assert all(row["process_id"] == old["process_id"] for row in proof["calls"])
+    for row in ledger:
+        assert row["process_id"] == old["process_id"]
+        assert_effect_authorization(proof, row)
+    artifacts = delivered["artifacts"] + [delivered["result"]]
+    for artifact in artifacts:
+        raw = subprocess.check_output(["docker", "exec", CONTROLLER, "mc", "cat", "agentteams/recovery-1631/" + artifact["key"]])
+        assert len(raw) == artifact["size"] and hashlib.sha256(raw).hexdigest() == artifact["sha256"]
+    order, source, target = cutover_lifecycle(before, "")
+    name = PREFIX + "-worker-agent-a"
+    started, image = docker("inspect", "--format", "{{.State.StartedAt}} {{.Image}}", name).split()
+    assert current["instance_id"] == f"docker/{target['ID']}/{started}"
+    matrix = report_events(task, delivered["result"]["sha256"], order["die"] // 1000000)
+    reply, = matrix["reports"]
+    assert reply["event_id"] == delivered["reply_event"] and reply["sender"] == task["assigned_to"]
+    assert not matrix["external_inputs"]
+    code = '''from datetime import datetime
+import json,pathlib,sys
+start=datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
+rows=[json.loads(line) for line in pathlib.Path('/var/log/agentteams/workers/agent-a/events.jsonl').read_text().splitlines()]
+print(json.dumps(sorted({x["event"] for x in rows if x.get("timestamp") and datetime.fromisoformat(x["timestamp"])>=start})))
+'''
+    events = json.loads(docker("exec", name, "python3", "-c", code, started))
+    assert "runtime.ready" in events
+    assert not {"turn.begin", "model.begin", "inference.begin"} & set(events)
+    captured = {"case": CASE, "task_id": TASK_ID, "scope": "saved report delivered on restart without rerunning effects",
+                "passed": True, "source_revision": source["Attributes"]["io.agentteams.recovery.harness-sha"],
+                "target_revision": target["Attributes"]["io.agentteams.recovery.harness-sha"],
+                "core_revision": docker("inspect", "--format", '{{index .Config.Labels "io.agentteams.recovery.core-sha"}}', CONTROLLER),
+                "shared_revision": target["Attributes"]["io.agentteams.recovery.core-sha"], "target_image_id": image,
+                "source_read_receipt": before["source_read_receipt"], "source_tool_processes": before["tool_processes"],
+                "execution_before": old, "execution_after": current, "ledger": ledger, "artifacts_verified": artifacts,
+                "matrix_before_restart": before["matrix"], "matrix_after_restart": matrix, "docker_order_ns": order,
+                "target_events": events, "driver_sha256": DRIVER_SHA256}
+    path = Path(f"/tmp/1631-live-{CASE}-saved-reply-verified.json")
+    path.write_text(json.dumps(captured, indent=2) + "\n")
+    print(f"Verified reply-only restart in {path}")
+
+
 def verify():
     """Read back real task, storage, native receipt and Matrix evidence."""
+    if FAULT == "after-submit":
+        return verify_saved_reply()
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
     execution, before = task["execution"], json.loads(Path("/tmp/1631-live-" + CASE + "-before-cutover.json").read_text())
     cp = execution["checkpoint"]
@@ -1623,5 +1726,6 @@ if __name__ == "__main__":
      "watch-dashboard-cutover": lambda: cutover(watch_dashboard=True),
      "return-cutover": lambda: cutover(watch_return=True, cli_return=True),
      "observe-return-cursors": observe_return_cursors, "verify-parked-effect": verify_parked_effect,
+     "verify-saved-reply": verify_saved_reply,
      "verify-cancelled-restart": verify_cancelled_restart,
      "verify": verify}[sys.argv[1]]()

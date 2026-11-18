@@ -217,6 +217,8 @@ print(json.dumps(any(row.get('event')=='runtime.ready' and datetime.datetime.fro
         "recovery_fixture": {"oracle_version": 4, "oracle_url": "http://" + PREFIX + "-oracle:8091"}}
     if FAULT == "after-effect":
         task["recovery_fixture"]["pause_after_effect"] = "one"
+    if os.getenv("RECOVERY_E2E_WAIT_SOURCE_READ") == "1":
+        task["recovery_fixture"]["wait_for_source_read"] = True
     if oracle_proof()["effects"]:
         raise RuntimeError("This Task already has independent effects; retain its proof")
     paused_turn = ("Once the helper commits the step, end the turn with a short progress reply. Leave the Task "

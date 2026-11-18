@@ -95,6 +95,27 @@ class EffectReceiptTests(unittest.TestCase):
     def receipts(self):
         return self.ledger.proof("team", "stable")["effects"]
 
+    def test_source_step_waits_for_its_native_assignment_read(self):
+        worker = "@worker:test"
+        self.task.update(room_id="!room:test", assigned_to=worker, notifyTxn="dispatch-1")
+        self.task["recovery_fixture"]["wait_for_source_read"] = True
+        assignment = {"event_id": "$source", "type": "m.room.message", "content": {
+            "org.agentteams.coordination": {"channel_meta": {"teamharness_coordination": {
+                "kind": "task_assigned", "task_id": "stable", "delivery_id": "dispatch-1"}}}}}
+        receipt = {"type": "receipt", "sender": worker,
+                   "content": {"status": "read", "m.relates_to": {"event_id": "$source"}}}
+        pages = iter([[assignment, {**receipt, "sender": "@other:test"}], [assignment, receipt]])
+
+        def get_events(*arguments):
+            self.assertEqual(self.receipts(), [])
+            return {"chunk": next(pages)}
+
+        receipts = SimpleNamespace(RECEIPT_TYPE="receipt", credentials=lambda _: ("server", "key"),
+                                   matrix_request=lambda *_: get_events)
+        with patch.dict(sys.modules, {"agentteams_receipts": receipts}), patch("time.sleep"):
+            self.invoke()
+        self.assertEqual([row["step"] for row in self.receipts()], ["one"])
+
     def test_openhuman_command_accepts_a_three_digit_fixture_task(self):
         command = Path(self.directory.name) / "agentteams-recovery-step"
         command.symlink_to(Path(__file__).parent / "fixtures/runtime_recovery_step.py")

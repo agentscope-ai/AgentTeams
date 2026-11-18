@@ -18,10 +18,10 @@ the image and shared-contract pins actually tested.
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Pass 144](evidence/runtime-recovery-1631-case144-verified.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | [Pass 150](evidence/runtime-recovery-1631-case150-verified.json) |
-| OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Pass 138](evidence/runtime-recovery-1631-case138-verified.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
+| OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Pass 138](evidence/runtime-recovery-1631-case138-verified.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | [Pass 159](evidence/runtime-recovery-1631-case159-verified.json) |
 | OpenHuman | [Pass 147](evidence/runtime-recovery-1631-case147-verified.json) | [Pass 152](evidence/runtime-recovery-1631-case152-verified.json) | [Pass 154](evidence/runtime-recovery-1631-case154-verified.json) | [Pass 151](evidence/runtime-recovery-1631-case151-verified.json) | — | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
 
-**6/6 normal restart lanes and 27/30 directed handoffs have passed.** A dash
+**6/6 normal restart lanes and 28/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -2048,3 +2048,20 @@ then ages the descriptor in the isolated test stack, leaving the native
 session and Task intact. The verifier requires a different, proven native
 session after the restart, plus the original Task, effects, and reply
 checks. The Hermes-specific option remains valid for reproducing case130.
+
+[Case159 OpenClaw → OpenHuman](evidence/runtime-recovery-1631-case159-verified.json)
+passed on Controller `6421981f`, OpenClaw `c6dcf56`, and OpenHuman `a7fd8fe`.
+The source read the Matrix assignment and committed step one. Docker
+recorded the old instance stopping and being removed before the actual
+target started. OpenHuman created a native session for the same Task and
+advanced checkpoint 4 to 11 in generation 2. The three effects
+executed once, four stored hashes matched, and one final Matrix reply
+followed zero new incoming messages.
+
+[Case160 QwenPaw → OpenHuman](evidence/runtime-recovery-1631-case160-late-source-read.json)
+observed the source read 19.715 seconds after the first effect. The Task
+and checkpoint remained intact and no replacement was requested. The
+optional `RECOVERY_E2E_WAIT_SOURCE_READ=1` fixture setting waits for the
+real source's read of its matched assignment before executing the first
+synthetic effect. This reproduces the requested read-before-step boundary
+while normal Worker startup discovery continues independently.

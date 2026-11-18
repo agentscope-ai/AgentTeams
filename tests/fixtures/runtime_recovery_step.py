@@ -52,6 +52,35 @@ def write(key, data):
     subprocess.run(["mc", "pipe", prefix + key], input=data, check=True, capture_output=True)
 
 
+def wait_for_source_read():
+    from agentteams_receipts import RECEIPT_TYPE, credentials, matrix_request
+
+    request = matrix_request(*credentials(Path("/root/agentteams-fs/agents/agent-a")))
+    room = urllib.parse.quote(task["room_id"], safe="")
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        rows = request("GET", f"/_matrix/client/v3/rooms/{room}/messages?dir=b&limit=100")["chunk"]
+        assignments, reads = set(), set()
+        for row in rows:
+            content = row.get("content", {})
+            if (row.get("type") == RECEIPT_TYPE and row.get("sender") == task["assigned_to"]
+                    and content.get("status") == "read"):
+                reads.add(content.get("m.relates_to", {}).get("event_id"))
+            notice = (content.get("org.agentteams.coordination") or {}).get("channel_meta", {}).get("teamharness_coordination", {})
+            if (row.get("type") == "m.room.message" and notice.get("kind") == "task_assigned"
+                    and notice.get("task_id") == task_id and notice.get("delivery_id") == task["notifyTxn"]):
+                assignments.add(row["event_id"])
+        if assignments & reads:
+            return
+        time.sleep(2)
+    raise RuntimeError("The isolated fixture did not observe the source native Matrix read before step one")
+
+
+if generation == 1 and step == "one" and task["recovery_fixture"].get("wait_for_source_read"):
+    # Task discovery and Matrix sync can race. Gate only the synthetic effect.
+    wait_for_source_read()
+
+
 operation = {"id": f"fixture:{task_id}:{step}", "state": "started"}
 
 

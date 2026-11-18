@@ -1520,3 +1520,13 @@ session was not reused, so this run does not count as a successful normal
 restart/reuse lane. OpenClaw #10 `a5f6b21` uses the common session descriptor
 and reports the native validator process outcome. The new candidate still
 needs a live test.
+
+[Case99 Codex → QwenPaw CLI handoff](evidence/runtime-recovery-1631-case99-verified.json)
+passed on Controller `6421981f`, Codex `ef12936` and QwenPaw `763877d`.
+Codex saved step one at checkpoint 5. QwenPaw recovered the same Task at
+generation 2 and checkpoint 12, with the real SDK session, one effect per
+step and one Matrix report. No new messages arrived after source shutdown.
+The new Controller recorded about 3.6 seconds from the source boundary
+snapshot to Docker exit and another 4.7 seconds from exit to target
+creation. This is one handoff measurement, not a distribution across
+Harnesses or a measure of the time to finish inference.

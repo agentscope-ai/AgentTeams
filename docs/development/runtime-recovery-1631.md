@@ -2065,3 +2065,12 @@ optional `RECOVERY_E2E_WAIT_SOURCE_READ=1` fixture setting waits for the
 real source's read of its matched assignment before executing the first
 synthetic effect. This reproduces the requested read-before-step boundary
 while normal Worker startup discovery continues independently.
+
+[Case161 OpenHuman abrupt restart](evidence/runtime-recovery-1631-case161-abrupt-restart-verified.json)
+passed on Controller `6421981f`, OpenHuman `a7fd8fe` and shared contract
+`cdc2800c`. The source exited 137 after an explicit SIGKILL. Docker
+started the same container with a different process identity. OpenHuman
+reused the matching native session and continued the original Task from
+checkpoint 5 to 12 in generation 2. The independent ledger recorded
+three single effects, four stored hashes and one final Matrix reply
+with no new inputs.

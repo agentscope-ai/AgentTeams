@@ -18,10 +18,14 @@ def owned(recovery, identity):
 def execute(request):
     if not enabled():
         raise RecoveryConflict('Worker process recovery is not configured')
-    recovery = Recovery()
+    recovery = Recovery(device_delivery=request.get("device_delivery") is True)
     action = request['action']
     if not isinstance(action, str):
         raise ValueError('Recovery action must be a string')
+    if action == 'recovery.scanned':
+        from worker_handoff import recovery_scanned
+        recovery_scanned()
+        return True
     if action.startswith('session.'):
         from worker_sessions import WorkerSessions
         sessions = WorkerSessions(request['runtime'], recovery=recovery)
@@ -88,6 +92,13 @@ def execute(request):
     task = owned(recovery, identity)
     if action == 'current':
         return {'task': task, 'checkpoint_digest': Recovery.digest(task['execution'].get('checkpoint'))}
+    if action == 'plan_reply':
+        from worker_matrix_delivery import plan_saved
+        cp = task['execution'].get('checkpoint') or {}
+        mode, pending = plan_saved(cp, request['text'], request['sender'], request['device'])
+        if pending is not None:
+            recovery.checkpoint(identity['task_id'], identity['team_id'], pending)
+        return {'mode': mode, 'reply_txn': cp['reply_txn'], 'legacy': not cp.get('reply_attempt')}
     if action == 'prepare_reply':
         text = request['text']
         cp = task['execution'].get('checkpoint') or {}

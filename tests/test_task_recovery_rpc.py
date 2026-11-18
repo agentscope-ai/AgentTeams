@@ -1,4 +1,5 @@
 """Native bridge must preserve shared ownership and delivery-only fences."""
+import hashlib
 from pathlib import Path
 import sys
 import unittest
@@ -43,6 +44,21 @@ class RecoveryRPCTest(unittest.TestCase):
         self.recovery.current.return_value = None
         with self.assertRaises(rpc.RecoveryConflict):
             rpc.execute({'action': 'current', 'identity': self.identity})
+
+    def test_native_sender_must_bind_device_before_publish_and_verify_after_device_change(self):
+        execution = self.task['execution']
+        cp = dict(version=4, delivery='pending', reply_txn='txn',
+                  result={'size': 2, 'sha256': hashlib.sha256(b'ok').hexdigest()}, reply_attempt={'state': 'ready'})
+        execution['checkpoint'] = cp
+        request = dict(action='plan_reply', identity=self.identity, device_delivery=True, text='ok', sender='@worker:d', device='A')
+        self.assertEqual(rpc.execute(request), {'mode': 'send', 'reply_txn': 'txn', 'legacy': False})
+        committed = self.recovery.checkpoint.call_args.args[2]
+        self.assertEqual(committed['reply_attempt'], {'state': 'sending', 'user_id': '@worker:d', 'device_id': 'A'})
+        execution['checkpoint'] = committed
+        self.assertEqual(rpc.execute(dict(request, device='B'))['mode'], 'find')
+        self.recovery.checkpoint.assert_called_once()
+        with self.assertRaises(rpc.RecoveryConflict):
+            rpc.execute(dict(request, text='different'))
 
     def test_empty_native_final_requires_a_submitted_durable_report(self):
         with self.assertRaisesRegex(rpc.RecoveryConflict, 'durable result'):

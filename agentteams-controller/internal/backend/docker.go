@@ -733,6 +733,8 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 			StartedAt string `json:"StartedAt"`
 			PID       *int   `json:"Pid"`
 			Running   *bool  `json:"Running"`
+			OOMKilled bool   `json:"OOMKilled"`
+			ExitCode  int    `json:"ExitCode"`
 		} `json:"State"`
 	}
 	if err := json.Unmarshal(body, &inspectResp); err != nil {
@@ -743,11 +745,21 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 	if inspectResp.ID != "" && inspectResp.State.StartedAt != "" {
 		instanceID = inspectResp.ID + "/" + inspectResp.State.StartedAt
 	}
+	status := normalizeDockerStatus(inspectResp.State.Status)
+	var message string
+	if status == StatusStopped {
+		if inspectResp.State.OOMKilled {
+			message = "Container ran out of memory (OOMKilled)."
+		} else if inspectResp.State.ExitCode != 0 {
+			message = fmt.Sprintf("Container exited with code %d.", inspectResp.State.ExitCode)
+		}
+	}
 	return &WorkerResult{
 		Name:                name,
 		Backend:             "docker",
 		DeploymentMode:      DeployLocal,
-		Status:              normalizeDockerStatus(inspectResp.State.Status),
+		Status:              status,
+		Message:             message,
 		ContainerID:         inspectResp.ID,
 		InstanceID:          instanceID,
 		Runtime:             inspectResp.Config.Labels[v1beta1.LabelRuntime],

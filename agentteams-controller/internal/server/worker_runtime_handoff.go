@@ -9,9 +9,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
@@ -53,7 +55,11 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 		if etag != "" {
 			w.Header().Set("ETag", `"`+etag+`"`)
 		}
-		httputil.WriteJSON(w, http.StatusOK, state)
+		status := service.WorkerRuntimeStatus{WorkerRuntimeState: *state}
+		if r.Method == http.MethodGet {
+			status.TargetFailure = h.handoffTargetFailure(r.Context(), worker.Name, state.Handoff)
+		}
+		httputil.WriteJSON(w, http.StatusOK, status)
 	}
 	if r.Method == http.MethodGet {
 		respond(store.Load(r.Context(), name))
@@ -154,6 +160,31 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	respond(store.Preflight(r.Context(), name, input.RequestID, input.Target, image, start, expected))
+}
+
+func (h *WorkerMatrixHandler) handoffTargetFailure(ctx context.Context, name string, op *service.WorkerHandoff) string {
+	if op == nil || (op.Phase != "creating" && op.Phase != "recovering") || h.deps.Backend == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	backendName, _, _ := strings.Cut(op.Source.InstanceID, "/")
+	wb, err := h.deps.Backend.GetWorkerBackend(ctx, backendName)
+	if err != nil {
+		return ""
+	}
+	status, err := wb.Status(ctx, name)
+	if err != nil || status == nil || status.HandoffLabel != op.TargetLabel() || status.Runtime != op.TargetRuntime {
+		return ""
+	}
+	switch status.Status {
+	case backend.StatusStopped, backend.StatusFailed:
+		if status.Message != "" {
+			return status.Message
+		}
+		return "Target Worker is " + string(status.Status) + "."
+	}
+	return ""
 }
 
 // SelfHandoff exposes the registered target to its startup supervisor.

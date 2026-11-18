@@ -119,6 +119,37 @@ func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(
 	if w := call(http.MethodPost, req, "*"); w.Code != 200 || w.Header().Get("ETag") != etag {
 		t.Fatalf("offline duplicate %d %s", w.Code, w.Body)
 	}
+	runtimeStore := service.WorkerRuntimeStore{Storage: store}
+	_, stoppedETag, err := runtimeStore.AdvanceLifecycle(t.Context(), "stable-name", "first", "stopping", "stopped", strings.Trim(etag, `"`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creating, creatingETag, err := runtimeStore.AdvanceLifecycle(t.Context(), "stable-name", "first", "stopped", "creating", stoppedETag, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &backend.WorkerResult{Status: backend.StatusStopped, Runtime: "codex", HandoffLabel: "foreign",
+		Message: "Container ran out of memory (OOMKilled)."}
+	b.StatusFn = func(_ context.Context, name string) (*backend.WorkerResult, error) {
+		if name != "member-cr" {
+			t.Fatalf("target status used storage name %q", name)
+		}
+		return target, nil
+	}
+	if w := call(http.MethodGet, "", ""); w.Code != 200 || strings.Contains(w.Body.String(), "target_failure") {
+		t.Fatalf("foreign target leaked into readback %d %s", w.Code, w.Body)
+	}
+	target.HandoffLabel = creating.Handoff.TargetLabel()
+	w := call(http.MethodGet, "", "")
+	if w.Code != 200 || w.Header().Get("ETag") != `"`+creatingETag+`"` ||
+		!strings.Contains(w.Body.String(), `"phase":"creating"`) ||
+		!strings.Contains(w.Body.String(), `"target_failure":"Container ran out of memory (OOMKilled)."`) {
+		t.Fatalf("failed target missing from readback %d %s", w.Code, w.Body)
+	}
+	if _, tag, err := runtimeStore.Load(t.Context(), "stable-name"); err != nil || tag != creatingETag {
+		t.Fatalf("target diagnostic changed persistent state %q %v", tag, err)
+	}
+
 	caller.ServiceAccountNamespace = "other"
 	if w := call(http.MethodGet, "", ""); w.Code != 403 {
 		t.Fatalf("foreign operator response %d", w.Code)

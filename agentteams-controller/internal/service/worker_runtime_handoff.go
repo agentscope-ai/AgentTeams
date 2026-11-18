@@ -31,6 +31,12 @@ type WorkerRuntimeState struct {
 	Handoff       *WorkerHandoff `json:"handoff,omitempty"`
 }
 
+// WorkerRuntimeStatus adds the observed target diagnostic to operator readback.
+type WorkerRuntimeStatus struct {
+	WorkerRuntimeState
+	TargetFailure string `json:"target_failure,omitempty"`
+}
+
 type WorkerHandoff struct {
 	ID                   string          `json:"id"`
 	Phase                string          `json:"phase"`

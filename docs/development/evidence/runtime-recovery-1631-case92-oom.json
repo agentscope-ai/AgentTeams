@@ -1,0 +1,59 @@
+{
+  "case": "92",
+  "task_id": "live-hermes-openclaw-92",
+  "task_status": "in_progress",
+  "execution": {
+    "runtime": "hermes",
+    "generation": 1
+  },
+  "checkpoint": {
+    "version": 6,
+    "completed_steps": [
+      "one"
+    ],
+    "remaining_steps": [
+      "two",
+      "three"
+    ]
+  },
+  "handoff": {
+    "phase": "creating",
+    "target_runtime": "openclaw",
+    "target_admitted": false
+  },
+  "target": {
+    "image_id": "sha256:1b3131caeedf1a034927b412d55ec421a4342a395752fba9040837e4d17745de",
+    "container_id": "c5a2b93a7a0a7086bc09c5439c8f74db3683449a1cbfc81ecefd966a2855e78a",
+    "sources": {
+      "core-sha": "52a3659b719abb78c17368ce020403c442d4e5db",
+      "harness-sha": "957876cad91fd85ba64916ebdf8e2980f51d8ba2"
+    },
+    "state": {
+      "Status": "exited",
+      "OOMKilled": true,
+      "ExitCode": 137
+    }
+  },
+  "lifecycle": [
+    {
+      "event": "die",
+      "id": "5f3f8f1366a90e62250ed342a8d3bfdf4d35609f56685915346e82da27273ec3",
+      "time_ns": 1794993923496879981
+    },
+    {
+      "event": "destroy",
+      "id": "5f3f8f1366a90e62250ed342a8d3bfdf4d35609f56685915346e82da27273ec3",
+      "time_ns": 1794993925737181543
+    },
+    {
+      "event": "create",
+      "id": "c5a2b93a7a0a7086bc09c5439c8f74db3683449a1cbfc81ecefd966a2855e78a",
+      "time_ns": 1794993929987150756
+    },
+    {
+      "event": "start",
+      "id": "c5a2b93a7a0a7086bc09c5439c8f74db3683449a1cbfc81ecefd966a2855e78a",
+      "time_ns": 1794993930142759325
+    }
+  ]
+}

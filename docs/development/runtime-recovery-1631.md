@@ -1452,3 +1452,10 @@ checkpoint version 5 and continued the original Task at generation 2. The
 final checkpoint reached version 13. The independent ledger records one
 effect per step. The verifier read back all three artifacts, the stored
 result, and one matching Matrix reply with zero new messages after shutdown.
+
+[Case92 Hermes → OpenClaw startup failure](evidence/runtime-recovery-1631-case92-oom.json)
+used the rebuilt OpenClaw image from `957876c` with common contract
+`52a3659b`. The source died and was removed before the target was created.
+Docker marked the target OOM-killed with exit code 137. The handoff remained
+in `creating` and the original Task remained in progress at generation 1,
+checkpoint 6, with step one complete. The target never claimed the Task.

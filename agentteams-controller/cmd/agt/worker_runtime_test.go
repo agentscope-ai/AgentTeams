@@ -69,15 +69,17 @@ func TestWorkerRuntimeStatusOnlyReadsCurrentOperation(t *testing.T) {
 		if r.Method != "GET" {
 			t.Errorf("status mutated state")
 		}
-		fmt.Fprint(w, `{"handoff":{"id":"saved","phase":"recovering","target_runtime":"qwenpaw"}}`)
+		fmt.Fprint(w, `{"handoff":{"id":"saved","phase":"recovering","target_runtime":"qwenpaw"},"target_failure":"Container ran out of memory (OOMKilled)."}`)
 	}))
 	defer s.Close()
 	t.Setenv("AGENTTEAMS_CONTROLLER_URL", s.URL)
-	var out bytes.Buffer
-	cmd := workerCmd()
-	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"runtime-status", "--name", "alice", "-o", "json"})
-	if err := cmd.Execute(); err != nil || !strings.Contains(out.String(), "recovering") {
-		t.Fatalf("out=%s err=%v", out.String(), err)
+	for _, format := range [][]string{nil, {"-o", "json"}} {
+		var out bytes.Buffer
+		cmd := workerCmd()
+		cmd.SetOut(&out)
+		cmd.SetArgs(append([]string{"runtime-status", "--name", "alice"}, format...))
+		if err := cmd.Execute(); err != nil || !strings.Contains(out.String(), "recovering") || !strings.Contains(out.String(), "OOMKilled") {
+			t.Fatalf("out=%s err=%v", out.String(), err)
+		}
 	}
 }

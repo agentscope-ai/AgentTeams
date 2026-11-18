@@ -37,7 +37,7 @@ func workerRuntimeCmd(switchRuntime bool) *cobra.Command {
 			return err
 		}
 		etag := resp.Header.Get("ETag")
-		var state service.WorkerRuntimeState
+		var state service.WorkerRuntimeStatus
 		if err = decodeJSONResponse(resp, &state); err != nil {
 			return err
 		}
@@ -63,6 +63,7 @@ func workerRuntimeCmd(switchRuntime bool) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("handoff %s: %w", requestID, err)
 			}
+			state = service.WorkerRuntimeStatus{}
 			if err = decodeJSONResponse(resp, &state); err != nil {
 				return fmt.Errorf("handoff %s: %w", requestID, err)
 			}
@@ -72,6 +73,9 @@ func workerRuntimeCmd(switchRuntime bool) *cobra.Command {
 		}
 		if op := state.Handoff; op != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "worker/%s %s → %s  phase=%s  request=%s\n", name, op.Source.Runtime, op.TargetRuntime, op.Phase, op.ID)
+			if state.TargetFailure != "" {
+				fmt.Fprintln(cmd.OutOrStdout(), state.TargetFailure)
+			}
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "worker/%s has no recorded Harness handoff\n", name)
 		}

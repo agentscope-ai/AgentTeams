@@ -1388,3 +1388,11 @@ do not increase the directed switch count:
   explicitly configured shell mode.
 - Hermes → OpenClaw stopped the old instance before creating the target.
   Docker marked the target OOM-killed before it claimed the Task.
+
+[Case80 Hermes → Codex CLI handoff](evidence/runtime-recovery-1631-case80-verified.json)
+passed with Codex `77e1215`. The read-only verifier checks the same Task through
+generation 1 → 2, steps one through three exactly once, actual Codex rollout and
+tool output, matching durable artifacts and one final Matrix reply with no
+new incoming message after shutdown. The local source and target images
+identify different Core contract snapshots in the evidence. This result adds
+one directed lane and does not claim the aligned full matrix.

@@ -42,7 +42,9 @@ def rollout_facts(home, thread, turn, marker, room):
 
 def collect(task_id, team, room, generation):
     import yaml
-    runtime = Path(os.environ["TEAMHARNESS_RUNTIME_CONFIG"])
+    # docker exec does not inherit variables exported by the entrypoint.
+    worker_home = Path(os.getenv("AGENTTEAMS_WORKER_HOME") or "/root/agentteams-fs/agents/agent-a")
+    runtime = Path(os.getenv("TEAMHARNESS_RUNTIME_CONFIG") or worker_home / "runtime/runtime.yaml")
     config = yaml.safe_load(runtime.read_text())
     marker = f"recovery:{team}/{task_id}:{generation}"
     journal = runtime.parent / "codex-bridge-state.json"

@@ -258,13 +258,13 @@ func TestTaskRecoveryPendingReplyCannotBeReplacedOrDropped(t *testing.T) {
 	if err := h.validateCheckpoint(t.Context(), taskMetaKey, old, next); err != nil {
 		t.Fatalf("same saved reply must accept delivery acknowledgement: %v", err)
 	}
-	// Only the original pending-to-delivered CAS seals the turn. Any later
-	// claim or checkpoint invalidates it, even if the old receipt remains.
+	// A scan can reclaim its own generation without starting a new native turn.
+	// A checkpoint that copies an old receipt cannot seal more work.
 	owner := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
 	h.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
 		return "instance", "codex", nil
 	}
-	initial := taskExecution{Generation: 3, InstanceID: "instance", ProcessID: "proc", Runtime: "codex", State: "active", Checkpoint: old}
+	initial := taskExecution{Generation: 3, InstanceID: "instance", ProcessID: "proc", Runtime: "codex", State: "active"}
 	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": owner.Username, "execution": initial}))
 	update := func(action string, cp *taskCheckpoint, wantAck uint64) {
 		t.Helper()
@@ -275,12 +275,13 @@ func TestTaskRecoveryPendingReplyCannotBeReplacedOrDropped(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.UpdateExecution(w, r)
 		var result struct{ Execution taskExecution }
-		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Execution.ReplyAcknowledgedGeneration != wantAck {
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Execution.ReplyGeneration != wantAck {
 			t.Fatalf("%s: %d %s", action, w.Code, w.Body)
 		}
 	}
+	update("checkpoint", old, 3)
 	update("checkpoint", next, 3)
-	update("claim", nil, 0)
+	update("claim", nil, 3)
 	next.Version++
 	update("checkpoint", next, 0)
 

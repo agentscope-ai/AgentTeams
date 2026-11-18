@@ -237,7 +237,7 @@ func collectBoundary(refs *[]service.WorkerCheckpointRef, ref service.WorkerChec
 	// Native turn completion can send a progress reply while the Task still
 	// has more steps. Its acknowledged result is a boundary only when the
 	// actual source also committed evidence of completed work.
-	acknowledgedProgress := execution.ReplyAcknowledgedGeneration == execution.Generation && openTask && cp.Delivery == "delivered" && cp.ReplyEvent != "" && cp.ReplyTxn != "" && cp.Result != nil &&
+	acknowledgedProgress := execution.ReplyGeneration == execution.Generation && openTask && cp.Delivery == "delivered" && cp.ReplyEvent != "" && cp.ReplyTxn != "" && cp.Result != nil &&
 		(len(cp.CompletedSteps) > 0 || (cp.Operation != nil && cp.Operation.State == "verified" && cp.Operation.Evidence != "")) &&
 		execution.InstanceID == op.Source.InstanceID && execution.ProcessID == op.Source.ProcessID && execution.Runtime == op.Source.Runtime
 	if openTask && (cp.Delivery == "delivered" || (deliveryOnly && len(cp.RemainingSteps) > 0)) {

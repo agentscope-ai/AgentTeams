@@ -371,7 +371,7 @@ func TestRuntimeHandoffDeliveredProgressStillRequiresTargetStep(t *testing.T) {
 	cp := &taskCheckpoint{Version: 5, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two", "three"},
 		Operation: &taskOperation{ID: "one", State: "verified", Evidence: "output/one"},
 		Result:    &taskArtifact{Key: "progress.md"}, ReplyTxn: "progress-one", ReplyEvent: "$progress", Delivery: "delivered"}
-	e := taskExecution{Generation: 1, InstanceID: f.start.InstanceID, ProcessID: f.start.ProcessID, Runtime: f.start.Runtime, State: "active", Checkpoint: cp, ReplyAcknowledgedGeneration: 1}
+	e := taskExecution{Generation: 1, InstanceID: f.start.InstanceID, ProcessID: f.start.ProcessID, Runtime: f.start.Runtime, State: "active", Checkpoint: cp, ReplyGeneration: 1}
 	put := func(status string) {
 		putTask(f.storage, taskMetaKey, taskMeta(map[string]any{"status": status, "assigned_to": "runtime-alice", "execution": e}))
 	}

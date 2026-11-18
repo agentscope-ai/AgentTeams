@@ -1,0 +1,117 @@
+{
+  "case": "98",
+  "task_id": "live-openclaw-openclaw-98",
+  "status": "completed",
+  "execution_generation": 2,
+  "scope": "Task continuation after automatic retry; original native session was not reused",
+  "first_restart": {
+    "docker_order_ns": {
+      "die": 1794996745217344678,
+      "start": 1794996746366552565
+    },
+    "failure": "native config validation",
+    "exit_code": 1,
+    "docker_oom_killed": false,
+    "independent_config_revalidation": true
+  },
+  "startup": [
+    {
+      "event": "startup.begin",
+      "timestamp": "2026-11-18T10:09:02.920229+00:00",
+      "boot_id": "167783a4153841b4bab33e3e90b738ed"
+    },
+    {
+      "event": "startup.begin",
+      "timestamp": "2026-11-18T10:12:26.503073+00:00",
+      "boot_id": "26ab3d4ee7204c68995e1f33224bca98"
+    },
+    {
+      "event": "runtime.exit",
+      "timestamp": "2026-11-18T10:12:29.748193+00:00",
+      "boot_id": "26ab3d4ee7204c68995e1f33224bca98",
+      "exit_code": 1
+    },
+    {
+      "event": "startup.begin",
+      "timestamp": "2026-11-18T10:14:32.290703+00:00",
+      "boot_id": "b76c34d212dc4a56893cffb2b8b0e936"
+    }
+  ],
+  "recovered_instance_started_at": "2026-11-18T10:14:32.042067697Z",
+  "same_container": true,
+  "source": {
+    "harness": "957876cad91fd85ba64916ebdf8e2980f51d8ba2",
+    "core": "52a3659b719abb78c17368ce020403c442d4e5db",
+    "image_id": "sha256:1b3131caeedf1a034927b412d55ec421a4342a395752fba9040837e4d17745de",
+    "platform": "linux/amd64"
+  },
+  "old_native_session": {
+    "cache": {
+      "runtime": "openclaw",
+      "authority": "fbf7addec51a91f1e426f167f08f7d0c5d08ba4906914b6488fb4a5a86696e4d",
+      "session_key": "agent:main:agentteams-task:bcf48201a024c642d82e250845205673763d0601c84c52fb3179a11adc421777:1cea3c43-9340-4eb4-b720-4fda3f02abae",
+      "session_id": "5c26d73f-669a-488a-ab93-e9245ccf839b",
+      "native_digest": "eaf52ad0c6d12b05300b5ecc519fea2e4be7fcbefa8a8603c4933d7dc7e0a375",
+      "checkpoint_digest": "2f30fe041fd55d98daaef9be457bd5ab7a3b6b857ee5650732ed08f969f82cb2",
+      "expires_at": 1795083130.505
+    },
+    "native": {
+      "session_id": "5c26d73f-669a-488a-ab93-e9245ccf839b",
+      "native_digest": "eaf52ad0c6d12b05300b5ecc519fea2e4be7fcbefa8a8603c4933d7dc7e0a375",
+      "message_count": 68,
+      "task_mentioned": true
+    }
+  },
+  "new_native_session": {
+    "session_key": "agent:main:agentteams-task:bcf48201a024c642d82e250845205673763d0601c84c52fb3179a11adc421777:c55b73a0-9633-4c81-a63b-f6468c05eb1b",
+    "session_id": "bc88c4fb-6675-419f-8218-42cb33b07872",
+    "native_digest": "d8992af141bac15381c63f2009239d1745719ba4caab80df7f82a9ad1cd6f215",
+    "message_count": 38,
+    "task_mentioned": true,
+    "has_recovery_turn": true
+  },
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794996688473220281,
+      "generation": 1,
+      "instance_id": "docker/e783bd2d0648ba6e616116232cb95507f1852e69975986bf0b8ec8ebcba1f4cb/2026-11-18T10:09:02.644668128Z",
+      "process_id": "1:1794996542917366491:167783a4153841b4bab33e3e90b738ed",
+      "step": "one",
+      "task_id": "live-openclaw-openclaw-98",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1794996963267130402,
+      "generation": 2,
+      "instance_id": "docker/e783bd2d0648ba6e616116232cb95507f1852e69975986bf0b8ec8ebcba1f4cb/2026-11-18T10:14:32.042067697Z",
+      "process_id": "1:1794996872289328863:b76c34d212dc4a56893cffb2b8b0e936",
+      "step": "two",
+      "task_id": "live-openclaw-openclaw-98",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 8,
+      "executed_at_ns": 1794996978468632478,
+      "generation": 2,
+      "instance_id": "docker/e783bd2d0648ba6e616116232cb95507f1852e69975986bf0b8ec8ebcba1f4cb/2026-11-18T10:14:32.042067697Z",
+      "process_id": "1:1794996872289328863:b76c34d212dc4a56893cffb2b8b0e936",
+      "step": "three",
+      "task_id": "live-openclaw-openclaw-98",
+      "team_id": "recovery-team"
+    }
+  ],
+  "matrix": {
+    "reply_event": "$axRdLTshb4HVHM2QAR9OuK_8XBZrKiX4I-O_A1L2ok8",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$_Skc_nM08gxkK9IcvsTawwPy7eKBk_g05fy91ysQNbw"
+    ],
+    "read_receipt_events": [
+      "$pbqUvHh0zNfZTP-p1k4FAi5WGwLXpQzvTztk4hFgAmk"
+    ],
+    "first_source_read_ms": 1794996593382
+  }
+}

@@ -1507,3 +1507,16 @@ before Docker recorded the old container exiting. Core `696146ff` now
 signals the Worker reconcile after durably writing the operation. Its
 test verifies the ordering and idempotent request behavior. The live
 latency with the updated Controller still needs measurement.
+
+[Case98 OpenClaw restart partial evidence](evidence/runtime-recovery-1631-case98-openclaw-partial.json)
+used OpenClaw `957876c` under amd64 emulation. The requested restart reached
+the new process, which exited at native config validation. Docker did not
+report OOM for that failure. A separate reproduction with the same record
+and fixture environment passed the native validator. The Controller
+automatically started the same container again. It recovered the original
+Task at generation 2 and completed the remaining two steps, with one final
+report and zero incoming messages after shutdown. The original native
+session was not reused, so this run does not count as a successful normal
+restart/reuse lane. OpenClaw #10 `a5f6b21` uses the common session descriptor
+and reports the native validator process outcome. The new candidate still
+needs a live test.

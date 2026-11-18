@@ -52,8 +52,8 @@ if OPERATOR_HANDOFF and MODE != "replace":
 if RETURN_TO_SOURCE and (not OPERATOR_HANDOFF or (SOURCE, TARGET) != ("qwenpaw", "hermes") or FAULT):
     raise ValueError("The stale QwenPaw session regression needs two operator handoffs via Hermes")
 CASE = os.getenv("RECOVERY_E2E_CASE", "01")
-if len(CASE) != 2 or not CASE.isdecimal():
-    raise ValueError("RECOVERY_E2E_CASE must be two decimal digits")
+if not re.fullmatch(r"[0-9]{2,3}", CASE):
+    raise ValueError("RECOVERY_E2E_CASE must be two or three decimal digits")
 TASK_ID, MAIN_ID = "live-" + SOURCE + "-" + TARGET + "-" + CASE, "live-main-" + CASE
 
 
@@ -401,29 +401,55 @@ print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,"hermes_shared"
             home, TASK_ID, str(task["execution"]["generation"]), text=script)), "cache": cache}
     if runtime == "openclaw":
         # Use the pinned SDK's actual SQLite APIs, not a guessed session filename.
+        key = hashlib.sha256(json.dumps(["agents/agent-a", "task", "recovery-team", TASK_ID],
+            ensure_ascii=False, separators=(",", ":")).encode()).hexdigest() + ".json"
+        base = "agentteams/recovery-1631/agents/agent-a/runtime/sessions/openclaw/"
+        listing = docker("exec", CONTROLLER, "mc", "ls", "--json", base)
+        shared = (json.loads(docker("exec", CONTROLLER, "mc", "cat", base + key))
+                  if any(json.loads(line).get("key") == key for line in listing.splitlines()) else None)
         probe = '''import fs from "node:fs";
 import {createHash} from "node:crypto";
-import {getSessionEntryAsync,loadTranscriptEventsSync} from "openclaw/plugin-sdk/session-store-runtime";
+import {getSessionEntryAsync,listSessionEntries,loadTranscriptEventsSync} from "openclaw/plugin-sdk/session-store-runtime";
 const digest=(value)=>createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const [task, generation, sharedRaw]=process.argv.slice(1);
 const home="/root/agentteams-fs/agents/agent-a";
 const file=home+"/runtime/openclaw-task-sessions.json";
-const cache=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8"))[digest(["recovery-team",process.argv[1]])]:null;
-let native=null;
-if(cache){
- const agentId=cache.session_key.split(":")[1];
- const entry=await getSessionEntryAsync({agentId,sessionKey:cache.session_key,readConsistency:"latest"});
- if(entry){
-  const events=loadTranscriptEventsSync({agentId,sessionKey:cache.session_key,sessionId:entry.sessionId});
-  native={session_id:entry.sessionId,native_digest:digest({entry,events}),
-   message_count:events.length,task_mentioned:JSON.stringify(events).includes(process.argv[1])};
- }
+const key=digest(["recovery-team",task]);
+const cache=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8"))[key]:null;
+const shared=JSON.parse(sharedRaw);
+const agentId=shared?.native_ref.split(":")[1]??"main";
+const generationMarker=JSON.stringify('"generation": '+generation).slice(1,-1);
+async function read(sessionKey, legacy=false) {
+ if(!sessionKey) return null;
+ const agentId=sessionKey.split(":")[1];
+ const entry=await getSessionEntryAsync({agentId,sessionKey,readConsistency:"latest"});
+ if(!entry) return null;
+ const events=loadTranscriptEventsSync({agentId,sessionKey,sessionId:entry.sessionId});
+ const hasRecoveryTurn=events.some(event=>{
+  const content=JSON.stringify(event);
+  return content.includes(task)&&content.includes("Recover your existing Task from the authoritative task system")
+    &&content.includes(generationMarker);
+ });
+ return {session_key:sessionKey,session_id:entry.sessionId,
+  native_digest:digest(legacy?{entry,events}:{sessionId:entry.sessionId,events}),
+  message_count:events.length,task_mentioned:JSON.stringify(events).includes(task),has_recovery_turn:hasRecoveryTurn};
 }
-console.log("AGENTTEAMS_NATIVE_PROBE="+JSON.stringify({cache:cache??null,native}));
+const sessions=[];
+for(const {sessionKey} of listSessionEntries({agentId,readOnly:true})){
+ if(!sessionKey.startsWith("agent:"+agentId+":agentteams-task:"+key+":")) continue;
+ const native=await read(sessionKey);
+ if(native?.has_recovery_turn) sessions.push(native);
+}
+console.log("AGENTTEAMS_NATIVE_PROBE="+JSON.stringify({cache:cache??null,native:await read(cache?.session_key,true),
+ shared_cache:shared,shared_native:await read(shared?.native_ref),turn_sessions:sessions}));
 '''
         output = docker("exec", "-w", "/opt/openclaw", PREFIX + "-worker-agent-a",
-            "node", "--input-type=module", "-e", probe, TASK_ID)
+            "node", "--input-type=module", "-e", probe, TASK_ID, str((task.get("execution") or {}).get("generation", 0)), json.dumps(shared))
         result["openclaw"] = json.loads(next(line.removeprefix("AGENTTEAMS_NATIVE_PROBE=")
             for line in output.splitlines() if line.startswith("AGENTTEAMS_NATIVE_PROBE=")))
+        if shared:
+            result["openclaw"]["config_generation"] = int(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c",
+                "import yaml; print(yaml.safe_load(open('/root/agentteams-fs/agents/agent-a/runtime/runtime.yaml'))['metadata'].get('generation', 0))"))
     return result
 
 
@@ -898,11 +924,23 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
             original = before["native_sessions"]["deepseek"]["native"]
             assert selected["session_id"] == original["session_id"] and selected["turn"] > original["turn"]
     if final_runtime == "openclaw":
-        assert_openclaw_native_cache(native["openclaw"], cp)
+        proof = native["openclaw"]
+        if proof["cache"]:
+            assert_openclaw_native_cache(proof, cp)
+            selected = proof["native"]
+        else:
+            assert len(proof["turn_sessions"]) == 1, "native session for the recovered execution was not found"
+            selected = proof["turn_sessions"][0]
+            assert selected["message_count"] > 0 and selected["task_mentioned"]
         if MODE == "restart":
             source_cache = before["native_sessions"]["openclaw"]
-            assert_openclaw_native_cache(source_cache, before["task"]["execution"]["checkpoint"])
-            assert native["openclaw"]["cache"]["session_id"] == source_cache["cache"]["session_id"], "valid native Task session was not reused"
+            source_checkpoint = before["task"]["execution"]["checkpoint"]
+            if source_cache["shared_cache"]:
+                original = assert_openclaw_shared_cache(source_cache, source_checkpoint, TASK_ID)
+            else:
+                assert_openclaw_native_cache(source_cache, source_checkpoint)
+                original = source_cache["native"]
+            assert selected["session_id"] == original["session_id"], "valid native Task session was not reused"
     if not LEGACY_CODEX and SOURCE == "codex":
         assert_codex_native(before["native_sessions"]["codex_shared"], before["task"], require_cache=MODE == "restart")
     if not LEGACY_CODEX and final_runtime == "codex":
@@ -1119,6 +1157,19 @@ def assert_openclaw_native_cache(proof, checkpoint):
     assert native and native["session_id"] == cache["session_id"]
     assert native["native_digest"] == cache["native_digest"], "native transcript changed after checkpoint binding"
     assert native["message_count"] > 0 and native["task_mentioned"]
+
+
+def assert_openclaw_shared_cache(proof, checkpoint, task_id):
+    cache, native = proof["shared_cache"], proof["shared_native"]
+    assert cache and cache["schema_version"] == 1 and cache["kind"] == "WorkerSessionCache"
+    assert cache["member_prefix"] == "agents/agent-a" and cache["runtime"] == "openclaw"
+    assert cache["work"] == {"kind": "task", "team_id": "recovery-team", "task_id": task_id}
+    assert cache["checkpoint_version"] == checkpoint["version"] and cache["expires_at"] > time.time()
+    assert cache["config_generation"] == proof["config_generation"]
+    assert cache["checkpoint_digest"] == hashlib.sha256(json.dumps(checkpoint, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert native and native["session_key"] == cache["native_ref"] and native["native_digest"] == cache["native_digest"]
+    assert native["has_recovery_turn"] and native["message_count"] > 0 and native["task_mentioned"]
+    return native
 
 
 def setup(*, restore=False):

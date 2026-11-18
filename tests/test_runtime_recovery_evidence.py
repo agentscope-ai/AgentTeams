@@ -72,6 +72,46 @@ class SubmissionHistoryTests(unittest.TestCase):
                 assert_native_submission(task)
 
 
+class DeepSeekBoundaryTests(unittest.TestCase):
+    def test_active_source_turn_still_needs_the_matching_native_tool_results(self):
+        import hashlib
+        from runtime_recovery_e2e import assert_deepseek_native
+
+        task = {"task_id": "task-a", "execution": {"generation": 1}}
+        input_id = "matrix-" + hashlib.sha256(b"recovery:recovery-team/task-a:1").hexdigest()
+        native = {"input_id": input_id, "task_mentioned": True, "completed": False,
+                  "tool_calls": 7, "tool_results": 7}
+        self.assertIs(assert_deepseek_native({"native": native}, task, allow_active_turn=True), native)
+        with self.assertRaises(AssertionError):
+            assert_deepseek_native({"native": native}, task)
+        for change in ({"tool_results": 0}, {"input_id": "matrix-other-task"}):
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                assert_deepseek_native({"native": {**native, **change}}, task, allow_active_turn=True)
+
+
+class ReplacementLifecycleTests(unittest.TestCase):
+    def test_unstarted_target_retry_must_be_removed_before_the_only_started_target(self):
+        from runtime_recovery_e2e import replacement_lifecycle
+
+        def event(action, actor, timestamp):
+            return {"Action": action, "timeNano": timestamp,
+                    "Actor": {"ID": actor, "Attributes": {"image": "target-image"}}}
+
+        died = event("die", "old", 1)
+        removed = event("destroy", "old", 2)
+        first = event("create", "unstarted", 3)
+        cleanup = event("destroy", "unstarted", 4)
+        target = event("create", "target", 5)
+        started = event("start", "target", 6)
+        rows = [died, removed, first, cleanup, target, started]
+        order, selected = replacement_lifecycle(rows, died, "old")
+        self.assertEqual(selected, target)
+        self.assertEqual(order["unstarted_target_attempts"], [{"id": "unstarted", "create": 3, "destroy": 4}])
+        for invalid in ([died, removed, first, target, started], rows + [event("start", "unstarted", 4)]):
+            with self.subTest(invalid=invalid), self.assertRaises(AssertionError):
+                replacement_lifecycle(invalid, died, "old")
+
+
 class OpenHumanCacheTests(unittest.TestCase):
     def test_native_tool_history_must_match_task_worker_and_latest_checkpoint(self):
         import copy

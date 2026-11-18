@@ -767,11 +767,33 @@ def cutover_lifecycle(before, suffix):
             assert died["Actor"]["Attributes"]["exitCode"] == "137"
             order["exit_code"] = 137
     else:
-        destroyed = next(row for row in rows if row["Action"] == "destroy" and row["Actor"]["ID"] == old)
-        target = next(row for row in rows if row["Action"] == "create" and row["Actor"]["ID"] != old)
-        assert died["timeNano"] <= destroyed["timeNano"] <= target["timeNano"]
-        order = {"die": died["timeNano"], "destroy": destroyed["timeNano"], "create": target["timeNano"]}
+        order, target = replacement_lifecycle(rows, died, old)
     return order, died["Actor"], target["Actor"]
+
+
+def replacement_lifecycle(rows, died, old):
+    destroyed = next(row for row in rows if row["Action"] == "destroy" and row["Actor"]["ID"] == old)
+    candidates = [row for row in rows if row["Action"] == "create" and row["Actor"]["ID"] != old]
+    assert candidates and died["timeNano"] <= destroyed["timeNano"] <= candidates[0]["timeNano"]
+    target = candidates[-1]
+    target_id = target["Actor"]["ID"]
+    starts = [row for row in rows if row["Action"] == "start"]
+    assert len(starts) == 1 and starts[0]["Actor"]["ID"] == target_id
+    assert target["timeNano"] <= starts[0]["timeNano"]
+    attempts = []
+    for abandoned, following in zip(candidates, candidates[1:]):
+        abandoned_id = abandoned["Actor"]["ID"]
+        assert abandoned_id != target_id
+        assert abandoned["Actor"]["Attributes"] == target["Actor"]["Attributes"]
+        removal = next((row for row in rows if row["Action"] == "destroy" and row["Actor"]["ID"] == abandoned_id), None)
+        assert removal and abandoned["timeNano"] <= removal["timeNano"] <= following["timeNano"]
+        assert not any(row["Action"] == "die" and row["Actor"]["ID"] == abandoned_id for row in rows)
+        attempts.append({"id": abandoned_id, "create": abandoned["timeNano"], "destroy": removal["timeNano"]})
+    order = {"die": died["timeNano"], "destroy": destroyed["timeNano"],
+             "create": target["timeNano"], "start": starts[0]["timeNano"]}
+    if attempts:
+        order["unstarted_target_attempts"] = attempts
+    return order, target
 
 
 def verify_handoff(op, before, execution, runtime):
@@ -941,6 +963,7 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     if middle and (read := middle.get("source_read_receipt")):
         assert read["source_event"] in matrix["native_read_sources"]
         assert read["read_event"] in matrix["read_receipt_events"]
+    assert matrix["first_source_read_ms"] <= ledger[0]["executed_at_ns"] // 1000000, "the initial source must be read before step one"
     if middle:
         first_registration = next(row for row in calls if row["method"] == "REGISTER" and row["step"] == "one")
         assert matrix["first_source_read_ms"] <= first_registration["at_ns"] // 1000000, "the initial source must be read before step one"
@@ -973,7 +996,8 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         selected = native["hermes"][-1]["session_id"]
         assert native["hermes_message_counts"].get(selected, 0) > 0, "recovered input was not persisted in the selected native session"
     if SOURCE == "deepseek-harness" and not FAULT:
-        assert_deepseek_native(before["native_sessions"]["deepseek"], before["task"], require_cache=MODE == "restart")
+        assert_deepseek_native(before["native_sessions"]["deepseek"], before["task"],
+            require_cache=MODE == "restart", allow_active_turn=MODE == "replace")
     if final_runtime == "deepseek-harness":
         selected = assert_deepseek_native(native["deepseek"], task)
         if MODE == "restart":
@@ -1051,6 +1075,8 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         # Replacement only requires a durable Task boundary. The stopping
         # source may still be publishing its latest native session.
         proof["openhuman_source_session"] = before["native_sessions"]["openhuman"]["descriptor"]
+    if SOURCE == "deepseek-harness":
+        proof["deepseek_source_session"] = before["native_sessions"]["deepseek"]["native"]
     if EXPIRE_HERMES_SESSION:
         proof["scope"] = "Hermes restart with an expired shared session descriptor"
         proof["expired_session"] = before["expired_session"]
@@ -1089,12 +1115,14 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     print(json.dumps({"passed": True, "evidence": str(path), **proof}))
 
 
-def assert_deepseek_native(proof, task, *, require_cache=False):
+def assert_deepseek_native(proof, task, *, require_cache=False, allow_active_turn=False):
     execution = task["execution"]
     item = proof["native"]
     marker = f"recovery:recovery-team/{task['task_id']}:{execution['generation']}"
     assert item and item["input_id"] == "matrix-" + hashlib.sha256(marker.encode()).hexdigest()
-    assert item["task_mentioned"] and item["completed"] and item["tool_calls"] and item["tool_results"]
+    assert item["task_mentioned"] and item["tool_calls"] and item["tool_results"]
+    if not allow_active_turn:
+        assert item["completed"]
     if require_cache:
         cache = proof["cache"]
         cp = execution["checkpoint"]

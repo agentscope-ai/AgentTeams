@@ -17,11 +17,11 @@ the image and shared-contract pins actually tested.
 | Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | [Pass 121](evidence/runtime-recovery-1631-case121-verified.json) | [Pass 149](evidence/runtime-recovery-1631-case149-verified.json) |
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Pass 144](evidence/runtime-recovery-1631-case144-verified.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
-| DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | — |
+| DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | [Pass 150](evidence/runtime-recovery-1631-case150-verified.json) |
 | OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Pass 138](evidence/runtime-recovery-1631-case138-verified.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
 | OpenHuman | [Pass 147](evidence/runtime-recovery-1631-case147-verified.json) | — | — | — | — | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
 
-**6/6 normal restart lanes and 23/30 directed handoffs have passed.** A dash
+**6/6 normal restart lanes and 24/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1973,3 +1973,19 @@ Task session and advanced checkpoint 2 to 12 in generation 2.
 All three steps ran once and four artifact/report hashes matched. The same
 Task emitted one final Matrix reply with zero new incoming messages after
 the source stopped.
+
+[Case148 OpenHuman → Hermes](evidence/runtime-recovery-1631-case148-assignment-absent.json)
+used the updated OpenHuman startup. OpenHuman discovered the assigned Task
+and completed its first effect. The fixture did not observe its separate
+Matrix assignment in the room before the deadline. No cutover was attempted.
+
+[Case150 DeepSeek → OpenHuman](evidence/runtime-recovery-1631-case150-verified.json)
+passed on Controller `6421981f`, DeepSeek `6f5aadb`, and OpenHuman `a7fd8fe`.
+DeepSeek read the original assignment and committed step one at checkpoint 2
+while its native turn was still active. Docker removed the old instance
+before creating the target. A host port conflict caused it to discard an
+unstarted target container and retry. The event stream confirms a single
+target process started. OpenHuman finished the original Task in generation 2
+at checkpoint 9, with all effects executed once and all hashes matching.
+One final Matrix reply followed zero new inputs. The driver now verifies
+the actual started target and records any unstarted attempts separately.

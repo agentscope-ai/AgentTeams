@@ -1280,3 +1280,35 @@ and submitted the same Task at checkpoint 12. The independent ledger
 records generations 1/2/2, all artifact and report hashes match, and Matrix
 has one canonical final reply with no external message after the stop.
 This lane used plaintext Matrix and did not export to Langfuse.
+
+### Cases69–70: Dashboard and CLI switch the same running Task
+
+Both lanes used Core `52a3659b`, Hermes `282c457`, QwenPaw `89d9f3e`
+and shared contract `52a3659b` in the isolated Docker environment. Each
+source sent a native read receipt and acknowledged its Task, committed step
+one at checkpoint 5, and stopped while the Task was still `in_progress`.
+Each target took generation 2, created a new native session, ran steps two
+and three and submitted the same Task at checkpoint 12. Each independent
+ledger has one effect per step (generations 1/2/2), all artifact and report
+hashes verified, and Matrix contains one canonical report and zero external
+room messages after cutover.
+
+- [Case69 Dashboard proof](evidence/runtime-recovery-1631-case69-dashboard.json)
+  used Dashboard `588c45b` to send the Hermes → QwenPaw request and display
+  the completed operation with the same request ID. The interactive test
+  observer timed out before the click. Controller's persisted source-stop
+  observation preceded the actual target Docker creation by 3.86 seconds.
+  A separate Docker query confirmed the old ID was gone. The room audit
+  checked from the pre-submit browser snapshot through the final report.
+  QwenPaw's native Task session was correlated through Controller trace
+  readback.
+- [Case70 CLI proof](evidence/runtime-recovery-1631-case70-verified.json)
+  used `agt worker switch-runtime` for QwenPaw → Hermes. The live Docker event
+  stream records old die → destroy → new create → start. The verifier checks
+  both sides of the persisted runtime handoff and the new Hermes native
+  session. Start the Docker event subscription before requesting a
+  replacement, since retention can roll over before an after-the-fact read.
+
+These are two current-candidate directed lanes. The remaining directed
+combinations, the retained-session switchback on these builds, encrypted
+Matrix continuity and the full fault matrix remain separate gates.

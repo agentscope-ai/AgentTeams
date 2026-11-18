@@ -1,0 +1,256 @@
+{
+  "task_id": "live-qwenpaw-hermes-70",
+  "case": "70",
+  "scope": "one real qwenpaw-to-hermes in-progress continuation",
+  "mode": "replace",
+  "fixture_prefix": "recovery-1631-live-20261118-v68",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "52a3659b719abb78c17368ce020403c442d4e5db",
+    "qwenpaw": "89d9f3ee82c6781d1601c7c904a59f8c30aa589f",
+    "hermes": "282c45715eb37d4d7e4c4aba64ab6e83386f9b52",
+    "shared_contract": "52a3659b719abb78c17368ce020403c442d4e5db"
+  },
+  "driver_sha256": "61b59e84d87cc9bc5f0baa29b8346a5635454e47e86427ac89373d27cb8cf043",
+  "native_recovery_sessions": {
+    "hermes": [
+      {
+        "timestamp": "2026-11-18T05:19:08.127975+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "2e0a786404d64268832207daedb3716d",
+        "event": "task.recovery.session",
+        "task_id": "live-qwenpaw-hermes-70",
+        "team_id": "recovery-team",
+        "generation": 2,
+        "session_id": "20261118_051908_58ed3348",
+        "checkpoint_version": 5,
+        "reused": false
+      }
+    ],
+    "hermes_message_counts": {
+      "20261118_051908_58ed3348": 53
+    },
+    "hermes_shared": {
+      "cache": null,
+      "native_digest": null,
+      "message_count": 0,
+      "tool_count": 0,
+      "task_mentioned": false
+    },
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": {
+        "schema_version": 1,
+        "kind": "WorkerSessionCache",
+        "member_prefix": "agents/agent-a",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-qwenpaw-hermes-70"
+        },
+        "runtime": "qwenpaw",
+        "start": {
+          "instance_id": "docker/ffcd7356b7a1e742719f6ee8b0a4668747d5b1e96da441ee8518ac1308a98d75/2026-11-18T05:07:26.970478278Z",
+          "process_id": "1:1794978447447724529:64718cae097648499e15435384d18aca",
+          "runtime": "qwenpaw"
+        },
+        "generation": 1,
+        "native_ref": "matrix:task:60e2ec038ac06d0db65f67e79d9097ec1f4b224e2badaad6f3120036b668b3bb:8eb0a9ffdeb74f82b8c61bf4017df802",
+        "native_digest": "eca9affd5d5bcb1ed5f14f5aa761397c52a27a3e8116406097d0741c6e3ed4e5",
+        "checkpoint_version": 5,
+        "checkpoint_digest": "ec2cfea557b52088c75522e1ab66b0e4c068ce5efa7aa1f95754565fbf0046bf",
+        "config_generation": 5,
+        "expires_at": 1795065430,
+        "saved_at": "2026-11-18T05:17:12Z"
+      },
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "cf02d2e0a6a189c84095792f9b14f915a9c3b5f92f01eecb5946750d39c0f347",
+      "descriptor": null,
+      "config_generation": null
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 5,
+  "checkpoint_after": 12,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/e6005987fb030af2ddc099ccd30fd6c016992a5cf50a40ef9dbd20527529ddf7/2026-11-18T05:18:09.228945629Z",
+    "process_id": "1:1794979089650461249:2e0a786404d64268832207daedb3716d",
+    "runtime": "hermes",
+    "state": "active",
+    "checkpoint": {
+      "version": 12,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-qwenpaw-hermes-70:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=31e972bb48eb58a4076847656b6dd3e22581dbe9c89ae796c690dd189626b658; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-70/output/step-one.json",
+          "sha256": "e73c15576b147adca9daa0f78336e25016f9370371b55ac134cb8253ba0a93d4",
+          "size": 354
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-70/output/step-two.json",
+          "sha256": "c87e68b623920ecbfa0a9a614203a512fc8fdfdae452f3980ba9731de37d5eac",
+          "size": 354
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-70/output/step-three.json",
+          "sha256": "31e972bb48eb58a4076847656b6dd3e22581dbe9c89ae796c690dd189626b658",
+          "size": 356
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-70/result.md",
+        "sha256": "a7ab39047d5bb340b4b878320d2f0f0a76db73d28cc806e2160c6de72a99fefc",
+        "size": 804
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:f08a95a2fa34050931e73213aba910707acef307417b0c586431a4dbb5afaaf7",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "L6aK3LW3gk"
+      },
+      "reply_event": "$Z8VcCbeUyRPvKnvZPaOV-RLx0KsJ0MwV9J5i83qdD1U",
+      "saved_at": "2026-11-18T05:22:32.070348762Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T05:14:43Z"
+    },
+    {
+      "action": "progress",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "note": "Step one completed and verified. PAUSED_AT_STEP_BOUNDARY confirmed. Remaining: two, three.",
+      "seq": 2,
+      "to": "in_progress",
+      "ts": "2026-11-18T05:15:39Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 3,
+      "to": "submitted",
+      "ts": "2026-11-18T05:21:19Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794978916074601945,
+      "generation": 1,
+      "instance_id": "docker/ffcd7356b7a1e742719f6ee8b0a4668747d5b1e96da441ee8518ac1308a98d75/2026-11-18T05:07:26.970478278Z",
+      "process_id": "1:1794978447447724529:64718cae097648499e15435384d18aca",
+      "step": "one",
+      "task_id": "live-qwenpaw-hermes-70",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1794979198471377380,
+      "generation": 2,
+      "instance_id": "docker/e6005987fb030af2ddc099ccd30fd6c016992a5cf50a40ef9dbd20527529ddf7/2026-11-18T05:18:09.228945629Z",
+      "process_id": "1:1794979089650461249:2e0a786404d64268832207daedb3716d",
+      "step": "two",
+      "task_id": "live-qwenpaw-hermes-70",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 8,
+      "executed_at_ns": 1794979236882090197,
+      "generation": 2,
+      "instance_id": "docker/e6005987fb030af2ddc099ccd30fd6c016992a5cf50a40ef9dbd20527529ddf7/2026-11-18T05:18:09.228945629Z",
+      "process_id": "1:1794979089650461249:2e0a786404d64268832207daedb3716d",
+      "step": "three",
+      "task_id": "live-qwenpaw-hermes-70",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-70/output/step-one.json",
+      "sha256": "e73c15576b147adca9daa0f78336e25016f9370371b55ac134cb8253ba0a93d4",
+      "size": 354
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-70/output/step-two.json",
+      "sha256": "c87e68b623920ecbfa0a9a614203a512fc8fdfdae452f3980ba9731de37d5eac",
+      "size": 354
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-70/output/step-three.json",
+      "sha256": "31e972bb48eb58a4076847656b6dd3e22581dbe9c89ae796c690dd189626b658",
+      "size": 356
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-hermes-70/result.md",
+      "sha256": "a7ab39047d5bb340b4b878320d2f0f0a76db73d28cc806e2160c6de72a99fefc",
+      "size": 804
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1794979084316774317,
+    "destroy": 1794979086438316289,
+    "create": 1794979089199041981
+  },
+  "matrix": {
+    "reply_event": "$Z8VcCbeUyRPvKnvZPaOV-RLx0KsJ0MwV9J5i83qdD1U",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$cDhda4KW40i_RRfPMrAsDhx6ZqjUbnc9Id48Lw-Gq3M"
+    ],
+    "read_receipt_events": [
+      "$eFez-rAmEMSb8ockjZXkf28ogeIP7C644TfEr9MhKO4"
+    ],
+    "first_source_read_ms": 1794979036126
+  },
+  "operator_handoff": {
+    "id": "live-qwenpaw-hermes-70",
+    "phase": "completed",
+    "source": {
+      "instance_id": "docker/ffcd7356b7a1e742719f6ee8b0a4668747d5b1e96da441ee8518ac1308a98d75/2026-11-18T05:07:26.970478278Z",
+      "process_id": "1:1794978447447724529:64718cae097648499e15435384d18aca",
+      "runtime": "qwenpaw"
+    },
+    "target_runtime": "hermes",
+    "target": {
+      "instance_id": "docker/e6005987fb030af2ddc099ccd30fd6c016992a5cf50a40ef9dbd20527529ddf7/2026-11-18T05:18:09.228945629Z",
+      "process_id": "1:1794979089650461249:2e0a786404d64268832207daedb3716d",
+      "runtime": "hermes"
+    },
+    "source_stop_observed_at": "2026-11-18T05:18:04.337395313Z",
+    "target_registered_at": "2026-11-18T05:18:35.542128712Z",
+    "completed_at": "2026-11-18T05:19:47.068712027Z",
+    "target_image": "recovery-1631/hermes:local"
+  }
+}

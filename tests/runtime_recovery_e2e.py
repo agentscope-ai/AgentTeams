@@ -485,7 +485,9 @@ def evidence(*, emit=True):
     return result
 
 
-def cutover(*, watch_return=False):
+def cutover(*, watch_return=False, watch_dashboard=False):
+    if watch_dashboard and (not OPERATOR_HANDOFF or watch_return):
+        raise ValueError("Dashboard cutover requires the operator handoff in replacement mode")
     if watch_return and not RETURN_TO_SOURCE:
         raise ValueError("watch-return requires the two-handoff scenario")
     suffix = "-return" if watch_return else ""
@@ -528,42 +530,58 @@ def cutover(*, watch_return=False):
         if first["id"] != TASK_ID or first["phase"] != "completed" or first["target"]["process_id"] != task["execution"]["process_id"]:
             raise RuntimeError("First handoff is not complete on the measured middle process")
         before["first_handoff"] = first
+    if watch_dashboard:
+        state = api("GET", "workers/agent-a/runtime-handoff")
+        previous = state.get("handoff") or {}
+        if previous and previous["phase"] != "completed":
+            raise RuntimeError("Another handoff is active")
+        before["dashboard_cutover"] = {"previous_request_id": previous.get("id")}
     with boundary_path.open("x") as stream:
         json.dump(before, stream, indent=2)
-    started = int(time.time())
-    if watch_return:
-        subprocess.Popen([sys.executable, __file__, "observe-return-cursors"], start_new_session=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print("Captured second boundary; switch agent-a back to the original Harness through the Dashboard.", flush=True)
-    elif MODE == "restart":
-        api("POST", "workers/agent-a/restart", {})
-    elif OPERATOR_HANDOFF:
-        result = json.loads(agt("worker", "switch-runtime", "--name", "agent-a", "--runtime", target,
-            "--request-id", TASK_ID, "-o", "json"))
-        op = result["handoff"]
-        if op["id"] != TASK_ID or op["target_runtime"] != target or op["target_image"] != HARNESS_IMAGES[target]:
-            raise RuntimeError("Handoff selected a different request or target image")
-    else:
-        api("PUT", "workers/agent-a", {"runtime": TARGET, "image": HARNESS_IMAGES[TARGET]})
-    # No Matrix input is sent. Observe the Controller's actual replacement.
-    deadline = time.monotonic() + (180 if OPERATOR_HANDOFF else 45)
-    replacement = None
-    while time.monotonic() < deadline:
-        result = subprocess.run(["docker", "inspect", name], capture_output=True, text=True)
-        if result.returncode == 0:
-            candidate = json.loads(result.stdout)[0]
-            changed = candidate["Id"] != old["Id"] if MODE == "replace" else candidate["State"]["StartedAt"] != old["State"]["StartedAt"]
-            if changed and candidate["State"]["Running"]:
-                replacement = candidate
-                break
-        time.sleep(1)
-    events = docker("events", "--since", str(started), "--until", str(int(time.time()) + 1),
-        "--filter", "type=container", "--filter", "container=" + name, "--format", "{{json .}}")
     path = Path("/tmp/1631-live-" + CASE + suffix + "-cutover-events.jsonl")
-    path.write_text(events + "\n")
+    args = ["docker", "events", "--since", str(int(time.time()) - 1),
+            "--filter", "type=container", "--filter", "container=" + name,
+            "--filter", "event=die", "--filter", "event=destroy",
+            "--filter", "event=create", "--filter", "event=start", "--format", "{{json .}}"]
+    # Subscribe before the mutation. Docker's retained event history can be
+    # overwritten by other containers before the first status probe returns.
+    with path.open("x") as stream, subprocess.Popen(args, stdout=stream) as capture:
+        try:
+            if watch_return:
+                subprocess.Popen([sys.executable, __file__, "observe-return-cursors"], start_new_session=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print("Captured second boundary; switch agent-a back to the original Harness through the Dashboard.", flush=True)
+            elif watch_dashboard:
+                print("Captured the step boundary; submit the switch through the Dashboard.", flush=True)
+            elif MODE == "restart":
+                api("POST", "workers/agent-a/restart", {})
+            elif OPERATOR_HANDOFF:
+                result = json.loads(agt("worker", "switch-runtime", "--name", "agent-a", "--runtime", target,
+                    "--request-id", TASK_ID, "-o", "json"))
+                op = result["handoff"]
+                if op["id"] != TASK_ID or op["target_runtime"] != target or op["target_image"] != HARNESS_IMAGES[target]:
+                    raise RuntimeError("Handoff selected a different request or target image")
+            else:
+                api("PUT", "workers/agent-a", {"runtime": TARGET, "image": HARNESS_IMAGES[TARGET]})
+            # No Matrix input is sent. Observe the Controller's actual replacement.
+            deadline = time.monotonic() + (600 if watch_dashboard else 180 if OPERATOR_HANDOFF else 45)
+            replacement = None
+            while time.monotonic() < deadline:
+                result = subprocess.run(["docker", "inspect", name], capture_output=True, text=True)
+                if result.returncode == 0:
+                    candidate = json.loads(result.stdout)[0]
+                    changed = candidate["Id"] != old["Id"] if MODE == "replace" else candidate["State"]["StartedAt"] != old["State"]["StartedAt"]
+                    if changed and candidate["State"]["Running"]:
+                        replacement = candidate
+                        break
+                time.sleep(1)
+        finally:
+            if capture.poll() is None:
+                capture.terminate()
+            capture.wait(timeout=5)
+    rows = [json.loads(row) for row in path.read_text().splitlines() if row]
     if replacement is None:
         raise RuntimeError("Replacement not observed; retained Docker event evidence")
-    rows = [json.loads(row) for row in events.splitlines() if row]
     died = [row["timeNano"] for row in rows if row["Actor"]["ID"] == old["Id"] and row["Action"] == "die"]
     removed = [row["timeNano"] for row in rows if row["Actor"]["ID"] == old["Id"] and row["Action"] == "destroy"]
     created = [row["timeNano"] for row in rows if row["Actor"]["ID"] == replacement["Id"] and row["Action"] == "create"]
@@ -864,7 +882,11 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
                          first_native_ref=old_ref, matrix_cursor_snapshots=cursor_snapshots,
                          initial_return_sync=verify_return_cursor(middle, cursor_snapshots[-1], current))
         else:
-            assert op["id"] == TASK_ID
+            dashboard = before.get("dashboard_cutover")
+            if dashboard is None:
+                assert op["id"] == TASK_ID
+            else:
+                assert op["id"] and op["id"] != dashboard["previous_request_id"]
             verify_handoff(op, before, execution, TARGET)
         proof["operator_handoff"] = op
     path = Path("/tmp/1631-live-" + CASE + "-verified.json")
@@ -1111,4 +1133,5 @@ def members():
 if __name__ == "__main__":
     {"setup": setup, "restore": lambda: setup(restore=True), "status": status, "members": members, "prepare": prepare, "oracle": oracle, "tracing": tracing, "seed": seed,
      "refresh-controller": refresh_controller, "evidence": evidence, "cutover": cutover, "watch-return": lambda: cutover(watch_return=True),
+     "watch-dashboard-cutover": lambda: cutover(watch_dashboard=True),
      "observe-return-cursors": observe_return_cursors, "verify": verify}[sys.argv[1]]()

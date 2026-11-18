@@ -261,15 +261,21 @@ class WorkerMatrix:
         self._message_update(identity["event_key"], entry, "checkpoint", cp)
         return op
 
-    def message_finish_tools(self, identity, operation_id, results, *, deliver_result=False):
-        """Call only for confirmed tool returns. Uncertain effects remain fenced."""
+    def message_pending_tools(self, identity, operation_id):
+        """Recheck the operation immediately before issuing a native side effect."""
         entry = self._message_owned(identity)
-        cp = dict(entry["execution"].get("checkpoint") or {})
+        cp = entry["execution"].get("checkpoint") or {}
         operation = cp.get("operation") or {}
         if (entry["recovery"] != "verify" or operation.get("id") != operation_id
                 or operation.get("state") != "started"):
             raise RecoveryConflict("Native results do not own an outstanding tool operation")
-        expected = json.loads(operation["evidence"])
+        return entry
+
+    def message_finish_tools(self, identity, operation_id, results, *, deliver_result=False):
+        """Call only for confirmed tool returns. Uncertain effects remain fenced."""
+        entry = self.message_pending_tools(identity, operation_id)
+        cp = dict(entry["execution"]["checkpoint"])
+        expected = json.loads(cp["operation"]["evidence"])
         if (sorted(r["id"] for r in results) != sorted(c["id"] for c in expected)
                 or any("content" not in result for result in results)):
             raise RecoveryConflict("Native tool receipts differ from the admitted calls")

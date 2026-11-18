@@ -89,7 +89,7 @@ func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(
 	}
 	encrypted = false
 	first := call(http.MethodPost, req, "*")
-	if first.Code != 200 || !strings.Contains(first.Body.String(), `"phase":"draining"`) || !strings.Contains(first.Body.String(), `"process_id":"registered-process"`) || !strings.Contains(first.Body.String(), `"runtime":"hermes"`) {
+	if first.Code != 200 || !strings.Contains(first.Body.String(), `"phase":"stopping"`) || !strings.Contains(first.Body.String(), `"process_id":"registered-process"`) || !strings.Contains(first.Body.String(), `"runtime":"hermes"`) {
 		t.Fatalf("preflight %d %s", first.Code, first.Body)
 	}
 	etag := first.Header().Get("ETag")
@@ -138,7 +138,7 @@ func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(
 	}
 }
 
-func TestRuntimeHandoffDrainsMatrixAtPersistedBoundary(t *testing.T) {
+func TestRuntimeHandoffSourceCanFinishWritesWhileStopping(t *testing.T) {
 	f := newMatrixExecutionFixture(t, nil)
 	f.expect("claim", nil, 200)
 	f.expect("checkpoint", &taskCheckpoint{Version: 1, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two", "three"}}, 200)
@@ -147,18 +147,16 @@ func TestRuntimeHandoffDrainsMatrixAtPersistedBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.expect("claim", nil, 409)
-	f.expect("checkpoint", &taskCheckpoint{Version: 2, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two", "three"}}, 409)
-	f.expect("checkpoint", &taskCheckpoint{Version: 2, CompletedSteps: []string{"one"}, Operation: &taskOperation{ID: "side-effect", State: "started"}}, 409)
 	stepTwo := f.artifact("two", "persisted step two")
 	f.expect("checkpoint", &taskCheckpoint{Version: 2, CompletedSteps: []string{"one", "two"}, RemainingSteps: []string{"three"}, Artifacts: []taskArtifact{stepTwo}}, 200)
-	f.expect("checkpoint", &taskCheckpoint{Version: 3, CompletedSteps: []string{"one", "two", "three"}, Artifacts: []taskArtifact{stepTwo}}, 409)
+	f.expect("checkpoint", &taskCheckpoint{Version: 3, CompletedSteps: []string{"one", "two", "three"}, Artifacts: []taskArtifact{stepTwo}}, 200)
 	input, err := f.h.store.Input(t.Context(), "runtime-alice", f.key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var execution taskExecution
-	if err := json.Unmarshal(input.Execution, &execution); err != nil || execution.State != "released" || execution.HandoffID != "switch" || execution.Checkpoint.Version != 2 || len(execution.Checkpoint.Artifacts) != 1 {
-		t.Fatalf("lost released boundary: %+v %v", execution, err)
+	if err := json.Unmarshal(input.Execution, &execution); err != nil || execution.State != "active" || execution.Checkpoint.Version != 3 || len(execution.Checkpoint.Artifacts) != 1 {
+		t.Fatalf("lost source progress: %+v %v", execution, err)
 	}
 	state, _, err := f.h.store.Load(t.Context(), "runtime-alice")
 	if err != nil || len(state.Pending) != 1 {
@@ -179,7 +177,7 @@ func TestRuntimeHandoffBlocksClaimStraddlingHandoffWrite(t *testing.T) {
 	f.expect("claim", nil, 409)
 }
 
-func TestRuntimeHandoffDrainsTaskAfterSideEffectVerification(t *testing.T) {
+func TestRuntimeHandoffKeepsTaskOperationVerificationDuringStop(t *testing.T) {
 	ctx := t.Context()
 	store := ossfake.NewMemory()
 	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-dev", "status": "in_progress"}))
@@ -224,8 +222,8 @@ func TestRuntimeHandoffDrainsTaskAfterSideEffectVerification(t *testing.T) {
 		Status    string
 		Execution taskExecution
 	}
-	if err := json.Unmarshal(data, &saved); err != nil || saved.Status != "in_progress" || saved.Execution.State != "released" || saved.Execution.HandoffID != "switch" || saved.Execution.Checkpoint.Operation.Evidence != "external durable receipt" {
-		t.Fatalf("lost task boundary: %+v %v", saved, err)
+	if err := json.Unmarshal(data, &saved); err != nil || saved.Status != "in_progress" || saved.Execution.State != "active" || saved.Execution.Checkpoint.Operation.Evidence != "external durable receipt" {
+		t.Fatalf("lost task progress: %+v %v", saved, err)
 	}
 }
 

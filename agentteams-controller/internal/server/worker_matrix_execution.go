@@ -161,7 +161,7 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		writeHandoffAdmissionError(w, err)
 		return
 	}
-	if err := checkHandoffExecution(op, start, request.Action, execution.Checkpoint, request.Checkpoint); err != nil {
+	if err := checkHandoffExecution(op, start, request.Action); err != nil {
 		writeError(w, 409, err.Error())
 		return
 	}
@@ -244,9 +244,6 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 			return
 		}
 		savedResult = string(data)
-	}
-	if op != nil && request.Action != "cancel" && execution.Checkpoint != nil && !unresolvedOperation(execution.Checkpoint) {
-		execution.State, execution.HandoffID = "released", op.ID
 	}
 	input.Execution, _ = json.Marshal(execution)
 	body, err := json.Marshal(input)

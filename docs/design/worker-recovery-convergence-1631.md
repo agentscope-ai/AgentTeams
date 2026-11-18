@@ -67,11 +67,11 @@ Controller 发布 YAML 时不能将未声明覆盖的持久个性内容清空。
 | 记录 | 格式与最小字段 | 唯一提交责任 |
 | --- | --- | --- |
 | `runtime.yaml` | 保持现有 `MemberRuntimeConfig`，含 `apiVersion`、`metadata.generation`、`member`、`desired`、`matrix`、`storage`、`credentials`。Skills／MCP 从该记录及公共资产生成原生配置。 | Controller 从现有配置 API／CR 发布；原生 UI 修改公共设置也必须写回该入口。 |
-| `runtime/state.json` | `schema_version:1`、`kind:WorkerRuntimeState`、`member_prefix`、`active_start:{instance_id,process_id,runtime}`；`handoff:{id,phase,source,target,checkpoint_refs,error}`。没有切换时 `handoff` 可为空。 | Controller；supervisor 注册实际启动身份，不能把随机 HTTP header 当作旧进程已停止的证明。 |
+| `runtime/state.json` | `schema_version:1`、`kind:WorkerRuntimeState`、`member_prefix`、`active_start:{instance_id,process_id,runtime}`；`handoff:{id,phase,source,target}`。没有切换时 `handoff` 可为空。 | Controller；supervisor 注册实际启动身份，不能把随机 HTTP header 当作旧进程已停止的证明。 |
 | `matrix/state.json` | `schema_version:1`、`kind:WorkerMatrixState`、`member_prefix`、`active_start`；`rooms` 保存 `through` 锚点与 `gaps` 分页缺口；`consumers` 保存带 Harness／账户／设备／格式身份的原生游标；`pending` 只保存未完成工作对应的 event-key。 | 公共消息模块通过 Controller 的自身作用域条件提交接口写入；Harness 不直接 mirror 覆盖。 |
 | `events/<event-key>.json` | 标准输入与上下文、原生写入证据，以及 Task 引用或非 Task 执行记录，见下例。 | 公共模块持久化；适配器只提交原生事实。 |
 | Task `execution` | 保持已有 `generation`、`instance_id`、`process_id`、`runtime`、`state`、`checkpoint`。检查点保持已有步骤、operation/evidence、artifact、result、delivery、reply 字段。 | 现有执行 API 校验归属、进程和 ETag；Worker 消息索引不复制权威检查点。 |
-| session 描述 | `schema_version:1`、`kind:WorkerSessionCache`、Worker／团队／工作身份、`runtime`、`native_ref`、`native_digest`、`checkpoint_version`／`checkpoint_digest`、`config_generation`、`expires_at`。 | 公共缓存模块写统一描述；适配器保存／读取真实原生会话，并给出最终持久内容摘要。 |
+| session 描述 | `schema_version:1`、`kind:WorkerSessionCache`、Worker／团队／工作身份、`runtime`、`native_ref`、`native_digest`、`checkpoint_version`／`checkpoint_digest`、`config_generation`、`expires_at`。 | 公共缓存模块写统一描述；适配器在 Worker 本地文件系统保存／读取原生会话。会话正文由适配器管理，未来如需外置，可由适配器映射通用数据与原生格式。 |
 
 示例：Task 消息记录，不复制 Task 的执行状态：
 
@@ -180,10 +180,10 @@ pending 保留原生接收批次顺序，不能按 event ID 摘要或发送时�
 1. **初始化配置**：拉取 Worker YAML 和资产，校验身份／版本，解析当前凭证，
    生成目标原生配置并读取实际生效值。配置不完整时报告具体缺项，不读旧私有配置凑齐。
 2. **登记启动并发现工作**：核实当前实例与实际进程启动身份；读取公共 pending、
-   补齐房间缺口，同时从 Task 系统发现分配给自己的可恢复任务。Task 发现不依赖消息到达，
+   按需补充近期房间历史，同时从 Task 系统发现分配给自己的可恢复任务。Task 发现不依赖消息到达，
    也不依赖消息索引必须完整；按 team/Task ID 去重后重读归属与取消状态。
 3. **领取与决策**：先取执行权，再校验最新检查点和产物。已有结果待投递只补发；
-   未核验 operation 先核验或停在待核验；其余只执行 remaining steps。
+   已登记的外部操作结果不明时沿用已有核验逻辑。未回写的推理和可重做工作从最新共享进度继续。
 4. **选择会话并执行**：存在、未过期、身份／配置／最新检查点及原生摘要均一致才复用。
    否则用任务描述、最新检查点、产物及必要房间历史建立新会话，保留同一 Task ID，
    自动触发原生推理。模型与每个工具调用前继续校验执行权。
@@ -193,17 +193,18 @@ pending 保留原生接收批次顺序，不能按 event ID 摘要或发送时�
 计划切换由同一个 Controller 操作执行：
 
 ```text
-preflight → draining → checkpointed → stopping → stopped → creating → recovering → completed
+stopping → stopped → creating → recovering → completed
 ```
 
-`draining` 停新执行，当前任务走到最近可确认步骤边界即交接，Task 仍为 in_progress。
-停止阶段确认旧实例、原生进程和工具子进程都停止，再创建目标。切换过程中重启
-Controller 从持久 phase 继续；每个外部动作重试前查询实际资源，避免重复创建。
-创建／恢复失败保留失败阶段及检查点，不擅自把旧实例并行启动作为回滚。
-未知副作用与进程无法确认停止时报告等待核验原因，不盲跑下一步。
+入口先核对目标配置和镜像，再记录停止操作。停止使用运行平台的实例生命周期。
+旧 Worker 在退出前可照常保存已有任务的进度。确认旧实例及其进程树停止并退出后，
+Controller 创建目标。目标注册并报告启动就绪即完成切换。Controller 重启后从持久阶段继续，
+Dashboard 和 `agt` 共用操作 ID 及阶段查询。普通重启和异常退出也使用同一个 Worker 启动恢复入口。
 
-Dashboard 和 `agt` 只提交／读取这一操作的 ID、阶段和失败原因，不自行删容器、
-重放 Matrix 或生成检查点。现有 runtime update 仍是配置提交，不能冒充已完成切换。
+任务进度以任务系统为准。旧 Worker 来不及回写时，新 Worker 可重做未保存的一段。
+普通聊天可取近期相关上下文，允许少量遗漏和重复。端到端以同一个 Task ID 在无新
+Matrix 消息的情况下继续推进并完成为准，任务进度及回复验证独立于切换操作。
+
 Worker 与 Manager 角色分别验收；原 Manager 旧消息回放回归保留在 #1631，
 不能把 Worker 任务通过直接算成 Manager 通过。
 

@@ -15,7 +15,7 @@ func workerRuntimeCmd(switchRuntime bool) *cobra.Command {
 	var name, target, id, output string
 	cmd := &cobra.Command{Use: "runtime-status", Short: "Read the current Worker Harness handoff", Args: cobra.NoArgs}
 	if switchRuntime {
-		cmd.Use, cmd.Short = "switch-runtime", "Switch the Worker Harness at a shared checkpoint"
+		cmd.Use, cmd.Short = "switch-runtime", "Stop the current Worker instance and start it with a different Harness"
 		cmd.Flags().StringVar(&target, "runtime", "", "Target Harness (required)")
 		cmd.MarkFlagRequired("runtime")
 		cmd.Flags().StringVar(&id, "request-id", "", "Stable handoff ID for retrying a specific request")

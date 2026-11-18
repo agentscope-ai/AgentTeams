@@ -140,24 +140,7 @@ class Recovery:
         return self.checkpoint(task_id, team, cp)
 
     def interrupted(self, task_id, team):
-        task = self.current(task_id, team)
-        if task is None:
-            return
-        cp = dict(task["execution"].get("checkpoint") or {})
-        if cp.get("result") and cp.get("delivery") != "delivered":
-            return
-        operation = cp.get("operation") or {}
-        if operation.get("state") in {"started", "unknown"}:
-            return  # Already fenced for verification; never replace its identity.
-        if task.get("status") == "submitted" and task.get("result_path"):
-            # Submission already persisted the report. Claim verifies its bytes
-            # and reconstructs delivery; a lost native callback is not new work.
-            return
-        for field in ("result", "delivery", "reply_txn", "reply_event", "reply_attempt"):
-            cp.pop(field, None)
-        operation = {"id": "native-turn:" + self.process}
-        cp.update(version=cp.get("version", 0)+1, operation={**operation, "state": "unknown"})
-        return self.checkpoint(task_id, team, cp)
+        """Keep the last durable checkpoint; registered operations retain their own state."""
 
     @staticmethod
     def session_usable(session, task, runtime, *, now=None):
@@ -178,7 +161,8 @@ class Recovery:
         return ("Recover your existing Task from the authoritative task system. Do not create a new task.\n"
             "Before any new side effect, record its operation identity with checkpoint_task. If an operation is "
             "started or unknown, verify its external outcome and save evidence before continuing; do not rerun it. "
-            "Completed steps must not run again. Pull and verify referenced artifacts before using them. "
+            "Continue from the last saved progress. Repeat unsaved reasoning or replayable work when needed. "
+            "Pull and verify referenced artifacts before using them. "
             "Save artifacts before committing their checkpoint. A read receipt or ACK is not a checkpoint.\n"
             "Use taskflow.checkpoint_task at step boundaries. If your assigned executor already persists these "
             "checkpoints, invoke it unchanged; do not pre-register its operation IDs or commit a duplicate checkpoint "

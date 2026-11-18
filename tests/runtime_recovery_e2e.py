@@ -613,9 +613,9 @@ def verify_handoff(op, before, execution, runtime):
     for field in ("instance_id", "process_id", "runtime"):
         assert op["source"][field] == source[field]
         assert op["target"][field] == execution[field]
-    refs = [r for r in op["checkpoint_refs"] if r.get("team_id") == "recovery-team" and r.get("task_id") == TASK_ID]
-    assert len(refs) == 1 and refs[0]["generation"] == source["generation"]
-    assert refs[0]["checkpoint_version"] >= source["checkpoint"]["version"]
+    # Verify execution directly in the Task, independently of Worker readiness.
+    assert execution["generation"] > source["generation"]
+    assert execution["checkpoint"]["version"] > source["checkpoint"]["version"]
     times = [datetime.fromisoformat(op[field].replace("Z", "+00:00"))
              for field in ("source_stop_observed_at", "target_registered_at", "completed_at")]
     assert times[0] <= times[1] <= times[2]

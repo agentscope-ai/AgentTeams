@@ -356,7 +356,7 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		writeHandoffAdmissionError(w, err)
 		return
 	}
-	if err := checkHandoffExecution(op, start, input.Action, execution.Checkpoint, input.Checkpoint); err != nil {
+	if err := checkHandoffExecution(op, start, input.Action); err != nil {
 		writeError(w, 409, err.Error())
 		return
 	}
@@ -386,6 +386,14 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 			if execution.InstanceID == instance {
 				writeError(w, 409, "another process owns this live instance")
 				return
+			}
+			// Older adapters recorded an interruption itself as an unknown operation.
+			// A real operation has its own ID and remains subject to verification.
+			if cp := execution.Checkpoint; cp != nil && cp.Operation != nil &&
+				cp.Operation.State == "unknown" && cp.Operation.Evidence == "" &&
+				cp.Operation.ID == "native-turn:"+execution.ProcessID {
+				cp.Operation = nil
+				cp.Version++
 			}
 			execution.HandoffID = ""
 			execution.Generation++
@@ -476,9 +484,6 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		}
 		execution.Checkpoint = &cp
 		savedResult = string(result)
-	}
-	if op != nil && execution.Checkpoint != nil && !unresolvedOperation(execution.Checkpoint) {
-		execution.State, execution.HandoffID = "released", op.ID
 	}
 	task["execution"], _ = json.Marshal(execution)
 	body, _ := json.Marshal(task)

@@ -59,8 +59,7 @@ def main():
     except OSError as exc:
         print('[runtime-logs] log directory unavailable: ' + redact(str(exc)), file=sys.stderr, flush=True)
     ready_dir = None
-    if (args.role != "manager" and os.getenv("AGENTTEAMS_CONTROLLER_URL") and sys.platform.startswith("linux")
-            and hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal")):
+    if args.role != "manager" and os.getenv("AGENTTEAMS_CONTROLLER_URL"):
         ready_dir = tempfile.TemporaryDirectory(prefix="agentteams-supervisor-")
         ready_path = Path(ready_dir.name) / "recovery-scanned"
         os.environ["AGENTTEAMS_SUPERVISOR_READY_FILE"] = str(ready_path)
@@ -73,7 +72,6 @@ def main():
         event('startup.failed', stage='process.spawn', error_type=type(exc).__name__, error=str(exc))
         event('runtime.exit', exit_code=127)
         return 127
-    handoff = None
     if ready_dir:
         from worker_handoff import SupervisorHandoff
         handoff = SupervisorHandoff(runtime, child, ready_path)
@@ -123,9 +121,7 @@ def main():
     def forward(signum, _frame):
         event('shutdown.requested', signal=signum)
         try:
-            # The Controller already checked the durable execution boundary.
-            # Finish a frozen source without reopening native intake.
-            os.killpg(child.pid, signal.SIGKILL if handoff and handoff.native.held else signum)
+            os.killpg(child.pid, signum)
         except ProcessLookupError:
             pass
     for signum in (signal.SIGTERM, signal.SIGINT):

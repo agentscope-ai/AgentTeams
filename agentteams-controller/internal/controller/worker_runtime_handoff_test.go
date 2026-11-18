@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/test/testutil/mocks"
@@ -18,22 +19,28 @@ import (
 
 func TestRuntimeHandoffReconcileRecoversInterruptedPreflightBeforeReplacement(t *testing.T) {
 	store := &service.WorkerRuntimeStore{Storage: ossfake.NewMemory()}
-	source := service.WorkerStart{InstanceID: "docker/one", ProcessID: "source-process", Runtime: "hermes"}
-	if _, _, err := store.Preflight(t.Context(), "stable", "op", "codex", "codex:fixture", source, ""); err != nil {
+	source := service.WorkerStart{InstanceID: "docker/source-boot", ProcessID: "source-process", Runtime: "hermes"}
+	legacy := service.WorkerRuntimeState{SchemaVersion: 1, Kind: "WorkerRuntimeState", MemberPrefix: "agents/stable", ActiveStart: &source,
+		Handoff: &service.WorkerHandoff{ID: "op", Phase: "draining", Source: source, TargetRuntime: "codex", TargetImage: "codex:fixture", LegacyCheckpointRefs: json.RawMessage(`[{"requires_verification":true}]`)}}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Storage.PutObject(t.Context(), "agents/stable/runtime/state.json", data); err != nil {
 		t.Fatal(err)
 	}
 	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "default", Annotations: map[string]string{service.WorkerRuntimeHandoffAnnotation: "true"}}, Spec: v1beta1.WorkerSpec{WorkerName: "stable", Runtime: "codex"}}
-	// A fresh reconciler must leave the old container alone while draining.
-	for i := 0; i < 2; i++ {
-		r := &WorkerReconciler{RuntimeStore: store}
-		result, err := r.reconcileNormal(t.Context(), w, &MemberState{})
-		if err != nil || result.RequeueAfter <= 0 {
-			t.Fatalf("missing durable requeue %v %v", result, err)
-		}
+	b := &runtimeHandoffBackend{MockWorkerBackend: mocks.NewMockWorkerBackend()}
+	b.NameOverride = "docker"
+	r := &WorkerReconciler{RuntimeStore: store, Backend: backend.NewRegistry([]backend.WorkerBackend{b}),
+		HandoffMatrix: service.WorkerHandoffMatrix{CheckPlaintextRooms: func(context.Context, string) error { return nil }}}
+	result, err := r.reconcileNormal(t.Context(), w, &MemberState{})
+	if err != nil || result.RequeueAfter <= 0 || b.stops != 1 {
+		t.Fatalf("legacy drain did not start stopping without checkpoint: %v %v stops=%d", result, err, b.stops)
 	}
 	state, _, err := store.Load(t.Context(), "stable")
-	if err != nil || state.Handoff.Phase != "draining" || state.Handoff.Source != source {
-		t.Fatalf("lost drain %v %v", state, err)
+	if err != nil || state.Handoff.Phase != "stopping" || state.Handoff.Source != source {
+		t.Fatalf("lost stop request %v %v", state, err)
 	}
 }
 
@@ -69,13 +76,6 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, etag, err := store.BeginDrain(t.Context(), "stable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := store.ConfirmCheckpoint(t.Context(), "stable", "op", source, etag, nil); err != nil {
-		t.Fatal(err)
-	}
 	b := &runtimeHandoffBackend{MockWorkerBackend: mocks.NewMockWorkerBackend()}
 	reg := backend.NewRegistry([]backend.WorkerBackend{b})
 	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "default"}, Spec: v1beta1.WorkerSpec{WorkerName: "stable", Runtime: "hermes", Image: "old-custom:image"}}
@@ -98,16 +98,12 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 		phase(to)
 	}
 	r.HandoffMatrix.E2EEEnabled = true
-	op, etag := phase("checkpointed")
+	op, etag := phase("stopping")
 	if _, err := r.reconcileHandoffSource(t.Context(), w, op, etag, member); !errors.Is(err, service.ErrWorkerStateConflict) || b.stops != 0 {
 		t.Fatalf("late E2EE config edit did not preserve source: %v", err)
 	}
-	phase("checkpointed")
+	phase("stopping")
 	r.HandoffMatrix.E2EEEnabled = false
-	tick("checkpointed", "stopping")
-	if b.stops != 0 {
-		t.Fatal("stopped source before durable intent")
-	}
 	tick("stopping", "stopping")
 	if b.removes != 0 {
 		t.Fatal("removed source before exit proof")
@@ -166,7 +162,7 @@ func TestRuntimeHandoffReconcileStopsSourceThenAdoptsOnlyRegisteredTarget(t *tes
 	}
 }
 
-func TestRuntimeHandoffDeclarativeWorkerUpdateEntersDrainBeforeRecreate(t *testing.T) {
+func TestRuntimeHandoffDeclarativeWorkerUpdatePersistsStopBeforeRecreate(t *testing.T) {
 	ctx := t.Context()
 	scheme := runtime.NewScheme()
 	if err := v1beta1.AddToScheme(scheme); err != nil {
@@ -179,10 +175,10 @@ func TestRuntimeHandoffDeclarativeWorkerUpdateEntersDrainBeforeRecreate(t *testi
 	}
 	store := &service.WorkerRuntimeStore{Storage: ossfake.NewMemory()}
 	ms := service.WorkerMatrixStore{Storage: store.Storage}
-	start := service.WorkerStart{InstanceID: "mock/source", ProcessID: "source-process", Runtime: "hermes"}
+	start := service.WorkerStart{InstanceID: "mock/source-boot", ProcessID: "source-process", Runtime: "hermes"}
 	b := &runtimeHandoffBackend{MockWorkerBackend: mocks.NewMockWorkerBackend()}
 	b.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
-		return &backend.WorkerResult{InstanceID: "source", Status: backend.StatusRunning, Runtime: "hermes"}, nil
+		return &backend.WorkerResult{InstanceID: "source-boot", Status: backend.StatusRunning, Runtime: "hermes"}, nil
 	}
 	r := WorkerReconciler{Client: k8s, RuntimeStore: store, Backend: backend.NewRegistry([]backend.WorkerBackend{b})}
 	mctx := MemberContext{StatusBackendRuntime: "mock", Spec: w.Spec, AppliedSpecHash: "desired"}
@@ -204,7 +200,7 @@ func TestRuntimeHandoffDeclarativeWorkerUpdateEntersDrainBeforeRecreate(t *testi
 		}
 	}
 	op, _, err := store.Load(ctx, "stable")
-	if err != nil || op.Handoff == nil || op.Handoff.Phase != "draining" || op.Handoff.Source != start || op.Handoff.TargetRuntime != "codex" || len(b.Calls.Delete) != 0 || len(b.Calls.Create) != 0 || b.stops != 0 {
+	if err != nil || op.Handoff == nil || op.Handoff.Phase != "stopping" || op.Handoff.Source != start || op.Handoff.TargetRuntime != "codex" || len(b.Calls.Delete) != 0 || len(b.Calls.Create) != 0 || b.stops != 1 {
 		t.Fatalf("source was not protected before common reconciliation %+v %v", op, err)
 	}
 }
@@ -218,57 +214,31 @@ func (b *observedHandoffBackend) ObserveRuntimeExit(context.Context, string, str
 	return b.exit, nil
 }
 
-func TestRuntimeHandoffSourceLostWaitsForIndependentExitAndVerifiedWork(t *testing.T) {
+func (b *observedHandoffBackend) StopRuntimeInstance(context.Context, string, string) (bool, error) {
+	return false, errors.New("source exited during stop")
+}
+
+func TestRuntimeHandoffSourceLostRequiresBackendExitOnly(t *testing.T) {
 	ctx := t.Context()
 	store := &service.WorkerRuntimeStore{Storage: ossfake.NewMemory()}
 	start := service.WorkerStart{InstanceID: "mock/source-boot", ProcessID: "source-process", Runtime: "hermes"}
-	if _, _, err := store.Preflight(ctx, "stable", "op", "codex", "codex:fixture", start, ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := store.BeginDrain(ctx, "stable"); err != nil {
+	op, etag, err := store.Preflight(ctx, "stable", "op", "hermes", "hermes:fixture", start, "")
+	if err != nil {
 		t.Fatal(err)
 	}
 	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "test"}, Spec: v1beta1.WorkerSpec{WorkerName: "stable"}}
 	b := &observedHandoffBackend{runtimeHandoffBackend: &runtimeHandoffBackend{MockWorkerBackend: mocks.NewMockWorkerBackend()}}
-	scans := 0
-	refs := []service.WorkerCheckpointRef{{Kind: "task", TeamID: "team", TaskID: "t", Generation: 1, CheckpointVersion: 2, RequiresVerification: true}}
-	r := WorkerReconciler{RuntimeStore: store, Backend: backend.NewRegistry([]backend.WorkerBackend{b}), InspectLostHandoff: func(context.Context, *v1beta1.Worker, *service.WorkerHandoff) ([]service.WorkerCheckpointRef, error) {
-		scans++
-		return refs, nil
-	}}
-	tick := func(want, reason string) *service.WorkerRuntimeState {
-		t.Helper()
-		curr, etag, err := store.Load(ctx, "stable")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := r.reconcileHandoffSource(ctx, w, curr.Handoff, etag, &MemberState{}); err != nil {
-			t.Fatal(err)
-		}
-		curr, _, err = store.Load(ctx, "stable")
-		if err != nil || curr.Handoff.Phase != want || curr.Handoff.SourceLossReason != reason {
-			t.Fatalf("expected %s/%s got %+v %v", want, reason, curr.Handoff, err)
-		}
-		return curr
-	}
-	tick("draining", "") // A live source can still finish its current turn.
+	r := WorkerReconciler{RuntimeStore: store, Backend: backend.NewRegistry([]backend.WorkerBackend{b})}
 	b.exit.Unconfirmed = true
-	tick("source_lost", "source_exit_unconfirmed")
-	if scans != 0 {
-		t.Fatal("unconfirmed source removal triggered a work scan")
+	if _, err = r.reconcileHandoffSource(ctx, w, op.Handoff, etag, &MemberState{}); err == nil {
+		t.Fatal("unconfirmed source exit allowed a replacement")
 	}
 	b.exit = backend.RuntimeExitObservation{Exited: true}
-	state := tick("source_lost", "execution_requires_verification")
-	if state.Handoff.SourceStopObservedAt == "" || !state.Handoff.CheckpointRefs[0].RequiresVerification || b.stops != 0 || b.removes != 0 {
-		t.Fatal("unverified orphan was restarted")
+	if _, err = r.reconcileHandoffSource(ctx, w, op.Handoff, etag, &MemberState{}); err != nil {
+		t.Fatal(err)
 	}
-	// The authoritative task was then cancelled/reassigned. An independent
-	// controller can auto-resume and prepare the target without new Matrix input.
-	refs = nil
-	state = tick("stopped", "")
-	b.removed, b.stopped = true, true
-	tick("creating", "")
-	if scans != 2 || state.Handoff.TargetImage != "codex:fixture" {
-		t.Fatalf("wrong source proof %+v scans=%d", state.Handoff, scans)
+	state, _, err := store.Load(ctx, "stable")
+	if err != nil || state.Handoff.Phase != "stopped" || state.Handoff.SourceStopObservedAt == "" {
+		t.Fatalf("verified exit was not enough to stop: %+v %v", state, err)
 	}
 }

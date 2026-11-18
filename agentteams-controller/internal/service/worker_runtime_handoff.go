@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
 	"strings"
 	"time"
 
@@ -33,37 +32,19 @@ type WorkerRuntimeState struct {
 }
 
 type WorkerHandoff struct {
-	ID                   string                `json:"id"`
-	Phase                string                `json:"phase"`
-	Source               WorkerStart           `json:"source"`
-	TargetRuntime        string                `json:"target_runtime"`
-	PriorTargets         []WorkerStart         `json:"prior_targets,omitempty"`
-	Target               *WorkerStart          `json:"target,omitempty"`
-	LostSources          []WorkerStart         `json:"lost_sources,omitempty"`
-	SourceLossReason     string                `json:"source_loss_reason,omitempty"`
-	SourceStopObservedAt string                `json:"source_stop_observed_at,omitempty"`
-	TargetRegisteredAt   string                `json:"target_registered_at,omitempty"`
-	CompletedAt          string                `json:"completed_at,omitempty"`
-	TargetImage          string                `json:"target_image,omitempty"`
-	CheckpointRefs       []WorkerCheckpointRef `json:"checkpoint_refs,omitempty"`
-}
-
-type WorkerCheckpointRef struct {
-	Kind                    string `json:"kind"`
-	TeamID                  string `json:"team_id,omitempty"`
-	TaskID                  string `json:"task_id,omitempty"`
-	EventKey                string `json:"event_key,omitempty"`
-	Generation              uint64 `json:"generation"`
-	CheckpointVersion       uint64 `json:"checkpoint_version"`
-	CompletedStepCount      *int   `json:"completed_step_count,omitempty"`
-	PendingReplyTxn         string `json:"pending_reply_txn,omitempty"`
-	SourceProgressReplyTxn  string `json:"source_progress_reply_txn,omitempty"`
-	VerifiedOperation       string `json:"verified_operation,omitempty"`
-	RequiresVerification    bool   `json:"requires_verification,omitempty"`
-	Outcome                 string `json:"outcome,omitempty"`
-	TargetGeneration        uint64 `json:"target_generation,omitempty"`
-	TargetCheckpointVersion uint64 `json:"target_checkpoint_version,omitempty"`
-	ReplyEvent              string `json:"reply_event,omitempty"`
+	ID                   string          `json:"id"`
+	Phase                string          `json:"phase"`
+	Source               WorkerStart     `json:"source"`
+	TargetRuntime        string          `json:"target_runtime"`
+	PriorTargets         []WorkerStart   `json:"prior_targets,omitempty"`
+	Target               *WorkerStart    `json:"target,omitempty"`
+	LostSources          []WorkerStart   `json:"lost_sources,omitempty"`
+	SourceLossReason     string          `json:"source_loss_reason,omitempty"`
+	SourceStopObservedAt string          `json:"source_stop_observed_at,omitempty"`
+	TargetRegisteredAt   string          `json:"target_registered_at,omitempty"`
+	CompletedAt          string          `json:"completed_at,omitempty"`
+	TargetImage          string          `json:"target_image,omitempty"`
+	LegacyCheckpointRefs json.RawMessage `json:"checkpoint_refs,omitempty"`
 }
 
 type WorkerRuntimeStore struct{ Storage oss.StorageClient }
@@ -228,7 +209,7 @@ func (s WorkerRuntimeStore) Preflight(ctx context.Context, name, id, target, ima
 	if err != nil {
 		return nil, "", err
 	}
-	handoff := WorkerHandoff{ID: id, Phase: "preflight", Source: source, TargetRuntime: target, TargetImage: image}
+	handoff := WorkerHandoff{ID: id, Phase: "stopping", Source: source, TargetRuntime: target, TargetImage: image}
 	if h := state.Handoff; h != nil {
 		if h.ID == id && h.Source == source && h.TargetRuntime == target {
 			return state, etag, nil
@@ -245,40 +226,21 @@ func (s WorkerRuntimeStore) Preflight(ctx context.Context, name, id, target, ima
 	return s.save(ctx, state, etag)
 }
 
-// BeginDrain can be called by the HTTP request and by the reconciler after a
-// crash. A pending request already closes claim admission, even between writes.
-func (s WorkerRuntimeStore) BeginDrain(ctx context.Context, name string) (*WorkerRuntimeState, string, error) {
+// ResumeStop upgrades unfinished records from the earlier draft protocol.
+func (s WorkerRuntimeStore) ResumeStop(ctx context.Context, name string) (*WorkerRuntimeState, string, error) {
 	state, etag, err := s.Load(ctx, name)
-	if err != nil || state.Handoff == nil || state.Handoff.Phase != "preflight" {
+	if err != nil || state.Handoff == nil {
 		return state, etag, err
 	}
-	state.Handoff.Phase = "draining"
-	state, etag, err = s.save(ctx, state, etag)
-	if errors.Is(err, ErrWorkerStateConflict) {
-		return s.Load(ctx, name)
-	}
-	return state, etag, err
-}
-
-// ConfirmCheckpoint commits the server-discovered references in the same CAS
-// as the phase. A stopped container is verified independently by its backend.
-func (s WorkerRuntimeStore) ConfirmCheckpoint(ctx context.Context, name, id string, source WorkerStart, expected string, refs []WorkerCheckpointRef) (*WorkerRuntimeState, string, error) {
-	state, etag, err := s.Load(ctx, name)
-	if err != nil {
-		return nil, "", err
-	}
-	op := state.Handoff
-	if op == nil || op.ID != id || op.Source != source {
-		return nil, "", ErrWorkerStateConflict
-	}
-	if op.Phase == "checkpointed" {
+	switch state.Handoff.Phase {
+	case "preflight", "draining", "checkpointed", "source_lost":
+		state.Handoff.Phase = "stopping"
+		state.Handoff.SourceLossReason = ""
+		state.Handoff.LegacyCheckpointRefs = nil
+		return s.save(ctx, state, etag)
+	default:
 		return state, etag, nil
 	}
-	if op.Phase != "draining" || etag != expected {
-		return nil, "", ErrWorkerStateConflict
-	}
-	op.CheckpointRefs, op.Phase = refs, "checkpointed"
-	return s.save(ctx, state, etag)
 }
 
 // TargetLabel identifies this operation on the actual replacement resource.
@@ -290,7 +252,7 @@ func (h *WorkerHandoff) TargetLabel() string {
 
 // AdvanceLifecycle persists intent before any destructive backend action.
 // Only a backend-matched and registered target may become the active process.
-func (s WorkerRuntimeStore) AdvanceLifecycle(ctx context.Context, name, id, from, to, expected, image string, target *WorkerStart) (*WorkerRuntimeState, string, error) {
+func (s WorkerRuntimeStore) AdvanceLifecycle(ctx context.Context, name, id, from, to, expected string, target *WorkerStart) (*WorkerRuntimeState, string, error) {
 	state, etag, err := s.Load(ctx, name)
 	if err != nil {
 		return nil, "", err
@@ -300,15 +262,10 @@ func (s WorkerRuntimeStore) AdvanceLifecycle(ctx context.Context, name, id, from
 		return nil, "", ErrWorkerStateConflict
 	}
 	switch {
-	case from == "checkpointed" && to == "stopping" && image != "":
-		op.TargetImage = image
 	case from == "stopping" && to == "stopped":
 		op.SourceStopObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	case from == "stopped" && to == "creating":
 	case (from == "creating" || from == "recovering") && to == "recovering" && target != nil && validRuntimeStart(*target) && target.Runtime == op.TargetRuntime && target.InstanceID != op.Source.InstanceID:
-		if op.Target != nil && *op.Target != *target {
-			op.PriorTargets = append(op.PriorTargets, *op.Target)
-		}
 		op.TargetRegisteredAt = time.Now().UTC().Format(time.RFC3339Nano)
 		op.Target = target
 		state.ActiveStart = target
@@ -319,58 +276,30 @@ func (s WorkerRuntimeStore) AdvanceLifecycle(ctx context.Context, name, id, from
 	return s.save(ctx, state, etag)
 }
 
-// RecordSourceLoss distinguishes an unavailable backend from a proven process
-// exit. Only a verified exit and safe authoritative work can skip a live ack.
-func (s WorkerRuntimeStore) RecordSourceLoss(ctx context.Context, name, id, expected string, exit backend.RuntimeExitObservation, successor *WorkerStart, refs []WorkerCheckpointRef) (*WorkerRuntimeState, string, error) {
+// RebindSource tracks a backend-proven restart of the same source resource.
+func (s WorkerRuntimeStore) RebindSource(ctx context.Context, name, id, expected string, previous, successor WorkerStart) (*WorkerRuntimeState, string, error) {
 	state, etag, err := s.Load(ctx, name)
 	if err != nil {
 		return nil, "", err
 	}
 	op := state.Handoff
-	if op == nil || op.ID != id || (op.Phase != "draining" && op.Phase != "source_lost" && op.Phase != "stopping" && op.Phase != "stopped") || etag != expected {
+	if op == nil || op.ID != id || op.Source != previous || etag != expected || (op.Phase != "stopping" && op.Phase != "stopped") {
 		return nil, "", ErrWorkerStateConflict
 	}
-	phase, reason := "source_lost", "source_exit_unconfirmed"
-	if exit.Exited {
-		if op.SourceStopObservedAt == "" {
-			op.SourceStopObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		}
-		phase, reason = "stopped", ""
-		for _, ref := range refs {
-			if ref.RequiresVerification {
-				phase, reason = "source_lost", "execution_requires_verification"
-				break
-			}
-		}
-		if phase == "stopped" && exit.Successor != "" {
-			if successor == nil {
-				phase, reason = "source_lost", "successor_registration_pending"
-			} else {
-				prefix, _, _ := strings.Cut(op.Source.InstanceID, "/")
-				if successor.Runtime != op.Source.Runtime || successor.InstanceID != prefix+"/"+exit.Successor || !validRuntimeStart(*successor) {
-					return nil, "", ErrWorkerStateInvalid
-				}
-				op.LostSources = append(op.LostSources, op.Source)
-				op.Source, *state.ActiveStart = *successor, *successor
-				op.SourceStopObservedAt = ""
-				phase = "draining"
-			}
-		}
-	} else if !exit.Unconfirmed {
-		if op.SourceStopObservedAt != "" {
-			reason = "conflicting_source_exit_evidence"
-		} else {
-			phase, reason = "draining", ""
-		}
+	oldBackend, oldInstance, _ := strings.Cut(previous.InstanceID, "/")
+	newBackend, newInstance, _ := strings.Cut(successor.InstanceID, "/")
+	oldResource, _, _ := strings.Cut(oldInstance, "/")
+	newResource, _, _ := strings.Cut(newInstance, "/")
+	if !validRuntimeStart(successor) || successor.Runtime != previous.Runtime || oldBackend != newBackend || oldResource != newResource || successor.InstanceID == previous.InstanceID {
+		return nil, "", ErrWorkerStateInvalid
 	}
-	if phase == op.Phase && reason == op.SourceLossReason && reflect.DeepEqual(op.CheckpointRefs, refs) && !(exit.Exited && op.Phase == "draining") {
-		return state, etag, nil
-	}
-	op.Phase, op.SourceLossReason, op.CheckpointRefs = phase, reason, refs
+	op.LostSources = append(op.LostSources, previous)
+	op.Source, state.ActiveStart = successor, &successor
+	op.SourceStopObservedAt, op.Phase = "", "stopping"
 	return s.save(ctx, state, etag)
 }
 
-// Complete records the observed target evidence alongside the source references.
+// Complete marks the registered target ready for normal Worker operation.
 func (s WorkerRuntimeStore) Complete(ctx context.Context, state *WorkerRuntimeState, expected string) (*WorkerRuntimeState, string, error) {
 	if state.Handoff == nil || state.Handoff.Phase != "recovering" || state.Handoff.Target == nil {
 		return nil, "", ErrWorkerStateConflict

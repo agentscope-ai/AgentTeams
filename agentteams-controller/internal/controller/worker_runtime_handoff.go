@@ -98,56 +98,26 @@ func (r *WorkerReconciler) beginDesiredRuntimeHandoff(ctx context.Context, w *v1
 			return false, err
 		}
 	}
-	_, _, err = r.RuntimeStore.BeginDrain(ctx, name)
-	return true, err
+	return true, nil
 }
 
 func (r *WorkerReconciler) reconcileHandoffSource(ctx context.Context, w *v1beta1.Worker, op *service.WorkerHandoff, etag string, state *MemberState) (reconcile.Result, error) {
 	wait := reconcile.Result{RequeueAfter: handoffPoll}
 	state.Message = "Worker runtime handoff: " + op.Phase
-	if op.Phase == "preflight" || ((op.Phase == "draining" || op.Phase == "source_lost") && r.InspectLostHandoff == nil) {
-		return wait, nil
-	}
 	wb, instance, err := r.handoffBackend(ctx, op)
 	if err != nil {
 		return reconcile.Result{}, err
-	}
-	if op.Phase == "draining" || op.Phase == "source_lost" {
-		observer, ok := wb.(backend.RuntimeExitObserver)
-		if !ok {
-			return wait, nil
-		}
-		exit, err := observer.ObserveRuntimeExit(ctx, w.Name, instance)
-		if err != nil {
-			return wait, err
-		}
-		if !exit.Exited && !exit.Unconfirmed && op.Phase == "draining" {
-			return wait, nil
-		}
-		return wait, r.inspectSourceLoss(ctx, w, op, etag, exit)
 	}
 	source, ok := wb.(backend.RuntimeHandoffSource)
 	if !ok {
 		return reconcile.Result{}, fmt.Errorf("backend %s cannot prove source termination", wb.Name())
 	}
-	var next, image string
+	var next string
 	switch op.Phase {
-	case "checkpointed":
+	case "stopping":
 		if err := r.HandoffMatrix.Validate(ctx, w, op.TargetRuntime); err != nil {
 			return wait, err
 		}
-		image = op.TargetImage
-		if image == "" {
-			image = source.HandoffTargetImage(op.TargetRuntime)
-			if w.Spec.Image != "" && (w.Spec.Runtime == op.TargetRuntime || (w.Spec.Runtime == "" && op.Source.Runtime == op.TargetRuntime)) {
-				image = w.Spec.Image
-			}
-		}
-		if image == "" {
-			return reconcile.Result{}, fmt.Errorf("no configured image for target Harness %s", op.TargetRuntime)
-		}
-		next = "stopping"
-	case "stopping":
 		stopped, err := source.StopRuntimeInstance(ctx, w.Name, instance)
 		if err != nil {
 			return wait, r.checkChangedSource(ctx, w, op, etag, wb, instance, err)
@@ -168,7 +138,7 @@ func (r *WorkerReconciler) reconcileHandoffSource(ctx context.Context, w *v1beta
 	default:
 		return reconcile.Result{}, fmt.Errorf("unexpected source handoff phase %q", op.Phase)
 	}
-	_, _, err = r.RuntimeStore.AdvanceLifecycle(ctx, w.Spec.EffectiveWorkerName(w.Name), op.ID, op.Phase, next, etag, image, nil)
+	_, _, err = r.RuntimeStore.AdvanceLifecycle(ctx, w.Spec.EffectiveWorkerName(w.Name), op.ID, op.Phase, next, etag, nil)
 	return wait, err
 }
 
@@ -176,42 +146,31 @@ func (r *WorkerReconciler) reconcileHandoffSource(ctx context.Context, w *v1beta
 // stop and removal. A failed mutation never authorizes a name-based retry.
 func (r *WorkerReconciler) checkChangedSource(ctx context.Context, w *v1beta1.Worker, op *service.WorkerHandoff, etag string, wb backend.WorkerBackend, instance string, cause error) error {
 	observer, ok := wb.(backend.RuntimeExitObserver)
-	if !ok || r.InspectLostHandoff == nil {
+	if !ok {
 		return cause
 	}
 	exit, err := observer.ObserveRuntimeExit(ctx, w.Name, instance)
-	if err != nil || (!exit.Unconfirmed && !exit.Exited) {
+	if err != nil || !exit.Exited {
 		return cause
 	}
-	return r.inspectSourceLoss(ctx, w, op, etag, exit)
-}
-
-func (r *WorkerReconciler) inspectSourceLoss(ctx context.Context, w *v1beta1.Worker, op *service.WorkerHandoff, etag string, exit backend.RuntimeExitObservation) error {
 	name := w.Spec.EffectiveWorkerName(w.Name)
-	var refs []service.WorkerCheckpointRef
-	var successor *service.WorkerStart
-	if exit.Exited {
-		var err error
-		refs, err = r.InspectLostHandoff(ctx, w, op)
+	if exit.Successor != "" {
+		matrix := service.WorkerMatrixStore{Storage: r.RuntimeStore.Storage}
+		consumption, _, err := matrix.Load(ctx, name)
 		if err != nil {
 			return err
 		}
-		if len(refs) == 0 {
-			refs = nil
+		start := consumption.ActiveStart
+		if start.InstanceID != wb.Name()+"/"+exit.Successor || start.Runtime != op.Source.Runtime {
+			return cause
 		}
-		if exit.Successor != "" {
-			matrix := service.WorkerMatrixStore{Storage: r.RuntimeStore.Storage}
-			consumption, _, err := matrix.Load(ctx, name)
-			if err != nil {
-				return err
-			}
-			prefix, _, _ := strings.Cut(op.Source.InstanceID, "/")
-			if start := consumption.ActiveStart; start.InstanceID == prefix+"/"+exit.Successor && start.Runtime == op.Source.Runtime {
-				successor = &start
-			}
-		}
+		_, _, err = r.RuntimeStore.RebindSource(ctx, name, op.ID, etag, op.Source, start)
+		return err
 	}
-	_, _, err := r.RuntimeStore.RecordSourceLoss(ctx, name, op.ID, etag, exit, successor, refs)
+	if op.Phase != "stopping" {
+		return cause
+	}
+	_, _, err = r.RuntimeStore.AdvanceLifecycle(ctx, name, op.ID, op.Phase, "stopped", etag, nil)
 	return err
 }
 
@@ -277,7 +236,7 @@ func (r *WorkerReconciler) reconcileHandoffTarget(ctx context.Context, w *v1beta
 		return wait, nil
 	}
 	if op.Target == nil || *op.Target != start {
-		_, _, err = r.RuntimeStore.AdvanceLifecycle(ctx, name, op.ID, op.Phase, "recovering", etag, "", &start)
+		_, _, err = r.RuntimeStore.AdvanceLifecycle(ctx, name, op.ID, op.Phase, "recovering", etag, &start)
 		return wait, err
 	}
 	// The normal reconcile may maintain services and token projection again.

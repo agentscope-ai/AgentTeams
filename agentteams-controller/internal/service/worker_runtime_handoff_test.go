@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"testing"
 
@@ -42,12 +41,8 @@ func TestHandoffPreflightConcurrentRequestsKeepOneOperation(t *testing.T) {
 	if _, _, err = store.Preflight(t.Context(), "agent", "different", "qwenpaw", "qwenpaw:fixture", source, newETag); !errors.Is(err, ErrWorkerStateConflict) {
 		t.Fatalf("fresh ETag replaced an in-flight operation: %v", err)
 	}
-	draining, drainETag, err := store.BeginDrain(t.Context(), "agent")
-	if err != nil || draining.Handoff.Phase != "draining" || drainETag == newETag {
-		t.Fatalf("begin drain %v %v", draining, err)
-	}
 	retried, retryETag, err := store.Preflight(t.Context(), "agent", after.Handoff.ID, "codex", "codex:fixture", source, "")
-	if err != nil || retried.Handoff.Phase != "draining" || retryETag != drainETag {
+	if err != nil || retried.Handoff.Phase != "stopping" || retryETag != newETag {
 		t.Fatalf("lost-response retry %v %v", retried, err)
 	}
 
@@ -113,25 +108,17 @@ func TestRuntimeHandoffRebindsOnlyProvenRegisteredSourceSuccessor(t *testing.T) 
 	store := WorkerRuntimeStore{Storage: ossfake.NewMemory()}
 	original := WorkerStart{InstanceID: "docker/id/first", Runtime: "hermes", ProcessID: "old"}
 	next := WorkerStart{InstanceID: "docker/id/second", Runtime: "hermes", ProcessID: "new"}
-	if _, _, err := store.Preflight(ctx, "agent", "op", "codex", "codex:fixture", original, ""); err != nil {
-		t.Fatal(err)
-	}
-	_, etag, err := store.BeginDrain(ctx, "agent")
+	_, etag, err := store.Preflight(ctx, "agent", "op", "codex", "codex:fixture", original, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	exit := backend.RuntimeExitObservation{Exited: true, Successor: "id/second"}
-	state, etag, err := store.RecordSourceLoss(ctx, "agent", "op", etag, exit, nil, nil)
-	if err != nil || state.Handoff.SourceLossReason != "successor_registration_pending" || state.Handoff.Source != original {
-		t.Fatalf("unregistered source took over %+v %v", state, err)
-	}
 	forged := next
 	forged.InstanceID = "docker/other"
-	if _, _, err := store.RecordSourceLoss(ctx, "agent", "op", etag, exit, &forged, nil); !errors.Is(err, ErrWorkerStateInvalid) {
+	if _, _, err := store.RebindSource(ctx, "agent", "op", etag, original, forged); !errors.Is(err, ErrWorkerStateInvalid) {
 		t.Fatal("admitted unrelated source")
 	}
-	state, _, err = store.RecordSourceLoss(ctx, "agent", "op", etag, exit, &next, nil)
-	if err != nil || state.Handoff.Phase != "draining" || len(state.Handoff.LostSources) != 1 || state.Handoff.LostSources[0] != original || state.Handoff.Source != next || *state.ActiveStart != next {
+	state, _, err := store.RebindSource(ctx, "agent", "op", etag, original, next)
+	if err != nil || state.Handoff.Phase != "stopping" || len(state.Handoff.LostSources) != 1 || state.Handoff.LostSources[0] != original || state.Handoff.Source != next || *state.ActiveStart != next {
 		t.Fatalf("lost original process or gate %+v %v", state, err)
 	}
 }

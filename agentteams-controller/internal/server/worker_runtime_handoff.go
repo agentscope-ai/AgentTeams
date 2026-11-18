@@ -113,7 +113,7 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		// A lost response may be retried after the source went offline.
-		respond(store.BeginDrain(r.Context(), name))
+		respond(store.ResumeStop(r.Context(), name))
 		return
 	}
 	if !worker.Spec.DesiredContainerMan() || worker.Spec.DesiredState() != "Running" || (worker.Spec.DeployMode != nil && *worker.Spec.DeployMode == v1beta1.DeployModeEdge) {
@@ -153,14 +153,10 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 	if !enroll() {
 		return
 	}
-	if _, _, err := store.Preflight(r.Context(), name, input.RequestID, input.Target, image, start, expected); err != nil {
-		h.writeError(w, err)
-		return
-	}
-	respond(store.BeginDrain(r.Context(), name))
+	respond(store.Preflight(r.Context(), name, input.RequestID, input.Target, image, start, expected))
 }
 
-// The source learns about draining even when there is no new Matrix input.
+// SelfHandoff exposes the registered target to its startup supervisor.
 func (h *WorkerMatrixHandler) SelfHandoff(w http.ResponseWriter, r *http.Request) {
 	name, instance, runtime, _, ok := h.identity(w, r)
 	if !ok {
@@ -196,40 +192,11 @@ func executionHandoff(ctx context.Context, store oss.StorageClient, name string,
 	return state.Handoff, nil
 }
 
-func checkHandoffExecution(op *service.WorkerHandoff, start service.WorkerStart, action string, old, next *taskCheckpoint) error {
-	if op == nil {
+func checkHandoffExecution(op *service.WorkerHandoff, start service.WorkerStart, action string) error {
+	if op == nil || (op.Source == start && op.Phase == "stopping" && action != "claim") {
 		return nil
 	}
-	if op.Source != start || (op.Phase != "preflight" && op.Phase != "draining") || action == "claim" {
-		return fmt.Errorf("Worker handoff %s is draining; new execution is closed", op.ID)
-	}
-	if next == nil || action == "cancel" {
-		return nil
-	}
-	if next.Operation != nil && next.Operation.State == "started" && (old == nil || old.Operation == nil || *next.Operation != *old.Operation) {
-		return errors.New("new side effects are closed while the Worker drains")
-	}
-	if unresolvedOperation(next) {
-		return nil
-	}
-	// Version changes, timestamps and repeated delivery acknowledgements do
-	// not prove that an active inference has reached its next step boundary.
-	steps := len(next.CompletedSteps) > 0 || len(next.RemainingSteps) > 0
-	saved := next.Result != nil && next.Delivery != ""
-	verified := next.Operation != nil && next.Operation.State == "verified"
-	if action == "release" && (steps || saved || verified) {
-		return nil
-	}
-	if len(next.CompletedSteps) > 0 && (old == nil || len(next.CompletedSteps) > len(old.CompletedSteps)) {
-		return nil
-	}
-	if saved && (old == nil || old.Result == nil || old.Delivery != next.Delivery) {
-		return nil
-	}
-	if verified && unresolvedOperation(old) {
-		return nil
-	}
-	return errors.New("draining requires a completed step, saved result, verified effect, or explicit release at a recorded boundary")
+	return fmt.Errorf("Worker handoff %s is in progress; execution admission is closed", op.ID)
 }
 
 func writeHandoffAdmissionError(w http.ResponseWriter, err error) {
@@ -249,7 +216,7 @@ func handoffClaimStillOpen(w http.ResponseWriter, r *http.Request, store oss.Sto
 		return false
 	}
 	if op != nil {
-		writeError(w, 409, "Worker is draining; new execution is closed")
+		writeError(w, 409, "Worker handoff is in progress; new execution is closed")
 		return false
 	}
 	return true

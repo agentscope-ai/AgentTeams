@@ -306,7 +306,6 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/tasks/{id}/execution", mw.Authenticate(http.HandlerFunc(recovery.UpdateExecution)))
 	workerMatrix := NewWorkerMatrixHandler(deps, recovery)
 	mux.Handle("GET /api/v1/runtime/handoff", mw.Authenticate(http.HandlerFunc(workerMatrix.SelfHandoff)))
-	mux.Handle("POST /api/v1/runtime/handoff/checkpoint", mw.Authenticate(http.HandlerFunc(workerMatrix.ConfirmHandoffBoundary)))
 	mux.Handle("POST /api/v1/runtime/handoff/recovered", mw.Authenticate(http.HandlerFunc(workerMatrix.ConfirmHandoffRecovery)))
 	mux.Handle("GET /api/v1/workers/{name}/runtime-handoff", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(workerMatrix.RuntimeHandoff)))
 	mux.Handle("POST /api/v1/workers/{name}/runtime-handoff", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(workerMatrix.RuntimeHandoff)))

@@ -51,7 +51,6 @@ type WorkerReconciler struct {
 	ObservabilityReader client.Reader
 	RuntimeStore        *service.WorkerRuntimeStore
 	HandoffMatrix       service.WorkerHandoffMatrix
-	InspectLostHandoff  func(context.Context, *v1beta1.Worker, *service.WorkerHandoff) ([]service.WorkerCheckpointRef, error)
 
 	Provisioner                 service.WorkerProvisioner
 	Deployer                    service.WorkerDeployer
@@ -200,7 +199,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	var targetHandoff *service.WorkerHandoff
 	var handoffETag string
 	if w.Annotations[service.WorkerRuntimeHandoffAnnotation] != "" && r.RuntimeStore != nil {
-		record, etag, err := r.RuntimeStore.BeginDrain(ctx, w.Spec.EffectiveWorkerName(w.Name))
+		record, etag, err := r.RuntimeStore.ResumeStop(ctx, w.Spec.EffectiveWorkerName(w.Name))
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -218,10 +217,6 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 						return reconcile.Result{}, fmt.Errorf("Worker image changed during handoff")
 					}
 					targetHandoff, handoffETag = op, etag
-				}
-			default:
-				if w.Spec.DesiredState() == "Running" && w.Spec.DesiredContainerMan() {
-					return r.reconcileHandoffSource(ctx, w, op, etag, state)
 				}
 			}
 		}

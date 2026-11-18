@@ -6,7 +6,7 @@ import time
 from uuid import uuid4
 
 from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
-from worker_matrix_delivery import publish_saved
+from worker_matrix_delivery import confirm_bound, publish_saved
 
 log = logging.getLogger(__name__)
 
@@ -21,11 +21,7 @@ async def publish_nio_reply(channel, room, checkpoint, text, identity, write_che
 
     async def bind(next_checkpoint):
         saved = await asyncio.to_thread(write_checkpoint, next_checkpoint)
-        execution = saved["execution"]
-        if (execution.get("state") != "active" or execution.get("runtime") != "qwenpaw"
-                or any(execution.get(key) != identity[key] for key in ("generation", "instance_id", "process_id"))
-                or execution.get("checkpoint") != next_checkpoint):
-            raise RecoveryConflict("Matrix reply device was not bound to the active execution")
+        confirm_bound(saved["execution"], identity, "qwenpaw", next_checkpoint)
 
     async def find(txn, body, sender):
         from nio import RoomMessageText, RoomMessagesResponse

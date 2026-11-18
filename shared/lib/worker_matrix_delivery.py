@@ -36,3 +36,15 @@ async def publish_saved(checkpoint, text, whoami, bind, find, send):
     if not isinstance(event_id, str) or not event_id.startswith("$") or len(event_id) < 2:
         raise RecoveryConflict("Previous Matrix delivery needs verification before retry on this device")
     return event_id
+
+
+def confirm_bound(execution, identity, runtime, checkpoint):
+    """Verify device binding after the Controller stamps the committed checkpoint."""
+    saved = dict(execution.get("checkpoint") or {})
+    submitted = dict(checkpoint)
+    saved.pop("saved_at", None)
+    submitted.pop("saved_at", None)
+    if (execution.get("runtime") != runtime or execution.get("state") != "active" or saved != submitted
+            or any(not identity.get(k) or execution.get(k) != identity[k]
+                   for k in ("instance_id", "process_id", "generation"))):
+        raise RecoveryConflict("Matrix reply device was not bound to the active execution")

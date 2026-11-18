@@ -1,0 +1,25 @@
+{
+  "case": "155",
+  "task_id": "live-openclaw-openhuman-155",
+  "source": "openclaw",
+  "target": "openhuman",
+  "source_revision": "c6dcf56695d1e924db750d53c8d3f0001959adee",
+  "source_container_id": "eaceee6cafd83dcc2a73700b9662d6a7081500d84e98895a3488f5a09b16f084",
+  "source_latest_start": "2026-11-18T15:17:27.04108213Z",
+  "runtime_exit_events": [
+    {
+      "timestamp": "2026-11-18T15:08:31.670456+00:00",
+      "exit_code": 137
+    },
+    {
+      "timestamp": "2026-11-18T15:14:18.775481+00:00",
+      "exit_code": 137
+    }
+  ],
+  "task_status": "assigned",
+  "generation": 1,
+  "completed_steps": [],
+  "cutover_requested": false,
+  "passed": false,
+  "failure": "Source runtime exited with status 137 before the committed boundary. The observed later source boot did not reach step one within the fixture deadline."
+}

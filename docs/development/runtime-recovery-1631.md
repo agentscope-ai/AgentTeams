@@ -2023,3 +2023,14 @@ was requested. The fixture now creates a prepared Task, queues its
 durable Matrix assignment and commits assigned state with the Controller
 ETag. Retries reuse the same notification identity while the Task remains
 prepared. The Controller's assigned commit wakes the queued notification.
+
+[Case155 OpenClaw → OpenHuman](evidence/runtime-recovery-1631-case155-source-restart-timeout.json)
+observed a source runtime exit with code 137 before step one. The same
+source container later started again and did not reach the committed
+boundary before the fixture deadline. No target was created.
+
+[Case156 QwenPaw → OpenHuman](evidence/runtime-recovery-1631-case156-late-source-read.json)
+completed the original Task from its retained step-one boundary. The
+Matrix read arrived 18.357 seconds after the first effect, so the strict
+ordering check failed again. This run predates the prepared-assignment
+fixture used by the follow-up case.

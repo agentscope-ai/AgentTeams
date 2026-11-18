@@ -1,0 +1,130 @@
+{
+  "case": 101,
+  "passed": false,
+  "task_id": "live-openclaw-openclaw-101",
+  "scope": "normal restart; initial native lease refusal, then reused assignment dedup blocks inference",
+  "sources": {
+    "core": "6421981fcc9255a0b779a04557769650172e290e",
+    "openclaw": "c1ffa90136de658593f1ba219817bb5e12d43351",
+    "shared": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6"
+  },
+  "source": {
+    "checkpoint": {
+      "version": 4,
+      "completed_steps": [
+        "one"
+      ],
+      "remaining_steps": [
+        "two",
+        "three"
+      ],
+      "operation": {
+        "id": "fixture:live-openclaw-openclaw-101:one",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=eef8a3d2ae699cbbed6bfa2a073ec95d95f7185edc565f8340b78e5347d2bc5a; step=one; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-101/output/step-one.json",
+          "sha256": "eef8a3d2ae699cbbed6bfa2a073ec95d95f7185edc565f8340b78e5347d2bc5a",
+          "size": 358
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-101/checkpoints/reply-c3e3e0120a4b23f4fb3428528ada45a3603ca184dc605be876cb414b3781cba2.txt",
+        "sha256": "c3e3e0120a4b23f4fb3428528ada45a3603ca184dc605be876cb414b3781cba2",
+        "size": 133
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:2a196be74dea56484dbb54c8fbd8645b8f17529a5314aa98ad1ef11269d1cead",
+      "reply_event": "$fJmqIYkM_FBvgJk-H9iTCvh_b2dbP9Y5WbFSpgkM4js",
+      "saved_at": "2026-11-18T10:51:09.003291737Z"
+    },
+    "generation": 1,
+    "read_receipt": {
+      "source_event": "$F_2IHmJyJCJDzkuErdGt2EG-_tt0F80NXFW--UwipOA",
+      "read_event": "$SDYes-lQqJ6Eo1oCvIvzVMsCasEKWoB9Ipaw-kwB7eQ"
+    },
+    "native_session": {
+      "native": null,
+      "shared_cache": {
+        "schema_version": 1,
+        "kind": "WorkerSessionCache",
+        "member_prefix": "agents/agent-a",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-openclaw-openclaw-101"
+        },
+        "runtime": "openclaw",
+        "start": {
+          "instance_id": "docker/36bef33971e3dad8d9101e39d9d587cde885d4dc50f8e39e08ad4fdf6aaf18c2/2026-11-18T10:49:20.740876134Z",
+          "process_id": "1:1794998960841593513:74cf82c887aa4e52bc8cc7f6c2f52c45",
+          "runtime": "openclaw"
+        },
+        "generation": 1,
+        "native_ref": "agent:main:agentteams-task:1c321ea305a75ed718aeb0c389dec88ba5ef017cf6adc2fb8f16f6f3169ed8c6:e7c34d6e-4960-4464-9b49-7b83308b5504",
+        "native_digest": "b3233ebe9c9bde799ae09cc79e7ae42851e74eb748c8c9f59ca813f89787ae53",
+        "checkpoint_version": 4,
+        "checkpoint_digest": "dc816f17de5127e01d26e2bad962d7ee592570e38aa3f545bc0588518ce7c1ee",
+        "config_generation": 3,
+        "expires_at": 1795085472,
+        "saved_at": "2026-11-18T10:51:14Z"
+      },
+      "shared_native": {
+        "session_key": "agent:main:agentteams-task:1c321ea305a75ed718aeb0c389dec88ba5ef017cf6adc2fb8f16f6f3169ed8c6:e7c34d6e-4960-4464-9b49-7b83308b5504",
+        "session_id": "8ef4f6fd-dc30-4551-8955-fe950fa342ea",
+        "native_digest": "b3233ebe9c9bde799ae09cc79e7ae42851e74eb748c8c9f59ca813f89787ae53",
+        "message_count": 35,
+        "task_mentioned": true,
+        "has_recovery_turn": true
+      },
+      "turn_sessions": [
+        {
+          "session_key": "agent:main:agentteams-task:1c321ea305a75ed718aeb0c389dec88ba5ef017cf6adc2fb8f16f6f3169ed8c6:e7c34d6e-4960-4464-9b49-7b83308b5504",
+          "session_id": "8ef4f6fd-dc30-4551-8955-fe950fa342ea",
+          "native_digest": "b3233ebe9c9bde799ae09cc79e7ae42851e74eb748c8c9f59ca813f89787ae53",
+          "message_count": 35,
+          "task_mentioned": true,
+          "has_recovery_turn": true
+        }
+      ],
+      "config_generation": 3
+    },
+    "ledger": [
+      {
+        "checkpoint_version": 1,
+        "executed_at_ns": 1794999048999674299,
+        "generation": 1,
+        "instance_id": "docker/36bef33971e3dad8d9101e39d9d587cde885d4dc50f8e39e08ad4fdf6aaf18c2/2026-11-18T10:49:20.740876134Z",
+        "process_id": "1:1794998960841593513:74cf82c887aa4e52bc8cc7f6c2f52c45",
+        "step": "one",
+        "task_id": "live-openclaw-openclaw-101",
+        "team_id": "recovery-team"
+      }
+    ]
+  },
+  "docker_events": [
+    {
+      "action": "die",
+      "time_ns": 1794999089009449574,
+      "container": "36bef33971e3dad8d9101e39d9d587cde885d4dc50f8e39e08ad4fdf6aaf18c2"
+    },
+    {
+      "action": "start",
+      "time_ns": 1794999090190611621,
+      "container": "36bef33971e3dad8d9101e39d9d587cde885d4dc50f8e39e08ad4fdf6aaf18c2"
+    }
+  ],
+  "observed_later_start": "2026-11-18T10:54:50.506426147Z",
+  "lease_error": "[openclaw] Reason: Cannot read shared state for discovery: /root/agentteams-fs/agents/agent-a/.openclaw/state/openclaw.sqlite. Retry after the current state operation completes. GatewayLockNamespaceError: cannot verify Gateway ownership from this process (different PID namespace); the owner heartbeat is fresh — run this command inside the Gateway container or with a shared PID namespace. If the previous Gateway stopped, wait up to 90 seconds after its last heartbeat. holder 7 at 36bef33971e3/pid-ns 4026534164, last renewed 6 s ago. wait 84 s and retry.",
+  "native_duplicate": "2026-11-18T11:07:43.560+00:00 [diagnostic] message processed: channel=matrix chatId=room:!H5aFSHBIWms91xNQ0y:recovery-1631.test messageId=$F_2IHmJyJCJDzkuErdGt2EG-_tt0F80NXFW--UwipOA sessionId=8ef4f6fd-dc30-4551-8955-fe950fa342ea sessionKey=agent:main:agentteams-task:1c321ea305a75ed718aeb0c389dec88ba5ef017cf6adc2fb8f16f6f3169ed8c6:e7c34d6e-4960-4464-9b49-7b83308b5504 outcome=skipped duration=36ms reason=duplicate",
+  "latest_task": {
+    "status": "in_progress",
+    "generation": 2,
+    "checkpoint_version": 4,
+    "completed_steps": [
+      "one"
+    ]
+  }
+}

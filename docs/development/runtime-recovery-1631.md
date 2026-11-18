@@ -18,7 +18,7 @@ the image and shared-contract pins actually tested.
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Failed 92](evidence/runtime-recovery-1631-case92-oom.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | — | — | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | — | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
-| OpenClaw | — | — | — | — | [Partial 100](evidence/runtime-recovery-1631-case100-openclaw-partial.json) | — |
+| OpenClaw | — | — | — | — | [Failed 101](evidence/runtime-recovery-1631-case101-openclaw-partial.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
 **4/6 normal restart lanes and 10/30 directed handoffs have passed.** A dash
@@ -1577,3 +1577,14 @@ Codex took generation 2 and completed the original Task at checkpoint 12. The
 independent ledger recorded each of the three step effects once, and Matrix
 recorded one final report. The verified report retains the exact shared-library
 pins used by each image.
+
+[Case101 OpenClaw restart failure](evidence/runtime-recovery-1631-case101-openclaw-partial.json)
+used the ARM64 OpenClaw `c1ffa90` image. The shared descriptor at checkpoint
+4 matched the native transcript before shutdown. Native config validation
+passed on the first restart, then gateway state discovery refused admission
+while the old PID namespace's heartbeat was fresh. A later Controller
+retry started the container, and the Worker claimed generation 2 with the
+same checkpoint. OpenClaw rejected the attempted inference as a duplicate
+of the original Matrix assignment in the reused native session. The Task
+remained in progress with only step one complete. The gateway lease wait
+and the generation-specific native turn are separate fixes.

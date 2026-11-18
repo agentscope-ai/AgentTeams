@@ -1,0 +1,235 @@
+{
+  "task_id": "live-deepseek-harness-codex-97",
+  "case": "97",
+  "scope": "one real deepseek-harness-to-codex in-progress continuation",
+  "mode": "replace",
+  "fixture_prefix": "recovery-1631-live-20261118-v97",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "52a3659b719abb78c17368ce020403c442d4e5db",
+    "deepseek-harness": "6f5aadb0963092f050202211281ed964ba94d070",
+    "codex": "77e1215c01046e8840bdce20d1261e1e772491f9",
+    "shared_contract_by_runtime": {
+      "deepseek-harness": "52a3659b719abb78c17368ce020403c442d4e5db",
+      "codex": "ec246de0"
+    }
+  },
+  "driver_sha256": "22a5fb0e517339545d16bb026f17fe422a49d4870587d81592509e0c4793391a",
+  "native_recovery_sessions": {
+    "hermes": [],
+    "hermes_message_counts": {},
+    "hermes_shared": null,
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "3688d00be8d09b6d6203e0cbd790234bd479f1443019b1faf07bdfb5323af75e",
+      "descriptor": null,
+      "config_generation": null
+    },
+    "codex_shared": {
+      "cache": null,
+      "config_generation": 4,
+      "route": {
+        "task_id": "live-deepseek-harness-codex-97",
+        "team_id": "recovery-team",
+        "generation": 2,
+        "instance_id": "docker/58d7f82bfc29e959441fb444e2b4a912fb5799d2850071178a32d9c4ad51be70/2026-11-18T10:05:01.698113416Z",
+        "process_id": "7:1794996301857717095:a0e8aeadb90848b4a76d3f9269776dde"
+      },
+      "native": {
+        "thread_id": "01a1ee1e-2971-7d00-82bd-8b9274790ca8",
+        "metadata_id": "01a1ee1e-2971-7d00-82bd-8b9274790ca8",
+        "turn_id": "01a1ee1e-356c-7e33-ba51-d6721bc8b713",
+        "rollout": "sessions/2026/11/18/rollout-2026-11-18T10-05-16-01a1ee1e-2971-7d00-82bd-8b9274790ca8.jsonl",
+        "native_digest": "ef24bc0a96591dde7b1640db805da434d12e98c92d230608dea11359d3c535b4",
+        "native_bytes": 94579,
+        "source_inputs": 1,
+        "tool_calls": 5,
+        "tool_outputs": 5
+      }
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 5,
+  "checkpoint_after": 12,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/58d7f82bfc29e959441fb444e2b4a912fb5799d2850071178a32d9c4ad51be70/2026-11-18T10:05:01.698113416Z",
+    "process_id": "7:1794996301857717095:a0e8aeadb90848b4a76d3f9269776dde",
+    "runtime": "codex",
+    "state": "active",
+    "checkpoint": {
+      "version": 12,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-deepseek-harness-codex-97:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=a959e041a09c81a3c91b41c7f6847e5d4271d45357a6a92ec30e0e4eaa5c50d6; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-codex-97/output/step-one.json",
+          "sha256": "d21561e5ed4ce379322aa787b704fff622a45952fadd1fd916dcbb72c6eca672",
+          "size": 362
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-codex-97/output/step-two.json",
+          "sha256": "80710b80a17c160880d76a242abff5f7218799de08fe28680dbfe6b0a6b5ecf9",
+          "size": 362
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-codex-97/output/step-three.json",
+          "sha256": "a959e041a09c81a3c91b41c7f6847e5d4271d45357a6a92ec30e0e4eaa5c50d6",
+          "size": 364
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-codex-97/result.md",
+        "sha256": "9d56114e61ead61b5145b0ac6297a1a64f2b1fa200b6629c4a4cc4c160f44970",
+        "size": 336
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:870067d7a175f6eafe9d7914fb57bd5de08c2fb6424f15b45eaf79e93027f25b",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "hUcl67cS33"
+      },
+      "reply_event": "$pWmtxheX_S-KLnOoDWH33P92SVYJurd22KiG3scD0QM",
+      "saved_at": "2026-11-18T10:06:46.367930533Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T09:59:59Z"
+    },
+    {
+      "action": "progress",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "note": "Step one completed. Checkpoint version 2 saved. Remaining: two, three. Awaiting cutover for next generation.",
+      "seq": 2,
+      "to": "in_progress",
+      "ts": "2026-11-18T10:00:52Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 3,
+      "to": "submitted",
+      "ts": "2026-11-18T10:06:27Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794996030369561573,
+      "generation": 1,
+      "instance_id": "docker/e490b6f386a687cd6e5365f78d407deb23f64b07de7e3af1db8a45fea789e339/2026-11-18T09:59:22.225710015Z",
+      "process_id": "7:1794995962484926859:88af121ff28543998ec1339817234734",
+      "step": "one",
+      "task_id": "live-deepseek-harness-codex-97",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1794996351167713941,
+      "generation": 2,
+      "instance_id": "docker/58d7f82bfc29e959441fb444e2b4a912fb5799d2850071178a32d9c4ad51be70/2026-11-18T10:05:01.698113416Z",
+      "process_id": "7:1794996301857717095:a0e8aeadb90848b4a76d3f9269776dde",
+      "step": "two",
+      "task_id": "live-deepseek-harness-codex-97",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 8,
+      "executed_at_ns": 1794996367772318149,
+      "generation": 2,
+      "instance_id": "docker/58d7f82bfc29e959441fb444e2b4a912fb5799d2850071178a32d9c4ad51be70/2026-11-18T10:05:01.698113416Z",
+      "process_id": "7:1794996301857717095:a0e8aeadb90848b4a76d3f9269776dde",
+      "step": "three",
+      "task_id": "live-deepseek-harness-codex-97",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-codex-97/output/step-one.json",
+      "sha256": "d21561e5ed4ce379322aa787b704fff622a45952fadd1fd916dcbb72c6eca672",
+      "size": 362
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-codex-97/output/step-two.json",
+      "sha256": "80710b80a17c160880d76a242abff5f7218799de08fe28680dbfe6b0a6b5ecf9",
+      "size": 362
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-codex-97/output/step-three.json",
+      "sha256": "a959e041a09c81a3c91b41c7f6847e5d4271d45357a6a92ec30e0e4eaa5c50d6",
+      "size": 364
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-codex-97/result.md",
+      "sha256": "9d56114e61ead61b5145b0ac6297a1a64f2b1fa200b6629c4a4cc4c160f44970",
+      "size": 336
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1794996296968397156,
+    "destroy": 1794996299048537719,
+    "create": 1794996301656600817
+  },
+  "matrix": {
+    "reply_event": "$pWmtxheX_S-KLnOoDWH33P92SVYJurd22KiG3scD0QM",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$WuGhFg2IifokAUFEZFHhpj8_G6mxcL7Qg2ZvSHxsJP8"
+    ],
+    "read_receipt_events": [
+      "$fKXLbX1LCG2FFPvVl-bhGRY4gHRHtmXA_AgE6SvVRZ0"
+    ],
+    "first_source_read_ms": 1794995983416
+  },
+  "operator_handoff": {
+    "id": "live-deepseek-harness-codex-97",
+    "phase": "completed",
+    "source": {
+      "instance_id": "docker/e490b6f386a687cd6e5365f78d407deb23f64b07de7e3af1db8a45fea789e339/2026-11-18T09:59:22.225710015Z",
+      "process_id": "7:1794995962484926859:88af121ff28543998ec1339817234734",
+      "runtime": "deepseek-harness"
+    },
+    "target_runtime": "codex",
+    "target": {
+      "instance_id": "docker/58d7f82bfc29e959441fb444e2b4a912fb5799d2850071178a32d9c4ad51be70/2026-11-18T10:05:01.698113416Z",
+      "process_id": "7:1794996301857717095:a0e8aeadb90848b4a76d3f9269776dde",
+      "runtime": "codex"
+    },
+    "source_stop_observed_at": "2026-11-18T10:04:57.34719804Z",
+    "target_registered_at": "2026-11-18T10:05:03.351332984Z",
+    "completed_at": "2026-11-18T10:05:26.967024767Z",
+    "target_image": "recovery-1631/codex:local"
+  }
+}

@@ -1486,3 +1486,24 @@ effect oracle did not register. No handoff was started. The fixture now asks
 the model to end its turn after the boundary step and scopes final submission
 to a turn with all three completed steps. The native tool and verifier still
 enforce the independent effect and checkpoint requirements.
+
+[Case96 QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
+passed the complete same-Task verifier on common contract `52a3659b` with
+QwenPaw `763877d` and Hermes `282c457`. Both source containers died and were
+removed before their replacements were created. The Task advanced through
+three distinct processes, one independent effect per generation and step.
+The final QwenPaw turn used a fresh native session, with the original
+session and its digest retained. The first returning Matrix sync matched
+the existing QwenPaw device cursor, and only one final report was delivered
+without new input.
+
+[Case97 DeepSeek → Codex CLI handoff](evidence/runtime-recovery-1631-case97-verified.json)
+passed with DeepSeek `6f5aadb` and Codex `77e1215` after simplifying the
+source boundary instruction. The same Task continued in a new Codex App
+Server session at generation 2, from checkpoint 5 to 12, with three
+independent effects and one final Matrix reply. This run retained different
+shared-contract pins. The source boundary was captured about 224 seconds
+before Docker recorded the old container exiting. Core `696146ff` now
+signals the Worker reconcile after durably writing the operation. Its
+test verifies the ordering and idempotent request behavior. The live
+latency with the updated Controller still needs measurement.

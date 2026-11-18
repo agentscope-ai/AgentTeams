@@ -88,21 +88,35 @@ class OpenHumanCacheTests(unittest.TestCase):
                  "checkpoint_digest": hashlib.sha256(json.dumps(cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
                  "history": history,
                  "native_digest": hashlib.sha256(json.dumps(history, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()}
-        proof = {"cache": cache, "authority": "worker-a"}
-        assert_openhuman_native_cache(proof, cp, "task-a")
+        start = {"instance_id": "backend/one", "process_id": "process", "runtime": "openhuman"}
+        execution = {**start, "checkpoint": cp, "generation": 1}
+        shared = {"schema_version": 1, "kind": "WorkerSessionCache", "runtime": "openhuman",
+                  "member_prefix": "agents/agent-a", "work": {"kind": "task", "team_id": "recovery-team", "task_id": "task-a"},
+                  "config_generation": 4, "generation": 1, "start": start, "expires_at": cache["expires_at"],
+                  "checkpoint_version": 4, "checkpoint_digest": cache["checkpoint_digest"], "native_ref": cache["session_id"],
+                  "native_digest": cache["native_digest"]}
+        proof = {"cache": cache, "authority": "worker-a", "descriptor": shared, "config_generation": 4}
+        assert_openhuman_native_cache(proof, execution, "task-a")
+        final = {**execution, "checkpoint": {"version": 10, "delivery": "delivered"}}
+        assert_openhuman_native_cache(proof, final, "task-a", terminal=True)
+        with self.assertRaises(AssertionError):
+            assert_openhuman_native_cache(proof, final, "task-a")
+        for change in [{"generation": 2}, {"config_generation": 5}, {"native_ref": "other"}, {"checkpoint_version": 11}]:
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                assert_openhuman_native_cache({**proof, "descriptor": {**shared, **change}}, final, "task-a", terminal=True)
         for change in [{"runtime": "hermes"}, {"scope": ["foreign-team", "task-a"]},
                        {"scope": ["recovery-team", "task-b"]}, {"authority": "worker-b"},
                        {"checkpoint_digest": "old"}, {"expires_at": 1}, {"session_id": ""},
                        {"native_digest": "changed"}, {"history": []}]:
             with self.subTest(change=change), self.assertRaises(AssertionError):
-                assert_openhuman_native_cache({**proof, "cache": {**cache, **change}}, cp, "task-a")
+                assert_openhuman_native_cache({**proof, "cache": {**cache, **change}}, execution, "task-a")
         for history in [[{"role": "user", "content": "task-a but no tools"}],
                         [{"role": "tool", "content": "a different task"}]]:
             changed = copy.deepcopy(cache)
             changed["history"] = history
             changed["native_digest"] = hashlib.sha256(json.dumps(history, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
             with self.subTest(history=history), self.assertRaises(AssertionError):
-                assert_openhuman_native_cache({**proof, "cache": changed}, cp, "task-a")
+                assert_openhuman_native_cache({**proof, "cache": changed, "descriptor": {**shared, "native_digest": changed["native_digest"]}}, execution, "task-a")
 
 
 class OpenClawCacheTests(unittest.TestCase):

@@ -357,6 +357,14 @@ openclaw_file=home/"runtime/openclaw-task-sessions.json"
 openclaw_cache=json.loads(openclaw_file.read_text()).get(digest(['recovery-team',task_id])) if openclaw_file.exists() else None
 openhuman_file=home/"runtime/openhuman-task-sessions"/(digest(['recovery-team',task_id])+'.json')
 openhuman_cache=json.loads(openhuman_file.read_text()) if openhuman_file.exists() else None
+openhuman_descriptor=None
+openhuman_config_generation=None
+if sys.argv[4]=="openhuman":
+ key='agents/agent-a/runtime/sessions/openhuman/'+work_key+'.json'
+ fetched=subprocess.run(['mc','cat',os.environ['AGENTTEAMS_STORAGE_PREFIX'].rstrip('/')+'/'+key],capture_output=True,text=True)
+ openhuman_descriptor=json.loads(fetched.stdout) if fetched.returncode==0 else None
+ config=__import__('yaml').safe_load((home/'runtime/runtime.yaml').read_text())
+ openhuman_config_generation=config['metadata'].get('generation',0)
 openhuman_authority=hashlib.sha256(json.dumps([os.getenv('AGENTTEAMS_CONTROLLER_URL'),os.getenv('AGENTTEAMS_WORKER_NAME')],ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 qwen_native=[]
 if qwen:
@@ -367,7 +375,7 @@ if qwen:
 print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,"hermes_shared":hermes_shared,
     "hermes_cache":[r for r in rows if r.get("event")=="task.recovery.cache" and r.get("task_id")==task_id],"codex":cache,
     "qwenpaw":qwen,"qwenpaw_native":qwen_native,"qwenpaw_shared":qwen_shared,"openclaw_cache":openclaw_cache,
-    "openhuman":{"cache":openhuman_cache,"authority":openhuman_authority}}))
+    "openhuman":{"cache":openhuman_cache,"authority":openhuman_authority,"descriptor":openhuman_descriptor,"config_generation":openhuman_config_generation}}))
 '''
     interpreter = {"hermes": "/opt/venv/hermes/bin/python", "qwenpaw": "/opt/venv/qwenpaw/bin/python"}.get(runtime, "python3")
     result = json.loads(docker("exec", PREFIX + "-worker-agent-a", interpreter, "-c", code, TASK_ID, task["room_id"], json.dumps(routes), runtime, previous_qwen_ref))
@@ -507,6 +515,8 @@ def cutover(*, watch_return=False):
         raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
     if MODE == "restart" and SOURCE == "hermes":
         assert_hermes_native_cache(before["native_sessions"]["hermes_shared"], cp, TASK_ID)
+    if source == "openhuman" and MODE == "restart" and not FAULT:
+        assert_openhuman_native_cache(before["native_sessions"]["openhuman"], task["execution"], TASK_ID)
     if source == "codex" and not LEGACY_CODEX and MODE == "restart":
         assert_codex_native(before["native_sessions"]["codex_shared"], task, require_cache=True)
     if source == "qwenpaw":
@@ -764,9 +774,9 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     old_ref = before["native_sessions"]["qwenpaw_shared"]["cache"]["native_ref"] if middle else ""
     native = native_sessions(old_ref)
     if SOURCE == "openhuman":
-        assert_openhuman_native_cache(before["native_sessions"]["openhuman"], before["task"]["execution"]["checkpoint"], TASK_ID)
+        assert_openhuman_native_cache(before["native_sessions"]["openhuman"], before["task"]["execution"], TASK_ID)
     if final_runtime == "openhuman":
-        assert_openhuman_native_cache(native["openhuman"], cp, TASK_ID)
+        assert_openhuman_native_cache(native["openhuman"], execution, TASK_ID, terminal=True)
         if MODE == "restart":
             assert native["openhuman"]["cache"]["session_id"] == before["native_sessions"]["openhuman"]["cache"]["session_id"], "valid native Task session was not reused"
     if SOURCE == "qwenpaw":
@@ -936,12 +946,25 @@ def assert_qwenpaw_native_route(proof, task_id, generation):
     return _qwenpaw_native(proof, task_id, refs.pop())
 
 
-def assert_openhuman_native_cache(proof, checkpoint, task_id):
-    cache = proof["cache"]
+def assert_openhuman_native_cache(proof, execution, task_id, *, terminal=False):
+    cache, shared, checkpoint = proof["cache"], proof["descriptor"], execution["checkpoint"]
+    assert shared and shared["schema_version"] == 1 and shared["kind"] == "WorkerSessionCache"
+    assert shared["runtime"] == "openhuman" and shared["member_prefix"] == "agents/agent-a"
+    assert shared["work"] == {"kind": "task", "team_id": "recovery-team", "task_id": task_id}
+    assert shared["generation"] == execution["generation"] and all(shared["start"][k] == execution[k] for k in ("instance_id", "process_id", "runtime"))
+    assert shared["expires_at"] > time.time() and shared["config_generation"] == proof["config_generation"]
+    assert cache and cache["session_id"] == shared["native_ref"] and cache["native_digest"] == shared["native_digest"]
+    assert cache["checkpoint_digest"] == shared["checkpoint_digest"]
+    if terminal:
+        # Submission closes session publication. Verify the target generation's
+        # last active native tool transcript and validate its final Task separately.
+        assert 0 < shared["checkpoint_version"] <= checkpoint["version"]
+    else:
+        assert shared["checkpoint_version"] == checkpoint["version"]
+        assert cache["checkpoint_digest"] == hashlib.sha256(json.dumps(checkpoint, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert cache and cache["format_version"] == 1 and cache["runtime"] == "openhuman"
     assert cache["scope"] == ["recovery-team", task_id] and cache["authority"] == proof["authority"], "native Task/Worker scope changed"
     assert cache["session_id"] and cache["expires_at"] > time.time()
-    assert cache["checkpoint_digest"] == hashlib.sha256(json.dumps(checkpoint, sort_keys=True, separators=(",", ":")).encode()).hexdigest(), "native history is behind the shared checkpoint"
     history = cache["history"]
     assert history and all(row["role"] in {"user", "assistant", "tool"} and isinstance(row["content"], str) for row in history)
     assert any(row["role"] == "tool" for row in history), "native tool history is absent"

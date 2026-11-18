@@ -14,6 +14,7 @@ import secrets
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -82,7 +83,7 @@ def state():
     return json.loads(STATE.read_text())
 
 
-def api(method, path, body=None, *, headers=None):
+def api(method, path, body=None, *, headers=None, with_etag=False):
     token = docker("exec", CONTROLLER, "cat", "/var/run/agentteams/cli-token")
     # OrbStack may rebind dynamically published ports on network attachment.
     port = docker("port", CONTROLLER, "8090/tcp").rsplit(":", 1)[1]
@@ -90,7 +91,8 @@ def api(method, path, body=None, *, headers=None):
         data=json.dumps(body).encode() if body is not None else None, method=method,
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", **(headers or {})})
     with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
+        result = json.load(response)
+        return (result, response.headers["ETag"]) if with_etag else result
 
 
 def tracing():
@@ -195,14 +197,21 @@ print(json.dumps(any(row.get('event')=='runtime.ready' and datetime.datetime.fro
     if not json.loads(docker("exec", PREFIX + "-worker-agent-a", "python3", "-c", ready_code, actual["State"]["StartedAt"])):
         raise RuntimeError("Wait for native runtime.ready after this container start before assignment")
     room = api("GET", "teams/" + team)["teamRoomID"]
-    if subprocess.run(["docker", "exec", CONTROLLER, "mc", "stat",
-            "agentteams/recovery-1631/teams/" + team + "/shared/tasks/" + task_id + "/meta.json"], capture_output=True).returncode == 0:
+    task_endpoint = f"tasks/{task_id}/meta?team={team}"
+    prepared = None
+    try:
+        prepared, etag = api("GET", task_endpoint, with_etag=True)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    if prepared is not None and (prepared.get("status") != "prepared"
+            or prepared.get("notifyTxn") != "live-assignment-" + CASE):
         raise RuntimeError("Fixture Task already exists; inspect instead of overwriting")
     main = {"task_id": main_id, "task_kind": "main", "team_id": team, "status": "in_progress", "room_id": room,
         "title": "Runtime recovery live acceptance", "dispatch_mode": "manual", "plan_type": "dag",
         "tasks": [{"task_id": task_id, "parent_task_id": main_id, "status": "assigned"}]}
     task = {"task_id": task_id, "main_task_id": main_id, "parent_task_id": main_id, "team_id": team,
-        "task_kind": "subtask", "title": f"Run three stable steps across {SOURCE} to {TARGET}", "status": "assigned",
+        "task_kind": "subtask", "title": f"Run three stable steps across {SOURCE} to {TARGET}", "status": "prepared",
         "assigned_to": "@agent-a:recovery-1631.test", "room_id": room, "notifyTxn": "live-assignment-" + CASE,
         "recovery_fixture": {"oracle_version": 4, "oracle_url": "http://" + PREFIX + "-oracle:8091"}}
     if FAULT == "after-effect":
@@ -233,14 +242,23 @@ The external test driver will replace your container at a step boundary without 
         spec += "\nFault scenario: in generation 1 the helper deliberately waits after the external effect, before its artifact/checkpoint. While that invocation runs, do not invoke it again, cancel it or manually finish its checkpoint. The driver will terminate your container. In generation 2 or later, use the same helper to verify the external outcome before continuing; never re-execute the unknown effect.\n"
     objects = {task_id + "/spec.md": spec, task_id + "/attempts.json": "[]",
         task_id + "/acceptance.py": (Path(__file__).parent / "fixtures/runtime_recovery_step.py").read_text()}
-    for suffix, value in objects.items():
-        docker("exec", "-i", CONTROLLER, "mc", "pipe", "agentteams/recovery-1631/teams/" + team + "/shared/tasks/" + suffix, text=value)
-    docker("exec", "-i", CONTROLLER, "mc", "pipe", "agentteams/recovery-1631/teams/" + team
-        + "/shared/recovery-fixtures/" + task_id + "/effects/.keep", text="")
-    # Use the real conditional Task creation contract. mc pipe uses a multipart
-    # ETag even for small input; it is not a substitute for Task metadata CAS.
-    for meta in (main, task):
-        api("PUT", "tasks/" + meta["task_id"] + "/meta?team=" + team, meta, headers={"If-None-Match": "*"})
+    if prepared is None:
+        for suffix, value in objects.items():
+            docker("exec", "-i", CONTROLLER, "mc", "pipe", "agentteams/recovery-1631/teams/" + team + "/shared/tasks/" + suffix, text=value)
+        docker("exec", "-i", CONTROLLER, "mc", "pipe", "agentteams/recovery-1631/teams/" + team
+            + "/shared/recovery-fixtures/" + task_id + "/effects/.keep", text="")
+        # Queue the durable notification before the Task becomes discoverable.
+        # The real Controller wakes the queued intent at the assigned commit.
+        main_endpoint = f"tasks/{main_id}/meta?team={team}"
+        try:
+            api("GET", main_endpoint)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            api("PUT", main_endpoint, main, headers={"If-None-Match": "*"})
+        etag = api("PUT", task_endpoint, task, headers={"If-None-Match": "*"})["etag"]
+    else:
+        assert prepared == task, "Prepared fixture identity changed before assignment"
     event = {"kind": "task_assigned", "main_task_id": main_id, "task_id": task_id,
              "delivery_id": task["notifyTxn"], "text": spec}
     code = """import json,os,pathlib,urllib.request,sys
@@ -248,8 +266,10 @@ token=pathlib.Path(os.environ['AGENTTEAMS_AUTH_TOKEN_FILE']).read_text().strip()
 request=urllib.request.Request(os.environ['AGENTTEAMS_CONTROLLER_URL']+'/api/v1/coordination/events',data=sys.stdin.buffer.read(),headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
 with urllib.request.urlopen(request,timeout=20) as response: print(response.read().decode())
 """
-    receipt = docker("exec", "-i", PREFIX + "-worker-leader", "python3", "-c", code, text=json.dumps(event))
-    print(json.dumps({"task_id": task_id, "main_task_id": main_id, "room_id": room, "notification": json.loads(receipt)}))
+    receipt = json.loads(docker("exec", "-i", PREFIX + "-worker-leader", "python3", "-c", code, text=json.dumps(event)))
+    assert receipt["accepted"] and receipt["event_id"]
+    api("PUT", task_endpoint, {**task, "status": "assigned", "eventId": receipt["event_id"]}, headers={"If-Match": etag})
+    print(json.dumps({"task_id": task_id, "main_task_id": main_id, "room_id": room, "notification": receipt}))
 
 
 def refresh_controller():

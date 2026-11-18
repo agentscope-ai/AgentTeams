@@ -62,13 +62,14 @@ Current release-build candidate pins on this Draft:
 | Codex | `426bfdd` | `4fca52d0` |
 | Hermes | `f5d74a3` | `4fca52d0` |
 | QwenPaw | `a76f5c0` | `b3f89683` |
-| DeepSeek | `6f5aadb` | `c1039c29` |
+| DeepSeek | `6a5e61d` | `52a3659b` |
 | OpenClaw | `c6dcf56` | `cdc2800c` |
 | OpenHuman | `a7fd8fe` | `cdc2800c` |
 
 Codex `426bfdd` updates the companion CI packaging pin for the native code
 at `28dcf22`. The evidence below records the image and shared-contract inputs
 actually run. The release-build candidate still needs its integrated gates.
+DeepSeek `6a5e61d` pins the same shared code as the live `6f5aadb` image.
 
 ## Implemented contract
 
@@ -2014,3 +2015,11 @@ reply. The source Task discovery ran before the Matrix assignment's read
 receipt, which arrived 55.708 seconds after the first effect. The verifier
 requires the source receipt before step one. The run remains partial,
 and a separate run exercises the full source-to-target ordering.
+
+[Case157 OpenHuman → OpenClaw](evidence/runtime-recovery-1631-case157-assignment-absent.json)
+committed step one from the assigned Task before the fixture observed its
+Matrix assignment. The original Task was retained and no runtime handoff
+was requested. The fixture now creates a prepared Task, queues its
+durable Matrix assignment and commits assigned state with the Controller
+ETag. Retries reuse the same notification identity while the Task remains
+prepared. The Controller's assigned commit wakes the queued notification.

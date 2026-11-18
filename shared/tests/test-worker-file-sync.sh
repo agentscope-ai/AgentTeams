@@ -91,7 +91,7 @@ test_manager_owned_and_local_runtime_files_stay_local() {
     state_dir="${tmpdir}/state"
     remote_prefix="agentteams/agentteams-storage/agents/alice"
     mkdir -p "${workspace}/results" "${workspace}/credentials" \
-        "${workspace}/.openclaw/matrix" "${state_dir}" "${tmpdir}/bin"
+        "${workspace}/.openclaw/matrix" "${workspace}/.openclaw/credentials/matrix" "${state_dir}" "${tmpdir}/bin"
 
     cat > "${tmpdir}/bin/mc" <<'EOF'
 #!/bin/bash
@@ -107,6 +107,7 @@ EOF
     printf '{}\n' > "${workspace}/openclaw.json"
     printf 'secret\n' > "${workspace}/credentials/token"
     printf 'crypto\n' > "${workspace}/.openclaw/matrix/state"
+    printf 'device\n' > "${workspace}/.openclaw/credentials/matrix/credentials.json"
     printf 'task result\n' > "${workspace}/results/output.md"
 
     worker_sync_push_once "${workspace}" "${remote_prefix}" "${state_dir}"
@@ -249,3 +250,8 @@ worker_sync_should_push "runtime/matrix-bridge-state.json" ||
 python3 "${SCRIPT_DIR}/test-worker-config-pull.py"
 
 echo "PASS: worker file sync"
+
+
+if worker_sync_should_push ".openclaw/credentials/matrix/credentials.json"; then
+    fail "native Matrix device credentials would be uploaded without their crypto store"
+fi

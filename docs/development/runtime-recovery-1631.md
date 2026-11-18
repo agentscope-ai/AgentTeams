@@ -7,7 +7,9 @@ installation was upgraded or deployed for this work.
 ## Regression after synchronizing main
 
 The Core image was built from `3050cc2f` (includes main `f99e1442`).
-The Dashboard image was built from `ad4239e` (includes main `6483fc6`).
+The switch used Dashboard `ad4239e`. The [latest Dashboard check](evidence/runtime-recovery-1631-dashboard-final-members.json)
+used `f886072`, which includes main `87e0c62` and loaded both upgraded
+Workers in the new dashboard.
 Core commit `ee03b5cb` changes only the upgrade CLI and its tests. Each
 runtime report names the actual Harness and shared-contract input.
 
@@ -15,16 +17,43 @@ runtime report names the actual Harness and shared-contract input.
 | --- | --- |
 | Worker restart, Codex | [Case 191](evidence/runtime-recovery-1631-case191-main-codex-restart.json) reused its native session and continued the same Task. |
 | Worker restart, OpenHuman | [Case 194](evidence/runtime-recovery-1631-case194-main-openhuman-restart.json) continued the Task after a compatible session was restored. |
+| Worker restart, Hermes | [Case 197](evidence/runtime-recovery-1631-case197-main-hermes-restart.json) continued the Task after reuse of the compatible session. |
 | Worker SIGKILL and restart, OpenClaw | [Case 195](evidence/runtime-recovery-1631-case195-main-openclaw-sigkill.json) continued the Task on the rebuilt Harness. |
+| Worker restart, QwenPaw | [Case 206](evidence/runtime-recovery-1631-case206-main-qwenpaw-restart.json) verified the assignment read before step one, reused the native session, and checked the resumed model route on the full ARM64 image. |
+| Worker restart, DeepSeek | [Case 204](evidence/runtime-recovery-1631-case204-main-deepseek-restart.json) reused the same native session and advanced from turn 1 to turn 2 on the full ARM64 image. |
 | CLI switch, Codex → Hermes | [Case 192](evidence/runtime-recovery-1631-case192-main-cli-switch.json) finished the original in-progress Task after the old container stopped. |
 | Dashboard switch, OpenClaw → Hermes | [Case 193](evidence/runtime-recovery-1631-case193-main-dashboard-switch.json) finished the original Task. The [browser](evidence/runtime-recovery-1631-case193-dashboard-ui.json) displayed the completed operation using the Controller's request ID. |
+| CLI switch, QwenPaw → Hermes | [Case 210](evidence/runtime-recovery-1631-case210-final-cli-switch.json) used Core and ARM64 QwenPaw from `5530ea5c`. It submitted the original Task after stopping the source. |
 
-Each of these Task runs recorded a new process generation, one external
+All six Harnesses passed a post-main restart. OpenClaw used the
+SIGKILL variant. Each of these Task runs recorded a new process generation, one external
 effect per step, unchanged Task identity, and one canonical Matrix report
 without further input. Case 193 uses the rebuilt OpenClaw image. The
 Codex and Hermes runs keep the companion image pins listed in their
 case reports. The earlier 30-lane matrix below is tied to its recorded
 source revisions.
+
+The [DeepSeek first restart attempt](evidence/runtime-recovery-1631-case196-main-deepseek-partial.json)
+and [QwenPaw first restart attempt](evidence/runtime-recovery-1631-case198-main-qwenpaw-partial.json)
+both finished the original Task with one durable effect per step and one
+canonical Matrix report. The DeepSeek fixture rejected a registration and
+verification call for the completed first step. Case 204 passed the full
+verifier with the rebuilt pinned image and fewer concurrent stacks. The
+first QwenPaw Worker recovered after an automatic startup retry while the
+fixture expected one start and the local trace query was unavailable.
+A [full ARM64 attempt](evidence/runtime-recovery-1631-case199-main-qwenpaw-stream-failure.json)
+reclaimed the Task but lost its first resumed model stream when the local
+Gateway process was killed. Case 205 completed the authoritative
+Task, including all effects and one canonical reply, but its strict
+read-order assertion failed. Case 206 enabled the existing fixture's
+source-read prerequisite and passed the full verifier.
+
+The [Manager Codex → Hermes → Codex round trip](evidence/runtime-recovery-1631-case202-main-manager-round-trip.json)
+kept the Manager and Matrix room. The returned Codex issued exactly one
+inference for the previously pending event and none for the completed
+Hermes event. The [first attempt](evidence/runtime-recovery-1631-case200-main-manager-stream-failure.json)
+received the pending event and then lost its model response stream.
+The retry used a short prompt without a tool call.
 
 The [published 1.2.7 upgrade](evidence/runtime-recovery-1631-v127-upgrade-verified.json)
 preserved the Controller data volume, Dashboard data volume, Worker
@@ -34,8 +63,38 @@ QwenPaw process discovered the in-progress Task seeded on the 1.2.7
 Controller, validated its existing artifact, submitted the same Task, and
 sent a single canonical Matrix completion without a new room input.
 That lane used a rebuilt TeamHarness and recovery helper on the pinned
-QwenPaw image with its existing AMD64 dependencies. Its full ARM64 image
-build and packaging validation are separate lanes.
+QwenPaw image with its existing AMD64 dependencies. A second
+[published 1.2.7 upgrade on ARM64](evidence/runtime-recovery-1631-v127-arm64-upgrade-verified.json)
+used the full candidate QwenPaw image. It kept the original data volume,
+Worker and room, could still read the pre-upgrade Matrix events, and
+answered a new message after replacement.
+
+A [six-Harness 1.2.7 compatibility run](evidence/runtime-recovery-1631-v127-six-harness-startup.json)
+started from published Worker images, kept the same Controller volume,
+and verified each original account, room and pre-upgrade reply after
+replacement. Every candidate Worker answered a new probe after native
+readiness. The Core and five Harnesses used ARM64. The OpenHuman
+candidate used its pinned AMD64 package. This run also surfaced a QwenPaw
+Task that parked in `needs_verification` after its model marked the
+built-in Task submission as a started external operation. Commit
+`5530ea5c` clarifies that the canonical submission tool owns its
+result commit. The verification guard stays in effect for external operations.
+
+The [post-fix ARM64 rerun](evidence/runtime-recovery-1631-v127-final-arm64-task-verified.json)
+used the published 1.2.7 Controller and QwenPaw image, the full candidate
+Controller and QwenPaw images from `5530ea5c`, and a fresh isolated volume.
+The old-format Task was written through 1.2.7 before the upgrade. On the
+same volume, the new Worker found and submitted that Task with a verified
+original artifact and a single canonical Matrix completion. No other
+sender posted to the task room between replacement and that completion.
+
+The [integration regressions](evidence/runtime-recovery-1631-postfix-ci-regressions.json)
+record the QwenPaw bootstrap test's final-message guard and the OpenClaw
+Team creation race. Core `db4f9ab2` delays the Team projection until the
+Worker publishes its Matrix identity. The same change waits for Team
+finalization before deleting referenced Workers in the cleanup test.
+The ARM64 Controller from `5530ea5c` passed the real Team Admin flow
+(25 assertions) and cleanup with a live Team (9 assertions).
 
 ## Live acceptance by source and target
 

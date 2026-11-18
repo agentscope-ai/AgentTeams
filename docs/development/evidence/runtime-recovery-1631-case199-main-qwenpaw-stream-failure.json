@@ -1,0 +1,57 @@
+{
+  "scope": "QwenPaw full ARM64 launched and reclaimed the original Task. The first resumed model stream was interrupted when the sandbox Gateway process was killed.",
+  "case": "199",
+  "harness": "qwenpaw",
+  "full_fixture_pass": false,
+  "core": "3050cc2f348cd003a346c0e27f812282c915081a",
+  "harness_revision": "a76f5c0090811e8b8dd7ec9183d00cbefa92f996",
+  "shared_worker_revision": "3050cc2f348cd003a346c0e27f812282c915081a",
+  "image": "sha256:b60e8e92d65105c51584a04012c0024ea6992bc0b84aaa7af1b5c0a2b6be5bb9",
+  "status": "in_progress",
+  "task_id": "live-qwenpaw-qwenpaw-199",
+  "room_id": "!Y941xzGX7zQ4SCqr3b:recovery-1631.test",
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 5,
+  "checkpoint_after": 5,
+  "completed_steps": [
+    "one"
+  ],
+  "delivery": "delivered",
+  "independent_effects": [
+    {
+      "step": "one",
+      "generation": 1,
+      "executed_at_ns": 1795026744684620824,
+      "checkpoint_version": 1
+    }
+  ],
+  "rejected_calls": [],
+  "verified_storage_artifacts": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-199/output/step-one.json",
+      "sha256": "b8d129ed6183efe9320eba2bd45a5c389db11dcdd2285cd88a07ff7bde7b7db4",
+      "size": 356
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-199/checkpoints/reply-0a7a6150160edfbfba97fa6fd187d4d95dc6cf0afba8c66aedcca7250f075450.txt",
+      "sha256": "0a7a6150160edfbfba97fa6fd187d4d95dc6cf0afba8c66aedcca7250f075450",
+      "size": 147
+    }
+  ],
+  "container_started_at": "2026-11-18T18:33:56.13435811Z",
+  "observed_model_failure": {
+    "at": "2026-11-18T18:34:33.395735Z",
+    "error": "peer closed connection without sending complete message body (incomplete chunked read)"
+  },
+  "gateway_exit": {
+    "at": "2026-11-18T18:34:33.397506Z",
+    "error": "Envoy exited with error: signal: killed"
+  },
+  "matrix_progress": {
+    "reply_event": "$Nl4cNNf-5kBjHqNHTMAJdC6WDUg-GgIj_x18lhGBT4k",
+    "external_matrix_inputs_after_stop": [],
+    "progress_copies": 1
+  },
+  "progress_matrix_event": "$Nl4cNNf-5kBjHqNHTMAJdC6WDUg-GgIj_x18lhGBT4k"
+}

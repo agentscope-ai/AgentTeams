@@ -1,0 +1,310 @@
+{
+  "published_source": "v1.2.7",
+  "core_revision": "3050cc2f348cd003a346c0e27f812282c915081a",
+  "controller_platform": "linux/arm64",
+  "controller": {
+    "old": {
+      "container_id": "71eceb30bcfd43666b47c04b2568447e1b1379524de6d830f548b5a9240c5251",
+      "image_id": "sha256:3a8bb42419d82531d4ef1916ac7685108b9238d8fcad43310fca5d2b9e5f5932",
+      "image": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-embedded:v1.2.7",
+      "platform": "linux/arm64",
+      "repo_digests": [
+        "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-embedded@sha256:3a8bb42419d82531d4ef1916ac7685108b9238d8fcad43310fca5d2b9e5f5932"
+      ],
+      "started_at": "2026-11-18T18:59:03.054875677Z",
+      "revision": null,
+      "harness_revision": null,
+      "data_volume": "recovery-1631-live-20261119-upgradearmtask-data"
+    },
+    "new": {
+      "container_id": "c9813a56c5f0789e009e0ab6023751f1561a9b580b895a33e1970741fc1da671",
+      "image_id": "sha256:f3d4899bd8015774b7d0f75ccd288ee553b183fa5aebf3fa6a5968aad59b007a",
+      "image": "recovery-1631/controller:local",
+      "platform": "linux/arm64",
+      "repo_digests": [],
+      "started_at": "2026-11-18T19:09:00.032546151Z",
+      "revision": "3050cc2f348cd003a346c0e27f812282c915081a",
+      "harness_revision": null,
+      "data_volume": "recovery-1631-live-20261119-upgradearmtask-data"
+    },
+    "old_retained_stopped": true
+  },
+  "storage_preflight_consistent": true,
+  "harnesses": {
+    "qwenpaw": {
+      "before": {
+        "room_id": "!pLNpkxCHRfnfWng98b:recovery-1631.test",
+        "matrix_user_id": "@upgrade-qwenpaw:recovery-1631.test",
+        "prompt_event": "$CceFpYr4cGabNMVpjKErmsCjBWL-DBkhgEX1WXLeDLg",
+        "reply_event": "$NNJieUHPqz9PwzyvoW4LMoyufAYUeu513F1ILCZ7Xjk",
+        "marker": "UPGRADE127_BEFORE_RETRY_QWENPAW_1631"
+      },
+      "after": {
+        "room_id": "!pLNpkxCHRfnfWng98b:recovery-1631.test",
+        "matrix_user_id": "@upgrade-qwenpaw:recovery-1631.test",
+        "prompt_event": "$4oTQJLMcqmgTTUXxb30ejlW7qWlMCxJv2DwW5hzVq3A",
+        "reply_event": "$PtFNJNJDihqwdavqtm7De5hKB9pcy-XupuLdRfZ8gQQ",
+        "marker": "UPGRADE127_AFTER_QWENPAW_1631"
+      },
+      "replacement": {
+        "worker": "upgrade-qwenpaw",
+        "room_id": "!pLNpkxCHRfnfWng98b:recovery-1631.test",
+        "matrix_user_id": "@upgrade-qwenpaw:recovery-1631.test",
+        "old": {
+          "id": "74bf4c94ec192dae4ff4c2c7174c8689d8a7285cd00ca0bcaaff76f266ac2fbc",
+          "image": "sha256:28c9974a7cf2d25d565f7bf79be6adc25eb8091501d3229aaa05b06a2a113dcb"
+        },
+        "new": {
+          "id": "a902cc372b704b508d27f15724eb228e7903c2f5e5d56351861d2f5dc311b283",
+          "image": "sha256:b60e8e92d65105c51584a04012c0024ea6992bc0b84aaa7af1b5c0a2b6be5bb9",
+          "started_at": "2026-11-18T19:09:15.677772107Z",
+          "revision": "3050cc2f348cd003a346c0e27f812282c915081a"
+        }
+      },
+      "candidate": {
+        "container_id": "a902cc372b704b508d27f15724eb228e7903c2f5e5d56351861d2f5dc311b283",
+        "image_id": "sha256:b60e8e92d65105c51584a04012c0024ea6992bc0b84aaa7af1b5c0a2b6be5bb9",
+        "image": "recovery-1631/qwenpaw:local",
+        "platform": "linux/arm64",
+        "repo_digests": [
+          "recovery-1631/qwenpaw@sha256:b60e8e92d65105c51584a04012c0024ea6992bc0b84aaa7af1b5c0a2b6be5bb9"
+        ],
+        "started_at": "2026-11-18T19:09:15.677772107Z",
+        "revision": "3050cc2f348cd003a346c0e27f812282c915081a",
+        "harness_revision": "a76f5c0090811e8b8dd7ec9183d00cbefa92f996",
+        "data_volume": null
+      }
+    },
+    "codex": {
+      "before": {
+        "room_id": "!w9u8fgTpsniAGVrlcC:recovery-1631.test",
+        "matrix_user_id": "@upgrade-codex:recovery-1631.test",
+        "prompt_event": "$8MsTWb--NzLMk6SVCXuzEbWqE66E6CRCCnkQGeAzm2M",
+        "reply_event": "$npzBOT7vJRWgoQiCiY5oKpt6FQcub-qO6UOImWDq5mg",
+        "marker": "UPGRADE127_BEFORE_CODEX_1631"
+      },
+      "after": {
+        "room_id": "!w9u8fgTpsniAGVrlcC:recovery-1631.test",
+        "matrix_user_id": "@upgrade-codex:recovery-1631.test",
+        "prompt_event": "$1em097IKYi3arlv1KS400uURHWQ-iMIPv9dFvEu2ua0",
+        "reply_event": "$3GKn8cTRxZ8dDev4tZQj6vvt8f-JmH8QIzPSbBa49pw",
+        "marker": "UPGRADE127_AFTER_CODEX_1631"
+      },
+      "replacement": {
+        "worker": "upgrade-codex",
+        "room_id": "!w9u8fgTpsniAGVrlcC:recovery-1631.test",
+        "matrix_user_id": "@upgrade-codex:recovery-1631.test",
+        "old": {
+          "id": "c735d81065d6a55d875c86c63f4453b96d3021b2da90cee47fc0742f1c94924e",
+          "image": "sha256:8775b676210c4703231ca08abf563a1a92dffafe6ec49e2913c35800919dc79b"
+        },
+        "new": {
+          "id": "b1cb1fb52c83b16689db1b124ef15bc6fff11bb135291a4025d0e2e7d8f85ebc",
+          "image": "sha256:5c5d12e4cc7374aab581459f66c7e077ecb7a4fa68fc936b1436fb505fb489a4",
+          "started_at": "2026-11-18T19:13:44.016158556Z",
+          "revision": "ed56a7d143c70c7323a0743165052fbe0d430df8"
+        }
+      },
+      "candidate": {
+        "container_id": "b1cb1fb52c83b16689db1b124ef15bc6fff11bb135291a4025d0e2e7d8f85ebc",
+        "image_id": "sha256:5c5d12e4cc7374aab581459f66c7e077ecb7a4fa68fc936b1436fb505fb489a4",
+        "image": "recovery-1631/codex:local",
+        "platform": "linux/arm64",
+        "repo_digests": [
+          "recovery-1631/codex@sha256:5c5d12e4cc7374aab581459f66c7e077ecb7a4fa68fc936b1436fb505fb489a4"
+        ],
+        "started_at": "2026-11-18T19:13:44.016158556Z",
+        "revision": "ed56a7d143c70c7323a0743165052fbe0d430df8",
+        "harness_revision": "426bfdd7b0d2eade599afcc166baf1771367d937",
+        "data_volume": null
+      }
+    },
+    "hermes": {
+      "before": {
+        "room_id": "!B2SD1oMA93xoNyHC85:recovery-1631.test",
+        "matrix_user_id": "@upgrade-hermes:recovery-1631.test",
+        "prompt_event": "$s9NLffZTDYqjk2F0bc5IKVf8V5zMETGsf-iBPoAg0FY",
+        "reply_event": "$60UNP5FRdZ0_ui6-dDA5WbC4n_bKMZe4g5RedwNZhKQ",
+        "marker": "UPGRADE127_BEFORE_RETRY_HERMES_1631"
+      },
+      "after": {
+        "room_id": "!B2SD1oMA93xoNyHC85:recovery-1631.test",
+        "matrix_user_id": "@upgrade-hermes:recovery-1631.test",
+        "prompt_event": "$epWhNYIOxJOvTk3eSuFQWDzgj2HwgtAG6RauLaGUOc4",
+        "reply_event": "$AvIs9znCzoTUEKsjepC3cmCerjyUtITyFEoUHN3xAKs",
+        "marker": "UPGRADE127_AFTER_RETRY_HERMES_1631"
+      },
+      "replacement": {
+        "worker": "upgrade-hermes",
+        "room_id": "!B2SD1oMA93xoNyHC85:recovery-1631.test",
+        "matrix_user_id": "@upgrade-hermes:recovery-1631.test",
+        "old": {
+          "id": "74ed7e61302a96e6bf3b7d54397a81f8056036ac3308eb0ed94c232796abe718",
+          "image": "sha256:7e15acca604f3e60edb2404a15c19a6341c34563fd7034488142c22ad5deae70"
+        },
+        "new": {
+          "id": "94019a70cd7202d9bb0ef1d1697baafe4423a3003d461719a8f1de61341fb128",
+          "image": "sha256:5ef8452caf94cb38be6482398080dc5c48e0872ea2a1d059bede862ca848421b",
+          "started_at": "2026-11-18T19:14:21.017814116Z",
+          "revision": "3050cc2f348cd003a346c0e27f812282c915081a"
+        }
+      },
+      "candidate": {
+        "container_id": "94019a70cd7202d9bb0ef1d1697baafe4423a3003d461719a8f1de61341fb128",
+        "image_id": "sha256:5ef8452caf94cb38be6482398080dc5c48e0872ea2a1d059bede862ca848421b",
+        "image": "recovery-1631/hermes:local",
+        "platform": "linux/arm64",
+        "repo_digests": [
+          "recovery-1631/hermes@sha256:5ef8452caf94cb38be6482398080dc5c48e0872ea2a1d059bede862ca848421b"
+        ],
+        "started_at": "2026-11-18T19:14:21.017814116Z",
+        "revision": "3050cc2f348cd003a346c0e27f812282c915081a",
+        "harness_revision": "f5d74a34ae90f470263cab88371ad462b8583eef",
+        "data_volume": null
+      }
+    },
+    "deepseek-harness": {
+      "before": {
+        "room_id": "!K0r6isdCsJ8pZDu9kl:recovery-1631.test",
+        "matrix_user_id": "@upgrade-deepseek-harness:recovery-1631.test",
+        "prompt_event": "$6bi_OjNVGDaQ6alfqsEbuhOp9KpcjRp8OurVXA_409M",
+        "reply_event": "$JbjKtvVFaEohJuBIYmENQ_KaB6Ei0S8q4ddRIxWNrtQ",
+        "marker": "UPGRADE127_BEFORE_DEEPSEEK-HARNESS_1631"
+      },
+      "after": {
+        "room_id": "!K0r6isdCsJ8pZDu9kl:recovery-1631.test",
+        "matrix_user_id": "@upgrade-deepseek-harness:recovery-1631.test",
+        "prompt_event": "$0GR94XzOWRYhlOsxqdbomF3tYen5QOAiHHPRrOgjOiw",
+        "reply_event": "$MmYnZ6pYGdthzFubpAvGQ82n7WgQ5rueOTfkPapEexU",
+        "marker": "UPGRADE127_AFTER_RETRY_DEEPSEEK-HARNESS_1631"
+      },
+      "replacement": {
+        "worker": "upgrade-deepseek-harness",
+        "room_id": "!K0r6isdCsJ8pZDu9kl:recovery-1631.test",
+        "matrix_user_id": "@upgrade-deepseek-harness:recovery-1631.test",
+        "old": {
+          "id": "16541080d98a655ecef57a6cc225e547bfd6d6d572644e18344bb933ca88ea48",
+          "image": "sha256:7948fd3e6a0c538fef5000b2c1b310e76081a48abcb923314710ec41458fee53"
+        },
+        "new": {
+          "id": "b68571280638cf78c8f704d6e7d1da2226a0799d5c65c77178179df5c7d73310",
+          "image": "sha256:3951ee7c7532edf04b35ed634e87b42a5f426940fece241b83400984ff693fb3",
+          "started_at": "2026-11-18T19:16:28.294981304Z",
+          "revision": "3050cc2f348cd003a346c0e27f812282c915081a"
+        }
+      },
+      "candidate": {
+        "container_id": "b68571280638cf78c8f704d6e7d1da2226a0799d5c65c77178179df5c7d73310",
+        "image_id": "sha256:3951ee7c7532edf04b35ed634e87b42a5f426940fece241b83400984ff693fb3",
+        "image": "recovery-1631/deepseek:local",
+        "platform": "linux/arm64",
+        "repo_digests": [
+          "recovery-1631/deepseek@sha256:3951ee7c7532edf04b35ed634e87b42a5f426940fece241b83400984ff693fb3"
+        ],
+        "started_at": "2026-11-18T19:16:28.294981304Z",
+        "revision": "3050cc2f348cd003a346c0e27f812282c915081a",
+        "harness_revision": "6a5e61d62b7d84429d53bd5718ad62457198610f",
+        "data_volume": null
+      }
+    },
+    "openhuman": {
+      "before": {
+        "room_id": "!NBe4Kz9yrL7brgonIW:recovery-1631.test",
+        "matrix_user_id": "@upgrade-openhuman:recovery-1631.test",
+        "prompt_event": "$A3RE6Y073LG0MLMmKUF-qLgDmjJkCGqDF4RUzLkHmB4",
+        "reply_event": "$bQLO5NxqzxQNJ70wtiVFsxS0VeBHQzItqa7WscI7GmM",
+        "marker": "UPGRADE127_BEFORE_OPENHUMAN_1631"
+      },
+      "after": {
+        "room_id": "!NBe4Kz9yrL7brgonIW:recovery-1631.test",
+        "matrix_user_id": "@upgrade-openhuman:recovery-1631.test",
+        "prompt_event": "$nsLor0cZLqXziZI3QRwN389hDzdGtanRDy3iyQwe3s4",
+        "reply_event": "$qKCgPDRyf_RenCw1ESbR7n8os-H5epilcP_q0KsHXok",
+        "marker": "UPGRADE127_AFTER_RETRY_OPENHUMAN_1631"
+      },
+      "replacement": {
+        "worker": "upgrade-openhuman",
+        "room_id": "!NBe4Kz9yrL7brgonIW:recovery-1631.test",
+        "matrix_user_id": "@upgrade-openhuman:recovery-1631.test",
+        "old": {
+          "id": "66455a6beb14c17729568b166b95bad4d625a335686766e543f91c1df28aa6d8",
+          "image": "sha256:e02273a9025e7464c20bfb5ea3820a8a76c47ef8f595c6e372277566bc8d61cd"
+        },
+        "new": {
+          "id": "1c170974314e950adb4e89171800330d6e369fe7fb406e7da67bbee188649f6e",
+          "image": "sha256:e3a56e4943c7d86d6c646d9c5cf4f69599058960eff35578c162a31a3c346b47",
+          "started_at": "2026-11-18T19:21:44.703330554Z",
+          "revision": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6"
+        }
+      },
+      "candidate": {
+        "container_id": "1c170974314e950adb4e89171800330d6e369fe7fb406e7da67bbee188649f6e",
+        "image_id": "sha256:e3a56e4943c7d86d6c646d9c5cf4f69599058960eff35578c162a31a3c346b47",
+        "image": "recovery-1631/openhuman:local",
+        "platform": "linux/amd64",
+        "repo_digests": [
+          "recovery-1631/openhuman@sha256:e3a56e4943c7d86d6c646d9c5cf4f69599058960eff35578c162a31a3c346b47"
+        ],
+        "started_at": "2026-11-18T19:21:44.703330554Z",
+        "revision": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6",
+        "harness_revision": "a7fd8fecb74eff07054920373b5a9e9772b0af30",
+        "data_volume": null
+      }
+    },
+    "openclaw": {
+      "before": {
+        "room_id": "!FlPEWnJ1nswGcV61N9:recovery-1631.test",
+        "matrix_user_id": "@upgrade-openclaw:recovery-1631.test",
+        "prompt_event": "$J_CLW23BJV8NfBDG76c9Ik5Uzg9MGNCH0G_tqLB5K8M",
+        "reply_event": "$RPHNSNQsh6JJ9avJmt_Nnor5AWgSTA3ZZWAUyEZNiR8",
+        "marker": "UPGRADE127_BEFORE_OPENCLAW_1631"
+      },
+      "after": {
+        "room_id": "!FlPEWnJ1nswGcV61N9:recovery-1631.test",
+        "matrix_user_id": "@upgrade-openclaw:recovery-1631.test",
+        "prompt_event": "$p3aF2duwMmGtoLXcww5JcKpvcnVkju3zscwM7lz-d7M",
+        "reply_event": "$OjCXElrsbTK1ymuSRJKGJqlKBobmn8YZhcjUaTGtUvA",
+        "marker": "UPGRADE127_AFTER_OPENCLAW_1631"
+      },
+      "replacement": {
+        "worker": "upgrade-openclaw",
+        "room_id": "!FlPEWnJ1nswGcV61N9:recovery-1631.test",
+        "matrix_user_id": "@upgrade-openclaw:recovery-1631.test",
+        "old": {
+          "id": "01bbab0cbb75eb8fb3270e67c90f030fb3101fd7a765aa98d66b1ad8157c4dcf",
+          "image": "sha256:8ef4e3fcfe995c93a778dded149755080e6aa0f3f69de0d32c0c0edd0f7dc863"
+        },
+        "new": {
+          "id": "d55301f04da941993683ba2afd024959550ab1b40a4af3b739816d88de59416f",
+          "image": "sha256:6cc6c58126ac2a4019be26a1fe97f7ca50d4fa85a108850b87a07c7bfdded4cf",
+          "started_at": "2026-11-18T19:18:37.910866991Z",
+          "revision": "3050cc2f348cd003a346c0e27f812282c915081a"
+        }
+      },
+      "candidate": {
+        "container_id": "d55301f04da941993683ba2afd024959550ab1b40a4af3b739816d88de59416f",
+        "image_id": "sha256:6cc6c58126ac2a4019be26a1fe97f7ca50d4fa85a108850b87a07c7bfdded4cf",
+        "image": "recovery-1631/openclaw:local",
+        "platform": "linux/arm64",
+        "repo_digests": [
+          "recovery-1631/openclaw@sha256:6cc6c58126ac2a4019be26a1fe97f7ca50d4fa85a108850b87a07c7bfdded4cf"
+        ],
+        "started_at": "2026-11-18T19:24:06.975709679Z",
+        "revision": "3050cc2f348cd003a346c0e27f812282c915081a",
+        "harness_revision": "c6dcf56695d1e924db750d53c8d3f0001959adee",
+        "data_volume": null
+      }
+    }
+  },
+  "legacy_qwenpaw_task": {
+    "task_id": "upgrade-127-task",
+    "state": "needs_verification",
+    "checkpoint_version": 1,
+    "operation": {
+      "id": "submit-upgrade-127-task",
+      "state": "started"
+    },
+    "submissions": 0,
+    "notes": "The model recorded Task submission as a started external operation. The Controller preserved it for verification and rejected submission. The replacement Worker still answered in the original personal room."
+  }
+}

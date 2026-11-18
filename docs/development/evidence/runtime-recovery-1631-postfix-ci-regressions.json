@@ -1,0 +1,38 @@
+{
+  "qwenpaw_bootstrap": {
+    "failed_job": "https://github.com/agentscope-ai/AgentTeams/actions/runs/44362166072/job/135021692712",
+    "test": "test-26-qwenpaw-teamharness-plugin-mode",
+    "failure": "The substring verifier matched a reasoning message before the hello script wrote its result.",
+    "fix": "f2eae440f3c3fd6d96448ad09b7c4d64678c6909",
+    "passing_job": "https://github.com/agentscope-ai/AgentTeams/actions/runs/44370323873/job/135045724243"
+  },
+  "openclaw_team_creation": {
+    "failed_job": "https://github.com/agentscope-ai/AgentTeams/actions/runs/44370323873/job/135045724185",
+    "test": "test-19-human-and-team-admin",
+    "startup_error": "Worker Matrix transport and identity are required",
+    "failed_run_assertions": {
+      "passed": 24,
+      "failed": 1
+    },
+    "guard_reproduction": "TestReconcileTeamTeamReferences_WorkerNotProvisionedKeepsTeamActive failed before the Team projection skipped unprovisioned Workers.",
+    "fix": "db4f9ab27cedf7344c35a008066862deddafe26e",
+    "local_passing_run": {
+      "core_revision": "5530ea5c951d3f66f15fd9df68224e3bd2139170",
+      "core_image": "sha256:9aa617e55de72d54fe1f5ae3cddf5a89c66c7c1761dcd2f4af0147bf6b598c99",
+      "platform": "linux/arm64",
+      "openclaw_revision": "c6dcf56695d1e924db750d53c8d3f0001959adee",
+      "test_19": {
+        "passed": 25,
+        "failed": 0
+      },
+      "test_100": {
+        "passed": 9,
+        "failed": 0
+      },
+      "test_100_with_live_team": {
+        "passed": 9,
+        "failed": 0
+      }
+    }
+  }
+}

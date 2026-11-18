@@ -1,0 +1,103 @@
+{
+  "published_source": "v1.2.7",
+  "source_release_commit": "d9d39d8ec7caf1f98bfd6c801bf43dd477aa1208",
+  "core_revision": "5530ea5c951d3f66f15fd9df68224e3bd2139170",
+  "upgrade_script_revision": "ee03b5cb55f416860006008255d73ac1757ff9e1",
+  "platform": "linux/arm64",
+  "storage_preflight_consistent": true,
+  "controller": {
+    "old": {
+      "container_id": "bfd32f47782d05fb10dcda7e3098bc065417b03864b1ba3f66fabb69b079fc51",
+      "image_id": "sha256:3a8bb42419d82531d4ef1916ac7685108b9238d8fcad43310fca5d2b9e5f5932",
+      "image": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-embedded:v1.2.7",
+      "platform": "linux/arm64",
+      "repo_digests": [
+        "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-embedded@sha256:3a8bb42419d82531d4ef1916ac7685108b9238d8fcad43310fca5d2b9e5f5932"
+      ],
+      "started_at": "2026-11-18T19:25:06.086881737Z",
+      "revision": null,
+      "harness_revision": null,
+      "data_volume": "recovery-1631-live-20261119-upgradefinal-data"
+    },
+    "new": {
+      "container_id": "76d4460d38523af96a0ef9185664c87ae9af1e9c3df3880a48c4060e392e56fc",
+      "image_id": "sha256:9aa617e55de72d54fe1f5ae3cddf5a89c66c7c1761dcd2f4af0147bf6b598c99",
+      "image": "recovery-1631/controller:local",
+      "platform": "linux/arm64",
+      "repo_digests": [
+        "recovery-1631/controller@sha256:9aa617e55de72d54fe1f5ae3cddf5a89c66c7c1761dcd2f4af0147bf6b598c99"
+      ],
+      "started_at": "2026-11-18T19:42:34.137076084Z",
+      "revision": "5530ea5c951d3f66f15fd9df68224e3bd2139170",
+      "harness_revision": null,
+      "data_volume": "recovery-1631-live-20261119-upgradefinal-data"
+    },
+    "old_retained_stopped": true
+  },
+  "harnesses": {
+    "qwenpaw": {
+      "before": {
+        "room_id": "!pOBbilceeZ0nNJDakb:recovery-1631.test",
+        "matrix_user_id": "@upgrade-qwenpaw:recovery-1631.test",
+        "prompt_event": "$oXGbwCR-SlwYvGUrSo0r3Po83LtS1Rx-5J4sCD-HKXA",
+        "reply_event": "$uUDcVcl5nfktf2qKjcKcFx29f84VSdJEPoCAg0rCnhY",
+        "marker": "UPGRADE127_BEFORE_RETRY_QWENPAW_1631"
+      },
+      "after": {
+        "room_id": "!pOBbilceeZ0nNJDakb:recovery-1631.test",
+        "matrix_user_id": "@upgrade-qwenpaw:recovery-1631.test",
+        "prompt_event": "$JOtILsL9iRGBssSy9MirWm058ZrF9QgdA_jJta1CLcs",
+        "reply_event": "$pwzKcJc-GPmartEuGTquBUn4MkmwiXtlIoBh0qS5ebU",
+        "marker": "UPGRADE127_AFTER_QWENPAW_1631"
+      },
+      "replacement": {
+        "worker": "upgrade-qwenpaw",
+        "room_id": "!pOBbilceeZ0nNJDakb:recovery-1631.test",
+        "matrix_user_id": "@upgrade-qwenpaw:recovery-1631.test",
+        "old": {
+          "id": "c9405a51aef493a25a8f175553585cfec8f98ad6643709384ab832b7366d4629",
+          "image": "sha256:28c9974a7cf2d25d565f7bf79be6adc25eb8091501d3229aaa05b06a2a113dcb"
+        },
+        "new": {
+          "id": "a1262cef3418ca03a3341e4aa2e961895f7f7c9568643236228bacccde73b423",
+          "image": "sha256:8c3b64d26d8f9ec93d6253bce4e017f144c3b64943b5434bb0a446a075e76c54",
+          "started_at": "2026-11-18T19:42:50.733581787Z",
+          "revision": "5530ea5c951d3f66f15fd9df68224e3bd2139170"
+        }
+      },
+      "candidate": {
+        "container_id": "a1262cef3418ca03a3341e4aa2e961895f7f7c9568643236228bacccde73b423",
+        "image_id": "sha256:8c3b64d26d8f9ec93d6253bce4e017f144c3b64943b5434bb0a446a075e76c54",
+        "image": "recovery-1631/qwenpaw:local",
+        "platform": "linux/arm64",
+        "repo_digests": [
+          "recovery-1631/qwenpaw@sha256:8c3b64d26d8f9ec93d6253bce4e017f144c3b64943b5434bb0a446a075e76c54"
+        ],
+        "started_at": "2026-11-18T19:42:50.733581787Z",
+        "revision": "5530ea5c951d3f66f15fd9df68224e3bd2139170",
+        "harness_revision": "a76f5c0090811e8b8dd7ec9183d00cbefa92f996",
+        "data_volume": null
+      }
+    }
+  },
+  "legacy_qwenpaw_task": {
+    "task_id": "upgrade-127-task",
+    "room_id": "!XrgYUM7e5LVvm8Pt3f:recovery-1631.test",
+    "assignee": "@upgrade-qwenpaw:recovery-1631.test",
+    "source_status": "in_progress",
+    "has_prior_execution_record": false,
+    "seeded_through_published_api": true,
+    "generation": 1,
+    "target_status": "submitted",
+    "original_artifact_sha256": "3a9a8dde69f07bc179ed78c92b82905214dca89e0d1bb4214c76972dd59b78ea",
+    "result_file_sha256": "0c84a7e54be8ea9f0578b8b3134e26a11263a73dea5b5872c4f76b4c531b4644",
+    "structured_result_digest": "3ca65d0a41a9535d6d27dbc74c4fd5197c1b634c766e3aac4ba0fc56499fc65b",
+    "submissions": 1,
+    "matrix": {
+      "canonical_event": "$SQ1OWGEzqBndl_BHvGyvkks_1DiQ7MurDGPT8ooxjZc",
+      "canonical_sha256": "9f1b7ce0d88a7b1295ea19ae744154b68ce0737468b07e99c2eb17c94e9ec84a",
+      "canonical_copies": 1,
+      "other_senders_before_report": []
+    }
+  }
+}

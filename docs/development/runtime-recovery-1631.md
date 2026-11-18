@@ -15,10 +15,10 @@ the image and shared-contract pins actually tested.
 | Source → Target | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | [Pass 121](evidence/runtime-recovery-1631-case121-verified.json) | — |
-| Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
+| Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Partial 128](evidence/runtime-recovery-1631-case128-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | — |
-| OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | — | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
+| OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Partial 125](evidence/runtime-recovery-1631-case125-partial.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
 **5/6 normal restart lanes and 19/30 directed handoffs have passed.** A dash
@@ -1761,3 +1761,31 @@ The local layer now routes to that executable and checks the hash before
 seeding new cases 127 (restart) and 128 (Hermes → OpenHuman). The fixture
 Dockerfile prioritizes the executable at the canonical image path over a
 retained wrapper target. OpenHuman runtime acceptance remains in progress.
+
+[Case125 OpenClaw → QwenPaw](evidence/runtime-recovery-1631-case125-partial.json)
+reached a native submission and final delivery on the original Task with
+one accepted effect for each step. The oracle also rejected repeated
+registration, verification and POST attempts for step two. The strict
+verifier failed on the additional POSTs. This case remains partial and is
+excluded from the directed pass count.
+
+[Case128 Hermes → OpenHuman](evidence/runtime-recovery-1631-case128-partial.json)
+proved the old container was removed, the exact CI executable started, and
+the replacement claimed the original Task at generation 2. It reached no
+new step. Native execution timed out after five minutes and the independent
+ledger retained only the source effect. In case127 the same timeout occurred
+before the first step of the OpenHuman restart fixture. The fixture's short
+model requests returned HTTP 200 for both streaming and non-streaming.
+The private synthetic request capture in case129 showed a successful real
+model response for the Task within five seconds. Its request had zero
+structured tool schemas, and the response carried a textual TeamHarness ACK
+request. The native Task turn timed out again without an ACK. The precise
+point of failure in the tool path still needs diagnosis.
+
+The live driver now supports \`RECOVERY_E2E_EXPIRE_HERMES_SESSION=1\` for a
+normal Hermes restart with an expired shared descriptor. It first proves the
+old native session and checkpoint agree, ages only the test descriptor and
+restarts through the Controller. The verifier requires a fresh native session
+ID and the same Task, effects and result assertions as an ordinary restart.
+This scenario is running separately as case130. The 27 fixture, policy and
+evidence tests passed with the driver change.

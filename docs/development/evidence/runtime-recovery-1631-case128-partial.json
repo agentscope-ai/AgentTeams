@@ -1,0 +1,111 @@
+{
+  "case": "128",
+  "task_id": "live-hermes-openhuman-128",
+  "scope": "partial: original task claimed, native execution timed out before step two",
+  "source_harness": "f5d74a34ae90f470263cab88371ad462b8583eef",
+  "target_harness": "7788c27e26d1d2d69923e0101266218d9234a09c",
+  "target_native_sha256": "22cbbf4687231dc0e35acc14110c728e7454ced89c94827f91ab791443100a26",
+  "docker_order_ns": {
+    "die": 1795005850537994676,
+    "destroy": 1795005860549270477,
+    "create": 1795005891292804694
+  },
+  "source_read_receipt": {
+    "source_event": "$wNLn9t1R3VUEUMZ-1c1diuMSHJkHNL18-Z98lpXRdYo",
+    "read_event": "$ZLRMVIzg8ZieQC7wAg5_Lso08NUtd46ttejDvI2mamg"
+  },
+  "native_timeout": [
+    "12:51:43:WRN:dispatch Task native execution timed out; side effects require verification"
+  ],
+  "final_task_status": "in_progress",
+  "target_execution": {
+    "generation": 2,
+    "instance_id": "docker/8fa9f0395ab49d03063d17e090bff4fe3e2cc0f327bff13cffb7a997cc85a02f/2026-11-18T12:44:56.908926056Z",
+    "process_id": "1:1795005913325654442:6215de9c3ead41bb9551c90edb006c2a",
+    "runtime": "openhuman",
+    "state": "active",
+    "checkpoint": {
+      "version": 5,
+      "completed_steps": [
+        "one"
+      ],
+      "remaining_steps": [
+        "two",
+        "three"
+      ],
+      "operation": {
+        "id": "fixture:live-hermes-openhuman-128:one",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=8fb92e1b97996dc06ce01c6113d55f39186fd6cdbb66d6fd4b55c059efffe996; step=one; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-openhuman-128/output/step-one.json",
+          "sha256": "8fb92e1b97996dc06ce01c6113d55f39186fd6cdbb66d6fd4b55c059efffe996",
+          "size": 357
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-hermes-openhuman-128/checkpoints/reply-31efd2f57babf378379128ce764b367caf5749d81933a60e951c274d83de594f.txt",
+        "sha256": "31efd2f57babf378379128ce764b367caf5749d81933a60e951c274d83de594f",
+        "size": 233
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:fc10b4051f529bfbb1a2d97a6644dc34ba68b44226e488ae6493a94fb7899840",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "XpaDQq29FL"
+      },
+      "reply_event": "$MqELT9TtUMHzIbc0r45wYIPEaR8yt6kc1lx-4KjqWd0",
+      "saved_at": "2026-11-18T12:43:36.148992698Z"
+    },
+    "reply_generation": 1
+  },
+  "ledger": {
+    "calls": [
+      {
+        "accepted": true,
+        "at_ns": 1795005689988997334,
+        "method": "REGISTER",
+        "process_id": "1:1795005524410512542:4833433391ed41bd8710d32b6350e057",
+        "step": "one",
+        "task_id": "live-hermes-openhuman-128",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1795005696628574828,
+        "method": "POST",
+        "process_id": "1:1795005524410512542:4833433391ed41bd8710d32b6350e057",
+        "step": "one",
+        "task_id": "live-hermes-openhuman-128",
+        "team_id": "recovery-team"
+      }
+    ],
+    "effects": [
+      {
+        "checkpoint_version": 1,
+        "executed_at_ns": 1795005696628679289,
+        "generation": 1,
+        "instance_id": "docker/1652498e1752216529dbf38363f8fe9a9feda5e089905e43b707af5d4bdf359b/2026-11-18T12:38:43.835642279Z",
+        "process_id": "1:1795005524410512542:4833433391ed41bd8710d32b6350e057",
+        "step": "one",
+        "task_id": "live-hermes-openhuman-128",
+        "team_id": "recovery-team"
+      }
+    ],
+    "intents": [
+      {
+        "checkpoint_version": 1,
+        "generation": 1,
+        "instance_id": "docker/1652498e1752216529dbf38363f8fe9a9feda5e089905e43b707af5d4bdf359b/2026-11-18T12:38:43.835642279Z",
+        "process_id": "1:1795005524410512542:4833433391ed41bd8710d32b6350e057",
+        "step": "one",
+        "task_id": "live-hermes-openhuman-128",
+        "team_id": "recovery-team"
+      }
+    ]
+  },
+  "full_lane_passed": false
+}

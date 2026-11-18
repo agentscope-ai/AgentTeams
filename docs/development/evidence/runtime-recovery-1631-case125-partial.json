@@ -1,0 +1,223 @@
+{
+  "case": "125",
+  "task_id": "live-openclaw-qwenpaw-125",
+  "scope": "partial: task submitted; extra attempts rejected by independent effect ledger",
+  "source_harness": "c6dcf56695d1e924db750d53c8d3f0001959adee",
+  "target_harness": "a76f5c0090811e8b8dd7ec9183d00cbefa92f996",
+  "docker_order_ns": {
+    "die": 1795006017234674919,
+    "destroy": 1795006021018026719,
+    "create": 1795006031283142993
+  },
+  "source_read_receipt": {
+    "source_event": "$8UNiMPBiYE8a6e7ShNauPNUoZ6zk1qqmZwRxRI2mVjc",
+    "read_event": "$p9JzI-S4eo14hik_Os8I-qADGb1GR51BtBlmkQaOBTk"
+  },
+  "final_status": "submitted",
+  "checkpoint_before": 4,
+  "checkpoint_after": 11,
+  "generation_before": 1,
+  "generation_after": 2,
+  "final_reply_event": "$dChtJRbXoaLhmD-MuiTZWF4wZ6gm3KmgHqip-6aObmo",
+  "ledger": {
+    "calls": [
+      {
+        "accepted": true,
+        "at_ns": 1795005821387129730,
+        "method": "REGISTER",
+        "process_id": "1:1795005567418090639:5142267c1f8c437d9908ca70e8f540ab",
+        "step": "one",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1795005824379584580,
+        "method": "POST",
+        "process_id": "1:1795005567418090639:5142267c1f8c437d9908ca70e8f540ab",
+        "step": "one",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1795006339140205291,
+        "method": "REGISTER",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1795006389507939678,
+        "method": "REGISTER",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1795006422408372384,
+        "method": "GET",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1795006443822769610,
+        "method": "POST",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1795006469702746357,
+        "method": "GET",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1795006472097781880,
+        "method": "REGISTER",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1795006527903414402,
+        "method": "GET",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1795006545328690654,
+        "method": "POST",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1795006558308868951,
+        "method": "POST",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1795006575688436079,
+        "method": "GET",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1795006589306498022,
+        "method": "GET",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1795006630901798898,
+        "method": "REGISTER",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "three",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": true,
+        "at_ns": 1795006638296577912,
+        "method": "POST",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "three",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      }
+    ],
+    "effects": [
+      {
+        "checkpoint_version": 1,
+        "executed_at_ns": 1795005824379614330,
+        "generation": 1,
+        "instance_id": "docker/0e16568739c53ff638f26d54723f1c219fac1ee39290e6ac8ddb3fbca7a0d5b1/2026-11-18T12:39:26.82316029Z",
+        "process_id": "1:1795005567418090639:5142267c1f8c437d9908ca70e8f540ab",
+        "step": "one",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "checkpoint_version": 5,
+        "executed_at_ns": 1795006545328773614,
+        "generation": 2,
+        "instance_id": "docker/8282899125b9bf641f3f0e7d815e44e6b5b2441f2c57c22f5fd340d643f2a5c1/2026-11-18T12:47:11.736288068Z",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "checkpoint_version": 7,
+        "executed_at_ns": 1795006638296598579,
+        "generation": 2,
+        "instance_id": "docker/8282899125b9bf641f3f0e7d815e44e6b5b2441f2c57c22f5fd340d643f2a5c1/2026-11-18T12:47:11.736288068Z",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "three",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      }
+    ],
+    "intents": [
+      {
+        "checkpoint_version": 1,
+        "generation": 1,
+        "instance_id": "docker/0e16568739c53ff638f26d54723f1c219fac1ee39290e6ac8ddb3fbca7a0d5b1/2026-11-18T12:39:26.82316029Z",
+        "process_id": "1:1795005567418090639:5142267c1f8c437d9908ca70e8f540ab",
+        "step": "one",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "checkpoint_version": 5,
+        "generation": 2,
+        "instance_id": "docker/8282899125b9bf641f3f0e7d815e44e6b5b2441f2c57c22f5fd340d643f2a5c1/2026-11-18T12:47:11.736288068Z",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "two",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      },
+      {
+        "checkpoint_version": 7,
+        "generation": 2,
+        "instance_id": "docker/8282899125b9bf641f3f0e7d815e44e6b5b2441f2c57c22f5fd340d643f2a5c1/2026-11-18T12:47:11.736288068Z",
+        "process_id": "1:1795006032999272867:31cdca3038ef4c7fadf52fc8377d84bf",
+        "step": "three",
+        "task_id": "live-openclaw-qwenpaw-125",
+        "team_id": "recovery-team"
+      }
+    ]
+  },
+  "full_lane_passed": false
+}

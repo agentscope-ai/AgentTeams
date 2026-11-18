@@ -41,6 +41,7 @@ OPERATOR_HANDOFF = os.getenv("RECOVERY_E2E_HANDOFF") == "1"
 LEGACY_CODEX = os.getenv("RECOVERY_E2E_LEGACY_CODEX") == "1"
 RETURN_TO_SOURCE = os.getenv("RECOVERY_E2E_RETURN") == "1"
 FAULT = os.getenv("RECOVERY_E2E_FAULT", "")
+EXPIRE_HERMES_SESSION = os.getenv("RECOVERY_E2E_EXPIRE_HERMES_SESSION") == "1"
 if FAULT not in {"", "after-effect"}:
     raise ValueError("Unknown recovery fault injection")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
@@ -51,6 +52,8 @@ if OPERATOR_HANDOFF and MODE != "replace":
     raise ValueError("The operator handoff requires a target Harness")
 if RETURN_TO_SOURCE and (not OPERATOR_HANDOFF or (SOURCE, TARGET) != ("qwenpaw", "hermes") or FAULT):
     raise ValueError("The stale QwenPaw session regression needs two operator handoffs via Hermes")
+if EXPIRE_HERMES_SESSION and (SOURCE != "hermes" or MODE != "restart" or FAULT):
+    raise ValueError("Session expiry requires a Hermes restart at a committed step boundary")
 CASE = os.getenv("RECOVERY_E2E_CASE", "01")
 if not re.fullmatch(r"[0-9]{2,3}", CASE):
     raise ValueError("RECOVERY_E2E_CASE must be two or three decimal digits")
@@ -646,6 +649,18 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
         if previous and previous["phase"] != "completed":
             raise RuntimeError("Another handoff is active")
         before["dashboard_cutover"] = {"previous_request_id": previous.get("id")}
+    if EXPIRE_HERMES_SESSION:
+        # Leave the native session and Task intact. Only age the fixture's shared descriptor.
+        labels = json.loads(docker("inspect", CONTROLLER))[0]["Config"]["Labels"]
+        assert labels.get("io.agentteams.recovery.owner") == "1631"
+        work = json.dumps(["agents/agent-a", "task", "recovery-team", TASK_ID], separators=(",", ":"))
+        key = "agentteams/recovery-1631/agents/agent-a/runtime/sessions/hermes/" + hashlib.sha256(work.encode()).hexdigest() + ".json"
+        previous = before["native_sessions"]["hermes_shared"]["cache"]
+        assert json.loads(docker("exec", CONTROLLER, "mc", "cat", key)) == previous
+        expired = {**previous, "expires_at": int(time.time()) - 3600}
+        docker("exec", "-i", CONTROLLER, "mc", "pipe", key, text=json.dumps(expired))
+        assert json.loads(docker("exec", CONTROLLER, "mc", "cat", key)) == expired
+        before["expired_session"] = {"native_ref": expired["native_ref"], "expires_at": expired["expires_at"]}
     with boundary_path.open("x") as stream:
         json.dump(before, stream, indent=2)
     path = Path("/tmp/1631-live-" + CASE + suffix + "-cutover-events.jsonl")
@@ -981,7 +996,12 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         assert_hermes_native_cache(before["native_sessions"]["hermes_shared"],
             before["task"]["execution"]["checkpoint"], TASK_ID)
         resumed = native["hermes"][-1]
-        assert resumed["session_id"] == cache["session_id"] and resumed["reused"] is True
+        if EXPIRE_HERMES_SESSION:
+            expired = before["expired_session"]
+            assert expired["native_ref"] == cache["session_id"] and expired["expires_at"] < before["recorded_at"]
+            assert resumed["session_id"] != cache["session_id"] and resumed["reused"] is False
+        else:
+            assert resumed["session_id"] == cache["session_id"] and resumed["reused"] is True
     controller = json.loads(docker("inspect", CONTROLLER))[0]
     current = json.loads(docker("inspect", PREFIX + "-worker-agent-a"))[0]
     assert current["Id"] == last_target["ID"], "additional replacement requires separate evidence"
@@ -1005,6 +1025,9 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         "checkpoint_before": before["task"]["execution"]["checkpoint"]["version"], "checkpoint_after": cp["version"],
         "execution": execution, "final_task_status": task["status"], "task_history": task["history"], "ledger": ledger, "artifacts_verified": artifacts,
         "docker_order_ns": order, "matrix": matrix}
+    if EXPIRE_HERMES_SESSION:
+        proof["scope"] = "Hermes restart with an expired shared session descriptor"
+        proof["expired_session"] = before["expired_session"]
     if OPERATOR_HANDOFF:
         op = json.loads(agt("worker", "runtime-status", "--name", "agent-a", "-o", "json"))["handoff"]
         if middle:

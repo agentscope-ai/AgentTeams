@@ -967,7 +967,22 @@ def assert_openhuman_native_cache(proof, execution, task_id, *, terminal=False):
     assert cache["session_id"] and cache["expires_at"] > time.time()
     history = cache["history"]
     assert history and all(row["role"] in {"user", "assistant", "tool"} and isinstance(row["content"], str) for row in history)
-    assert any(row["role"] == "tool" for row in history), "native tool history is absent"
+    has_tools = any(row["role"] == "tool" for row in history)
+    for previous, row in zip(history, history[1:]):
+        if previous["role"] != "assistant" or row["role"] != "user":
+            continue
+        # The SDK's text-tool fallback serializes actual tool results as user
+        # messages. Bind the native result tag to its preceding parsed call.
+        result = re.match(r'^\[Tool results\]\n<tool_result name="([^"]+)">\n.*?\n</tool_result>', row["content"], re.S)
+        if result:
+            for body in re.findall(r"<tool_call>(.*?)</tool_call>", previous["content"], re.S):
+                try:
+                    call = json.loads(body)
+                except ValueError:
+                    continue
+                if isinstance(call, dict) and call.get("name") == result[1] and isinstance(call.get("arguments"), dict):
+                    has_tools = True
+    assert has_tools, "native tool history is absent"
     # Rust serde_json persists native UTF-8, unlike Python's default ASCII escaping.
     transcript = json.dumps(history, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     assert cache["native_digest"] == hashlib.sha256(transcript.encode()).hexdigest(), "native history changed after checkpoint binding"

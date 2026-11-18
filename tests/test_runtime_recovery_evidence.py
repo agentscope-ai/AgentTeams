@@ -118,6 +118,19 @@ class OpenHumanCacheTests(unittest.TestCase):
             with self.subTest(history=history), self.assertRaises(AssertionError):
                 assert_openhuman_native_cache({**proof, "cache": changed, "descriptor": {**shared, "native_digest": changed["native_digest"]}}, execution, "task-a")
 
+        fallback = [cache["history"][0], {"role": "assistant", "content": '<tool_call>{"name":"shell","arguments":{}}</tool_call>'},
+                    {"role":"user", "content":'[Tool results]\n<tool_result name="shell">\nstep one for task-a\n</tool_result>\n'}]
+        for name, valid in [("shell", True), ("another", False)]:
+            rows = [*fallback[:2], {"role":"user", "content":fallback[-1]["content"].replace('name="shell"', f'name="{name}"')}]
+            digest = hashlib.sha256(json.dumps(rows, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+            candidate = {**proof, "cache": {**cache, "history": rows, "native_digest": digest},
+                         "descriptor": {**shared, "native_digest": digest}}
+            if valid:
+                assert_openhuman_native_cache(candidate, execution, "task-a")
+            else:
+                with self.assertRaises(AssertionError):
+                    assert_openhuman_native_cache(candidate, execution, "task-a")
+
 
 class OpenClawCacheTests(unittest.TestCase):
     def test_actual_native_session_and_latest_checkpoint_are_required(self):

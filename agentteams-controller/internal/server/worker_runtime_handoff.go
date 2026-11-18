@@ -18,6 +18,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // RuntimeHandoff records and reads the preflight shared by operator clients.
@@ -90,20 +91,36 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 		writeError(w, 400, "valid request ID and supported target Harness required")
 		return
 	}
-	enroll := func() bool {
-		if worker.Annotations[service.WorkerRuntimeHandoffAnnotation] != "" {
-			return true
+	setAnnotation := func(value string) error {
+		if worker.Annotations[service.WorkerRuntimeHandoffAnnotation] == value {
+			return nil
 		}
 		before := worker.DeepCopy()
 		if worker.Annotations == nil {
 			worker.Annotations = make(map[string]string)
 		}
-		worker.Annotations[service.WorkerRuntimeHandoffAnnotation] = "true"
-		if err := h.deps.Client.Patch(r.Context(), &worker, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+		worker.Annotations[service.WorkerRuntimeHandoffAnnotation] = value
+		return h.deps.Client.Patch(r.Context(), &worker, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+	}
+	enroll := func() bool {
+		if worker.Annotations[service.WorkerRuntimeHandoffAnnotation] != "" {
+			return true
+		}
+		if err := setAnnotation("true"); err != nil {
 			writeK8sError(w, "enable Worker handoff reconciliation", err)
 			return false
 		}
 		return true
+	}
+	respondToOperation := func(state *service.WorkerRuntimeState, etag string, err error) {
+		if err == nil && state.Handoff != nil && state.Handoff.Phase != "completed" {
+			// The enrollment watch may run before this storage commit. Signal
+			// the durable operation so an idle Worker need not wait to poll.
+			if signalErr := setAnnotation("request:" + state.Handoff.ID); signalErr != nil {
+				log.FromContext(r.Context()).Error(signalErr, "could not notify Worker reconciler of durable handoff", "worker", worker.Name)
+			}
+		}
+		respond(state, etag, err)
 	}
 	current, _, err := store.Load(r.Context(), name)
 	if err != nil {
@@ -119,7 +136,7 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		// A lost response may be retried after the source went offline.
-		respond(store.ResumeStop(r.Context(), name))
+		respondToOperation(store.ResumeStop(r.Context(), name))
 		return
 	}
 	if !worker.Spec.DesiredContainerMan() || worker.Spec.DesiredState() != "Running" || (worker.Spec.DeployMode != nil && *worker.Spec.DeployMode == v1beta1.DeployModeEdge) {
@@ -159,7 +176,7 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 	if !enroll() {
 		return
 	}
-	respond(store.Preflight(r.Context(), name, input.RequestID, input.Target, image, start, expected))
+	respondToOperation(store.Preflight(r.Context(), name, input.RequestID, input.Target, image, start, expected))
 }
 
 func (h *WorkerMatrixHandler) handoffTargetFailure(ctx context.Context, name string, op *service.WorkerHandoff) string {

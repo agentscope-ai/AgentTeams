@@ -18,13 +18,26 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/test/testutil/mocks"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(t *testing.T) {
 	store := ossfake.NewMemory()
 	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "member-cr", Namespace: "test-ns"}, Spec: v1beta1.WorkerSpec{WorkerName: "stable-name", Runtime: "qwenpaw"}}
-	k8s := fake.NewClientBuilder().WithScheme(newProjectTestScheme(t)).WithObjects(worker).Build()
+	wakes := 0
+	k8s := fake.NewClientBuilder().WithScheme(newProjectTestScheme(t)).WithObjects(worker).
+		WithInterceptorFuncs(interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if obj.GetAnnotations()[service.WorkerRuntimeHandoffAnnotation] == "request:first" {
+				op, _, err := (service.WorkerRuntimeStore{Storage: store}).Load(ctx, "stable-name")
+				if err != nil || op.Handoff == nil || op.Handoff.ID != "first" || op.Handoff.Phase != "stopping" {
+					t.Fatalf("Worker was woken before the handoff was durable: %+v, %v", op, err)
+				}
+				wakes++
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		}}).Build()
 	b := &operatorHandoffBackend{MockWorkerBackend: mocks.NewMockWorkerBackend()}
 	live := "current"
 	b.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
@@ -96,8 +109,11 @@ func TestRuntimeHandoffPreflightPersistsActualStartAndSurvivesControllerRestart(
 	if etag == "" {
 		t.Fatal("missing revision")
 	}
-	if w := call(http.MethodPost, req, "*"); w.Code != 200 || w.Header().Get("ETag") != etag {
-		t.Fatalf("lost response retry created a different operation %d %s", w.Code, w.Body)
+	if wakes != 1 {
+		t.Fatalf("expected one reconcile signal for the durable handoff, got %d", wakes)
+	}
+	if w := call(http.MethodPost, req, "*"); w.Code != 200 || w.Header().Get("ETag") != etag || wakes != 1 {
+		t.Fatalf("lost response retry changed or re-enqueued the operation %d %s (wakes=%d)", w.Code, w.Body, wakes)
 	}
 	changed := `{"request_id":"second","target_runtime":"qwenpaw"}`
 	if w := call(http.MethodPost, changed, "*"); w.Code != 409 {

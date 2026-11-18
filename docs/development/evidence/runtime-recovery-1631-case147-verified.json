@@ -1,0 +1,256 @@
+{
+  "task_id": "live-openhuman-codex-147",
+  "case": "147",
+  "scope": "one real openhuman-to-codex in-progress continuation",
+  "mode": "replace",
+  "fixture_prefix": "recovery-1631-live-20261118-v147",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "6421981fcc9255a0b779a04557769650172e290e",
+    "openhuman": "8165de5aaf640370ec92154353dd1e998ca26294",
+    "codex": "28dcf223b3f1d3dd0cb4abdbfe87b3e20dede024",
+    "shared_contract_by_runtime": {
+      "openhuman": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6",
+      "codex": "4fca52d09d8568d6cbf5f5fc35f51b6a2c858db8"
+    }
+  },
+  "driver_sha256": "fcc8104cd23a031b10b8bd83b6c7427a5b185a31dd8fbd629be064dafb67ebba",
+  "native_recovery_sessions": {
+    "hermes": [],
+    "hermes_message_counts": {},
+    "hermes_shared": null,
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "31e65c91f18f3af0251d588047f015ba00895343dbbd981dfb799dbf88ea9456",
+      "descriptor": null,
+      "config_generation": null
+    },
+    "codex_shared": {
+      "cache": null,
+      "config_generation": 4,
+      "route": {
+        "task_id": "live-openhuman-codex-147",
+        "team_id": "recovery-team",
+        "generation": 2,
+        "instance_id": "docker/d1533b2b0ae2914a7f8a745a7940f1f201d8004410862385bac7dec8bcf72119/2026-11-18T14:39:55.787649487Z",
+        "process_id": "7:1795012796002438982:ce48be2d6e63486aa993af75ae729077"
+      },
+      "native": {
+        "thread_id": "01a1ef19-e08e-73b1-b281-bf2ae5d1b090",
+        "metadata_id": "01a1ef19-e08e-73b1-b281-bf2ae5d1b090",
+        "turn_id": "01a1ef19-e857-7d33-8e9d-7455765ea7eb",
+        "rollout": "sessions/2026/11/18/rollout-2026-11-18T14-40-12-01a1ef19-e08e-73b1-b281-bf2ae5d1b090.jsonl",
+        "native_digest": "d257e4921723f73b9e6822f55506476da201c10f1ce1ec8e1a38eb2e798af4e5",
+        "native_bytes": 127222,
+        "source_inputs": 1,
+        "tool_calls": 14,
+        "tool_outputs": 14
+      }
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 2,
+  "checkpoint_after": 9,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/d1533b2b0ae2914a7f8a745a7940f1f201d8004410862385bac7dec8bcf72119/2026-11-18T14:39:55.787649487Z",
+    "process_id": "7:1795012796002438982:ce48be2d6e63486aa993af75ae729077",
+    "runtime": "codex",
+    "state": "active",
+    "checkpoint": {
+      "version": 9,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-openhuman-codex-147:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=3f3a029312a39ff5f47c8d91dbb279258f623a36d376705835edcf8c2fea6ff6; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openhuman-codex-147/output/step-one.json",
+          "sha256": "49fe73c423b68555df09fed2c78ba1e113907a83f096acae49b8c7ba9b171e38",
+          "size": 355
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openhuman-codex-147/output/step-two.json",
+          "sha256": "63a7304e19b2cdcbec2f03cb1b864c247cec20975cb5d3c9717d60997362f111",
+          "size": 356
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openhuman-codex-147/output/step-three.json",
+          "sha256": "3f3a029312a39ff5f47c8d91dbb279258f623a36d376705835edcf8c2fea6ff6",
+          "size": 358
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-openhuman-codex-147/result.md",
+        "sha256": "a6e49304ce3e559db3f8cf29a3288b9779b6aad9e97190ff770033ed013b9616",
+        "size": 313
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:5107c615714f2927525409ea02ca5d8a639198dcff753747c5eeeec44aba05c5",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "CQJpR4MYTg"
+      },
+      "reply_event": "$q70fFrXBlzRhCjY_437vJ-eY_aR8UXHkdC2N9W-G_Cw",
+      "saved_at": "2026-11-18T14:41:55.166085866Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T14:39:05Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 2,
+      "to": "submitted",
+      "ts": "2026-11-18T14:41:34Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795012775659382946,
+      "generation": 1,
+      "instance_id": "docker/96434974c8d2b8c38a64b858cf0bbb1a988fbad27a16d475d0465213016ca384/2026-11-18T14:38:19.90244363Z",
+      "process_id": "1:1795012700356576116:2508ade65b5c45158a950383b0b40e4a",
+      "step": "one",
+      "task_id": "live-openhuman-codex-147",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 3,
+      "executed_at_ns": 1795012853768736658,
+      "generation": 2,
+      "instance_id": "docker/d1533b2b0ae2914a7f8a745a7940f1f201d8004410862385bac7dec8bcf72119/2026-11-18T14:39:55.787649487Z",
+      "process_id": "7:1795012796002438982:ce48be2d6e63486aa993af75ae729077",
+      "step": "two",
+      "task_id": "live-openhuman-codex-147",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 5,
+      "executed_at_ns": 1795012870982814417,
+      "generation": 2,
+      "instance_id": "docker/d1533b2b0ae2914a7f8a745a7940f1f201d8004410862385bac7dec8bcf72119/2026-11-18T14:39:55.787649487Z",
+      "process_id": "7:1795012796002438982:ce48be2d6e63486aa993af75ae729077",
+      "step": "three",
+      "task_id": "live-openhuman-codex-147",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openhuman-codex-147/output/step-one.json",
+      "sha256": "49fe73c423b68555df09fed2c78ba1e113907a83f096acae49b8c7ba9b171e38",
+      "size": 355
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openhuman-codex-147/output/step-two.json",
+      "sha256": "63a7304e19b2cdcbec2f03cb1b864c247cec20975cb5d3c9717d60997362f111",
+      "size": 356
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openhuman-codex-147/output/step-three.json",
+      "sha256": "3f3a029312a39ff5f47c8d91dbb279258f623a36d376705835edcf8c2fea6ff6",
+      "size": 358
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openhuman-codex-147/result.md",
+      "sha256": "a6e49304ce3e559db3f8cf29a3288b9779b6aad9e97190ff770033ed013b9616",
+      "size": 313
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1795012786914989266,
+    "destroy": 1795012789206258834,
+    "create": 1795012795710433684
+  },
+  "matrix": {
+    "reply_event": "$q70fFrXBlzRhCjY_437vJ-eY_aR8UXHkdC2N9W-G_Cw",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$oKWtkU9xniG1Mysu7IWthZYKT-PZswrcApftDaYDraY"
+    ],
+    "read_receipt_events": [
+      "$E6kc_LOruSsYaDUeRIPqFUY4ZRrVla3i-vChFtnYyT4"
+    ],
+    "first_source_read_ms": 1795012733173
+  },
+  "openhuman_source_session": {
+    "schema_version": 1,
+    "kind": "WorkerSessionCache",
+    "member_prefix": "agents/agent-a",
+    "work": {
+      "kind": "task",
+      "team_id": "recovery-team",
+      "task_id": "live-openhuman-codex-147"
+    },
+    "runtime": "openhuman",
+    "start": {
+      "instance_id": "docker/96434974c8d2b8c38a64b858cf0bbb1a988fbad27a16d475d0465213016ca384/2026-11-18T14:38:19.90244363Z",
+      "process_id": "1:1795012700356576116:2508ade65b5c45158a950383b0b40e4a",
+      "runtime": "openhuman"
+    },
+    "generation": 1,
+    "native_ref": "01cd5bea-4119-48b4-94b9-03378049572c",
+    "native_digest": "1aaa0fb562aa8c928460a28151bd6afa14f04bfc3905e5e63d16dfa49b36d9ad",
+    "checkpoint_version": 0,
+    "checkpoint_digest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "config_generation": 3,
+    "expires_at": 1795099152,
+    "saved_at": "2026-11-18T14:39:15Z"
+  },
+  "images": {
+    "controller": "sha256:ce7df71f3ea9268b3c2282b3e6ee00e2a6a969008d758a3cf95673d68cba5b67",
+    "source": "sha256:3e42126774560e8cb04f144fec30bbffadccc0f7cfd9b5853655d48e7ffa5fb3",
+    "target": "sha256:e85bc5214caca23afc5cbc927c5f81efc8afe510ccc2cac01cc56f2c05e397de"
+  },
+  "openhuman_preapproved_fixture": true,
+  "operator_handoff": {
+    "id": "live-openhuman-codex-147",
+    "phase": "completed",
+    "source": {
+      "instance_id": "docker/96434974c8d2b8c38a64b858cf0bbb1a988fbad27a16d475d0465213016ca384/2026-11-18T14:38:19.90244363Z",
+      "process_id": "1:1795012700356576116:2508ade65b5c45158a950383b0b40e4a",
+      "runtime": "openhuman"
+    },
+    "target_runtime": "codex",
+    "target": {
+      "instance_id": "docker/d1533b2b0ae2914a7f8a745a7940f1f201d8004410862385bac7dec8bcf72119/2026-11-18T14:39:55.787649487Z",
+      "process_id": "7:1795012796002438982:ce48be2d6e63486aa993af75ae729077",
+      "runtime": "codex"
+    },
+    "source_stop_observed_at": "2026-11-18T14:39:46.964886508Z",
+    "target_registered_at": "2026-11-18T14:40:00.940522294Z",
+    "completed_at": "2026-11-18T14:40:18.703457411Z",
+    "target_image": "recovery-1631/codex:local"
+  }
+}

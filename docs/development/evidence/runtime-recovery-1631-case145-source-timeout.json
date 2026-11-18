@@ -1,0 +1,15 @@
+{
+  "case": "145",
+  "task_id": "live-openhuman-hermes-145",
+  "source": "openhuman",
+  "target": "hermes",
+  "source_revision": "8165de5aaf640370ec92154353dd1e998ca26294",
+  "source_image_id": "sha256:3e42126774560e8cb04f144fec30bbffadccc0f7cfd9b5853655d48e7ffa5fb3",
+  "source_status": "running",
+  "task_status": "assigned",
+  "execution_generation": 1,
+  "checkpoint_committed": false,
+  "cutover_requested": false,
+  "failure": "The source did not commit step one before the 600-second boundary deadline.",
+  "passed": false
+}

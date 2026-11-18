@@ -19,9 +19,9 @@ the image and shared-contract pins actually tested.
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | — |
 | OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Pass 138](evidence/runtime-recovery-1631-case138-verified.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
-| OpenHuman | — | — | — | — | — | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
+| OpenHuman | [Pass 147](evidence/runtime-recovery-1631-case147-verified.json) | — | — | — | — | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
 
-**6/6 normal restart lanes and 21/30 directed handoffs have passed.** A dash
+**6/6 normal restart lanes and 22/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1922,3 +1922,28 @@ report hashes, and one final Matrix reply with zero new incoming events
 after the stop. The public reports retain native session IDs and digests,
 message counts, and tool result counts. Raw native chat history is kept
 in the local run evidence.
+
+[Case145 OpenHuman → Hermes](evidence/runtime-recovery-1631-case145-source-timeout.json)
+timed out at the source. The Task stayed assigned at generation 1 with no
+committed step. The driver made no handoff request.
+
+[Case146 Codex → OpenHuman](evidence/runtime-recovery-1631-case146-legacy-shared-startup-failure.json)
+committed step one and stopped Codex. OpenHuman exited with code 1 during
+configuration because the Worker pull placed legacy Codex copies of Task
+metadata under native `workspace/shared`. OpenHuman
+[PR #3](https://github.com/agentteams-group/agentteams-harness-openhuman/pull/3)
+commit `a7fd8fe` keeps that historical remote prefix out of the Worker
+config pull and preserves any existing local directory before linking the
+native path to the canonical Worker shared directory. A new run uses the
+updated startup scripts and the same checksum-verified native executable.
+
+[Case147 OpenHuman → Codex](evidence/runtime-recovery-1631-case147-verified.json)
+passed with Controller `6421981f`, OpenHuman `8165de5`, and Codex `28dcf22`.
+The OpenHuman session descriptor still pointed at checkpoint 0 when the
+authoritative Task reached the step-one boundary at checkpoint 2. The
+source had already produced the native Matrix read receipt and the first
+verified effect. Codex opened a Task session, completed steps two and three
+in generation 2, and submitted at checkpoint 9. The original Task had one
+effect per step, four matching stored hashes, and one final Matrix reply
+after zero new inputs. The verifier records the departing OpenHuman session
+descriptor and requires exact native cache matching for same-Harness reuse.

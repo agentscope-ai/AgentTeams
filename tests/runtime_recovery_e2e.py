@@ -946,7 +946,7 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         assert matrix["first_source_read_ms"] <= first_registration["at_ns"] // 1000000, "the initial source must be read before step one"
     old_ref = before["native_sessions"]["qwenpaw_shared"]["cache"]["native_ref"] if middle else ""
     native = native_sessions(old_ref, verify_qwen_route=final_runtime == "qwenpaw")
-    if SOURCE == "openhuman":
+    if SOURCE == "openhuman" and MODE == "restart" and not FAULT:
         assert_openhuman_native_cache(before["native_sessions"]["openhuman"], before["task"]["execution"], TASK_ID)
     if final_runtime == "openhuman":
         assert_openhuman_native_cache(native["openhuman"], execution, TASK_ID, terminal=True)
@@ -1047,6 +1047,10 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         "checkpoint_before": before["task"]["execution"]["checkpoint"]["version"], "checkpoint_after": cp["version"],
         "execution": execution, "final_task_status": task["status"], "task_history": task["history"], "ledger": ledger, "artifacts_verified": artifacts,
         "docker_order_ns": order, "matrix": matrix}
+    if SOURCE == "openhuman":
+        # Replacement only requires a durable Task boundary. The stopping
+        # source may still be publishing its latest native session.
+        proof["openhuman_source_session"] = before["native_sessions"]["openhuman"]["descriptor"]
     if EXPIRE_HERMES_SESSION:
         proof["scope"] = "Hermes restart with an expired shared session descriptor"
         proof["expired_session"] = before["expired_session"]

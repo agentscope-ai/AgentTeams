@@ -1,0 +1,29 @@
+{
+  "case": "146",
+  "task_id": "live-codex-openhuman-146",
+  "source": "codex",
+  "target": "openhuman",
+  "target_revision": "8165de5aaf640370ec92154353dd1e998ca26294",
+  "target_image_id": "sha256:3e42126774560e8cb04f144fec30bbffadccc0f7cfd9b5853655d48e7ffa5fb3",
+  "target_process": {
+    "Status": "exited",
+    "OOMKilled": false,
+    "ExitCode": 1,
+    "StartedAt": "2026-11-18T14:39:55.789242711Z",
+    "FinishedAt": "2026-11-18T14:39:58.622738881Z"
+  },
+  "source_read_receipt": {
+    "source_event": "$05L8G8JbmRa0EWJszbTCZWDFX4qSdxd-9A5nBqaS7w0",
+    "read_event": "$LavEHkHKERrX-BQNwFVgAVh2TOC59C2ZJwwgOKAMT3k"
+  },
+  "task_status": "in_progress",
+  "execution_generation": 1,
+  "checkpoint": 4,
+  "completed_steps": [
+    "one"
+  ],
+  "verified_operation": "verified",
+  "legacy_path": "workspace/shared/tasks/live-codex-openhuman-146/meta.json",
+  "failure": "OpenHuman terminated during configuration because its native shared directory contained the legacy Codex cache.",
+  "passed": false
+}

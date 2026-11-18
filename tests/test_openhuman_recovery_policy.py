@@ -11,14 +11,14 @@ spec.loader.exec_module(policy)
 
 
 @pytest.mark.parametrize("commands", ['["agt", "mc"]', '[\n    "agt",\n    "mc",\n]'])
-def test_only_python_is_added_and_the_policy_survives_a_fixture_restart(tmp_path, commands):
+def test_only_the_bounded_step_tool_is_added_and_autonomy_is_preserved(tmp_path, commands):
     path = tmp_path / "config.toml"
-    path.write_text(f'[autonomy]\nallowed_commands = {commands}\nworkspace_only = true\n\n[mcp_client]\nenabled = true\n')
+    path.write_text(f'[autonomy]\nallowed_commands = {commands}\nworkspace_only = true\nlevel = "supervised"\nrequire_approval_for_medium_risk = true\n\n[mcp_client]\nenabled = true\n')
     for _ in range(2):
         policy.configure(path, "recovery-1631-live-20261117-v18", "http://recovery-1631-live-20261117-v18-controller:8090")
         result = tomllib.loads(path.read_text())
-        assert result["autonomy"] == {"allowed_commands": ["agt", "mc", "python3"], "workspace_only": True,
-                                      "level": "full", "require_approval_for_medium_risk": False}
+        assert result["autonomy"] == {"allowed_commands": ["agt", "mc", "agentteams-recovery-step"], "workspace_only": True,
+                                      "level": "supervised", "require_approval_for_medium_risk": True}
         assert result["mcp_client"] == {"enabled": True}
 
 

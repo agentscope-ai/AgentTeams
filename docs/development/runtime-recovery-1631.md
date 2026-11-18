@@ -1312,3 +1312,25 @@ room messages after cutover.
 These are two current-candidate directed lanes. The remaining directed
 combinations, the retained-session switchback on these builds, encrypted
 Matrix continuity and the full fault matrix remain separate gates.
+
+[Trace evidence for cases69–70](evidence/runtime-recovery-1631-cases69-70-traces.json)
+verifies generation-2 model and tool observations and the native session
+through the Controller and Langfuse. The Dashboard Tracing view independently
+displayed case69's trace ID and recovered Task, room, generation and native
+session metadata.
+
+### Case71: OpenHuman startup recovery and test tool policy
+
+[Partial case71 evidence](evidence/runtime-recovery-1631-case71-partial.json)
+records Hermes → OpenHuman. The live Docker event stream confirmed the old
+container died and was removed before the new instance was created. OpenHuman
+`05f35ab` claimed the same Task in generation 2 and entered inference without
+any new Matrix input from the driver. Its native shell denied the fixture's
+open-ended Python invocation. No second or third effect was observed. This
+lane does not count as completed Task continuation.
+
+The disposable fixture now allowlists one scoped `agentteams-recovery-step`
+command that invokes the same independent oracle and verifies the fixture
+Controller, team and Task. It preserves native autonomy and approval
+settings. The production Harness and command policy are untouched. A fresh
+live lane is needed to exercise the new fixture command.

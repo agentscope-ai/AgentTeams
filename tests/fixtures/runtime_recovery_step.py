@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Deterministic side-effect fixture invoked by the real Harness's model tool.
 
 This never starts a model or resumes a Task by itself. A separately owned
@@ -7,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -17,10 +19,19 @@ sys.path.insert(0, "/opt/agentteams/scripts/lib")
 from task_recovery import Recovery
 
 task_id, team = sys.argv[1:]
+direct_command = Path(sys.argv[0]).name == "agentteams-recovery-step"
+controller_host = urllib.parse.urlparse(os.getenv("AGENTTEAMS_CONTROLLER_URL", "")).hostname or ""
+fixture_prefix = controller_host.removesuffix("-controller")
+if direct_command and (team != "recovery-team" or not re.fullmatch(r"live-[a-z0-9-]+-\d{2}", task_id)
+        or not re.fullmatch(r"recovery-1631-live-\d{8}-v\d+", fixture_prefix)
+        or controller_host != fixture_prefix + "-controller"):
+    raise ValueError("This command is only for the isolated recovery fixture")
 recovery = Recovery()
 task = recovery.current(task_id, team)
 if not task or task["status"] != "in_progress":
     raise RuntimeError("ACK the assigned Task durably before running a step")
+if direct_command and task.get("recovery_fixture", {}).get("oracle_url") != "http://" + fixture_prefix + "-oracle:8091":
+    raise ValueError("Task does not reference the fixture's independent oracle")
 cp = dict(task["execution"].get("checkpoint") or {})
 steps = ["one", "two", "three"]
 done = cp.get("completed_steps", [])

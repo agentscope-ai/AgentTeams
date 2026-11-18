@@ -207,9 +207,10 @@ print(json.dumps(any(row.get('event')=='runtime.ready' and datetime.datetime.fro
                         "in generation 3 continue step three")
     spec = f"""You are executing a bounded real runtime-recovery acceptance task {task_id} in team {team}.
 Use your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.
-Pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/{team}/shared/tasks/{task_id}/acceptance.py into your task scratch directory using mc cp.
+Unless your active Harness is OpenHuman, use mc cp to pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/{team}/shared/tasks/{task_id}/acceptance.py into your task scratch directory.
 The acceptance.py helper owns the fixture:* operation identities and records both started and verified checkpoints itself. Invoke it as one native terminal tool call; do not pre-register a checkpoint for the helper or duplicate its operation IDs.
-Use your native terminal tool to run python3 acceptance.py {task_id} {team}. Each invocation executes ONE real persisted side effect and commits its checkpoint through the real Controller.
+Use your native terminal tool to run python3 acceptance.py {task_id} {team}. If your active Harness is OpenHuman, use its Shell tool with the single command agentteams-recovery-step {task_id} {team} instead. Use the command directly without cd, an interpreter, or a shell prefix. This is the same acceptance helper installed in the isolated test image.
+Each invocation executes ONE real persisted side effect and commits its checkpoint through the real Controller.
 Read the authoritative completed_steps. Never repeat a completed step or edit the fixture, ledger or checkpoint outside the helper.
 In execution generation 1, run only step one. Then call the helper once more to verify PAUSED_AT_STEP_BOUNDARY and end your turn with a short progress report. Leave task status in_progress. Do not submit, wait, poll or request a new message.
 {continuation} with the same helper, then use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/{task_id}/output/step-one.json, shared/tasks/{task_id}/output/step-two.json, shared/tasks/{task_id}/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.
@@ -456,7 +457,7 @@ rows=[]
 for path in pathlib.Path('/proc').glob('[0-9]*/cmdline'):
  try:
   args=path.read_bytes().decode().split('\\0')
-  if sys.argv[1] in args and any(arg.endswith('/acceptance.py') or arg=='acceptance.py' for arg in args):
+  if sys.argv[1] in args and any(pathlib.PurePosixPath(arg).name in {'acceptance.py','agentteams-recovery-step'} for arg in args):
    rows.append({'pid':int(path.parent.name),'start_ticks':path.with_name('stat').read_text().split()[21]})
  except FileNotFoundError:pass
 print(json.dumps(rows))

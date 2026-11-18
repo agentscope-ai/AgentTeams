@@ -1,0 +1,83 @@
+{
+  "task_id": "live-hermes-openhuman-71",
+  "status": "in_progress",
+  "checkpoint": {
+    "version": 6,
+    "completed_steps": [
+      "one"
+    ],
+    "remaining_steps": [
+      "two",
+      "three"
+    ]
+  },
+  "execution": {
+    "runtime": "openhuman",
+    "process_id": "1:1794980292551421884:5076875b9e284caea888bd22cf260ebd",
+    "instance_id": "docker/0640ac1b9e8dea559b5443f7a5153a368234bf8cea296a8f55f3460e75778b88/2026-11-18T05:38:11.69234136Z",
+    "generation": 2,
+    "state": "needs_verification"
+  },
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794980114906906933,
+      "generation": 1,
+      "instance_id": "docker/e6005987fb030af2ddc099ccd30fd6c016992a5cf50a40ef9dbd20527529ddf7/2026-11-18T05:18:09.228945629Z",
+      "process_id": "1:1794979089650461249:2e0a786404d64268832207daedb3716d",
+      "step": "one",
+      "task_id": "live-hermes-openhuman-71",
+      "team_id": "recovery-team"
+    }
+  ],
+  "instances": [
+    {
+      "id": "4a5b637896dbed5ef2674e135e23ec3b2c3248ed3c4a70393556031935f7a2ea",
+      "name": "recovery-1631-live-20261118-v68-controller",
+      "image": "recovery-1631/controller:local",
+      "started_at": "2026-11-18T05:32:56.274890713Z"
+    },
+    {
+      "id": "0640ac1b9e8dea559b5443f7a5153a368234bf8cea296a8f55f3460e75778b88",
+      "name": "recovery-1631-live-20261118-v68-worker-agent-a",
+      "image": "recovery-1631/openhuman:local",
+      "started_at": "2026-11-18T05:38:11.69234136Z"
+    },
+    {
+      "id": "8134863d68380aa3cdcb3f6d2eec5838a72d39c43c2ad6417d0490cde1567e80",
+      "name": "recovery-1631-live-20261118-v68-worker-leader",
+      "image": "recovery-1631/hermes:local",
+      "started_at": "2026-11-18T04:56:48.977173353Z"
+    }
+  ],
+  "sources": {
+    "core": "52a3659b719abb78c17368ce020403c442d4e5db",
+    "hermes": "282c45715eb37d4d7e4c4aba64ab6e83386f9b52",
+    "openhuman": "05f35aba57fae3bb2339f5c3e715ab72e97543a8",
+    "openhuman_shared_contract": "0f3489c73a774145a211798514399c8f6e899079",
+    "openhuman_image_id": "sha256:94ee2fca0947c63ab58d878612b2ad680267940518a7e9d36d643930d76b3eb2"
+  },
+  "lifecycle": [
+    {
+      "action": "die",
+      "container": "e6005987fb030af2ddc099ccd30fd6c016992a5cf50a40ef9dbd20527529ddf7",
+      "timeNano": 1794980285487467759
+    },
+    {
+      "action": "destroy",
+      "container": "e6005987fb030af2ddc099ccd30fd6c016992a5cf50a40ef9dbd20527529ddf7",
+      "timeNano": 1794980287796851875
+    },
+    {
+      "action": "create",
+      "container": "0640ac1b9e8dea559b5443f7a5153a368234bf8cea296a8f55f3460e75778b88",
+      "timeNano": 1794980291583624253
+    },
+    {
+      "action": "start",
+      "container": "0640ac1b9e8dea559b5443f7a5153a368234bf8cea296a8f55f3460e75778b88",
+      "timeNano": 1794980291944103524
+    }
+  ],
+  "scope": "Target acquired the active Task without new driver input, then native shell policy rejected the fixture command. Only source step one executed."
+}

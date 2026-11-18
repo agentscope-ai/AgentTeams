@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Explicit command policy for the disposable recovery fixture image only.
 
-The real native model invokes the deterministic Python step tool. Production
+The real native model invokes a bounded acceptance step command. Production
 entrypoints and their command allowlists are unchanged by this test wrapper.
 """
 import json
@@ -22,19 +22,17 @@ def configure(path, prefix, controller):
     commands = native["autonomy"]["allowed_commands"]
     if not isinstance(commands, list) or not all(isinstance(item, str) for item in commands):
         raise ValueError("Native command policy must be an explicit list")
-    commands = list(dict.fromkeys([*commands, "python3"]))
+    commands = list(dict.fromkeys([*commands, "agentteams-recovery-step"]))
     section = re.compile(r"(?ms)^\[autonomy\]\s*\n(.*?)(?=^\[|\Z)")
     matches = list(section.finditer(text))
     if len(matches) != 1:
         raise ValueError("Expected one native autonomy section")
     body = matches[0][1]
     # The installed config CLI serializes long command arrays across lines.
-    body, count = re.subn(r"(?m)^allowed_commands[ \t]*=[ \t]*\[[^\]]*\][ \t]*\n?", "", body)
+    body, count = re.subn(r"(?m)^allowed_commands[ \t]*=[ \t]*\[[^\]]*\]",
+                          "allowed_commands = " + json.dumps(commands), body)
     if count != 1:
         raise ValueError("Expected one native command array")
-    body = re.sub(r"(?m)^(?:level|require_approval_for_medium_risk)\s*=.*\n?", "", body)
-    body += ('allowed_commands = ' + json.dumps(commands) + '\n'
-             'level = "full"\nrequire_approval_for_medium_risk = false\n\n')
     replacement = text[:matches[0].start()] + "[autonomy]\n" + body + text[matches[0].end():]
     result = tomllib.loads(replacement)
     assert result["autonomy"]["allowed_commands"] == commands
@@ -45,5 +43,5 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["serve"] and os.getenv("RECOVERY_E2E_PREFIX"):
         configure(Path(os.environ["OPENHUMAN_CONFIG"]), os.environ.get("RECOVERY_E2E_PREFIX", ""),
                   os.environ.get("AGENTTEAMS_CONTROLLER_URL", ""))
-        print("Recovery fixture policy: Python step tool explicitly allowed before native startup", flush=True)
+        print("Recovery fixture policy: bounded step command explicitly allowed before native startup", flush=True)
     os.execv("/usr/local/bin/openhuman-core.native", ["openhuman-core", *sys.argv[1:]])

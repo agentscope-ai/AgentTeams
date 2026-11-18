@@ -1307,8 +1307,8 @@ else
 fi
 
 LEADER_BOOTSTRAP_REPLY=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${LEADER_DM}" "${LEADER_MXID}" "${BOOTSTRAP_LEADER_MARKER}" 360 2>/dev/null || true)
-if echo "${LEADER_BOOTSTRAP_REPLY}" | grep -Fq "${BOOTSTRAP_LEADER_MARKER}"; then
+    "${ADMIN_TOKEN}" "${LEADER_DM}" "${LEADER_MXID}" "^${BOOTSTRAP_LEADER_MARKER}$" 360 2>/dev/null || true)
+if echo "${LEADER_BOOTSTRAP_REPLY}" | grep -Fxq "${BOOTSTRAP_LEADER_MARKER}"; then
     log_pass "QwenPaw leader completed package bootstrap instructions"
 else
     log_fail "QwenPaw leader did not complete package bootstrap instructions"
@@ -1320,7 +1320,7 @@ else
     log_fail "QwenPaw leader did not write bootstrap completion flag"
 fi
 
-if docker exec "${LEADER_CONTAINER}" sh -c "grep -Fq '${BOOTSTRAP_LEADER_MARKER}' '${LEADER_DEFAULT_WS}/bootstrap/test26-hello-result.txt'" >/dev/null 2>&1; then
+if _wait_workspace_marker "${LEADER_CONTAINER}" "${LEADER_DEFAULT_WS}/bootstrap/test26-hello-result.txt" "${BOOTSTRAP_LEADER_MARKER}" 120; then
     log_pass "QwenPaw leader hello script wrote expected marker"
 else
     log_fail "QwenPaw leader hello script did not write expected marker"
@@ -1334,8 +1334,8 @@ else
 fi
 
 WORKER_BOOTSTRAP_REPLY=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${BOOTSTRAP_WORKER_MARKER}" 360 2>/dev/null || true)
-if echo "${WORKER_BOOTSTRAP_REPLY}" | grep -Fq "${BOOTSTRAP_WORKER_MARKER}"; then
+    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "^${BOOTSTRAP_WORKER_MARKER}$" 360 2>/dev/null || true)
+if echo "${WORKER_BOOTSTRAP_REPLY}" | grep -Fxq "${BOOTSTRAP_WORKER_MARKER}"; then
     log_pass "QwenPaw worker completed package bootstrap instructions"
 else
     log_fail "QwenPaw worker did not complete package bootstrap instructions"
@@ -1347,7 +1347,7 @@ else
     log_fail "QwenPaw worker did not write bootstrap completion flag"
 fi
 
-if docker exec "${WORKER_CONTAINER}" sh -c "grep -Fq '${BOOTSTRAP_WORKER_MARKER}' '${WORKER_DEFAULT_WS}/bootstrap/test26-hello-result.txt'" >/dev/null 2>&1; then
+if _wait_workspace_marker "${WORKER_CONTAINER}" "${WORKER_DEFAULT_WS}/bootstrap/test26-hello-result.txt" "${BOOTSTRAP_WORKER_MARKER}" 120; then
     log_pass "QwenPaw worker hello script wrote expected marker"
 else
     log_fail "QwenPaw worker hello script did not write expected marker"

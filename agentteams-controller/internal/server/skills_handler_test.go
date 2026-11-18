@@ -8,10 +8,10 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"net/url"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -334,7 +334,14 @@ func TestSkills_UploadDeploymentScope(t *testing.T) {
 		t.Errorf("global-tool source = %q, want shared", s.Source)
 	}
 
-	// L2 scope=deployment → 403 (deployment-wide writes are admin only).
+	if rec := postSkill(t, h, skManager, "deployment", "", skillZip("manager-tool", nil)); rec.Code != http.StatusOK {
+		t.Fatalf("manager deployment: status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := store.Memory.Stat(context.Background(), globalSkillsPrefix+"manager-tool/SKILL.md"); err != nil {
+		t.Errorf("manager-tool not under the deployment prefix: %v", err)
+	}
+
+	// L2 scope=deployment → 403.
 	if rec := postSkill(t, h, skL2, "deployment", "", zip); rec.Code != http.StatusForbidden {
 		t.Errorf("L2 deployment: status = %d, want 403", rec.Code)
 	}
@@ -360,7 +367,7 @@ func TestSkills_UploadScopeMatrix(t *testing.T) {
 	if rec := postSkill(t, h, skLeader, "team", "market-team", zip); rec.Code != http.StatusForbidden {
 		t.Errorf("leader: status = %d, want 403", rec.Code)
 	}
-	// Manager / worker: 403 (authorizer denies; the handler re-checks).
+	// Manager and worker cannot publish to the team scope.
 	if rec := postSkill(t, h, skManager, "team", "market-team", zip); rec.Code != http.StatusForbidden {
 		t.Errorf("manager: status = %d, want 403", rec.Code)
 	}
@@ -1239,7 +1246,6 @@ func TestTeamSkillStandardZipToWorkerE2E(t *testing.T) {
 		}
 	}
 }
-
 
 // --- GET /api/v1/skills/{name}/download（v1.2.5 新增：技能包下载） ---
 

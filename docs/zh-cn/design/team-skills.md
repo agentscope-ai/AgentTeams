@@ -23,7 +23,7 @@ read side (GET /api/v1/skills, existing endpoint):
 write side:
   POST /api/v1/skills            multipart/form-data
     scope=team        → teams/<t>/skills/<name>/      (admin any / L2 own team)
-    scope=deployment  → agents/global/skills/<name>/  (admin only)
+    scope=deployment  → agents/global/skills/<name>/  (admin or platform Manager)
     common: structure validation + scan ① (best-effort) + exact-copy write
 
 materialize (assign — PUT /workers {skills}, existing surface, NO new endpoint):
@@ -32,7 +32,7 @@ materialize (assign — PUT /workers {skills}, existing surface, NO new endpoint
     → worker sync loop materializes within its sync interval (≤5 min)
 ```
 
-允许发布的角色：**admin**（任意范围）与 **L2 人类**（仅本团队、仅 `scope=team`）。Manager 与团队 leader **永不**发布——leader 读取本团队目录（指派面），但写在授权器被拒、在处理器复核（两层均由测试钉死）。Worker 永不。
+管理员可发布到任一范围，平台 Manager 可发布到 `scope=deployment`，L2 用户可发布到自己团队的 `scope=team`。团队 Leader 可查看本团队技能目录并指派技能。
 
 ## 存储布局
 
@@ -112,7 +112,7 @@ agents/<w>/skills/<name>/...       materialized per worker (existing)
 
 ## 测试覆盖（见各 commit）
 
-- authorizer：发布角色矩阵（admin/L2 通过；manager/leader/worker 被拒——已钉死）；
+- authorizer：发布角色矩阵（admin/Manager/L2 通过；leader/worker 被拒）；
 - upload：范围矩阵、结构 8 负面（缺 SKILL.md、名不匹配、无 frontmatter、双根、zip-slip、符号链接、裸根、坏名）、zip 炸弹、扫描闸门（block 422 / warn 呈现 / unavailable → skipped + 写入 / nil scanner → skipped）、精确复制替换；
 - skillscan：探针输出解析、容器选择矩阵、fake-Docker 端到端、缓存/TTL/FIFO、k8s 失败关闭、载荷 tar 布局、探针契约钉死；
 - materialization：正路径、精确复制替换、block 不复制、unavailable 失败关闭、团队优先于 builtin、非团队技能留在 builtin 路径、混合、独立（`teamName ""`）。

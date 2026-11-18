@@ -31,7 +31,7 @@ read side (GET /api/v1/skills, existing endpoint):
 write side:
   POST /api/v1/skills            multipart/form-data
     scope=team        → teams/<t>/skills/<name>/      (admin any / L2 own team)
-    scope=deployment  → agents/global/skills/<name>/  (admin only)
+    scope=deployment  → agents/global/skills/<name>/  (admin or platform Manager)
     common: structure validation + scan ① (best-effort) + exact-copy write
 
 materialize (assign — PUT /workers {skills}, existing surface, NO new endpoint):
@@ -40,11 +40,9 @@ materialize (assign — PUT /workers {skills}, existing surface, NO new endpoint
     → worker sync loop materializes within its sync interval (≤5 min)
 ```
 
-Roles that may publish: **admin** (any scope) and **L2 human** (own team,
-`scope=team` only). Manager and team leaders **never** publish — leaders
-read their team's catalog (the assign surface) but the write is denied at
-the authorizer and re-checked in the handler (both layers pinned by tests).
-Workers never.
+Admins may publish to either scope. The platform Manager may publish to
+`scope=deployment`. L2 humans may publish to `scope=team` for their own
+teams. Team leaders can read their team's catalog for assignment.
 
 ## Storage layout
 
@@ -182,8 +180,7 @@ this switches to a formal audit record — the seam is noted in code.
 
 ## Test coverage (see each commit)
 
-- authorizer: publish role matrix (admin/L2 pass; manager/leader/worker
-  denied — pinned);
+- authorizer: publish role matrix (admin/Manager/L2 pass; leader/worker denied);
 - upload: scope matrix, structure 8-negative (missing SKILL.md, name
   mismatch, no frontmatter, two roots, zip-slip, symlink, bare root, bad
   name), zip bomb, scan gate (block 422 / warn surfaced / unavailable →

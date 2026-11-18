@@ -31,11 +31,12 @@ including a hidden or temporary one. Only create a Project when the user
 explicitly requests one. Automatic cross-team Project creation is future work;
 do not infer that authorization from task complexity or member count.
 
-Before planning, read the main task ID and original spec registered in the
-Manager handoff. That main task is pending while you analyze the request.
-Use its existing ID and unchanged original spec when you supply the execution
-subtasks, owners and dependencies to `start_task`. Successful dispatch makes
-the main task assigned; only a Worker's durable ACK makes it in progress.
+If the Manager registered a main task, reuse its ID and unchanged original
+spec. When the requester assigns work directly to you without a registered
+main task, choose a stable task ID and use the original request as the spec.
+In both cases pass the execution subtasks, owners, dependencies, and requester
+route to `start_task`. Successful dispatch makes the main task assigned;
+only a Worker's durable ACK makes it in progress.
 
 A main Task owns the original request, execution plan, task room, source reply
 route and final report. Each subtask is independently executable by one Worker.
@@ -245,11 +246,11 @@ For DingTalk requester compatibility, `requester` may use
 `dingtalk:{user_id}:{session_id}`; TeamHarness derives `reply_route` from that
 value when `replyRoute` is not provided.
 
-## Create Quick Project
+## Create an explicit single-node Project
 
-Use `create_quick_project` only after Quick Task mode is selected and the
-Leader is in the Matrix Task room that received the task request message. It is
-a shortcut for:
+Use `create_quick_project` only for an explicitly requested single-node Project
+after a manual handoff to its Matrix Task room. For an ordinary Task request,
+use `taskflow start_task`. This legacy Project action is a shortcut for:
 
 ```text
 create_project + plan single-node DAG + assigned task spec

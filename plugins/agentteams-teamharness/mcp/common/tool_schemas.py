@@ -352,11 +352,11 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "projectflow": {
         "description": (
-            "Manage durable TeamHarness project state only after Quick Task "
-            "or Project Work mode is selected: create quick projects, create "
-            "projects, plan or update DAG and Loop work, query ready nodes, "
-            "and record loop iterations. Do not use for ordinary direct "
-            "replies or one-off checks. start_project combines task-room creation, "
+"Create projects only when explicitly requested. Use taskflow start_task "
+            "for ordinary task requests, even when they involve multiple workers "
+            "or dependencies. Manage existing projects, including DAG and Loop "
+            "plans, query ready nodes, and record loop iterations. "
+            "start_project combines task-room creation, "
             "initial DAG storage and first ready assignments; supply create_project "
             "fields plus tasks with specs for initially ready nodes. complete_project persists the "
             "terminal state locally and syncs it to shared storage before "

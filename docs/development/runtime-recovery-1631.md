@@ -1334,3 +1334,29 @@ command that invokes the same independent oracle and verifies the fixture
 Controller, team and Task. It preserves native autonomy and approval
 settings. The production Harness and command policy are untouched. A fresh
 live lane is needed to exercise the new fixture command.
+
+### Cases72–75: native startup follow-up
+
+[Partial cases72 and 74](evidence/runtime-recovery-1631-cases72-74-partial.json)
+both reached generation 2 under the original Task without a follow-up
+assignment. Each independent ledger still contains only step one.
+
+- OpenHuman case72 received an upstream HTTP 200 in 6.25 seconds. Its native
+  turn timed out later and the Task remained `needs_verification`. The image
+  also failed to import OTel at startup. OpenHuman `9ee359c` installs the
+  common pinned telemetry requirements and exercises the import in image
+  smoke. This packaging change does not establish a fix for the native
+  timeout or prove OpenHuman model/tool tracing.
+- DeepSeek case74 recovered ownership but the native launcher failed the
+  initial TeamHarness MCP connection or tool synchronization. A standalone
+  probe in the same container initialized the server and listed seven
+  tools. DeepSeek `99890d8` emits native readiness after the successful
+  Matrix and Task scan, before running inference. This fixes the misleading
+  startup timeout event independently of the native MCP failure.
+- QwenPaw case73 failed to reach the source step boundary with the original
+  60-second local API startup window. QwenPaw `763877d` gives a slow SDK
+  initialization 180 seconds, while retaining the native version and
+  default-agent readiness checks. The original assignment was retained in
+  the same fixture, and the patched process registered a current start and
+  advanced its checkpoint. A separate case75 is reserved for the controlled
+  normal restart with a valid native session.

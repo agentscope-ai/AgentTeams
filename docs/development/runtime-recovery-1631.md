@@ -1664,3 +1664,9 @@ and room were retained, with distinct container IDs. The preceding
 containers were absent on inspection, while Docker's historical lifecycle
 events were unavailable for this probe. Other Manager Harnesses and
 completion paths still need independent validation.
+
+[Case112 same-Harness Manager backlog](evidence/runtime-recovery-1631-case112-manager-restart.json)
+then stopped the returned Codex container through the controller, sent one
+Matrix message while the instance was stopped, and started the same
+container and image. The new process handled that pending event once
+without further input.

@@ -1,0 +1,37 @@
+{
+  "fixture": "recovery-1631-live-20261118-manager112",
+  "identity": "@manager:recovery-1631.test",
+  "room": "!odYgFmQdztlSu0W562:recovery-1631.test",
+  "phases": [
+    {
+      "phase": "pending-during-stop",
+      "container": {
+        "id": "921f8d3062bf70143305cc914927a6fbc76336b5754d69506b2fc08594786280",
+        "running": false,
+        "started_at": "2026-11-18T11:40:43.334247027Z",
+        "finished_at": "2026-11-18T11:43:10.867257387Z",
+        "image": "sha256:e85bc5214caca23afc5cbc927c5f81efc8afe510ccc2cac01cc56f2c05e397de"
+      },
+      "event": "$WS05a9c5SUBdehaliJ-7S_gjOxFDEjHhdqZ_Rf0ND_8"
+    },
+    {
+      "phase": "verified",
+      "event": "$WS05a9c5SUBdehaliJ-7S_gjOxFDEjHhdqZ_Rf0ND_8",
+      "reply": "$h0qbrGP0YBOj9vug2L4FZSnFd_yoamleHiXarkW5sfc",
+      "container": {
+        "id": "921f8d3062bf70143305cc914927a6fbc76336b5754d69506b2fc08594786280",
+        "running": true,
+        "started_at": "2026-11-18T11:43:13.526490072Z",
+        "finished_at": "2026-11-18T11:43:10.867257387Z",
+        "image": "sha256:e85bc5214caca23afc5cbc927c5f81efc8afe510ccc2cac01cc56f2c05e397de"
+      },
+      "new_input_after_start": 0
+    }
+  ],
+  "passed": true,
+  "sources": {
+    "controller": "6421981fcc9255a0b779a04557769650172e290e",
+    "codex": "28dcf223b3f1d3dd0cb4abdbfe87b3e20dede024",
+    "shared_core": "4fca52d09d8568d6cbf5f5fc35f51b6a2c858db8"
+  }
+}

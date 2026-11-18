@@ -531,9 +531,11 @@ while True:
         text=json.dumps({"room": task["room_id"], "task": TASK_ID})))
 
 
-def cutover(*, watch_return=False, watch_dashboard=False):
+def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
     if watch_dashboard and (not OPERATOR_HANDOFF or watch_return):
         raise ValueError("Dashboard cutover requires the operator handoff in replacement mode")
+    if cli_return and not watch_return:
+        raise ValueError("CLI return requires the second cutover")
     if watch_return and not RETURN_TO_SOURCE:
         raise ValueError("watch-return requires the two-handoff scenario")
     suffix = "-return" if watch_return else ""
@@ -560,7 +562,16 @@ def cutover(*, watch_return=False, watch_dashboard=False):
         raise RuntimeError("Wait for the source native Matrix read receipt before cutover")
     # Capture the source while it still exists; post-cutover reads cannot prove
     # the source native session or absence of the target Task session.
-    before = evidence(emit=False)
+    deadline = time.monotonic() + 60
+    while True:
+        before = evidence(emit=False)
+        if source != "qwenpaw" or before["task"]["execution"] != task["execution"]:
+            break
+        cache = before["native_sessions"]["qwenpaw_shared"]["cache"]
+        if (cache and cache.get("checkpoint_version") == cp.get("version")) or time.monotonic() >= deadline:
+            break
+        # The native SDK persists the session after the step result is delivered.
+        time.sleep(2)
     before["source_read_receipt"] = read
     before["tool_processes"] = fixture_tool_processes()
     if before["instances"][1]["id"] != old["Id"] or before["task"]["execution"] != task["execution"]:
@@ -602,21 +613,23 @@ def cutover(*, watch_return=False, watch_dashboard=False):
             if watch_return:
                 subprocess.Popen([sys.executable, __file__, "observe-return-cursors"], start_new_session=True,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if watch_return and not cli_return:
                 print("Captured second boundary; switch agent-a back to the original Harness through the Dashboard.", flush=True)
             elif watch_dashboard:
                 print("Captured the step boundary; submit the switch through the Dashboard.", flush=True)
             elif MODE == "restart":
                 api("POST", "workers/agent-a/restart", {})
             elif OPERATOR_HANDOFF:
+                request = TASK_ID + suffix
                 result = json.loads(agt("worker", "switch-runtime", "--name", "agent-a", "--runtime", target,
-                    "--request-id", TASK_ID, "-o", "json"))
+                    "--request-id", request, "-o", "json"))
                 op = result["handoff"]
-                if op["id"] != TASK_ID or op["target_runtime"] != target or op["target_image"] != HARNESS_IMAGES[target]:
+                if op["id"] != request or op["target_runtime"] != target or op["target_image"] != HARNESS_IMAGES[target]:
                     raise RuntimeError("Handoff selected a different request or target image")
             else:
                 api("PUT", "workers/agent-a", {"runtime": TARGET, "image": HARNESS_IMAGES[TARGET]})
             # No Matrix input is sent. Observe the Controller's actual replacement.
-            deadline = time.monotonic() + (600 if watch_dashboard else 180 if OPERATOR_HANDOFF else 45)
+            deadline = time.monotonic() + (600 if OPERATOR_HANDOFF else 45)
             replacement = None
             while time.monotonic() < deadline:
                 result = subprocess.run(["docker", "inspect", name], capture_output=True, text=True)
@@ -695,7 +708,7 @@ def observe_return_cursors():
     """Save only sync cursor hashes from the isolated Controller's HTTP listener."""
     path = Path("/tmp/1631-live-" + CASE + "-return-sync.jsonl")
     filter_ = "tcp and (dst port 6167 or dst port 8080) and tcp[((tcp[12] & 0xf0) >> 2):4] = 0x47455420"
-    run = ["docker", "exec", CONTROLLER, "timeout", "300", "tcpdump", "-l", "-nn", "-tt", "-s", "1024", "-A", "-i", "any", filter_]
+    run = ["docker", "exec", CONTROLLER, "timeout", "660", "tcpdump", "-l", "-nn", "-tt", "-s", "1024", "-A", "-i", "any", filter_]
     endpoint = re.compile(rb"^(\d+\.\d+) .*?IP (\d+\.\d+\.\d+\.\d+)\.\d+ > ")
     request = re.compile(rb"GET (/_matrix/client/(?:v3|r0)/sync(?:\?[^ ]*)?) HTTP/")
     with path.open("x") as output, subprocess.Popen(run, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as capture:
@@ -839,6 +852,9 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         text=json.dumps({"room": task["room_id"], "event": cp["reply_event"], "sha256": cp["result"]["sha256"],
             "stopped_ms": order["die"] // 1000000, "task_id": TASK_ID})))
     if read := before.get("source_read_receipt"):
+        assert read["source_event"] in matrix["native_read_sources"]
+        assert read["read_event"] in matrix["read_receipt_events"]
+    if middle and (read := middle.get("source_read_receipt")):
         assert read["source_event"] in matrix["native_read_sources"]
         assert read["read_event"] in matrix["read_receipt_events"]
     if middle:
@@ -1217,4 +1233,5 @@ if __name__ == "__main__":
     {"setup": setup, "restore": lambda: setup(restore=True), "status": status, "members": members, "prepare": prepare, "oracle": oracle, "tracing": tracing, "seed": seed,
      "refresh-controller": refresh_controller, "evidence": evidence, "cutover": cutover, "watch-return": lambda: cutover(watch_return=True),
      "watch-dashboard-cutover": lambda: cutover(watch_dashboard=True),
+     "return-cutover": lambda: cutover(watch_return=True, cli_return=True),
      "observe-return-cursors": observe_return_cursors, "verify": verify}[sys.argv[1]]()

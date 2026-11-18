@@ -95,6 +95,20 @@ class EffectReceiptTests(unittest.TestCase):
     def receipts(self):
         return self.ledger.proof("team", "stable")["effects"]
 
+    def test_openhuman_command_accepts_a_three_digit_fixture_task(self):
+        command = Path(self.directory.name) / "agentteams-recovery-step"
+        command.symlink_to(Path(__file__).parent / "fixtures/runtime_recovery_step.py")
+        task_id = "live-hermes-openhuman-116"
+        controller = "http://recovery-1631-live-20261118-v116-controller:8090"
+        received = []
+        client = SimpleNamespace(current=lambda *args: received.append(args))
+        with patch.dict(sys.modules, {"task_recovery": SimpleNamespace(Recovery=lambda: client)}), \
+                patch.object(sys, "argv", [str(command), task_id, "recovery-team"]), \
+                patch.dict(os.environ, {"AGENTTEAMS_CONTROLLER_URL": controller}):
+            with self.assertRaisesRegex(RuntimeError, "ACK the assigned Task"):
+                runpy.run_path(str(command))
+        self.assertEqual(received, [(task_id, "recovery-team")])
+
     def test_stale_task_directory_ledger_cannot_erase_effect_receipts(self):
         self.invoke()
         self.assertIn("PAUSED_AT_STEP_BOUNDARY", self.invoke())

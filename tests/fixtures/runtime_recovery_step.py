@@ -22,7 +22,7 @@ task_id, team = sys.argv[1:]
 direct_command = Path(sys.argv[0]).name == "agentteams-recovery-step"
 controller_host = urllib.parse.urlparse(os.getenv("AGENTTEAMS_CONTROLLER_URL", "")).hostname or ""
 fixture_prefix = controller_host.removesuffix("-controller")
-if direct_command and (team != "recovery-team" or not re.fullmatch(r"live-[a-z0-9-]+-\d{2}", task_id)
+if direct_command and (team != "recovery-team" or not re.fullmatch(r"live-[a-z0-9-]+-[0-9]{2,3}", task_id)
         or not re.fullmatch(r"recovery-1631-live-\d{8}-v\d+", fixture_prefix)
         or controller_host != fixture_prefix + "-controller"):
     raise ValueError("This command is only for the isolated recovery fixture")

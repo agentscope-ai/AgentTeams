@@ -40,8 +40,10 @@ def configure(path, prefix, controller):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["serve"] and os.getenv("RECOVERY_E2E_PREFIX"):
-        configure(Path(os.environ["OPENHUMAN_CONFIG"]), os.environ.get("RECOVERY_E2E_PREFIX", ""),
-                  os.environ.get("AGENTTEAMS_CONTROLLER_URL", ""))
+    controller = os.getenv("AGENTTEAMS_CONTROLLER_URL", "")
+    hostname = urllib.parse.urlparse(controller).hostname or ""
+    prefix = os.getenv("RECOVERY_E2E_PREFIX") or hostname.removesuffix("-controller")
+    if sys.argv[1:] == ["serve"] and re.fullmatch(r"recovery-1631-live-\d{8}-v\d+", prefix):
+        configure(Path(os.environ["OPENHUMAN_CONFIG"]), prefix, controller)
         print("Recovery fixture policy: bounded step command explicitly allowed before native startup", flush=True)
     os.execv("/usr/local/bin/openhuman-core.native", ["openhuman-core", *sys.argv[1:]])

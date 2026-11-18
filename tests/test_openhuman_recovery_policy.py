@@ -1,5 +1,7 @@
 """Test-only native policy setup must never select an existing installation."""
 import importlib.util
+import runpy
+import sys
 from pathlib import Path
 import tomllib
 
@@ -34,3 +36,24 @@ def test_other_installations_are_rejected_without_changing_files(tmp_path, prefi
     with pytest.raises(ValueError, match="explicitly named"):
         policy.configure(path, prefix, controller)
     assert path.read_text() == original
+
+
+@pytest.mark.parametrize("host,allowed", [
+    ("recovery-1631-live-20261118-v116-controller", True),
+    ("agentteams-controller", False),
+])
+def test_fixture_image_derives_policy_scope_from_the_controller(tmp_path, monkeypatch, host, allowed):
+    path = tmp_path / "config.toml"
+    path.write_text('[autonomy]\nallowed_commands = ["agt"]\n')
+    monkeypatch.delenv("RECOVERY_E2E_PREFIX", raising=False)
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", f"http://{host}:8090")
+    monkeypatch.setenv("OPENHUMAN_CONFIG", str(path))
+    monkeypatch.setattr(sys, "argv", ["openhuman-core", "serve"])
+    calls = []
+    monkeypatch.setattr(policy.os, "execv", lambda binary, args: calls.append((binary, args)))
+
+    runpy.run_path(spec.origin, run_name="__main__")
+
+    commands = tomllib.loads(path.read_text())["autonomy"]["allowed_commands"]
+    assert ("agentteams-recovery-step" in commands) is allowed
+    assert calls == [("/usr/local/bin/openhuman-core.native", ["openhuman-core", "serve"])]

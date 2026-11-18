@@ -1124,13 +1124,14 @@ func TestReconcileTeamTeamReferences_WorkerNotProvisionedKeepsTeamActive(t *test
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), unprovisionedWorker.DeepCopy()).
-		WithStatusSubresource(&v1beta1.Team{}).
+		WithStatusSubresource(&v1beta1.Team{}, &v1beta1.Worker{}).
 		Build()
 
+	deployer := mocks.NewMockDeployer()
 	r := &TeamReconciler{
 		Client:      c,
 		Provisioner: mocks.NewMockProvisioner(),
-		Deployer:    mocks.NewMockDeployer(),
+		Deployer:    deployer,
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
@@ -1156,6 +1157,26 @@ func TestReconcileTeamTeamReferences_WorkerNotProvisionedKeepsTeamActive(t *test
 	}
 	if ms.Ready {
 		t.Errorf("dev Ready=true, want false")
+	}
+
+	if _, ok := runtimeConfigCallFor(deployer.Calls.DeployMemberRuntimeConfig, "dev"); ok {
+		t.Fatal("published a runtime config before Worker Matrix identity was available")
+	}
+	var readyWorker v1beta1.Worker
+	if err := c.Get(ctx, client.ObjectKeyFromObject(unprovisionedWorker), &readyWorker); err != nil {
+		t.Fatalf("get Worker: %v", err)
+	}
+	readyWorker.Status.MatrixUserID = "@dev:matrix.local"
+	readyWorker.Status.RoomID = "!room-dev:matrix.local"
+	if err := c.Status().Update(ctx, &readyWorker); err != nil {
+		t.Fatalf("publish Worker identity: %v", err)
+	}
+	if _, err := r.reconcileTeam(ctx, team, client.MergeFrom(team.DeepCopy())); err != nil {
+		t.Fatalf("reconcile provisioned Worker: %v", err)
+	}
+	cfg, ok := runtimeConfigCallFor(deployer.Calls.DeployMemberRuntimeConfig, "dev")
+	if !ok || cfg.MatrixUserID != readyWorker.Status.MatrixUserID || cfg.PersonalRoomID != readyWorker.Status.RoomID {
+		t.Fatalf("missing complete runtime config after provisioning: %+v", cfg)
 	}
 }
 

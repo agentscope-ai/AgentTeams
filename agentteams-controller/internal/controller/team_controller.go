@@ -676,6 +676,11 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if !member.worker.DeletionTimestamp.IsZero() {
 			continue
 		}
+		// The Worker publishes its first runtime config before updating status.
+		// Wait for that Matrix identity before replacing the config with Team context.
+		if member.worker.Status.MatrixUserID == "" {
+			continue
+		}
 		runtime := backend.ResolveRuntime(member.worker.Spec.Runtime, r.DefaultRuntime)
 		deployMode := v1beta1.DeployModeLocal
 		if member.worker.Spec.DeployMode != nil {

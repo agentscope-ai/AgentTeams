@@ -51,6 +51,7 @@ func TestTeamProjectionKeepsCentralObservabilitySettings(t *testing.T) {
 	team := &v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "team", Namespace: "default"},
 		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{{Name: "worker", Role: "team_leader"}}}}
 	worker := newWorker("worker", v1beta1.WorkerSpec{Runtime: "openclaw", Model: "qwen-plus"})
+	worker.Status.MatrixUserID = "@worker:matrix.local"
 	rig := newTeamReconcileRig(t, team, worker)
 	scheme := newControllerTestScheme(t)
 	if err := corev1.AddToScheme(scheme); err != nil {

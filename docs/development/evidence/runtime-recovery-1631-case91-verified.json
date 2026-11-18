@@ -1,0 +1,233 @@
+{
+  "task_id": "live-deepseek-harness-hermes-91",
+  "case": "91",
+  "scope": "one real deepseek-harness-to-hermes in-progress continuation",
+  "mode": "replace",
+  "fixture_prefix": "recovery-1631-live-20261118-v91",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "52a3659b719abb78c17368ce020403c442d4e5db",
+    "deepseek-harness": "6f5aadb0963092f050202211281ed964ba94d070",
+    "hermes": "282c45715eb37d4d7e4c4aba64ab6e83386f9b52",
+    "shared_contract": "52a3659b719abb78c17368ce020403c442d4e5db"
+  },
+  "driver_sha256": "457a7f4056c097302d8fe541ffd6293d19f60456ac70e0abff8e96df6a485206",
+  "native_recovery_sessions": {
+    "hermes": [
+      {
+        "timestamp": "2026-11-18T09:23:34.954686+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "22e571cc4cc44f95ae7ef8f14f382adc",
+        "event": "task.recovery.session",
+        "task_id": "live-deepseek-harness-hermes-91",
+        "team_id": "recovery-team",
+        "generation": 2,
+        "session_id": "20261118_092334_bafe0896",
+        "checkpoint_version": 5,
+        "reused": false
+      }
+    ],
+    "hermes_message_counts": {
+      "20261118_092334_bafe0896": 33
+    },
+    "hermes_shared": {
+      "cache": null,
+      "native_digest": null,
+      "message_count": 0,
+      "tool_count": 0,
+      "task_mentioned": false
+    },
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "47edf3d100ecec128ee51b612ac91f5b7135dadbc865620d179a439de853d6c4",
+      "descriptor": null,
+      "config_generation": null
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 5,
+  "checkpoint_after": 13,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/019e2bee4ec470d69dbc29554d5e2c40f56e8238a8d55cb392f4fefe08056912/2026-11-18T09:22:54.28559303Z",
+    "process_id": "1:1794993774605122160:22e571cc4cc44f95ae7ef8f14f382adc",
+    "runtime": "hermes",
+    "state": "active",
+    "checkpoint": {
+      "version": 13,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-deepseek-harness-hermes-91:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=953f0e514a1c58f690795d3c7f8c755fe82e943c9e6d2ca54a063e74bfb70be0; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-hermes-91/output/step-one.json",
+          "sha256": "c39241c080b753ea6eb7f90f0b1e40db8823824932201f85404342b4dbbcd944",
+          "size": 362
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-hermes-91/output/step-two.json",
+          "sha256": "c5d62bc4e6c5d4c5605b916e8c557ab73221fff6e90bb6259e5a287b0e175d85",
+          "size": 362
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-hermes-91/output/step-three.json",
+          "sha256": "953f0e514a1c58f690795d3c7f8c755fe82e943c9e6d2ca54a063e74bfb70be0",
+          "size": 364
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-hermes-91/result.md",
+        "sha256": "f1fe3068f22deaca038545db7b7c8ab207123a42cda2bad506a2a5c4ce9c5445",
+        "size": 819
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:2fe8d5df2ca0e626ee6d149c8d6b9e230dd50cddd4ece00929b5e29d9ec1de4f",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "FMecT6rWi3"
+      },
+      "reply_event": "$yjSu1svDZimkRL-3cJN5O6cw5gu0MhptNSmYhxDC04w",
+      "saved_at": "2026-11-18T09:26:06.209675509Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T09:19:31Z"
+    },
+    {
+      "action": "progress",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "note": "Generation 1: Step one completed and verified. PAUSED_AT_STEP_BOUNDARY confirmed. Remaining: two, three.",
+      "seq": 2,
+      "to": "in_progress",
+      "ts": "2026-11-18T09:20:57Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 3,
+      "to": "submitted",
+      "ts": "2026-11-18T09:25:35Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794993612773044383,
+      "generation": 1,
+      "instance_id": "docker/0fdc9a0881569a66c555dc20a2a680ea64d84c30c75980147fa68f6e044353a0/2026-11-18T09:13:25.32882022Z",
+      "process_id": "7:1794993208982843501:3f1073b9b81d42059a81b92aa279cd01",
+      "step": "one",
+      "task_id": "live-deepseek-harness-hermes-91",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1794993860509330688,
+      "generation": 2,
+      "instance_id": "docker/019e2bee4ec470d69dbc29554d5e2c40f56e8238a8d55cb392f4fefe08056912/2026-11-18T09:22:54.28559303Z",
+      "process_id": "1:1794993774605122160:22e571cc4cc44f95ae7ef8f14f382adc",
+      "step": "two",
+      "task_id": "live-deepseek-harness-hermes-91",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 8,
+      "executed_at_ns": 1794993882709882678,
+      "generation": 2,
+      "instance_id": "docker/019e2bee4ec470d69dbc29554d5e2c40f56e8238a8d55cb392f4fefe08056912/2026-11-18T09:22:54.28559303Z",
+      "process_id": "1:1794993774605122160:22e571cc4cc44f95ae7ef8f14f382adc",
+      "step": "three",
+      "task_id": "live-deepseek-harness-hermes-91",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-hermes-91/output/step-one.json",
+      "sha256": "c39241c080b753ea6eb7f90f0b1e40db8823824932201f85404342b4dbbcd944",
+      "size": 362
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-hermes-91/output/step-two.json",
+      "sha256": "c5d62bc4e6c5d4c5605b916e8c557ab73221fff6e90bb6259e5a287b0e175d85",
+      "size": 362
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-hermes-91/output/step-three.json",
+      "sha256": "953f0e514a1c58f690795d3c7f8c755fe82e943c9e6d2ca54a063e74bfb70be0",
+      "size": 364
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-hermes-91/result.md",
+      "sha256": "f1fe3068f22deaca038545db7b7c8ab207123a42cda2bad506a2a5c4ce9c5445",
+      "size": 819
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1794993768951803732,
+    "destroy": 1794993771259171949,
+    "create": 1794993774233509145
+  },
+  "matrix": {
+    "reply_event": "$yjSu1svDZimkRL-3cJN5O6cw5gu0MhptNSmYhxDC04w",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$dQBLySjHQNeG4ArI0FIHH8vtpE9cX2n-lhOY84N_DcA"
+    ],
+    "read_receipt_events": [
+      "$c_9oBrmdXvqibvU_BgFgKsvOKhhPeo3kneDEP5yczMQ"
+    ],
+    "first_source_read_ms": 1794993541559
+  },
+  "operator_handoff": {
+    "id": "live-deepseek-harness-hermes-91",
+    "phase": "completed",
+    "source": {
+      "instance_id": "docker/0fdc9a0881569a66c555dc20a2a680ea64d84c30c75980147fa68f6e044353a0/2026-11-18T09:13:25.32882022Z",
+      "process_id": "7:1794993208982843501:3f1073b9b81d42059a81b92aa279cd01",
+      "runtime": "deepseek-harness"
+    },
+    "target_runtime": "hermes",
+    "target": {
+      "instance_id": "docker/019e2bee4ec470d69dbc29554d5e2c40f56e8238a8d55cb392f4fefe08056912/2026-11-18T09:22:54.28559303Z",
+      "process_id": "1:1794993774605122160:22e571cc4cc44f95ae7ef8f14f382adc",
+      "runtime": "hermes"
+    },
+    "source_stop_observed_at": "2026-11-18T09:22:48.961926761Z",
+    "target_registered_at": "2026-11-18T09:23:09.917748518Z",
+    "completed_at": "2026-11-18T09:23:44.509636091Z",
+    "target_image": "recovery-1631/hermes:local"
+  }
+}

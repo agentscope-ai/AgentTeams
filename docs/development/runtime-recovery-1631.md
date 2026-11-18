@@ -1442,3 +1442,13 @@ records stop before target registration. This is evidence of safe hold only:
 automatic verification, continuation, and a final reply did not occur.
 The driver's bounded Docker event capture did not observe the late stop and
 replacement and is not used as lifecycle evidence for this case.
+
+[Case91 DeepSeek → Hermes CLI handoff](evidence/runtime-recovery-1631-case91-verified.json)
+passed with DeepSeek `6f5aadb`, Hermes `282c457`, and Core contract `52a3659b`
+on both sides. The original Matrix assignment had a source read receipt
+before step one. Docker recorded the source dying and being removed before
+the target was created. Hermes built a new native session from shared
+checkpoint version 5 and continued the original Task at generation 2. The
+final checkpoint reached version 13. The independent ledger records one
+effect per step. The verifier read back all three artifacts, the stored
+result, and one matching Matrix reply with zero new messages after shutdown.

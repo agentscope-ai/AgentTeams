@@ -1,0 +1,86 @@
+{
+  "case": "169",
+  "scope": "expired OpenHuman session and duplicate process claim",
+  "passed": false,
+  "task_id": "live-openhuman-openhuman-169",
+  "expired_session": {
+    "native_ref": "6fc42124-94c0-4785-b1ec-66cb4a29ccf2",
+    "expires_at": 1795013273
+  },
+  "status": "in_progress",
+  "generation": 2,
+  "checkpoint_version": 7,
+  "completed_steps": [
+    "one",
+    "two"
+  ],
+  "delivery": null,
+  "competing_claim": {
+    "http_status": 409,
+    "reason": "worker runtime state changed: register this actual Worker start before execution",
+    "attempted_process_id": "fixture-competitor:e80f35a9d6b6443ab9748a80226b6dae",
+    "owner": {
+      "instance_id": "docker/839ea53725f39640f1a9b8f8436f2cf0dd6111952b0387387ed5834745acef26/2026-11-18T15:47:55.103005527Z",
+      "process_id": "1:1795016876846476170:283cea5c159342cdbbb007c7d8b6d8a8",
+      "generation": 2
+    },
+    "case": "169",
+    "task_id": "live-openhuman-openhuman-169",
+    "runtime": "openhuman",
+    "driver_sha256": "03e094d3467ba7e3a089a69c385763b98c70df9ab9987df442eed5b13a7db257"
+  },
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795016809876237719,
+      "generation": 1,
+      "instance_id": "docker/839ea53725f39640f1a9b8f8436f2cf0dd6111952b0387387ed5834745acef26/2026-11-18T15:45:34.006578502Z",
+      "process_id": "1:1795016734723557246:1825bf26717f4f6696d0bc9018f24112",
+      "step": "one",
+      "task_id": "live-openhuman-openhuman-169",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1795016917081552686,
+      "generation": 2,
+      "instance_id": "docker/839ea53725f39640f1a9b8f8436f2cf0dd6111952b0387387ed5834745acef26/2026-11-18T15:47:55.103005527Z",
+      "process_id": "1:1795016876846476170:283cea5c159342cdbbb007c7d8b6d8a8",
+      "step": "two",
+      "task_id": "live-openhuman-openhuman-169",
+      "team_id": "recovery-team"
+    }
+  ],
+  "instances": [
+    {
+      "name": "recovery-1631-live-20261118-v169-controller",
+      "id": "da3291b99f52dd5bd6fa0fd13549e1ba2f19edbfc8a676a69044a6d9ea3d456a",
+      "image": "recovery-1631/controller:local",
+      "image_id": "sha256:ce7df71f3ea9268b3c2282b3e6ee00e2a6a969008d758a3cf95673d68cba5b67",
+      "running": true,
+      "pid": 387784,
+      "started_at": "2026-11-18T15:44:48.351923493Z",
+      "finished_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "recovery-1631-live-20261118-v169-worker-agent-a",
+      "id": "839ea53725f39640f1a9b8f8436f2cf0dd6111952b0387387ed5834745acef26",
+      "image": "recovery-1631/openhuman:local",
+      "image_id": "sha256:b33227bfd8de5637cd6833de421f1d7d46d77dda1c8e9601c956745255d7f9b0",
+      "running": true,
+      "pid": 434666,
+      "started_at": "2026-11-18T15:47:55.103005527Z",
+      "finished_at": "2026-11-18T15:47:54.844264824Z"
+    },
+    {
+      "name": "recovery-1631-live-20261118-v169-worker-leader",
+      "id": "122aa88cfbd0518a9ca2beea29244cd174775a8b6ad647c1b8e5c3e3c0deb153",
+      "image": "recovery-1631/hermes:local",
+      "image_id": "sha256:0160e4d40f498a32dec12e336cc4f628de7c706aded3b4f51e02df548d0c2d6c",
+      "running": true,
+      "pid": 406490,
+      "started_at": "2026-11-18T15:45:39.831379602Z",
+      "finished_at": "0001-01-01T00:00:00Z"
+    }
+  ]
+}

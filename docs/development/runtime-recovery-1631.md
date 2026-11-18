@@ -2131,3 +2131,24 @@ effect and before its verified checkpoint. The restarted DeepSeek process
 claimed generation 2, preserved the operation and entered
 `needs_verification`. The independent ledger held one effect and no target
 execution request.
+
+[Case171 QwenPaw abrupt restart](evidence/runtime-recovery-1631-case171-abrupt-restart-verified.json)
+passed with an explicit SIGKILL, exit 137, and the same container
+starting a new process. It reused its valid session and finished the
+same Task. The completed effects and final Matrix reply occurred once.
+
+[Case174 QwenPaw expired session](evidence/runtime-recovery-1631-case174-expired-session-verified.json)
+passed with a different native Task session and three single effects.
+The same Worker's credentials from an unregistered process received
+HTTP 409 without changing the execution owner or checkpoint.
+[Case175 Codex cancellation](evidence/runtime-recovery-1631-case175-cancelled-restart.json)
+confirmed that a real Leader cancellation remains authoritative after a
+new Worker process starts. Discovery excluded the Task, and the one
+effect recorded before cancellation remained the only effect.
+
+[Case169 OpenHuman expired session](evidence/runtime-recovery-1631-case169-expiry-incomplete.json)
+reached step two in generation 2 and rejected a competing process with
+HTTP 409. Step three and final delivery were unverified at timeout.
+[Case172 OpenClaw abrupt restart](evidence/runtime-recovery-1631-case172-source-oom.json)
+hit an OOM kill in the source before the fixture could commit step one
+or request its restart. This attempt does not pass the recovery case.

@@ -610,6 +610,108 @@ def same_step_boundary(previous, current):
             == {k: v for k, v in new.items() if k not in delivery_fields})
 
 
+def competing_claim():
+    """Challenge a real live Task claim with the same Worker token and another process."""
+    code = '''import json,os,sys,uuid
+from task_recovery import Recovery,RecoveryConflict
+task_id=sys.argv[1]
+os.environ["AGENTTEAMS_PROCESS_ID"]="fixture-competitor:"+uuid.uuid4().hex
+client=Recovery(device_delivery=True)
+snapshot=client.discover()
+entry=next(e for e in snapshot["tasks"] if e["team_id"]=="recovery-team" and e["task"]["task_id"]==task_id)
+execution=entry["task"]["execution"]
+assert entry["task"]["status"]=="in_progress" and execution["instance_id"]==snapshot["instance_id"]
+assert execution["process_id"] and execution["process_id"]!=client.process
+try:
+ client.claim(snapshot,entry)
+except RecoveryConflict as error:
+ reason=json.loads(str(error))["message"]
+ assert error.__cause__.code==409 and reason in {
+     "another process owns this live instance",
+     "worker runtime state changed: register this actual Worker start before execution"}
+else:
+ raise AssertionError("a competing process claimed the live Task")
+current=client.current(task_id,"recovery-team")["execution"]
+fields=("instance_id","process_id","generation")
+assert all(current[k]==execution[k] for k in fields)
+print(json.dumps({"http_status":409,"reason":reason,
+    "attempted_process_id":client.process,"owner":{k:current[k] for k in fields}}))
+'''
+    return json.loads(docker("exec", "-i", "-e", "PYTHONPATH=/opt/agentteams/scripts/lib",
+        PREFIX + "-worker-agent-a", "python3", "-c", code, TASK_ID))
+
+
+def verify_cancelled_restart():
+    """Cancel a live fixture Task through the Leader tool, then restart its Worker."""
+    assert MODE == "restart" and not FAULT
+    controller = json.loads(docker("inspect", CONTROLLER))[0]
+    assert controller["Config"]["Labels"]["io.agentteams.recovery.owner"] == "1631"
+    name = PREFIX + "-worker-agent-a"
+    old = json.loads(docker("inspect", name))[0]
+    endpoint = f"tasks/{TASK_ID}/meta?team=recovery-team"
+    task = api("GET", endpoint)
+    assert task["status"] == "in_progress" and task["execution"]["checkpoint"]["completed_steps"] == ["one"]
+    assert source_read_receipt(task) and not fixture_tool_processes()
+    conflict = competing_claim()
+    first, = oracle_proof()["effects"]
+    args = {"action": "cancel_task", "payload": {"taskId": TASK_ID, "mainTaskId": MAIN_ID,
+            "reason": "Cancel the disposable recovery Task after its first effect"}}
+    tool = '''import json,sys
+from mcp.server import call_tool
+result=call_tool("taskflow",json.load(sys.stdin))
+print(result["content"][0]["text"])
+'''
+    leader_path = "/root/agentteams-fs/agents/leader"
+    outcome = json.loads(docker("exec", "-i",
+        "-e", "PYTHONPATH=/opt/agentteams/plugins/teamharness:/opt/agentteams/scripts/lib",
+        "-e", f"TEAMHARNESS_RUNTIME_CONFIG={leader_path}/runtime/runtime.yaml",
+        "-e", f"TEAMHARNESS_SHARED_DIR={leader_path}/shared",
+        PREFIX + "-worker-leader", "/opt/venv/hermes/bin/python", "-c", tool, text=json.dumps(args)))
+    assert outcome["ok"] and outcome["synced"], outcome.get("error")
+    cancelled = api("GET", endpoint)
+    assert cancelled["status"] == "cancelled" and cancelled["cancel_reason"] == args["payload"]["reason"]
+    api("POST", "workers/agent-a/restart", {})
+    observe = '''import datetime,json,os,pathlib,sys
+from task_recovery import Recovery
+started=datetime.datetime.fromisoformat(sys.argv[2])
+path=pathlib.Path("/var/log/agentteams/workers/agent-a/events.jsonl")
+events=[json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+ready=any(row["event"]=="runtime.ready" and datetime.datetime.fromisoformat(row["timestamp"])>=started for row in events)
+if ready:
+ os.environ["AGENTTEAMS_PROCESS_ID"]="fixture-cancel-readback"
+ snapshot=Recovery().discover()
+ assert not any(row["task"]["task_id"]==sys.argv[1] for row in snapshot["tasks"])
+ print(json.dumps({"ready":True,"instance_id":snapshot["instance_id"],"recoverable":False}))
+else:
+ print(json.dumps({"ready":False}))
+'''
+    deadline = time.monotonic() + 240
+    while time.monotonic() < deadline:
+        worker = json.loads(docker("inspect", name))[0]
+        if worker["State"]["Running"] and worker["State"]["StartedAt"] != old["State"]["StartedAt"]:
+            started = worker["State"]["StartedAt"].replace("Z", "+00:00")
+            check = json.loads(docker("exec", "-i", "-e", "PYTHONPATH=/opt/agentteams/scripts/lib",
+                name, "python3", "-c", observe, TASK_ID, started))
+            if check["ready"]:
+                break
+        time.sleep(2)
+    else:
+        raise TimeoutError("The cancelled-Task Worker did not reach a new native ready state")
+    final = api("GET", endpoint)
+    assert worker["Id"] == old["Id"] and check["instance_id"] != task["execution"]["instance_id"]
+    assert final["status"] == "cancelled" and final["execution"] == cancelled["execution"]
+    assert oracle_proof()["effects"] == [first] and not fixture_tool_processes()
+    result = {"passed": True, "case": CASE, "task_id": TASK_ID, "runtime": SOURCE,
+              "core_revision": controller["Config"]["Labels"]["io.agentteams.recovery.core-sha"],
+              "harness_revision": worker["Config"]["Labels"]["io.agentteams.recovery.harness-sha"],
+              "image_id": worker["Image"], "original_execution": task["execution"],
+              "final_status": final["status"], "cancel_reason": final["cancel_reason"],
+              "competing_claim": conflict, "restart_readback": check, "effects": [first]}
+    path = Path(f"/tmp/1631-live-{CASE}-cancelled-restart.json")
+    path.write_text(json.dumps(result, indent=2))
+    print(f"Verified cancellation and restart in {path}")
+
+
 def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
     if watch_dashboard and (not OPERATOR_HANDOFF or watch_return):
         raise ValueError("Dashboard cutover requires the operator handoff in replacement mode")
@@ -652,7 +754,7 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
             # Keep observing the same process and verified effect at the newer checkpoint.
             task = before["task"]
             cp = task["execution"]["checkpoint"]
-        if source == "qwenpaw":
+        if source == "qwenpaw" and not FAULT:
             cache = before["native_sessions"]["qwenpaw_shared"]["cache"]
         elif source == "openhuman" and MODE == "restart" and not FAULT:
             proof = before["native_sessions"]["openhuman"]
@@ -677,6 +779,9 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
     before["tool_processes"] = fixture_tool_processes()
     if before["instances"][1]["id"] != old["Id"] or before["task"]["execution"] != task["execution"]:
         raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
+    if os.getenv("RECOVERY_E2E_VERIFY_COMPETING_CLAIM") == "1":
+        before["competing_claim"] = competing_claim()
+        assert all(value == task["execution"][key] for key, value in before["competing_claim"]["owner"].items())
     if MODE == "restart" and SOURCE == "hermes" and not FAULT:
         assert_hermes_native_cache(before["native_sessions"]["hermes_shared"], cp, TASK_ID)
     if source == "openhuman" and MODE == "restart" and not FAULT:
@@ -693,7 +798,7 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
             assert_openclaw_native_cache(proof, cp)
         else:
             raise RuntimeError("Wait for the OpenClaw native session descriptor at the committed boundary")
-    if source == "qwenpaw":
+    if source == "qwenpaw" and not FAULT:
         assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"], cp, TASK_ID)
     if RETURN_TO_SOURCE:
         before["matrix"] = matrix_cursors(task)
@@ -975,7 +1080,9 @@ def verify():
     assert task["task_id"] == before["task"]["task_id"] == TASK_ID
     assert before["task"]["status"] == "in_progress"
     if FAULT == "after-effect":
-        assert before["task"]["execution"]["checkpoint"]["completed_steps"] == []
+        assert task.get("recovery_fixture", {}).get("oracle_version") in {3, 4}
+        interrupted = before["task"]["execution"]["checkpoint"]
+        assert interrupted["completed_steps"] == [] and interrupted["operation"]["state"] == "started"
         assert before["tool_processes"], "fault scenario must interrupt an actual tool process"
     else:
         assert before["task"]["execution"]["checkpoint"]["completed_steps"] == ["one"]
@@ -1074,10 +1181,10 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         assert_openhuman_native_cache(before["native_sessions"]["openhuman"], before["task"]["execution"], TASK_ID)
     if final_runtime == "openhuman":
         assert_openhuman_native_cache(native["openhuman"], execution, TASK_ID, terminal=True)
-        if MODE == "restart":
+        if MODE == "restart" and not FAULT:
             assert_restarted_native(before["native_sessions"]["openhuman"]["cache"]["session_id"],
                 native["openhuman"]["cache"]["session_id"], before)
-    if SOURCE == "qwenpaw":
+    if SOURCE == "qwenpaw" and not FAULT:
         assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"],
             before["task"]["execution"]["checkpoint"], TASK_ID)
     if final_runtime == "qwenpaw":
@@ -1087,7 +1194,7 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
             retained = _qwenpaw_native(native["qwenpaw_shared"], TASK_ID, old_ref)
             assert retained["native_digest"] == before["native_sessions"]["qwenpaw_shared"]["cache"]["native_digest"]
             assert len(matrix["read_receipt_events"]) == 1, "the initial assignment was marked read more than once"
-        if MODE == "restart":
+        if MODE == "restart" and not FAULT:
             source = before["native_sessions"]["qwenpaw_shared"]
             assert_qwenpaw_native_cache(source, before["task"]["execution"]["checkpoint"], TASK_ID)
             assert_restarted_native(source["cache"]["native_ref"], selected["session_id"], before)
@@ -1097,12 +1204,14 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     if final_runtime == "hermes":
         selected = native["hermes"][-1]["session_id"]
         assert native["hermes_message_counts"].get(selected, 0) > 0, "recovered input was not persisted in the selected native session"
+        if FAULT:
+            assert native["hermes"][-1]["reused"] is False
     if SOURCE == "deepseek-harness" and not FAULT:
         assert_deepseek_native(before["native_sessions"]["deepseek"], before["task"],
             require_cache=MODE == "restart", allow_active_turn=MODE == "replace")
     if final_runtime == "deepseek-harness":
         selected = assert_deepseek_native(native["deepseek"], task)
-        if MODE == "restart":
+        if MODE == "restart" and not FAULT:
             original = before["native_sessions"]["deepseek"]["native"]
             assert_restarted_native(original["session_id"], selected["session_id"], before)
             if not EXPIRE_SESSION:
@@ -1116,7 +1225,7 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
             assert len(proof["turn_sessions"]) == 1, "native session for the recovered execution was not found"
             selected = proof["turn_sessions"][0]
             assert selected["message_count"] > 0 and selected["task_mentioned"]
-        if MODE == "restart":
+        if MODE == "restart" and not FAULT:
             source_cache = before["native_sessions"]["openclaw"]
             source_checkpoint = before["task"]["execution"]["checkpoint"]
             if source_cache["shared_cache"]:
@@ -1125,11 +1234,11 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
                 assert_openclaw_native_cache(source_cache, source_checkpoint)
                 original = source_cache["native"]
             assert_restarted_native(original["session_id"], selected["session_id"], before)
-    if not LEGACY_CODEX and SOURCE == "codex":
+    if not LEGACY_CODEX and SOURCE == "codex" and not FAULT:
         assert_codex_native(before["native_sessions"]["codex_shared"], before["task"], require_cache=MODE == "restart")
     if not LEGACY_CODEX and final_runtime == "codex":
         target = assert_codex_native(native["codex_shared"], task)
-        if MODE == "restart":
+        if MODE == "restart" and not FAULT:
             original = before["native_sessions"]["codex_shared"]["native"]
             assert_restarted_native(original["thread_id"], target["thread_id"], before)
             assert target["turn_id"] != original["turn_id"]
@@ -1139,7 +1248,7 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         digest = hashlib.sha256(json.dumps(before["task"]["execution"]["checkpoint"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         assert cache["checkpoint_digest"] == digest
         assert native["codex"]["thread_id"] == cache["thread_id"], "valid native session was not reused"
-    if MODE == "restart" and SOURCE == "hermes":
+    if MODE == "restart" and SOURCE == "hermes" and not FAULT:
         cache = before["native_sessions"]["hermes_cache"][-1]
         assert cache["expires_at"] > before["recorded_at"]
         digest = hashlib.sha256(json.dumps(before["task"]["execution"]["checkpoint"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -1178,6 +1287,13 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         proof["openhuman_source_session"] = before["native_sessions"]["openhuman"]["descriptor"]
     if SOURCE == "deepseek-harness":
         proof["deepseek_source_session"] = before["native_sessions"]["deepseek"]["native"]
+    if FAULT:
+        proof["scope"] = f"{SOURCE} interrupted effect verified before {TARGET} continued"
+        proof["interrupted_effect"] = {"operation": interrupted["operation"], "checkpoint": interrupted["version"],
+                                       "tool_processes": before["tool_processes"],
+                                       "verification_calls": [row for row in calls if row["method"] == "GET"]}
+    if "competing_claim" in before:
+        proof["competing_claim"] = before["competing_claim"]
     if EXPIRE_SESSION:
         proof["scope"] = f"{SOURCE} restart with an expired shared session descriptor"
         proof["expired_session"] = before["expired_session"]
@@ -1498,4 +1614,5 @@ if __name__ == "__main__":
      "watch-dashboard-cutover": lambda: cutover(watch_dashboard=True),
      "return-cutover": lambda: cutover(watch_return=True, cli_return=True),
      "observe-return-cursors": observe_return_cursors, "verify-parked-effect": verify_parked_effect,
+     "verify-cancelled-restart": verify_cancelled_restart,
      "verify": verify}[sys.argv[1]]()

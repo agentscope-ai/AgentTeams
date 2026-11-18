@@ -1,0 +1,21 @@
+{
+  "case": "172",
+  "runtime": "openclaw",
+  "scope": "source OOM before an abrupt restart could be requested",
+  "worker_image_id": "sha256:e291b053c457fbd49d3f5aa9dff3ab6618203a232954ffbe59d4d4bdb16689d5",
+  "worker_revision": "c6dcf56695d1e924db750d53c8d3f0001959adee",
+  "container": "e52c4630a444b3b5f10a7dfa8060c3935a4b0df182723cc896b9819cf7d4cd33",
+  "state": {
+    "Status": "exited",
+    "OOMKilled": true,
+    "ExitCode": 137,
+    "StartedAt": "2026-11-18T16:08:29.065638121Z",
+    "FinishedAt": "2026-11-18T16:09:03.343346695Z"
+  },
+  "task_id": "live-openclaw-openclaw-172",
+  "task_status": "assigned",
+  "checkpoint_version": null,
+  "completed_steps": [],
+  "requested_restart": false,
+  "passed": false
+}

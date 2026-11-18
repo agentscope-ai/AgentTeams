@@ -38,12 +38,12 @@ continuation pending verification.
 
 | Harness | SIGKILL and resume | Expired session and resume | Saved reply | Uncertain effect | Competing claim | Cancellation and restart | Reassignment |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Codex | [Pass 135](evidence/runtime-recovery-1631-case135-abrupt-restart-verified.json) | [Pass 162](evidence/runtime-recovery-1631-case162-expired-session-verified.json) | Case 01, real Matrix | [Parked 166](evidence/runtime-recovery-1631-case166-parked-effect.json) | [Rejected 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Pass 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | Open |
-| Hermes | [Pass 168](evidence/runtime-recovery-1631-case168-abrupt-restart-verified.json) | [Pass 130](evidence/runtime-recovery-1631-case130-expired-session-verified.json) | [Restart 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | [Verified, then resumed 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | Open | Open | Open |
+| Codex | [Pass 135](evidence/runtime-recovery-1631-case135-abrupt-restart-verified.json) | [Pass 162](evidence/runtime-recovery-1631-case162-expired-session-verified.json) | Case 01, real Matrix | [Parked 166](evidence/runtime-recovery-1631-case166-parked-effect.json) | [Rejected 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Pass 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Old owner denied 180](evidence/runtime-recovery-1631-case180-reassignment-authority.json) |
+| Hermes | [Pass 168](evidence/runtime-recovery-1631-case168-abrupt-restart-verified.json) | [Pass 130](evidence/runtime-recovery-1631-case130-expired-session-verified.json) | [Restart 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | [Verified, then resumed 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | Open | Open | [New owner submitted 180](evidence/runtime-recovery-1631-case180-reassignment-authority.json) |
 | QwenPaw | [Pass 171](evidence/runtime-recovery-1631-case171-abrupt-restart-verified.json) | [Pass 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | [Same-process retry 31](evidence/runtime-recovery-1631-case31-delivery.json) | Open | [Rejected 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | Open | Open |
 | DeepSeek | [Pass 137](evidence/runtime-recovery-1631-case137-abrupt-restart-verified.json) | [Pass 165](evidence/runtime-recovery-1631-case165-expired-session-verified.json) | Open | [Parked 170](evidence/runtime-recovery-1631-case170-parked-effect.json) | Open | Open | Open |
 | OpenClaw | [Pass 176](evidence/runtime-recovery-1631-case176-abrupt-restart-verified.json) | [Pass 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open | [Rejected 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open |
-| OpenHuman | [Pass 161](evidence/runtime-recovery-1631-case161-abrupt-restart-verified.json) | [Partial 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open | [Rejected 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open |
+| OpenHuman | [Pass 161](evidence/runtime-recovery-1631-case161-abrupt-restart-verified.json) | [Pass 181](evidence/runtime-recovery-1631-case181-expired-session-verified.json) | Open | Open | [Rejected 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open |
 
 ## Source baseline
 
@@ -2224,3 +2224,25 @@ stopped rather than publishing a mismatched descriptor. The fixture
 now uses single-part upload and checks the object ETag against the
 exact input bytes before restarting the Worker. Case178 adds no
 completed expiry pass.
+
+
+[Case181 OpenHuman expired-session restart](evidence/runtime-recovery-1631-case181-expired-session-verified.json)
+passed with Controller `cb08ece3`, OpenHuman `a7fd8fe` and shared contract
+`cdc2800c`. With single-part expiry instrumentation, the new process wrote
+a fresh native session descriptor and advanced the original Task from
+checkpoint 5 to 12 in generation 2. Three independent effects and four
+stored hashes verified. Matrix recorded one canonical report and zero
+new input. Expired-session restart now has a passing run for each of
+the six Harnesses. The recorded OpenHuman proof retains the native
+transcript digest and verified entry count.
+
+[Case180 live Task reassignment](evidence/runtime-recovery-1631-case180-reassignment-authority.json)
+exercised the real Leader's delegate tool on Controller `cb08ece3`.
+The previous assignee was paused while the unclaimed assignment moved
+to the second Worker. After restarting, Codex was excluded from discovery
+and received HTTP 403 with the current Task ETag. Hermes alone acknowledged
+and submitted the original Task. Its durable report matched the only
+canonical Matrix reply. The original raw Matrix notification also caused
+one Codex tool-status message, so the quiet-room check remains open for
+this path. The submitted report identifies the Task and reassignment
+without the optional fixture marker.

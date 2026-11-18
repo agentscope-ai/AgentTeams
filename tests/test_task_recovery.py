@@ -174,6 +174,15 @@ class RecoveryTests(unittest.TestCase):
         claim.assert_called_once()
         save.assert_not_called()
 
+    def test_completed_callback_recovers_the_accepted_report(self):
+        self.task.update(status="completed", result_path="shared/tasks/stable-task/result.md")
+        claimed = {"task": self.task, "execution": {"checkpoint": {"delivery": "pending"}}, "saved_result": "Accepted report"}
+        with patch.object(self.recovery, "claim", return_value=claimed) as claim, patch.object(self.recovery, "save_reply") as save:
+            result = self.recovery.prepare_reply("stable-task", "team", "Stale native summary")
+        self.assertEqual(result, (claimed, "Accepted report"))
+        claim.assert_called_once()
+        save.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -120,8 +120,8 @@ class Recovery:
         # submit_task permits a summary without a report file. While this
         # process still owns active execution, persist its final answer before
         # asking claim to recover an already persisted submitted report.
-        submitted_report = entry["task"]["status"] == "submitted" and entry["task"].get("result_path")
-        if execution.get("state") == "active" and not (execution.get("checkpoint") or {}).get("result") and not submitted_report:
+        final_report = entry["task"]["status"] in {"submitted", "completed"} and entry["task"].get("result_path")
+        if execution.get("state") == "active" and not (execution.get("checkpoint") or {}).get("result") and not final_report:
             return self.save_reply(task_id, team, text), text
         claimed = self.claim(snapshot, entry)
         cp = claimed["execution"].get("checkpoint") or {}

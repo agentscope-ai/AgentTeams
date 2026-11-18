@@ -168,7 +168,28 @@ func recoveryStatus(task map[string]json.RawMessage) bool {
 	}
 	// Acceptance may race a crash between saving the answer and sending
 	// its Matrix reply. A completed Task is eligible for delivery only.
-	return status == "submitted" || (status == "completed" && execution.Checkpoint != nil && execution.Checkpoint.Delivery == "pending" && execution.Checkpoint.Result != nil)
+	if status == "submitted" {
+		return true
+	}
+	if status != "completed" {
+		return false
+	}
+	if cp := execution.Checkpoint; cp != nil {
+		if cp.Delivery == "pending" && cp.Result != nil {
+			return true
+		}
+		if cp.Result != nil || cp.Delivery != "" || unresolvedOperation(cp) {
+			return false
+		}
+	}
+	// The Leader can accept the canonical report before the native callback
+	// records the reply. Claim verifies the persisted bytes before delivery.
+	var taskID, submissionID, reportPath string
+	_ = json.Unmarshal(task["task_id"], &taskID)
+	_ = json.Unmarshal(task["submission_id"], &submissionID)
+	_ = json.Unmarshal(task["result_path"], &reportPath)
+	return taskID != "" && submissionID != "" && path.Clean(reportPath) == reportPath &&
+		strings.HasPrefix(reportPath, "shared/tasks/"+taskID+"/")
 }
 
 // ListRecoverableTasks grants only self discovery; Project list stays closed.
@@ -341,6 +362,15 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		writeError(w, 409, "invalid authoritative execution record")
 		return
 	}
+	var status string
+	_ = json.Unmarshal(task["status"], &status)
+	if status == "completed" && input.Action != "claim" {
+		cp := execution.Checkpoint
+		if input.Action != "checkpoint" || cp == nil || cp.Delivery != "pending" || cp.Result == nil {
+			writeError(w, 409, "a completed Task permits only delivery recovery")
+			return
+		}
+	}
 	name := caller.Username
 	if h.deps.Client != nil || h.deps.APIReader != nil {
 		worker, err := NewCoordinationHandler(h.deps).worker(r.Context(), caller.Username)
@@ -440,10 +470,9 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 	}
 	// submit_task saves result.md before publishing submitted metadata. A
 	// process may stop before its native final-text hook saves delivery.
-	var status, submissionID string
-	_ = json.Unmarshal(task["status"], &status)
+	var submissionID string
 	_ = json.Unmarshal(task["submission_id"], &submissionID)
-	if input.Action == "claim" && status == "submitted" && (execution.Checkpoint == nil || execution.Checkpoint.Result == nil) {
+	if input.Action == "claim" && (status == "submitted" || status == "completed") && (execution.Checkpoint == nil || execution.Checkpoint.Result == nil) {
 		old := execution.Checkpoint
 		if unresolvedOperation(old) || submissionID == "" {
 			writeError(w, 409, "verify the submitted operation and result before delivery")

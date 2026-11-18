@@ -38,8 +38,8 @@ continuation pending verification.
 
 | Harness | SIGKILL and resume | Expired session and resume | Saved reply | Uncertain effect | Competing claim | Cancellation and restart | Reassignment |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Codex | [Pass 135](evidence/runtime-recovery-1631-case135-abrupt-restart-verified.json) | [Pass 162](evidence/runtime-recovery-1631-case162-expired-session-verified.json) | Case 01, real Matrix | [Parked 166](evidence/runtime-recovery-1631-case166-parked-effect.json) | [Rejected 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Pass 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Old owner denied 180](evidence/runtime-recovery-1631-case180-reassignment-authority.json) |
-| Hermes | [Pass 168](evidence/runtime-recovery-1631-case168-abrupt-restart-verified.json) | [Pass 130](evidence/runtime-recovery-1631-case130-expired-session-verified.json) | [Restart 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | [Verified, then resumed 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | Open | Open | [New owner submitted 180](evidence/runtime-recovery-1631-case180-reassignment-authority.json) |
+| Codex | [Pass 135](evidence/runtime-recovery-1631-case135-abrupt-restart-verified.json) | [Pass 162](evidence/runtime-recovery-1631-case162-expired-session-verified.json) | Case 01, real Matrix | [Parked 166](evidence/runtime-recovery-1631-case166-parked-effect.json) | [Rejected 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Pass 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Old owner denied 182](evidence/runtime-recovery-1631-case182-reassignment-verified.json) |
+| Hermes | [Pass 168](evidence/runtime-recovery-1631-case168-abrupt-restart-verified.json) | [Pass 130](evidence/runtime-recovery-1631-case130-expired-session-verified.json) | [Restart 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | [Verified, then resumed 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | Open | Open | [New owner submitted 182](evidence/runtime-recovery-1631-case182-reassignment-verified.json) |
 | QwenPaw | [Pass 171](evidence/runtime-recovery-1631-case171-abrupt-restart-verified.json) | [Pass 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | [Same-process retry 31](evidence/runtime-recovery-1631-case31-delivery.json) | Open | [Rejected 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | Open | Open |
 | DeepSeek | [Pass 137](evidence/runtime-recovery-1631-case137-abrupt-restart-verified.json) | [Pass 165](evidence/runtime-recovery-1631-case165-expired-session-verified.json) | Open | [Parked 170](evidence/runtime-recovery-1631-case170-parked-effect.json) | Open | Open | Open |
 | OpenClaw | [Pass 176](evidence/runtime-recovery-1631-case176-abrupt-restart-verified.json) | [Pass 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open | [Rejected 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open |
@@ -2246,3 +2246,14 @@ canonical Matrix reply. The original raw Matrix notification also caused
 one Codex tool-status message, so the quiet-room check remains open for
 this path. The submitted report identifies the Task and reassignment
 without the optional fixture marker.
+
+
+[Case182 structured Task reassignment](evidence/runtime-recovery-1631-case182-reassignment-verified.json)
+passed with Controller `cb08ece3` and both genuine Leader assignment
+events in the Matrix room. The first event reached Matrix before the
+Leader reassigned the unclaimed Task to the second Worker. After the old
+Codex Worker restarted, scoped discovery excluded the Task and an
+execution claim was rejected with HTTP 403. The new Hermes Worker
+acknowledged and submitted the same Task. Readback matched the one
+canonical report to the saved artifact, with zero additional room
+messages from other senders before delivery.

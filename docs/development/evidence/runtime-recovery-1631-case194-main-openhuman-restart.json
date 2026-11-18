@@ -1,0 +1,291 @@
+{
+  "task_id": "live-openhuman-openhuman-194",
+  "case": "194",
+  "scope": "one real openhuman-to-openhuman in-progress continuation",
+  "mode": "restart",
+  "fixture_prefix": "recovery-1631-live-20261118-v194",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "3050cc2f348cd003a346c0e27f812282c915081a",
+    "openhuman": "a7fd8fecb74eff07054920373b5a9e9772b0af30",
+    "shared_contract": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6"
+  },
+  "driver_sha256": "8e1c403c014c9fdd8381d6f8a2bbddc4170c2b450b49692afe8bcd3256acfcdd",
+  "native_recovery_sessions": {
+    "hermes": [],
+    "hermes_message_counts": {},
+    "hermes_shared": null,
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": {
+        "authority": "7c1d0d801d93616568fe37325b1c51df8d8f44153c37c5e2c4c20cae4b120320",
+        "checkpoint_digest": "c15983a590ab15cb64d245322c1a87d13f81f537ec8dc3cbec24a66adbfffa09",
+        "expires_at": 1795111087,
+        "format_version": 1,
+        "history": [
+          {
+            "content": "[Channel context]\nYou are responding via the \"matrix\" channel. Reply target: \"!G90qvuZ4cDdPQ2SzWH:recovery-1631.test\".\nFor any cron/scheduled reminder you create with `cron_add`, set `delivery` to `{ \"mode\": \"announce\", \"channel\": \"matrix\", \"to\": \"!G90qvuZ4cDdPQ2SzWH:recovery-1631.test\" }` so the reminder is delivered back here instead of the in-app web stream. Only fall back to the default proactive delivery if the user explicitly asks for in-app/desktop notification.\n\nRecover your existing Task from the authoritative task system. Do not create a new task.\nBefore any new side effect, record its operation identity with checkpoint_task. If an operation is started or unknown, verify its external outcome and save evidence before continuing; do not rerun it. Continue from the last saved progress. Repeat unsaved reasoning or replayable work when needed. Pull and verify referenced artifacts before using them. Save artifacts before committing their checkpoint. A read receipt or ACK is not a checkpoint.\nUse taskflow.checkpoint_task at step boundaries. If your assigned executor already persists these checkpoints, invoke it unchanged; do not pre-register its operation IDs or commit a duplicate checkpoint outside its protocol. Use the same task ID for submission.\n{\"task_id\": \"live-openhuman-openhuman-194\", \"team_id\": \"recovery-team\", \"status\": \"assigned\", \"title\": \"Run three stable steps across openhuman to openhuman\", \"spec\": \"You are executing a bounded real runtime-recovery acceptance task live-openhuman-openhuman-194 in team recovery-team.\\nUse your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.\\nUnless your active Harness is OpenHuman, use mc cp to pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/acceptance.py into your task scratch directory.\\nThe acceptance.py helper owns the fixture:* operation identities and records both started and verified checkpoints itself. Invoke it as one native terminal tool call; do not pre-register a checkpoint for the helper or duplicate its operation IDs.\\nUse your native terminal tool to run python3 acceptance.py live-openhuman-openhuman-194 recovery-team. If your active Harness is OpenHuman, use its Shell tool with the single command agentteams-recovery-step live-openhuman-openhuman-194 recovery-team instead. Use the command directly without cd, an interpreter, or a shell prefix. This is the same acceptance helper installed in the isolated test image.\\nEach invocation executes ONE real persisted side effect and commits its checkpoint through the real Controller.\\nRead the authoritative completed_steps. Never repeat a completed step or edit the fixture, ledger or checkpoint outside the helper.\\nIn generation 1, run the helper only for step one. Once the helper commits the step, end the turn with a short progress reply. Leave the Task in_progress and make no further tool calls. The driver requests the cutover.\\nFrom generation 2 onward, run the helper for each remaining step.\\nWhen all three steps are complete, use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/live-openhuman-openhuman-194/output/step-one.json, shared/tasks/live-openhuman-openhuman-194/output/step-two.json, shared/tasks/live-openhuman-openhuman-194/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.\\nOutputs are durable in the task's shared object-storage output/ directory. On OpenHuman, submit the existing relative deliverable paths through TeamHarness as soon as all three steps are committed. The helper has already persisted and verified these files. Do not use native file_read or a shell probe on the shared paths before submission. On the other Harnesses, pull the outputs to your task output/ directory before submission. Do not create a new task or send messages to other members.\\nThe external test driver will replace your container at a step boundary without sending any new Matrix message.\\n\\nIf the helper returns SOURCE_READ_PENDING, it has executed nothing. Run the same helper again in the current turn to let the native assignment read arrive before the first effect. Only report step one after the helper returns its checkpoint version.\\n\", \"project_id\": null, \"main_task_id\": \"live-main-194\", \"generation\": 1, \"checkpoint\": null, \"history\": []}",
+            "role": "user"
+          },
+          {
+            "content": "{\"content\":\"I'll start by acknowledging the task and then running step one of the recovery acceptance fixture.\",\"tool_calls\":[{\"arguments\":\"{\\\"arguments\\\": {\\\"action\\\": \\\"ack_task\\\", \\\"task_id\\\": \\\"live-openhuman-openhuman-194\\\", \\\"synced\\\": true}, \\\"server\\\": \\\"teamharness\\\", \\\"tool\\\": \\\"taskflow\\\"}\",\"id\":\"call_1dc22a26091f418b92fc8460\",\"name\":\"mcp_call_tool\"}]}",
+            "role": "assistant"
+          },
+          {
+            "content": "{\"content\":\"{\\\"ok\\\": true, \\\"tool\\\": \\\"taskflow\\\", \\\"action\\\": \\\"ack_task\\\", \\\"task\\\": {\\\"assigned_at\\\": \\\"2026-11-18T17:55:22Z\\\", \\\"assigned_to\\\": \\\"@agent-a:recovery-1631.test\\\", \\\"eventId\\\": \\\"3c50b9f76d40cd58a7ed90e42209499f\\\", \\\"execution\\\": {\\\"generation\\\": 1, \\\"instance_id\\\": \\\"docker/163eb20c64213ce4d84e1268592f0cc3380a4dd2893fe7bf35cd9c808d0758f7/2026-11-18T17:54:44.657947406Z\\\", \\\"process_id\\\": \\\"1:1795024484924599038:a794848a2e6d4b84b7504fc0be4b6c17\\\", \\\"runtime\\\": \\\"openhuman\\\", \\\"state\\\": \\\"active\\\"}, \\\"main_task_id\\\": \\\"live-main-194\\\", \\\"notifyTxn\\\": \\\"live-assignment-194\\\", \\\"parent_task_id\\\": \\\"live-main-194\\\", \\\"project_id\\\": \\\"\\\", \\\"recovery_fixture\\\": {\\\"oracle_url\\\": \\\"http://recovery-1631-live-20261118-v194-oracle:8091\\\", \\\"oracle_version\\\": 4, \\\"wait_for_source_read\\\": true}, \\\"room_id\\\": \\\"!G90qvuZ4cDdPQ2SzWH:recovery-1631.test\\\", \\\"spec_path\\\": \\\"\\\", \\\"status\\\": \\\"in_progress\\\", \\\"task_id\\\": \\\"live-openhuman-openhuman-194\\\", \\\"task_kind\\\": \\\"subtask\\\", \\\"task_title\\\": \\\"Run three stable steps across openhuman to openhuman\\\", \\\"team_id\\\": \\\"recovery-team\\\", \\\"title\\\": \\\"Run three stable steps across openhuman to openhuman\\\", \\\"acknowledged_by_role\\\": \\\"worker\\\", \\\"history_seq\\\": 1, \\\"history\\\": [{\\\"ts\\\": \\\"2026-11-18T17:55:22Z\\\", \\\"from\\\": \\\"assigned\\\", \\\"to\\\": \\\"in_prog\\n... truncated ...\",\"tool_call_id\":\"call_1dc22a26091f418b92fc8460\"}",
+            "role": "tool"
+          },
+          {
+            "content": "{\"content\":\"Task acknowledged. Now running step one of the recovery acceptance fixture:\",\"tool_calls\":[{\"arguments\":\"{\\\"command\\\": \\\"agentteams-recovery-step live-openhuman-openhuman-194 recovery-team\\\"}\",\"id\":\"call_e909e2f0172d41a2b7ecfcb9\",\"name\":\"shell\"}]}",
+            "role": "assistant"
+          },
+          {
+            "content": "{\"content\":\"{\\\"step\\\": \\\"one\\\", \\\"checkpoint_version\\\": 2, \\\"remaining_steps\\\": [\\\"two\\\", \\\"three\\\"], \\\"sha256\\\": \\\"d46bd850d3dfeaa60d05480f009ffd92d521b2bb6d9346f508e49ef31e72f059\\\"}\\n\",\"tool_call_id\":\"call_e909e2f0172d41a2b7ecfcb9\"}",
+            "role": "tool"
+          },
+          {
+            "content": "Step one completed \u2014 checkpoint v2 committed. Remaining: steps two and three. Task remains in_progress, standing by for the driver's cutover.",
+            "role": "assistant"
+          },
+          {
+            "content": "[Channel context]\nYou are responding via the \"matrix\" channel. Reply target: \"!G90qvuZ4cDdPQ2SzWH:recovery-1631.test\".\nFor any cron/scheduled reminder you create with `cron_add`, set `delivery` to `{ \"mode\": \"announce\", \"channel\": \"matrix\", \"to\": \"!G90qvuZ4cDdPQ2SzWH:recovery-1631.test\" }` so the reminder is delivered back here instead of the in-app web stream. Only fall back to the default proactive delivery if the user explicitly asks for in-app/desktop notification.\n\nRecover your existing Task from the authoritative task system. Do not create a new task.\nBefore any new side effect, record its operation identity with checkpoint_task. If an operation is started or unknown, verify its external outcome and save evidence before continuing; do not rerun it. Continue from the last saved progress. Repeat unsaved reasoning or replayable work when needed. Pull and verify referenced artifacts before using them. Save artifacts before committing their checkpoint. A read receipt or ACK is not a checkpoint.\nUse taskflow.checkpoint_task at step boundaries. If your assigned executor already persists these checkpoints, invoke it unchanged; do not pre-register its operation IDs or commit a duplicate checkpoint outside its protocol. Use the same task ID for submission.\n{\"task_id\": \"live-openhuman-openhuman-194\", \"team_id\": \"recovery-team\", \"status\": \"in_progress\", \"title\": \"Run three stable steps across openhuman to openhuman\", \"spec\": \"You are executing a bounded real runtime-recovery acceptance task live-openhuman-openhuman-194 in team recovery-team.\\nUse your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.\\nUnless your active Harness is OpenHuman, use mc cp to pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/acceptance.py into your task scratch directory.\\nThe acceptance.py helper owns the fixture:* operation identities and records both started and verified checkpoints itself. Invoke it as one native terminal tool call; do not pre-register a checkpoint for the helper or duplicate its operation IDs.\\nUse your native terminal tool to run python3 acceptance.py live-openhuman-openhuman-194 recovery-team. If your active Harness is OpenHuman, use its Shell tool with the single command agentteams-recovery-step live-openhuman-openhuman-194 recovery-team instead. Use the command directly without cd, an interpreter, or a shell prefix. This is the same acceptance helper installed in the isolated test image.\\nEach invocation executes ONE real persisted side effect and commits its checkpoint through the real Controller.\\nRead the authoritative completed_steps. Never repeat a completed step or edit the fixture, ledger or checkpoint outside the helper.\\nIn generation 1, run the helper only for step one. Once the helper commits the step, end the turn with a short progress reply. Leave the Task in_progress and make no further tool calls. The driver requests the cutover.\\nFrom generation 2 onward, run the helper for each remaining step.\\nWhen all three steps are complete, use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/live-openhuman-openhuman-194/output/step-one.json, shared/tasks/live-openhuman-openhuman-194/output/step-two.json, shared/tasks/live-openhuman-openhuman-194/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.\\nOutputs are durable in the task's shared object-storage output/ directory. On OpenHuman, submit the existing relative deliverable paths through TeamHarness as soon as all three steps are committed. The helper has already persisted and verified these files. Do not use native file_read or a shell probe on the shared paths before submission. On the other Harnesses, pull the outputs to your task output/ directory before submission. Do not create a new task or send messages to other members.\\nThe external test driver will replace your container at a step boundary without sending any new Matrix message.\\n\\nIf the helper returns SOURCE_READ_PENDING, it has executed nothing. Run the same helper again in the current turn to let the native assignment read arrive before the first effect. Only report step one after the helper returns its checkpoint version.\\n\", \"project_id\": \"\", \"main_task_id\": \"live-main-194\", \"generation\": 2, \"checkpoint\": {\"version\": 5, \"completed_steps\": [\"one\"], \"remaining_steps\": [\"two\", \"three\"], \"operation\": {\"id\": \"fixture:live-openhuman-openhuman-194:one\", \"state\": \"verified\", \"evidence\": \"Independent effect ledger; persisted output SHA256=d46bd850d3dfeaa60d05480f009ffd92d521b2bb6d9346f508e49ef31e72f059; step=one; count=1\"}, \"artifacts\": [{\"key\": \"teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/output/step-one.json\", \"sha256\": \"d46bd850d3dfeaa60d05480f009ffd92d521b2bb6d9346f508e49ef31e72f059\", \"size\": 360}], \"result\": {\"key\": \"teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/checkpoints/reply-1b73d35c969d06bbd884532292a7651acb13270376b89a1221a2c6595f22b4b8.txt\", \"sha256\": \"1b73d35c969d06bbd884532292a7651acb13270376b89a1221a2c6595f22b4b8\", \"size\": 143}, \"delivery\": \"delivered\", \"reply_txn\": \"task-reply:5fb963fe6e784d31f0960fde88f0ad84a2126aa726d9fafbed82542caf623354\", \"reply_attempt\": {\"state\": \"sending\", \"user_id\": \"@agent-a:recovery-1631.test\", \"device_id\": \"eRDp2mr2pY\"}, \"reply_event\": \"$0i9OqPbnFd4v0sCHUUQphutjGLlnr4MWi7jzA-3NkDc\", \"saved_at\": \"2026-11-18T17:56:45.127848968Z\"}, \"history\": [{\"action\": \"ack_task\", \"actor\": \"worker:agent-a\", \"from\": \"assigned\", \"seq\": 1, \"to\": \"in_progress\", \"ts\": \"2026-11-18T17:55:22Z\"}]}",
+            "role": "user"
+          },
+          {
+            "content": "{\"content\":\"Step one is verified. Running step two:\",\"tool_calls\":[{\"arguments\":\"{\\\"command\\\": \\\"agentteams-recovery-step live-openhuman-openhuman-194 recovery-team\\\"}\",\"id\":\"call_5962681dbd9a41d9a6992284\",\"name\":\"shell\"}]}",
+            "role": "assistant"
+          },
+          {
+            "content": "{\"content\":\"{\\\"step\\\": \\\"two\\\", \\\"checkpoint_version\\\": 7, \\\"remaining_steps\\\": [\\\"three\\\"], \\\"sha256\\\": \\\"58dfc3a9889c6f17190614a8fd3fa15e672e2bcfba7f780cd2c338801e83d894\\\"}\\n\",\"tool_call_id\":\"call_5962681dbd9a41d9a6992284\"}",
+            "role": "tool"
+          },
+          {
+            "content": "{\"content\":\"Step two completed \u2014 checkpoint v7 committed. Running step three:\",\"tool_calls\":[{\"arguments\":\"{\\\"command\\\": \\\"agentteams-recovery-step live-openhuman-openhuman-194 recovery-team\\\"}\",\"id\":\"call_cd20732be87647d186cec95f\",\"name\":\"shell\"}]}",
+            "role": "assistant"
+          },
+          {
+            "content": "{\"content\":\"{\\\"step\\\": \\\"three\\\", \\\"checkpoint_version\\\": 9, \\\"remaining_steps\\\": [], \\\"sha256\\\": \\\"749440561b19bc2d4b1a7f74785c79d2c5d34d851cd9c954532b9984fcf58d77\\\"}\\n\",\"tool_call_id\":\"call_cd20732be87647d186cec95f\"}",
+            "role": "tool"
+          }
+        ],
+        "native_digest": "6bcf78d9a36dca7c5cc5db25665e0660c4061faafe8f8528a5e0767a83bd189f",
+        "runtime": "openhuman",
+        "scope": [
+          "recovery-team",
+          "live-openhuman-openhuman-194"
+        ],
+        "session_id": "c5f13bc2-771a-4388-a286-899a3c4ef067"
+      },
+      "authority": "7c1d0d801d93616568fe37325b1c51df8d8f44153c37c5e2c4c20cae4b120320",
+      "descriptor": {
+        "schema_version": 1,
+        "kind": "WorkerSessionCache",
+        "member_prefix": "agents/agent-a",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-openhuman-openhuman-194"
+        },
+        "runtime": "openhuman",
+        "start": {
+          "instance_id": "docker/163eb20c64213ce4d84e1268592f0cc3380a4dd2893fe7bf35cd9c808d0758f7/2026-11-18T17:56:54.668846403Z",
+          "process_id": "1:1795024615256914171:c665491231d3440c823ecfc9cd2b31c2",
+          "runtime": "openhuman"
+        },
+        "generation": 2,
+        "native_ref": "c5f13bc2-771a-4388-a286-899a3c4ef067",
+        "native_digest": "6bcf78d9a36dca7c5cc5db25665e0660c4061faafe8f8528a5e0767a83bd189f",
+        "checkpoint_version": 9,
+        "checkpoint_digest": "c15983a590ab15cb64d245322c1a87d13f81f537ec8dc3cbec24a66adbfffa09",
+        "config_generation": 3,
+        "expires_at": 1795111087,
+        "saved_at": "2026-11-18T17:58:10Z"
+      },
+      "config_generation": 3
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 5,
+  "checkpoint_after": 12,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/163eb20c64213ce4d84e1268592f0cc3380a4dd2893fe7bf35cd9c808d0758f7/2026-11-18T17:56:54.668846403Z",
+    "process_id": "1:1795024615256914171:c665491231d3440c823ecfc9cd2b31c2",
+    "runtime": "openhuman",
+    "state": "active",
+    "checkpoint": {
+      "version": 12,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-openhuman-openhuman-194:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=749440561b19bc2d4b1a7f74785c79d2c5d34d851cd9c954532b9984fcf58d77; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/output/step-one.json",
+          "sha256": "d46bd850d3dfeaa60d05480f009ffd92d521b2bb6d9346f508e49ef31e72f059",
+          "size": 360
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/output/step-two.json",
+          "sha256": "58dfc3a9889c6f17190614a8fd3fa15e672e2bcfba7f780cd2c338801e83d894",
+          "size": 360
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/output/step-three.json",
+          "sha256": "749440561b19bc2d4b1a7f74785c79d2c5d34d851cd9c954532b9984fcf58d77",
+          "size": 362
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/result.md",
+        "sha256": "f39316244698c60fca7100ae15d92b38e32920dd7d9acfa573b275da0715ba83",
+        "size": 765
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:8b6c4f0b70abc19438c048ca19f955e730ebe00be686623c1122c50430b2314a",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "eRDp2mr2pY"
+      },
+      "reply_event": "$_r11gpVBGEvIfJNwns-oHlOV0o2D1lX2JySd7O_KmqY",
+      "saved_at": "2026-11-18T17:59:07.326522282Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T17:55:22Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 2,
+      "to": "submitted",
+      "ts": "2026-11-18T17:58:23Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795024551128980752,
+      "generation": 1,
+      "instance_id": "docker/163eb20c64213ce4d84e1268592f0cc3380a4dd2893fe7bf35cd9c808d0758f7/2026-11-18T17:54:44.657947406Z",
+      "process_id": "1:1795024484924599038:a794848a2e6d4b84b7504fc0be4b6c17",
+      "step": "one",
+      "task_id": "live-openhuman-openhuman-194",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1795024656527763689,
+      "generation": 2,
+      "instance_id": "docker/163eb20c64213ce4d84e1268592f0cc3380a4dd2893fe7bf35cd9c808d0758f7/2026-11-18T17:56:54.668846403Z",
+      "process_id": "1:1795024615256914171:c665491231d3440c823ecfc9cd2b31c2",
+      "step": "two",
+      "task_id": "live-openhuman-openhuman-194",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 8,
+      "executed_at_ns": 1795024684726000676,
+      "generation": 2,
+      "instance_id": "docker/163eb20c64213ce4d84e1268592f0cc3380a4dd2893fe7bf35cd9c808d0758f7/2026-11-18T17:56:54.668846403Z",
+      "process_id": "1:1795024615256914171:c665491231d3440c823ecfc9cd2b31c2",
+      "step": "three",
+      "task_id": "live-openhuman-openhuman-194",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/output/step-one.json",
+      "sha256": "d46bd850d3dfeaa60d05480f009ffd92d521b2bb6d9346f508e49ef31e72f059",
+      "size": 360
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/output/step-two.json",
+      "sha256": "58dfc3a9889c6f17190614a8fd3fa15e672e2bcfba7f780cd2c338801e83d894",
+      "size": 360
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/output/step-three.json",
+      "sha256": "749440561b19bc2d4b1a7f74785c79d2c5d34d851cd9c954532b9984fcf58d77",
+      "size": 362
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openhuman-openhuman-194/result.md",
+      "sha256": "f39316244698c60fca7100ae15d92b38e32920dd7d9acfa573b275da0715ba83",
+      "size": 765
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1795024614638188952,
+    "start": 1795024615072906839
+  },
+  "matrix": {
+    "reply_event": "$_r11gpVBGEvIfJNwns-oHlOV0o2D1lX2JySd7O_KmqY",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$UrRlOGXXZHqyJiKTUCPlStYvOggghLD8ZDtl_V3w2Gg"
+    ],
+    "read_receipt_events": [
+      "$1fWzgWgZZCMVNCoaE_DYhgppAwThOCgXWVfeIhcyO_Y"
+    ],
+    "first_source_read_ms": 1795024507247
+  },
+  "openhuman_source_session": {
+    "schema_version": 1,
+    "kind": "WorkerSessionCache",
+    "member_prefix": "agents/agent-a",
+    "work": {
+      "kind": "task",
+      "team_id": "recovery-team",
+      "task_id": "live-openhuman-openhuman-194"
+    },
+    "runtime": "openhuman",
+    "start": {
+      "instance_id": "docker/163eb20c64213ce4d84e1268592f0cc3380a4dd2893fe7bf35cd9c808d0758f7/2026-11-18T17:54:44.657947406Z",
+      "process_id": "1:1795024484924599038:a794848a2e6d4b84b7504fc0be4b6c17",
+      "runtime": "openhuman"
+    },
+    "generation": 1,
+    "native_ref": "c5f13bc2-771a-4388-a286-899a3c4ef067",
+    "native_digest": "881843405c41a20332accad34561a2e263019a1ace8649f46ff71417c6a5e086",
+    "checkpoint_version": 5,
+    "checkpoint_digest": "42eb3b2127dfaed5375a2923c0de07f7d6f0d18c7f4d49433de89b92d79f7112",
+    "config_generation": 3,
+    "expires_at": 1795111009,
+    "saved_at": "2026-11-18T17:56:52Z"
+  },
+  "images": {
+    "controller": "sha256:f3d4899bd8015774b7d0f75ccd288ee553b183fa5aebf3fa6a5968aad59b007a",
+    "source": "sha256:e3a56e4943c7d86d6c646d9c5cf4f69599058960eff35578c162a31a3c346b47",
+    "target": "sha256:e3a56e4943c7d86d6c646d9c5cf4f69599058960eff35578c162a31a3c346b47"
+  },
+  "openhuman_preapproved_fixture": true
+}

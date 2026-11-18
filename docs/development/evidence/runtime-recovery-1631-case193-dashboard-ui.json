@@ -1,0 +1,12 @@
+{
+  "session": {
+    "status": 200,
+    "authenticated": true,
+    "level": 3,
+    "mode": "matrix"
+  },
+  "http": 200,
+  "request_id": "2849a91c-12ad-4eac-b8cd-9dcfe11de8d7",
+  "target": "hermes",
+  "displayed_completed": true
+}

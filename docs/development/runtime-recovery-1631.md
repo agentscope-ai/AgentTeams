@@ -4,6 +4,39 @@ Status: **incomplete; Draft implementation**. This document records contract
 tests separately from native Harness and real-model acceptance. No existing
 installation was upgraded or deployed for this work.
 
+## Regression after synchronizing main
+
+The Core image was built from `3050cc2f` (includes main `f99e1442`).
+The Dashboard image was built from `ad4239e` (includes main `6483fc6`).
+Core commit `ee03b5cb` changes only the upgrade CLI and its tests. Each
+runtime report names the actual Harness and shared-contract input.
+
+| Real scenario | Result |
+| --- | --- |
+| Worker restart, Codex | [Case 191](evidence/runtime-recovery-1631-case191-main-codex-restart.json) reused its native session and continued the same Task. |
+| Worker restart, OpenHuman | [Case 194](evidence/runtime-recovery-1631-case194-main-openhuman-restart.json) continued the Task after a compatible session was restored. |
+| Worker SIGKILL and restart, OpenClaw | [Case 195](evidence/runtime-recovery-1631-case195-main-openclaw-sigkill.json) continued the Task on the rebuilt Harness. |
+| CLI switch, Codex → Hermes | [Case 192](evidence/runtime-recovery-1631-case192-main-cli-switch.json) finished the original in-progress Task after the old container stopped. |
+| Dashboard switch, OpenClaw → Hermes | [Case 193](evidence/runtime-recovery-1631-case193-main-dashboard-switch.json) finished the original Task. The [browser](evidence/runtime-recovery-1631-case193-dashboard-ui.json) displayed the completed operation using the Controller's request ID. |
+
+Each of these Task runs recorded a new process generation, one external
+effect per step, unchanged Task identity, and one canonical Matrix report
+without further input. Case 193 uses the rebuilt OpenClaw image. The
+Codex and Hermes runs keep the companion image pins listed in their
+case reports. The earlier 30-lane matrix below is tied to its recorded
+source revisions.
+
+The [published 1.2.7 upgrade](evidence/runtime-recovery-1631-v127-upgrade-verified.json)
+preserved the Controller data volume, Dashboard data volume, Worker
+Matrix identities and rooms, existing chat events, and a legacy task's
+artifact. OpenClaw and QwenPaw both replied after replacement. The new
+QwenPaw process discovered the in-progress Task seeded on the 1.2.7
+Controller, validated its existing artifact, submitted the same Task, and
+sent a single canonical Matrix completion without a new room input.
+That lane used a rebuilt TeamHarness and recovery helper on the pinned
+QwenPaw image with its existing AMD64 dependencies. Its full ARM64 image
+build and packaging validation are separate lanes.
+
 ## Live acceptance by source and target
 
 The diagonal records normal restart with a compatible native session.
@@ -43,7 +76,7 @@ continuation pending verification.
 | QwenPaw | [Pass 171](evidence/runtime-recovery-1631-case171-abrupt-restart-verified.json) | [Pass 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | [Restart 186](evidence/runtime-recovery-1631-case186-saved-reply-verified.json) | Open | [Rejected 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | Open | Open |
 | DeepSeek | [Pass 137](evidence/runtime-recovery-1631-case137-abrupt-restart-verified.json) | [Pass 165](evidence/runtime-recovery-1631-case165-expired-session-verified.json) | Open | [Parked 170](evidence/runtime-recovery-1631-case170-parked-effect.json) | [Rejected 183](evidence/runtime-recovery-1631-case183-cancelled-restart.json) | [Pass 183](evidence/runtime-recovery-1631-case183-cancelled-restart.json) | Open |
 | OpenClaw | [Pass 176](evidence/runtime-recovery-1631-case176-abrupt-restart-verified.json) | [Pass 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open | [Rejected 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open |
-| OpenHuman | [Pass 161](evidence/runtime-recovery-1631-case161-abrupt-restart-verified.json) | [Pass 181](evidence/runtime-recovery-1631-case181-expired-session-verified.json) | Open | [Parked 185](evidence/runtime-recovery-1631-case185-parked-effect.json) | [Rejected 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open |
+| OpenHuman | [Pass 161](evidence/runtime-recovery-1631-case161-abrupt-restart-verified.json) | [Pass 181](evidence/runtime-recovery-1631-case181-expired-session-verified.json) | [Restart 188](evidence/runtime-recovery-1631-case188-saved-reply-verified.json) | [Parked 185](evidence/runtime-recovery-1631-case185-parked-effect.json) | [Rejected 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open |
 
 ## Source baseline
 
@@ -2299,3 +2332,9 @@ verified that a competing process received HTTP 409, then a Leader
 cancelled the Task after step one. The replacement did not discover
 the cancelled Task, and the independent ledger retained one effect
 from the original process.
+
+[Case188 OpenHuman saved reply](evidence/runtime-recovery-1631-case188-saved-reply-verified.json)
+used the prior Controller revision. The real native tool was interrupted after
+report submission and before Matrix delivery. The replacement reused the
+original reply transaction and sent one report. The step ledger and artifact
+digests stayed unchanged, with no replacement model start or additional input.

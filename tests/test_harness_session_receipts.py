@@ -171,6 +171,19 @@ class HarnessReceiptTests(unittest.TestCase):
                 scan_inputs(self.receipts, runtime, {})
                 self.assertIn(("$" + runtime, "read"), self.states())
 
+    def test_managed_codex_journal_cannot_ack_an_assignment(self):
+        path = self.root / "runtime/codex-bridge-state.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"events": {"turn": {"input_checkpointed": True, "event": {
+            "room_id": "!room:hs", "event_id": "recovery:T", "session_source_event_ids": ["$source"]}}}}))
+        with patch.dict(os.environ, {"AGENTTEAMS_CODEX_NATIVE_INPUTS":"1", "AGENTTEAMS_CONTROLLER_URL":"test",
+                                     "AGENTTEAMS_PROCESS_ID":"process", "AGENTTEAMS_AGENT_ROLE":"worker"}):
+            scan_inputs(self.receipts, "codex", {})
+            self.assertNotIn(("$source", "read"), self.states())
+            self.receipts.enqueue("!room:hs", "$source", "received")
+            self.receipts.committed(["$source"])
+            self.assertIn(("$source", "read"), self.states())
+
     def test_codex_running_and_answer_failure_do_not_imply_or_undo_read(self):
         path = self.root / "runtime/codex-bridge-state.json"
         path.parent.mkdir()

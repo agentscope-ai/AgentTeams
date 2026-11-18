@@ -176,6 +176,12 @@ def scan_inputs(receipts, runtime, offsets):
             for item in data.get("receipts", []):
                 receipts.enqueue(item["room_id"], item["event_id"])
     elif runtime == "codex":
+        if os.getenv("AGENTTEAMS_CODEX_NATIVE_INPUTS") == "1":
+            from task_recovery import enabled
+            if enabled():
+                # The current adapter records exact native rows after the
+                # Controller confirms them. Legacy local rows lack this fact.
+                return
         path = workspace / "runtime/codex-bridge-state.json"
         if path.exists():
             for record in json.loads(path.read_text()).get("events", {}).values():

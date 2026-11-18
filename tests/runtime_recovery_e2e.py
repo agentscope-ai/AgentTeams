@@ -37,6 +37,8 @@ HARNESS_IMAGES.update(image_overrides)
 SOURCE, TARGET = os.getenv("RECOVERY_E2E_FROM", "codex"), os.getenv("RECOVERY_E2E_TO", "hermes")
 MODE = os.getenv("RECOVERY_E2E_MODE", "replace")
 OPERATOR_HANDOFF = os.getenv("RECOVERY_E2E_HANDOFF") == "1"
+# Old case 08 used a journal-only image. Its original verifier stays opt-in.
+LEGACY_CODEX = os.getenv("RECOVERY_E2E_LEGACY_CODEX") == "1"
 RETURN_TO_SOURCE = os.getenv("RECOVERY_E2E_RETURN") == "1"
 FAULT = os.getenv("RECOVERY_E2E_FAULT", "")
 if FAULT not in {"", "after-effect"}:
@@ -369,6 +371,11 @@ print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,"hermes_shared"
 '''
     interpreter = {"hermes": "/opt/venv/hermes/bin/python", "qwenpaw": "/opt/venv/qwenpaw/bin/python"}.get(runtime, "python3")
     result = json.loads(docker("exec", PREFIX + "-worker-agent-a", interpreter, "-c", code, TASK_ID, task["room_id"], json.dumps(routes), runtime, previous_qwen_ref))
+    if runtime == "codex" and not LEGACY_CODEX and task.get("execution"):
+        script = (Path(__file__).parent / "fixtures/runtime_recovery_codex.py").read_text()
+        result["codex_shared"] = json.loads(docker("exec", "-i", PREFIX + "-worker-agent-a",
+            "/opt/venv/bin/python", "-", TASK_ID, "recovery-team", task["room_id"],
+            str(task["execution"]["generation"]), text=script))
     if runtime == "openclaw":
         # Use the pinned SDK's actual SQLite APIs, not a guessed session filename.
         probe = '''import fs from "node:fs";
@@ -500,6 +507,8 @@ def cutover(*, watch_return=False):
         raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
     if MODE == "restart" and SOURCE == "hermes":
         assert_hermes_native_cache(before["native_sessions"]["hermes_shared"], cp, TASK_ID)
+    if source == "codex" and not LEGACY_CODEX and MODE == "restart":
+        assert_codex_native(before["native_sessions"]["codex_shared"], task, require_cache=True)
     if source == "qwenpaw":
         assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"], cp, TASK_ID)
     if RETURN_TO_SOURCE:
@@ -786,7 +795,14 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
             source_cache = before["native_sessions"]["openclaw"]
             assert_openclaw_native_cache(source_cache, before["task"]["execution"]["checkpoint"])
             assert native["openclaw"]["cache"]["session_id"] == source_cache["cache"]["session_id"], "valid native Task session was not reused"
-    if MODE == "restart" and SOURCE == "codex":
+    if not LEGACY_CODEX and SOURCE == "codex":
+        assert_codex_native(before["native_sessions"]["codex_shared"], before["task"], require_cache=MODE == "restart")
+    if not LEGACY_CODEX and final_runtime == "codex":
+        target = assert_codex_native(native["codex_shared"], task)
+        if MODE == "restart":
+            original = before["native_sessions"]["codex_shared"]["native"]
+            assert target["thread_id"] == original["thread_id"] and target["turn_id"] != original["turn_id"]
+    if LEGACY_CODEX and MODE == "restart" and SOURCE == "codex":
         cache = before["native_sessions"]["codex"]
         assert cache["runtime"] == "codex" and cache["expires_at"] > before["recorded_at"]
         digest = hashlib.sha256(json.dumps(before["task"]["execution"]["checkpoint"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -844,6 +860,27 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     path = Path("/tmp/1631-live-" + CASE + "-verified.json")
     path.write_text(json.dumps(proof, indent=2))
     print(json.dumps({"passed": True, "evidence": str(path), **proof}))
+
+
+def assert_codex_native(proof, task, *, require_cache=False):
+    execution = task["execution"]
+    work = {"kind": "task", "team_id": "recovery-team", "task_id": task["task_id"]}
+    route, native = proof["route"], proof["native"]
+    assert route["team_id"] == work["team_id"] and route["task_id"] == work["task_id"]
+    assert all(route[k] == execution[k] for k in ("instance_id", "process_id", "generation"))
+    assert native and native["thread_id"] == native["metadata_id"] and native["turn_id"]
+    assert native["native_bytes"] and native["source_inputs"] == 1 and native["tool_calls"] and native["tool_outputs"]
+    if require_cache:
+        cache = proof["cache"]
+        assert cache and cache["schema_version"] == 1 and cache["kind"] == "WorkerSessionCache" and cache["runtime"] == "codex"
+        assert cache["member_prefix"] == "agents/agent-a" and cache["work"] == work
+        assert cache["generation"] == execution["generation"] and all(cache["start"][k] == execution[k] for k in ("instance_id", "process_id", "runtime"))
+        cp = execution["checkpoint"]
+        digest = hashlib.sha256(json.dumps(cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert cache["checkpoint_version"] == cp["version"] and cache["checkpoint_digest"] == digest
+        assert cache["config_generation"] == proof["config_generation"] and cache["expires_at"] > time.time()
+        assert (cache["native_ref"], cache["native_digest"]) == (native["thread_id"], native["native_digest"])
+    return native
 
 
 def assert_hermes_native_cache(proof, checkpoint, task_id):

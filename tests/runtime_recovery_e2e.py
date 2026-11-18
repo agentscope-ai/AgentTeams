@@ -515,8 +515,8 @@ while True:
   if row.get("type")==RECEIPT_TYPE and row.get("sender")=="@agent-a:recovery-1631.test" and content.get("status")=="read":
    ref=content.get("m.relates_to",{}).get("event_id")
    if ref: reads[ref]=row["event_id"]
-  notice=content.get("org.agentteams.coordination") or {}
-  if row.get("type")=="m.room.message" and notice.get("kind")=="task_assigned" and p["task"] in content.get("body",""):
+  notice=(content.get("org.agentteams.coordination") or {}).get("channel_meta",{}).get("teamharness_coordination",{})
+  if row.get("type")=="m.room.message" and notice.get("kind")=="task_assigned" and notice.get("task_id")==p["task"]:
    seen.add(row["event_id"])
  if matched:=sorted(seen & reads.keys()):
   print(json.dumps({"source_event":matched[0],"read_event":reads[matched[0]]}))

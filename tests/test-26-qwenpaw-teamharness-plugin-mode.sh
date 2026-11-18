@@ -579,9 +579,7 @@ Complete these steps immediately before handling the user's request:
 1. Run the packaged hello script:
    sh bootstrap/test26-hello.sh
 
-2. Reply with exactly this marker:
-
-${bootstrap_marker}
+2. Reply with exactly the marker printed by the script.
 EOF
         cat >\"\${work}/config/bootstrap/test26-seed.md\" <<'EOF'
 # TEST26 AgentSpec Config Bootstrap
@@ -598,6 +596,7 @@ role=\"\${AGENTTEAMS_WORKER_ROLE:-\${AGENTTEAMS_AGENT_ROLE:-unknown}}\"
 mkdir -p bootstrap
 printf '%s\n' \"\${marker}\" > bootstrap/test26-hello-result.txt
 printf '%s\n' \"\${role}\" > bootstrap/test26-hello-role.txt
+printf '%s\n' \"\${marker}\"
 EOF
         chmod +x \"\${work}/config/bootstrap/test26-hello.sh\"
         cat >\"\${work}/config/materials/test26-note.md\" <<'EOF'
@@ -1299,8 +1298,8 @@ fi
 
 log_section "QwenPaw Native Bootstrap"
 
-LEADER_BOOTSTRAP_PROMPT="Please run your package bootstrap now. Follow BOOTSTRAP.md exactly: run the packaged hello script, then reply with the requested marker. Do not ask me to confirm identity."
-if matrix_send_message "${ADMIN_TOKEN}" "${LEADER_DM}" "${LEADER_BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
+BOOTSTRAP_PROMPT="Please run your package bootstrap now. Follow BOOTSTRAP.md exactly. Run the packaged hello script and reply with only the marker printed by the script. Do not ask me to confirm identity."
+if matrix_send_message "${ADMIN_TOKEN}" "${LEADER_DM}" "${BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
     log_pass "Admin sent package bootstrap request to QwenPaw leader"
 else
     log_fail "Admin failed to send package bootstrap request to QwenPaw leader"
@@ -1326,8 +1325,7 @@ else
     log_fail "QwenPaw leader hello script did not write expected marker"
 fi
 
-WORKER_BOOTSTRAP_PROMPT="Please run your package bootstrap now. Follow BOOTSTRAP.md exactly: run the packaged hello script, then reply with the requested marker. Do not ask me to confirm identity."
-if matrix_send_mention_message "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${WORKER_BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
+if matrix_send_mention_message "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
     log_pass "Admin sent package bootstrap mention to QwenPaw worker"
 else
     log_fail "Admin failed to send package bootstrap mention to QwenPaw worker"

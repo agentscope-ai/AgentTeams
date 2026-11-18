@@ -4,7 +4,13 @@
     "test": "test-26-qwenpaw-teamharness-plugin-mode",
     "failure": "The substring verifier matched a reasoning message before the hello script wrote its result.",
     "fix": "f2eae440f3c3fd6d96448ad09b7c4d64678c6909",
-    "passing_job": "https://github.com/agentscope-ai/AgentTeams/actions/runs/44370323873/job/135045724243"
+    "passing_job": "https://github.com/agentscope-ai/AgentTeams/actions/runs/44370323873/job/135045724243",
+    "separate_missing_marker_case": {
+      "failed_job": "https://github.com/agentscope-ai/AgentTeams/actions/runs/44378084642/job/135075796856",
+      "failure": "The Leader ran the package script and wrote both files, but the script printed nothing and the Leader sent a prose summary without the marker.",
+      "change": "Print the marker after writing the verification files. Ask the Worker and Leader to return exactly the printed marker.",
+      "local_red_green": "The extracted original shell fixture wrote the marker file with empty stdout. The fixed fixture wrote the same file and printed the marker."
+    }
   },
   "openclaw_team_creation": {
     "failed_job": "https://github.com/agentscope-ai/AgentTeams/actions/runs/44370323873/job/135045724185",

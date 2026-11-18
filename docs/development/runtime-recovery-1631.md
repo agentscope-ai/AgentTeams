@@ -90,7 +90,8 @@ sender posted to the task room between replacement and that completion.
 
 The [integration regressions](evidence/runtime-recovery-1631-postfix-ci-regressions.json)
 record the QwenPaw bootstrap test's final-message guard and the OpenClaw
-Team creation race. Core `db4f9ab2` delays the Team projection until the
+Team creation race. The bootstrap fixture prints its marker after writing
+the proof files, so the model can return the actual tool output. Core `db4f9ab2` delays the Team projection until the
 Worker publishes its Matrix identity. The same change waits for Team
 finalization before deleting referenced Workers in the cleanup test.
 The ARM64 Controller from `5530ea5c` passed the real Team Admin flow

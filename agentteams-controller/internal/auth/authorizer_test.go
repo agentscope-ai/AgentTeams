@@ -107,9 +107,9 @@ func TestAuthorizer_SkillPublishRoles(t *testing.T) {
 	if err := a.Authorize(leader, req); err == nil {
 		t.Error("leader skill-publish: allowed, want denied")
 	}
-	// Manager does not participate in team-skill paths; workers never.
-	if err := a.Authorize(manager, req); err == nil {
-		t.Error("manager skill-publish: allowed, want denied")
+	// The handler allows the platform Manager to upload deployment skills.
+	if err := a.Authorize(manager, req); err != nil {
+		t.Errorf("manager skill-publish: denied: %v", err)
 	}
 	if err := a.Authorize(worker, req); err == nil {
 		t.Error("worker skill-publish: allowed, want denied")

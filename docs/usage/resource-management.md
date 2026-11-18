@@ -173,7 +173,7 @@ A **team skill** belongs to one team (storage: `teams/<team>/skills/<name>/`) â€
    The upload is content-scanned (best-effort): a blocked scan returns
    `422` with the findings; an unavailable scan proceeds and reports
    `scan.status: "skipped"`. Re-uploading the same skill replaces it
-   exactly (dropped files are deleted). `scope=deployment` (admin only)
+   exactly (dropped files are deleted). `scope=deployment` (admin or platform Manager)
    publishes to `agents/global/skills/` instead.
 2. **Assign**: update the Worker's `spec.skills` (API, Dashboard, or
    through the Manager). At the next reconcile the Controller scans the
@@ -183,8 +183,8 @@ A **team skill** belongs to one team (storage: `teams/<team>/skills/<name>/`) â€
    it into its native workspace within the sync interval.
 
 Team leaders can browse their team's catalog (`GET /api/v1/skills?team=â€¦`)
-as the assign surface but cannot publish; manager and worker principals
-cannot publish at all. On a name clash the **team layer wins** over the
+as the assign surface. Skill publishing is available to admins, platform
+Managers and L2 humans according to the scopes above. On a name clash the **team layer wins** over the
 builtin library. See [Team Skills design](../design/team-skills.md) for
 the full contract, scan semantics, and the k8s-mode limitation.
 

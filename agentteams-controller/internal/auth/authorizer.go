@@ -37,10 +37,8 @@ const (
 	ActionGateway             Action = "gateway"
 	ActionWorkspaceFilesWrite Action = "workspace-files-write"
 	// ActionSkillPublish authorizes POST /api/v1/skills (skill upload,
-	// #1221). Granted to admin (any scope) and L2 humans (own team,
-	// scope=team only); explicitly denied to manager, team leader, and
-	// worker. The scope/team refinement happens in the handler (403 for
-	// non-admin scope=deployment; 404 anti-probing for cross-team).
+	// #1221). The handler enforces scope: admin (any scope), platform
+	// Manager (deployment), and L2 human (own team).
 	ActionSkillPublish       Action = "skill-publish"
 	ActionWorkerSkillPreload Action = "worker-skill-preload"
 )
@@ -69,13 +67,6 @@ func (a *Authorizer) Authorize(caller *CallerIdentity, req AuthzRequest) error {
 
 	switch caller.Role {
 	case RoleAdmin, RoleManager:
-		// Manager is a full-access SA but does NOT participate in the
-		// team-skill paths (#1221): publishing a team skill is admin (any
-		// scope) and L2 human (own team) only — never manager, never team
-		// leader. The manager agent manages workers, not team assets.
-		if caller.Role == RoleManager && req.ResourceKind == "skills" && req.Action == ActionSkillPublish {
-			return deny(caller, req)
-		}
 		return nil // full access
 
 	case RoleTeamLeader:

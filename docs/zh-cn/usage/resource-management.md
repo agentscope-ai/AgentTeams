@@ -167,10 +167,10 @@ Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Wor
      -F "file=@./marketing-briefing.zip"
    ```
 
-   ZIP 必须只含**一个顶层目录**（技能根目录，目录名即技能名），其根下必须有 `SKILL.md`，且 frontmatter `name` 与目录名一致。上限 64 MB（ZIP 与解压后均计）。上传会做内容扫描（尽力而为）：命中阻断（CRITICAL/HIGH）返回 `422` 并带 findings；扫描不可用则继续并上报 `scan.status: "skipped"`。重复上传同一技能为**精确替换**（新版删掉的旧文件会被删掉）。`scope=deployment`（仅 admin）改发布到 `agents/global/skills/`。
+   ZIP 必须只含**一个顶层目录**（技能根目录，目录名即技能名），其根下必须有 `SKILL.md`，且 frontmatter `name` 与目录名一致。上限 64 MB（ZIP 与解压后均计）。上传会做内容扫描（尽力而为）：命中阻断（CRITICAL/HIGH）返回 `422` 并带 findings；扫描不可用则继续并上报 `scan.status: "skipped"`。重复上传同一技能为**精确替换**（新版删掉的旧文件会被删掉）。`scope=deployment`（管理员或平台 Manager）改发布到 `agents/global/skills/`。
 2. **指派**：更新 Worker 的 `spec.skills`（API、Dashboard，或经 Manager）。下次 reconcile 时 Controller 会**再次、强制地**扫描该技能（扫描被阻断或不可用则不复制，并在 Worker 状态里记为非阻塞 warning），然后把它拷入 `agents/<worker>/skills/<name>/`；Worker 的同步循环会在同步周期内把它物化进原生工作空间。
 
-team leader 可以浏览本团队目录（`GET /api/v1/skills?team=…`）作为指派面，但**不能发布**；manager 与 worker 主体一律不能发布。同名冲突时**团队层优先于 builtin 库**。完整契约、扫描语义与 k8s 模式限制见 [团队技能设计](../design/team-skills.md)。
+team leader 可以浏览本团队目录（`GET /api/v1/skills?team=…`）作为指派面。技能发布按上述角色与范围授权。同名冲突时**团队层优先于 builtin 库**。完整契约、扫描语义与 k8s 模式限制见 [团队技能设计](../design/team-skills.md)。
 
 ### 带自定义包的 Worker
 

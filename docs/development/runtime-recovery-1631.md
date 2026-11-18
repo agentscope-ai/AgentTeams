@@ -1824,4 +1824,12 @@ The live driver accepts `RECOVERY_E2E_ABRUPT_RESTART=1` for the same-Harness
 restart scenario. It sends SIGKILL at the committed boundary of a labelled
 fixture with Docker auto-restart disabled. The verifier requires exit 137,
 the original container's later start, the new process identity, and the
-same Task, effect and Matrix assertions. Case135 is exercising it on Codex.
+same Task, effect and Matrix assertions.
+[Case135 passed](evidence/runtime-recovery-1631-case135-abrupt-restart-verified.json)
+on Controller `6421981f` and Codex `28dcf22`. The original notification and
+step-one checkpoint were durable despite the initial test-driver seed
+observation timing out. The driver continued from the existing boundary.
+After exit 137, the same container started a new process. Codex reused the
+matching native session and submitted the original Task at checkpoint 12
+(generation 2). Matrix recorded one final reply and no new input after the
+stop. The independent ledger recorded each step once.

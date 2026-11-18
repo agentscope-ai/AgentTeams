@@ -119,6 +119,19 @@ class EffectReceiptTests(unittest.TestCase):
         self.assertEqual([entry["generation"] for entry in self.receipts()], [1, 2, 3])
         self.assertEqual([entry["step"] for entry in self.receipts()], ["one", "two", "three"])
 
+    def test_next_step_retires_delivered_progress_and_its_device_binding(self):
+        self.invoke()
+        cp = self.task["execution"]["checkpoint"]
+        cp.update(delivery="delivered", result={"summary": "Progress"}, reply_txn="progress-txn",
+                  reply_event="$progress", reply_attempt={"state": "bound", "user": "@worker:test", "device": "old"})
+        self.task["execution"]["generation"] = 2
+        self.process = "replacement-process"
+        self.invoke()
+        current = self.task["execution"]["checkpoint"]
+        self.assertFalse({"result", "delivery", "reply_txn", "reply_event", "reply_attempt"} & current.keys())
+        self.assertEqual(current["completed_steps"], ["one", "two"])
+        self.assertEqual([e["generation"] for e in self.receipts()], [1, 2])
+
     def test_uncertain_effect_is_verified_without_executing_it_again(self):
         self.fail_output = True
         with self.assertRaises(subprocess.CalledProcessError):

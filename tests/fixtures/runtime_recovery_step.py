@@ -69,7 +69,7 @@ if cp.get("operation", {}).get("state") in {"started", "unknown"}:
         data = effect("POST")
 else:
     effect("REGISTER")
-    for field in ("result", "delivery", "reply_txn", "reply_event"):
+    for field in ("result", "delivery", "reply_txn", "reply_event", "reply_attempt"):
         cp.pop(field, None)
     cp.update(version=cp.get("version", 0) + 1, completed_steps=done, remaining_steps=steps[len(done):], operation=operation)
     recovery.checkpoint(task_id, team, cp)

@@ -159,14 +159,15 @@ class Recovery:
         execution = task["execution"]
         checkpoint = execution.get("checkpoint")
         return ("Recover your existing Task from the authoritative task system. Do not create a new task.\n"
-            "Before any new side effect, record its operation identity with checkpoint_task. If an operation is "
+            "Before a new external side effect, record its operation identity with checkpoint_task. If an operation is "
             "started or unknown, verify its external outcome and save evidence before continuing; do not rerun it. "
             "Continue from the last saved progress. Repeat unsaved reasoning or replayable work when needed. "
             "Pull and verify referenced artifacts before using them. "
             "Save artifacts before committing their checkpoint. A read receipt or ACK is not a checkpoint.\n"
             "Use taskflow.checkpoint_task at step boundaries. If your assigned executor already persists these "
             "checkpoints, invoke it unchanged; do not pre-register its operation IDs or commit a duplicate checkpoint "
-            "outside its protocol. Use the same task ID for submission.\n"
+            "outside its protocol. Call submit_task directly with the same Task ID once prior operations are verified. "
+            "It saves its own canonical result; do not register submission itself as a started operation.\n"
             + json.dumps({"task_id": task["task_id"], "team_id": task.get("team_id"),
                 "status": task["status"], "title": task.get("title"), "spec": task.get("spec"),
                 "project_id": task.get("project_id"), "main_task_id": task.get("main_task_id"),

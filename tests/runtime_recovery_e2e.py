@@ -806,9 +806,14 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     assert current["Id"] == last_target["ID"], "additional replacement requires separate evidence"
     assert current["Id"] in execution["instance_id"]
     assert current["State"]["StartedAt"] in execution["instance_id"], "execution must bind the actual process start, including automatic retries"
+    source_pin = old_source["Attributes"]["io.agentteams.recovery.core-sha"]
+    target_pin = first_target["Attributes"]["io.agentteams.recovery.core-sha"]
     sources = {"core": controller["Config"]["Labels"]["io.agentteams.recovery.core-sha"],
-        "shared_contract": first_target["Attributes"]["io.agentteams.recovery.core-sha"],
         SOURCE: old_source["Attributes"]["io.agentteams.recovery.harness-sha"], TARGET: first_target["Attributes"]["io.agentteams.recovery.harness-sha"]}
+    if source_pin == target_pin:
+        sources["shared_contract"] = source_pin
+    else:
+        sources["shared_contract_by_runtime"] = {SOURCE: source_pin, TARGET: target_pin}
     proof = {"task_id": TASK_ID, "case": CASE, "scope": f"one real {SOURCE}-to-{TARGET} in-progress continuation", "mode": MODE,
         "fixture_prefix": PREFIX, "authoritative_report_verified": True,
         "sources": sources, "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "native_recovery_sessions": native,

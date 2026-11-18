@@ -15,13 +15,13 @@ the image and shared-contract pins actually tested.
 | Source → Target | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | — | — |
-| Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Failed 92](evidence/runtime-recovery-1631-case92-oom.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
+| Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | — | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
 | OpenClaw | — | — | — | — | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
-**5/6 normal restart lanes and 12/30 directed handoffs have passed.** A dash
+**5/6 normal restart lanes and 13/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1644,3 +1644,11 @@ verifier confirmed one final reply and zero new Matrix inputs after stop.
 This run stopped the completed disposable tracing stack before testing and
 sampled memory; the observed Worker cgroup peak was about 4.35 GiB during
 restart. The failure records for 104 and 106 remain available.
+
+[Case111 Hermes → OpenClaw](evidence/runtime-recovery-1631-case111-verified.json)
+passed on Controller `6421981f`, Hermes `282c457` and ARM64 OpenClaw
+`c6dcf56`. Docker removed the source before creating the target. The
+new native OpenClaw session continued the same Task from generation 1,
+checkpoint 5 to generation 2, checkpoint 11. The verifier read three
+distinct step effects and one final Matrix reply, with no new Matrix input
+after cutover. The earlier OpenClaw OOM attempt remains historical evidence.

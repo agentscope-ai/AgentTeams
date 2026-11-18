@@ -2152,3 +2152,16 @@ HTTP 409. Step three and final delivery were unverified at timeout.
 [Case172 OpenClaw abrupt restart](evidence/runtime-recovery-1631-case172-source-oom.json)
 hit an OOM kill in the source before the fixture could commit step one
 or request its restart. This attempt does not pass the recovery case.
+
+[Case173 Hermes uncertain effect and accepted-report delivery](evidence/runtime-recovery-1631-case173-completed-report-recovery.json)
+interrupted the source after its tool committed the first effect while
+the checkpoint still recorded it as started. Generation 2 verified
+that effect, completed steps two and three, and persisted the canonical
+report. Leader acceptance occurred before the native callback recorded
+the pending reply. The original Controller `6421981f` left the completed
+Task at checkpoint 6 with no canonical Matrix reply. After replacing
+only the disposable Controller with `994c3f60` and restarting the same
+Hermes `f5d74a3` container, generation 3 recovered the accepted report
+through checkpoint 9. The ledger was unchanged, no inference start was
+recorded in the restarted Worker, and Matrix contained exactly one
+matching report with no incoming room message during delivery.

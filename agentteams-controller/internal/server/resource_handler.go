@@ -34,10 +34,12 @@ const k8sUpdateMaxRetries = 3
 // Team CRs reference independently managed Worker CRs. Worker CRUD always
 // operates on Worker CRs; Team CRUD only owns membership and coordination.
 type ResourceHandler struct {
-	workerEnvBuilder *service.WorkerEnvBuilder
-	client           client.Client
-	namespace        string
-	backend          *backend.Registry
+	workerEnvBuilder     *service.WorkerEnvBuilder
+	client               client.Client
+	namespace            string
+	backend              *backend.Registry
+	passwordResetter     humanPasswordResetter
+	passwordResetEnabled bool
 	// oss backs object-storage-backed read surfaces (the shared MCP
 	// registry). Nil in embedded mode without MinIO: the affected endpoints
 	// then report the shared half as unavailable instead of failing.
@@ -1637,7 +1639,10 @@ func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
 
 	humans := make([]HumanResponse, 0, len(list.Items))
 	for i := range list.Items {
-		humans = append(humans, humanListToResponse(&list.Items[i]))
+		human := &list.Items[i]
+		response := humanListToResponse(human)
+		response.PasswordResetAvailable = h.passwordResetEnabled && h.passwordResetter != nil && canResetHumanPassword(human)
+		humans = append(humans, response)
 	}
 
 	if fieldViews == listFieldsAll {

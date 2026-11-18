@@ -1530,3 +1530,19 @@ The new Controller recorded about 3.6 seconds from the source boundary
 snapshot to Docker exit and another 4.7 seconds from exit to target
 creation. This is one handoff measurement, not a distribution across
 Harnesses or a measure of the time to finish inference.
+
+[Case100 OpenClaw ARM64 restart diagnosis](evidence/runtime-recovery-1631-case100-openclaw-partial.json)
+reproduced an initial exit from the native config validator. The validator
+reported that its shared-state read and cleanup failed. On a copy of the
+same Worker workspace, the same runtime config and native CLI failed with the
+live state path and succeeded with a separate validation state directory.
+OpenClaw [#10](https://github.com/agentteams-group/agentteams-harness-openclaw/pull/10)
+`c1ffa90` validates through a temporary state directory and leaves the native
+session directory alone.
+
+The Controller automatically retried the same container and the original
+Task finished at generation 2 with one final Matrix report. The boundary
+snapshot preceded the persisted native session descriptor, and the target
+used a different session. The driver now requires the matching OpenClaw
+session descriptor and actual native transcript before requesting a normal
+restart and checks the final execution used the captured startup.

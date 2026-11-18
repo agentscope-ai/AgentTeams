@@ -1,0 +1,79 @@
+{
+  "case": "100",
+  "task_id": "live-openclaw-openclaw-100",
+  "final_task_status": "submitted",
+  "scope": "OpenClaw original Task continued after automatic retry; valid-session acceptance not met",
+  "first_restart": {
+    "docker_order_ns": {
+      "die": 1794998529860071976,
+      "start": 1794998530668582326
+    },
+    "parent_exit_code": 1,
+    "validator_exit_code": 1,
+    "docker_oom_killed": false,
+    "root_error": "Shared-state read and cleanup failed"
+  },
+  "native_validator_separate_repro": {
+    "same_runtime_record_and_restored_state": true,
+    "default_state_exit": 1,
+    "isolated_state_exit": 0
+  },
+  "checkpoint_before": 4,
+  "checkpoint_after": 11,
+  "actual_task_process_started_at": "2026-11-18T10:43:08.301099835Z",
+  "same_container": true,
+  "sources": {
+    "harness": "a5f6b210c532c128445f7e10293ec311f8a0319d",
+    "shared_contract": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6",
+    "controller": "6421981fcc9255a0b779a04557769650172e290e",
+    "image_id": "sha256:67e03a7dddbe98ba5bfd2f4f35573ca5c730d5bf64f9a60debcfc7a8ca7249a2",
+    "platform": "linux/arm64"
+  },
+  "shared_descriptor_present_at_boundary": false,
+  "old_native_session_id": "f06ff156-c9ec-4af9-b20d-cf81f4aed9b1",
+  "new_native_session_id": "15cb28f6-c369-4806-9260-433140aca2a4",
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794998364870596052,
+      "generation": 1,
+      "instance_id": "docker/48a71d8fe554905a04567bf7b798490ec9f1606579153d9c288559bbd0c4eec5/2026-11-18T10:37:39.198339506Z",
+      "process_id": "1:1794998259409464710:2b47cde22aa54a9da6e96b20cc117d8c",
+      "step": "one",
+      "task_id": "live-openclaw-openclaw-100",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 5,
+      "executed_at_ns": 1794998640482923257,
+      "generation": 2,
+      "instance_id": "docker/48a71d8fe554905a04567bf7b798490ec9f1606579153d9c288559bbd0c4eec5/2026-11-18T10:43:08.301099835Z",
+      "process_id": "1:1794998588411080977:703f3554c915414999d495531a1f08f7",
+      "step": "two",
+      "task_id": "live-openclaw-openclaw-100",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 7,
+      "executed_at_ns": 1794998651882987277,
+      "generation": 2,
+      "instance_id": "docker/48a71d8fe554905a04567bf7b798490ec9f1606579153d9c288559bbd0c4eec5/2026-11-18T10:43:08.301099835Z",
+      "process_id": "1:1794998588411080977:703f3554c915414999d495531a1f08f7",
+      "step": "three",
+      "task_id": "live-openclaw-openclaw-100",
+      "team_id": "recovery-team"
+    }
+  ],
+  "matrix": {
+    "reply_event": "$WgGM19vth_FafEBZ7GClYpZ6HIbowTnahZpQTULjJmk",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$nD8PA4NKyjP0LzQZwIWAU1K0W7I-4ZRSoBvbUjrnJoY"
+    ],
+    "read_receipt_events": [
+      "$RlxWuv6o3r9_NZ96AE0RZ8Yd9X3YTdQKC0cAM3WNZgI"
+    ],
+    "first_source_read_ms": 1794998289824
+  }
+}

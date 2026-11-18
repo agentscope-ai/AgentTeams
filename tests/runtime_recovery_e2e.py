@@ -591,11 +591,20 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
     # Capture the source while it still exists; post-cutover reads cannot prove
     # the source native session or absence of the target Task session.
     deadline = time.monotonic() + 60
+    openclaw_restart = source == "openclaw" and MODE == "restart" and not FAULT
     while True:
         before = evidence(emit=False)
-        if source != "qwenpaw" or before["task"]["execution"] != task["execution"]:
+        if before["task"]["execution"] != task["execution"]:
             break
-        cache = before["native_sessions"]["qwenpaw_shared"]["cache"]
+        if source == "qwenpaw":
+            cache = before["native_sessions"]["qwenpaw_shared"]["cache"]
+        elif openclaw_restart:
+            proof = before["native_sessions"]["openclaw"]
+            cache = proof["shared_cache"]
+            if proof["cache"]:
+                break  # Retain archived runs using the legacy cache format.
+        else:
+            break
         if (cache and cache.get("checkpoint_version") == cp.get("version")) or time.monotonic() >= deadline:
             break
         # The native SDK persists the session after the step result is delivered.
@@ -612,6 +621,14 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
         assert_codex_native(before["native_sessions"]["codex_shared"], task, require_cache=True)
     if source == "deepseek-harness" and MODE == "restart" and not FAULT:
         assert_deepseek_native(before["native_sessions"]["deepseek"], task, require_cache=True)
+    if openclaw_restart:
+        proof = before["native_sessions"]["openclaw"]
+        if proof["shared_cache"]:
+            assert_openclaw_shared_cache(proof, cp, TASK_ID)
+        elif proof["cache"]:
+            assert_openclaw_native_cache(proof, cp)
+        else:
+            raise RuntimeError("Wait for the OpenClaw native session descriptor at the committed boundary")
     if source == "qwenpaw":
         assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"], cp, TASK_ID)
     if RETURN_TO_SOURCE:
@@ -968,6 +985,9 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     assert current["Id"] == last_target["ID"], "additional replacement requires separate evidence"
     assert current["Id"] in execution["instance_id"]
     assert current["State"]["StartedAt"] in execution["instance_id"], "execution must bind the actual process start, including automatic retries"
+    if MODE == "restart":
+        started = datetime.fromisoformat(current["State"]["StartedAt"].replace("Z", "+00:00")).timestamp()
+        assert order["die"] / 1e9 <= started <= order["start"] / 1e9 + 1e-6, "restart retried after the captured startup"
     source_pin = old_source["Attributes"]["io.agentteams.recovery.core-sha"]
     target_pin = first_target["Attributes"]["io.agentteams.recovery.core-sha"]
     sources = {"core": controller["Config"]["Labels"]["io.agentteams.recovery.core-sha"],

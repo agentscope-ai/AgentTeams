@@ -8,9 +8,59 @@ import (
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"sigs.k8s.io/yaml"
 )
+
+func TestFreshYAMLWorkerHasMatrixTransportWithoutNativeConfig(t *testing.T) {
+	for _, runtime := range []string{"codex", "deepseek-harness", "qwenpaw"} {
+		t.Run(runtime, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			d := NewDeployer(DeployerConfig{OSS: store, AgentConfig: agentconfig.NewGenerator(agentconfig.Config{
+				MatrixServerURL: "https://matrix.test", MatrixDomain: "test", AdminUser: "admin", E2EEEnabled: true,
+			})})
+			req := MemberRuntimeConfigDeployRequest{Name: "alice", Runtime: runtime, MatrixUserID: "@alice:test",
+				Spec: v1beta1.WorkerSpec{ChannelPolicy: &v1beta1.ChannelPolicySpec{GroupDenyExtra: []string{"manager"}}}}
+			if err := d.DeployMemberRuntimeConfig(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			body, err := store.GetObject(t.Context(), "agents/alice/runtime/runtime.yaml")
+			var doc memberRuntimeConfigDocument
+			if err != nil || yaml.Unmarshal(body, &doc) != nil || doc.Matrix == nil {
+				t.Fatal("a new Worker has no shared Matrix transport")
+			}
+			cfg := doc.Matrix.Transport
+			if cfg["homeserver"] != "https://matrix.test" || cfg["encryption"] != true || !reflect.DeepEqual(cfg["groupAllowFrom"], []any{"@admin:test"}) {
+				t.Fatalf("incorrect Worker Matrix transport: %v", cfg)
+			}
+			if _, ok := cfg["accessToken"]; ok {
+				t.Fatal("shared transport contains a native credential")
+			}
+			req.TeamName, req.LeaderRuntimeName = "team", "lead"
+			req.MatrixAllowLists = &RuntimeMatrixAllowLists{GroupAllowFrom: []string{"@lead:test", "@peer:test"}, DMAllowFrom: []string{"@lead:test"}}
+			if err := d.DeployMemberRuntimeConfig(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			// A standalone reconcile may race the Team writer. It retains the
+			// Team roster and its matching resolved policy.
+			req.TeamName, req.LeaderRuntimeName, req.MatrixAllowLists = "", "", nil
+			if err := d.DeployMemberRuntimeConfig(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			body, err = store.GetObject(t.Context(), "agents/alice/runtime/runtime.yaml")
+			var retained memberRuntimeConfigDocument
+			if err != nil || yaml.Unmarshal(body, &retained) != nil || retained.Team == nil || retained.Matrix == nil {
+				t.Fatal("Team-scoped Worker policy was lost")
+			}
+			cfg = retained.Matrix.Transport
+			dm, _ := cfg["dm"].(map[string]any)
+			if !reflect.DeepEqual(cfg["groupAllowFrom"], []any{"@lead:test", "@peer:test"}) || !reflect.DeepEqual(dm["allowFrom"], []any{"@lead:test"}) {
+				t.Fatalf("Team policy changed on a subsequent projection: %v", cfg)
+			}
+		})
+	}
+}
 
 // This verifies the shared configuration projection, not native Harness
 // startup, message consumption or execution recovery.

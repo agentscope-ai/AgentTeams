@@ -130,10 +130,17 @@ type MemberRuntimeConfigDeployRequest struct {
 	TeamAdminName     string
 	TeamAdminMatrixID string
 	TeamMembers       []RuntimeConfigTeamMember
+	MatrixAllowLists  *RuntimeMatrixAllowLists
 
 	// DropTeamContext forces a standalone runtime.yaml even when an older
 	// team-scoped runtime.yaml exists for the same runtime name.
 	DropTeamContext bool
+}
+
+// RuntimeMatrixAllowLists holds the resolved Team policy for one Worker.
+type RuntimeMatrixAllowLists struct {
+	GroupAllowFrom []string
+	DMAllowFrom    []string
 }
 
 // RuntimeConfigTeamMember is a non-secret roster entry projected into
@@ -318,6 +325,14 @@ func resolvedSubagentModel(req WorkerDeployRequest) string {
 	return req.Spec.SubagentModel
 }
 
+func workerChannelPolicy(spec *v1beta1.ChannelPolicySpec) *agentconfig.ChannelPolicy {
+	if spec == nil {
+		return nil
+	}
+	return &agentconfig.ChannelPolicy{GroupAllowExtra: spec.GroupAllowExtra, GroupDenyExtra: spec.GroupDenyExtra,
+		DMAllowExtra: spec.DmAllowExtra, DMDenyExtra: spec.DmDenyExtra}
+}
+
 // DeployWorkerConfig generates and pushes all configuration files to OSS:
 // openclaw.json, SOUL.md, mcporter config, Matrix password, agent file sync,
 // AGENTS.md merge with builtin section + coordination context, builtin skills.
@@ -355,15 +370,6 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	}
 
 	// --- openclaw.json ---
-	var channelPolicy *agentconfig.ChannelPolicy
-	if req.Spec.ChannelPolicy != nil {
-		channelPolicy = &agentconfig.ChannelPolicy{
-			GroupAllowExtra: req.Spec.ChannelPolicy.GroupAllowExtra,
-			GroupDenyExtra:  req.Spec.ChannelPolicy.GroupDenyExtra,
-			DMAllowExtra:    req.Spec.ChannelPolicy.DmAllowExtra,
-			DMDenyExtra:     req.Spec.ChannelPolicy.DmDenyExtra,
-		}
-	}
 
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
 		WorkerName:          req.Name,
@@ -375,7 +381,7 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		SubagentModelName:   resolvedSubagentModel(req),
 		AIGatewayURL:        req.AIGatewayURL,
 		TeamLeaderName:      req.TeamLeaderName,
-		ChannelPolicy:       channelPolicy,
+		ChannelPolicy:       workerChannelPolicy(req.Spec.ChannelPolicy),
 		Heartbeat:           req.Heartbeat,
 		LlmHeartbeatEnabled: req.Spec.LlmHeartbeatEnabled,
 		Runtime:             req.Spec.Runtime,

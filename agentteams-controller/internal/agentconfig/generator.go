@@ -81,13 +81,6 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		subagentsCfg["model"] = pid + "/" + subagentModel
 	}
 
-	matrixServerURL := g.config.MatrixServerURL
-	if matrixServerURL == "" {
-		// K8s deployments must set AGENTTEAMS_MATRIX_URL (Helm injects it automatically).
-		// This default only applies to docker/embedded mode.
-		matrixServerURL = "http://matrix-local.agentteams.io:8080"
-	}
-
 	aiGatewayURL := g.config.AIGatewayURL
 	if req.AIGatewayURL != "" {
 		aiGatewayURL = req.AIGatewayURL
@@ -96,13 +89,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		aiGatewayURL = "http://aigw-local.agentteams.io:8080"
 	}
 
-	matrixDomain := g.config.MatrixDomain
-	if matrixDomain == "" {
-		matrixDomain = "matrix-local.agentteams.io:8080"
-	}
-
-	adminUser := g.config.AdminUser
-	adminMatrixID := fmt.Sprintf("@%s:%s", adminUser, matrixDomain)
+	matrixDomain, adminMatrixID := g.matrixIdentity()
 
 	// Build the base openclaw.json structure (must match OpenClaw schema).
 	//
@@ -185,7 +172,7 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 			},
 		},
 		"channels": map[string]interface{}{
-			"matrix": g.buildMatrixChannelConfig(req, matrixServerURL, matrixDomain, adminMatrixID),
+			"matrix": g.WorkerMatrixChannel(req),
 		},
 		"models": map[string]interface{}{
 			"mode": "merge",
@@ -305,12 +292,33 @@ func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, err
 		}
 	}
 
-	// Apply channel policy overrides
-	if req.ChannelPolicy != nil {
-		g.applyChannelPolicy(config, req.ChannelPolicy, matrixDomain)
+	return json.MarshalIndent(config, "", "  ")
+}
+
+func (g *Generator) matrixIdentity() (string, string) {
+	matrixDomain := g.config.MatrixDomain
+	if matrixDomain == "" {
+		matrixDomain = "matrix-local.agentteams.io:8080"
 	}
 
-	return json.MarshalIndent(config, "", "  ")
+	return matrixDomain, fmt.Sprintf("@%s:%s", g.config.AdminUser, matrixDomain)
+}
+
+// WorkerMatrixChannel resolves the same transport and channel policy for native
+// configuration files and the Worker-owned runtime document.
+func (g *Generator) WorkerMatrixChannel(req WorkerConfigRequest) map[string]any {
+	matrixServerURL := g.config.MatrixServerURL
+	if matrixServerURL == "" {
+		// K8s deployments must set AGENTTEAMS_MATRIX_URL (Helm injects it automatically).
+		// This default only applies to docker/embedded mode.
+		matrixServerURL = "http://matrix-local.agentteams.io:8080"
+	}
+	domain, adminID := g.matrixIdentity()
+	channel := g.buildMatrixChannelConfig(req, matrixServerURL, domain, adminID)
+	if req.ChannelPolicy != nil {
+		g.applyChannelPolicy(channel, req.ChannelPolicy, domain)
+	}
+	return channel
 }
 
 func (g *Generator) buildMatrixChannelConfig(req WorkerConfigRequest, serverURL, domain, adminMatrixID string) map[string]interface{} {
@@ -399,16 +407,7 @@ func elevatedAllowFrom(req WorkerConfigRequest, domain, adminMatrixID string) []
 	}
 }
 
-func (g *Generator) applyChannelPolicy(config map[string]interface{}, policy *ChannelPolicy, domain string) {
-	channels, _ := config["channels"].(map[string]interface{})
-	if channels == nil {
-		return
-	}
-	matrixCfg, _ := channels["matrix"].(map[string]interface{})
-	if matrixCfg == nil {
-		return
-	}
-
+func (g *Generator) applyChannelPolicy(matrixCfg map[string]interface{}, policy *ChannelPolicy, domain string) {
 	resolveID := func(s string) string {
 		if strings.HasPrefix(s, "@") {
 			return s

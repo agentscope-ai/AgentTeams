@@ -12,6 +12,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"sigs.k8s.io/yaml"
@@ -275,7 +276,7 @@ func (d *Deployer) DeployMemberRuntimeConfig(ctx context.Context, req MemberRunt
 	if doc.Team == nil && !req.DropTeamContext {
 		d.preserveExistingRuntimeTeamContext(ctx, runtimeName, &doc)
 	}
-	if err := d.projectRuntimeMatrixTransport(ctx, runtimeName, &doc); err != nil {
+	if err := d.projectRuntimeMatrixTransport(ctx, runtimeName, &doc, req.MatrixAllowLists); err != nil {
 		return err
 	}
 	if err := preserveRuntimeConfigGeneration(ctx, d.oss, memberRuntimeConfigObjectKey(runtimeName), &doc); err != nil {
@@ -341,7 +342,7 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 		doc.Member.PersonalRoomID = req.PersonalRoomID
 	}
 	applyRuntimeTeamContext(&doc, req)
-	if err := d.projectRuntimeMatrixTransport(ctx, runtimeName, &doc); err != nil {
+	if err := d.projectRuntimeMatrixTransport(ctx, runtimeName, &doc, req.MatrixAllowLists); err != nil {
 		return err
 	}
 	if err := preserveRuntimeConfigGeneration(ctx, d.oss, key, &doc); err != nil {
@@ -358,16 +359,7 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 	return nil
 }
 
-func (d *Deployer) projectRuntimeMatrixTransport(ctx context.Context, name string, doc *memberRuntimeConfigDocument) error {
-	// Reuse the resolved Worker policy, including Human/Team overlays. Do not
-	// reconstruct allowlists independently in each Harness or read native dirs.
-	body, err := d.oss.GetObject(ctx, "agents/"+name+"/openclaw.json")
-	if errors.Is(err, os.ErrNotExist) {
-		return nil // Compatibility with members without this projection.
-	}
-	if err != nil {
-		return fmt.Errorf("read Worker Matrix projection: %w", err)
-	}
+func (d *Deployer) projectRuntimeMatrixTransport(ctx context.Context, name string, doc *memberRuntimeConfigDocument, policy *RuntimeMatrixAllowLists) error {
 	var config struct {
 		Channels struct {
 			Matrix map[string]any `json:"matrix"`
@@ -378,8 +370,39 @@ func (d *Deployer) projectRuntimeMatrixTransport(ctx context.Context, name strin
 			} `json:"groupChat"`
 		} `json:"messages"`
 	}
-	if err := json.Unmarshal(body, &config); err != nil {
-		return fmt.Errorf("decode Worker Matrix projection: %w", err)
+	if backend.UsesMemberRuntimeConfig(doc.Member.Runtime) && d.agentConfig != nil {
+		// A fresh YAML-native Worker has no OpenClaw file. Generate its
+		// transport from the same Controller settings as file-based Workers.
+		channel := d.agentConfig.WorkerMatrixChannel(agentconfig.WorkerConfigRequest{
+			WorkerName: name, PersonalRoomID: doc.Member.PersonalRoomID,
+			ChannelPolicy: workerChannelPolicy(doc.Desired.ChannelPolicy),
+		})
+		if policy != nil {
+			channel["groupAllowFrom"] = append([]string{}, policy.GroupAllowFrom...)
+			channel["dm"].(map[string]any)["allowFrom"] = append([]string{}, policy.DMAllowFrom...)
+		} else if doc.Team != nil && doc.Matrix != nil && doc.Matrix.Transport != nil {
+			// A standalone reconcile may preserve the Team controller's last
+			// document. Its Team membership and resolved allowlists stay together.
+			for _, key := range []string{"groupAllowFrom", "dm"} {
+				if previous, ok := doc.Matrix.Transport[key]; ok {
+					channel[key] = previous
+				}
+			}
+		}
+		config.Channels.Matrix = channel
+	} else {
+		// File-based Workers can also carry Human grants and operator-owned
+		// entries in their existing Worker-level compatibility projection.
+		body, err := d.oss.GetObject(ctx, "agents/"+name+"/openclaw.json")
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read Worker Matrix projection: %w", err)
+		}
+		if err := json.Unmarshal(body, &config); err != nil {
+			return fmt.Errorf("decode Worker Matrix projection: %w", err)
+		}
 	}
 	if config.Channels.Matrix == nil {
 		return nil
@@ -724,6 +747,12 @@ func (d *Deployer) preserveExistingRuntimeTeamContext(ctx context.Context, runti
 		return
 	}
 	doc.Team = existing.Team
+	if existing.Matrix != nil && existing.Matrix.Transport != nil && backend.UsesMemberRuntimeConfig(doc.Member.Runtime) {
+		if doc.Matrix == nil {
+			doc.Matrix = &memberRuntimeConfigMatrix{}
+		}
+		doc.Matrix.Transport = existing.Matrix.Transport
+	}
 	if existing.Member.Role != "" {
 		doc.Member.Role = existing.Member.Role
 	}

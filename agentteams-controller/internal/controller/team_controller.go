@@ -722,6 +722,10 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			TeamAdminMatrixID: teamAdminMatrixID(t),
 			TeamMembers:       roster,
 		}
+		if backend.UsesMemberRuntimeConfig(runtime) && deployMode != v1beta1.DeployModeEdge {
+			policy := r.teamChannelPolicy(t, members, leaderName, member, role)
+			req.MatrixAllowLists = &policy
+		}
 		if role == RoleTeamLeader {
 			req.Heartbeat = &agentconfig.HeartbeatConfig{Enabled: t.Spec.HeartbeatEvery != "" && t.Spec.HeartbeatEvery != "0m", Every: t.Spec.HeartbeatEvery}
 		}
@@ -782,10 +786,7 @@ func runtimeConfigTeamMembers(t *v1beta1.Team, members []teamWorkerMember, leade
 	return roster
 }
 
-type teamChannelAllowLists struct {
-	GroupAllowFrom []string
-	DMAllowFrom    []string
-}
+type teamChannelAllowLists = service.RuntimeMatrixAllowLists
 
 func teamMemberStatusSnapshot(member teamWorkerMember, role MemberRole) v1beta1.TeamMemberStatus {
 	ms := v1beta1.TeamMemberStatus{Name: member.ref.Name, Role: role.String()}

@@ -498,6 +498,39 @@ def evidence(*, emit=True):
     return result
 
 
+def source_read_receipt(task):
+    # Check the server before stopping the source. Task discovery can run
+    # before the independently queued Matrix assignment has been delivered.
+    code = '''import json,pathlib,sys,urllib.parse
+from agentteams_receipts import credentials,matrix_request,RECEIPT_TYPE
+p=json.load(sys.stdin)
+request=matrix_request(*credentials(pathlib.Path("/root/agentteams-fs/agents/agent-a")))
+room="/_matrix/client/v3/rooms/"+urllib.parse.quote(p["room"],safe="")
+reads,seen={},set()
+cursor=None
+while True:
+ page=request("GET",room+"/messages?dir=b&limit=100"+("&from="+urllib.parse.quote(cursor,safe="") if cursor else ""))
+ for row in page["chunk"]:
+  content=row.get("content",{})
+  if row.get("type")==RECEIPT_TYPE and row.get("sender")=="@agent-a:recovery-1631.test" and content.get("status")=="read":
+   ref=content.get("m.relates_to",{}).get("event_id")
+   if ref: reads[ref]=row["event_id"]
+  notice=content.get("org.agentteams.coordination") or {}
+  if row.get("type")=="m.room.message" and notice.get("kind")=="task_assigned" and p["task"] in content.get("body",""):
+   seen.add(row["event_id"])
+ if matched:=sorted(seen & reads.keys()):
+  print(json.dumps({"source_event":matched[0],"read_event":reads[matched[0]]}))
+  break
+ if not page["chunk"] or not page.get("end") or page["end"]==cursor:
+  print("null")
+  break
+ cursor=page["end"]
+'''
+    return json.loads(docker("exec", "-i", "-e", "PYTHONPATH=/opt/agentteams/scripts/lib",
+        PREFIX + "-worker-agent-a", "python3", "-c", code,
+        text=json.dumps({"room": task["room_id"], "task": TASK_ID})))
+
+
 def cutover(*, watch_return=False, watch_dashboard=False):
     if watch_dashboard and (not OPERATOR_HANDOFF or watch_return):
         raise ValueError("Dashboard cutover requires the operator handoff in replacement mode")
@@ -522,9 +555,13 @@ def cutover(*, watch_return=False, watch_dashboard=False):
     old = json.loads(docker("inspect", name))[0]
     if old["Config"]["Image"] != HARNESS_IMAGES[source]:
         raise RuntimeError("The cutover requires this fixture's selected source image")
+    read = source_read_receipt(task)
+    if not read:
+        raise RuntimeError("Wait for the source native Matrix read receipt before cutover")
     # Capture the source while it still exists; post-cutover reads cannot prove
     # the source native session or absence of the target Task session.
     before = evidence(emit=False)
+    before["source_read_receipt"] = read
     before["tool_processes"] = fixture_tool_processes()
     if before["instances"][1]["id"] != old["Id"] or before["task"]["execution"] != task["execution"]:
         raise RuntimeError("Task/source changed while collecting the boundary; inspect evidence before retrying")
@@ -801,6 +838,9 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     matrix = json.loads(docker("exec", "-i", "-e", "PYTHONPATH=/opt/agentteams/scripts/lib", PREFIX + "-worker-agent-a", "python3", "-c", code,
         text=json.dumps({"room": task["room_id"], "event": cp["reply_event"], "sha256": cp["result"]["sha256"],
             "stopped_ms": order["die"] // 1000000, "task_id": TASK_ID})))
+    if read := before.get("source_read_receipt"):
+        assert read["source_event"] in matrix["native_read_sources"]
+        assert read["read_event"] in matrix["read_receipt_events"]
     if middle:
         first_registration = next(row for row in calls if row["method"] == "REGISTER" and row["step"] == "one")
         assert matrix["first_source_read_ms"] <= first_registration["at_ns"] // 1000000, "the initial source must be read before step one"

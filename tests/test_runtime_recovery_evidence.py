@@ -234,9 +234,15 @@ class CutoverBoundaryTests(unittest.TestCase):
                 patch.object(driver, "api", side_effect=api), \
                 patch.object(driver, "docker", return_value=json.dumps([{"Id": "old", "Config": {"Image": driver.HARNESS_IMAGES[driver.SOURCE]}}])), \
                 patch.object(driver, "evidence", return_value=before), \
+                patch.object(driver, "source_read_receipt", return_value=None) as read, \
                 patch.object(driver, "fixture_tool_processes", return_value=[]):
+            with self.assertRaisesRegex(RuntimeError, "source native Matrix read receipt"):
+                driver.cutover()
+            self.assertFalse(path.exists())
+            read.return_value = {"source_event": "$assignment", "read_event": "$receipt"}
             with self.assertRaises(MutationObserved):
                 driver.cutover()
+            self.assertEqual(json.loads(path.read_text())["source_read_receipt"], read.return_value)
             with self.assertRaisesRegex(RuntimeError, "already has a boundary"):
                 driver.cutover()
 

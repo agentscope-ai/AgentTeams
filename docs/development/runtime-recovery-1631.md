@@ -1425,3 +1425,20 @@ passed with Codex `77e1215` and Hermes `282c457`. It verifies the original
 Task, independent effect counts, old stop before target creation, new
 execution generation, and one final Matrix reply without a new Matrix input.
 The proof retains the different source/target contract pins.
+
+Case87 DeepSeek → Hermes completed all three steps and delivered the original
+Task result. The fixture had timed out after creating the Task and never
+queued the source assignment, so Matrix history contained neither the
+assignment nor its read receipt. This direction remains unaccepted. The
+live driver now checks the actual source Matrix read before requesting a
+handoff and records it in the cutover proof.
+
+[Case88 unknown operation](evidence/runtime-recovery-1631-case88-held.json)
+interrupted a live Hermes tool after its external effect but before its
+checkpoint. Codex claimed the original Task at generation 2 with the operation
+still started and entered `needs_verification`. The independent ledger shows
+only the original POST and no target verification request. The Controller
+records stop before target registration. This is evidence of safe hold only:
+automatic verification, continuation, and a final reply did not occur.
+The driver's bounded Docker event capture did not observe the late stop and
+replacement and is not used as lifecycle evidence for this case.

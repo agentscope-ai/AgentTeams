@@ -31,11 +31,12 @@ including a hidden or temporary one. Only create a Project when the user
 explicitly requests one. Automatic cross-team Project creation is future work;
 do not infer that authorization from task complexity or member count.
 
-Before planning, read the main task ID and original spec registered in the
-Manager handoff. That main task is pending while you analyze the request.
-Use its existing ID and unchanged original spec when you supply the execution
-subtasks, owners and dependencies to `start_task`. Successful dispatch makes
-the main task assigned; only a Worker's durable ACK makes it in progress.
+If the Manager registered a main task, reuse its ID and unchanged original
+spec. When the requester assigns work directly to you without a registered
+main task, choose a stable task ID and use the original request as the spec.
+In both cases pass the execution subtasks, owners, dependencies, and requester
+route to `start_task`. Successful dispatch makes the main task assigned;
+only a Worker's durable ACK makes it in progress.
 
 A main Task owns the original request, execution plan, task room, source reply
 route and final report. Each subtask is independently executable by one Worker.

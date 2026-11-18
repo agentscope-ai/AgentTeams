@@ -1265,3 +1265,18 @@ Core695 Controller44184054560 and earlier f852 integration44175315246 passed.
 Core now pins matching green Hermesa815ed0 and QwenPaw7dba11e/shared69538c9a;
 the new Core head still needs matching checks. Full coverage remains3/6 normal
 restart/reuse and7/30 historical directions, not complete fault suites.
+
+### Case68: packaged Hermes normal restart with valid native session reuse
+
+[Strict case68 evidence](evidence/runtime-recovery-1631-case68-verified.json)
+records Core `52a3659b`, Hermes `282c457` and shared contract `52a3659b`.
+After the initial native Matrix read and Task ACK, step one was committed
+while the Task remained `in_progress`. The first observation occurred before
+the native session descriptor was saved. The cutover ran on the same Task
+after reading back its matching native digest and checkpoint version 5.
+The real restart preserved the container and changed its process identity.
+Generation 2 reused the original native session, ran steps two and three,
+and submitted the same Task at checkpoint 12. The independent ledger
+records generations 1/2/2, all artifact and report hashes match, and Matrix
+has one canonical final reply with no external message after the stop.
+This lane used plaintext Matrix and did not export to Langfuse.

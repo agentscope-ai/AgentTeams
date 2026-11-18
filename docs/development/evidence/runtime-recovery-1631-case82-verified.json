@@ -1,0 +1,225 @@
+{
+  "task_id": "live-codex-codex-82",
+  "case": "82",
+  "scope": "one real codex-to-codex in-progress continuation",
+  "mode": "restart",
+  "fixture_prefix": "recovery-1631-live-20261118-v82",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "52a3659b719abb78c17368ce020403c442d4e5db",
+    "codex": "77e1215c01046e8840bdce20d1261e1e772491f9",
+    "shared_contract": "ec246de0"
+  },
+  "driver_sha256": "d037ddc8ab3b9d35ce44f4e03aa345129ea212522410dba180815713c1cf9771",
+  "native_recovery_sessions": {
+    "hermes": [],
+    "hermes_message_counts": {},
+    "hermes_shared": null,
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "a860521095835a98383155c5fd67eeb99aa703592617ee28359d4d9cd8655686",
+      "descriptor": null,
+      "config_generation": null
+    },
+    "codex_shared": {
+      "cache": {
+        "schema_version": 1,
+        "kind": "WorkerSessionCache",
+        "member_prefix": "agents/agent-a",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-codex-codex-82"
+        },
+        "runtime": "codex",
+        "start": {
+          "instance_id": "docker/506a2bc11712a915a9055e61bba6101f48b585971c8a0f2218c211ca3a5d72fc/2026-11-18T08:31:02.225667112Z",
+          "process_id": "7:1794990662375678831:74f2fdae18e0453494497e109aef8417",
+          "runtime": "codex"
+        },
+        "generation": 1,
+        "native_ref": "01a1edc8-1f9e-7e62-b163-4387b5b42f54",
+        "native_digest": "3abca39fb3622facd86e901c097fa65195214bb0ef44100c8db5af0f0a311aba",
+        "checkpoint_version": 5,
+        "checkpoint_digest": "2e64ff21191de99f7cb906bd628918154878b0aa3b0d06e5dafa3a54cee070dd",
+        "config_generation": 3,
+        "expires_at": 1795077136,
+        "saved_at": "2026-11-18T08:32:19Z"
+      },
+      "config_generation": 3,
+      "route": {
+        "task_id": "live-codex-codex-82",
+        "team_id": "recovery-team",
+        "generation": 2,
+        "instance_id": "docker/506a2bc11712a915a9055e61bba6101f48b585971c8a0f2218c211ca3a5d72fc/2026-11-18T08:32:26.556084663Z",
+        "process_id": "7:1794990746730201623:102f971bffb24d3f896e6cf5e0de81f9"
+      },
+      "native": {
+        "thread_id": "01a1edc8-1f9e-7e62-b163-4387b5b42f54",
+        "metadata_id": "01a1edc8-1f9e-7e62-b163-4387b5b42f54",
+        "turn_id": "01a1edc9-74bf-7170-ba14-3049cad1f02a",
+        "rollout": "sessions/2026/11/18/rollout-2026-11-18T08-31-17-01a1edc8-1f9e-7e62-b163-4387b5b42f54.jsonl",
+        "native_digest": "72a105b321334ef52c5123623a99bfee9d2a7dad3527cc8aedd8cf66b757093b",
+        "native_bytes": 135614,
+        "source_inputs": 1,
+        "tool_calls": 7,
+        "tool_outputs": 7
+      }
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 5,
+  "checkpoint_after": 12,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/506a2bc11712a915a9055e61bba6101f48b585971c8a0f2218c211ca3a5d72fc/2026-11-18T08:32:26.556084663Z",
+    "process_id": "7:1794990746730201623:102f971bffb24d3f896e6cf5e0de81f9",
+    "runtime": "codex",
+    "state": "active",
+    "checkpoint": {
+      "version": 12,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-codex-codex-82:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=45f4854c806de81d4cf000a82703913e8d457f12a43446eb02c58a3b4cf61f08; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-codex-codex-82/output/step-one.json",
+          "sha256": "c4f9dc069e9666bf6f7fb4975b2b2c12d70ef458f4373444a56f217a5f9917bb",
+          "size": 351
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-codex-codex-82/output/step-two.json",
+          "sha256": "db5fbf8ce1d5e4be55ba87ac1658ec6dd98a522abb4f4e67f2e0a66557df062e",
+          "size": 351
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-codex-codex-82/output/step-three.json",
+          "sha256": "45f4854c806de81d4cf000a82703913e8d457f12a43446eb02c58a3b4cf61f08",
+          "size": 353
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-codex-codex-82/result.md",
+        "sha256": "72b243b231b67ef3fed75a3c40bc16fb234794a2a8ba5b736bbd950eafcf94fa",
+        "size": 638
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:96605b4bb022ba1f322ee8abbc50a7ae567f0967a3b88d5e77f1596a3c8092bd",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "RtGHXrhCML"
+      },
+      "reply_event": "$7uqeCd22T-7dlyrODouZC7YRkF5YP-lJsGfp-6E3eDI",
+      "saved_at": "2026-11-18T08:33:53.791088154Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T08:31:27Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 2,
+      "to": "submitted",
+      "ts": "2026-11-18T08:33:33Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794990703989357389,
+      "generation": 1,
+      "instance_id": "docker/506a2bc11712a915a9055e61bba6101f48b585971c8a0f2218c211ca3a5d72fc/2026-11-18T08:31:02.225667112Z",
+      "process_id": "7:1794990662375678831:74f2fdae18e0453494497e109aef8417",
+      "step": "one",
+      "task_id": "live-codex-codex-82",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1794990780990966971,
+      "generation": 2,
+      "instance_id": "docker/506a2bc11712a915a9055e61bba6101f48b585971c8a0f2218c211ca3a5d72fc/2026-11-18T08:32:26.556084663Z",
+      "process_id": "7:1794990746730201623:102f971bffb24d3f896e6cf5e0de81f9",
+      "step": "two",
+      "task_id": "live-codex-codex-82",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 8,
+      "executed_at_ns": 1794990796797634699,
+      "generation": 2,
+      "instance_id": "docker/506a2bc11712a915a9055e61bba6101f48b585971c8a0f2218c211ca3a5d72fc/2026-11-18T08:32:26.556084663Z",
+      "process_id": "7:1794990746730201623:102f971bffb24d3f896e6cf5e0de81f9",
+      "step": "three",
+      "task_id": "live-codex-codex-82",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-codex-82/output/step-one.json",
+      "sha256": "c4f9dc069e9666bf6f7fb4975b2b2c12d70ef458f4373444a56f217a5f9917bb",
+      "size": 351
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-codex-82/output/step-two.json",
+      "sha256": "db5fbf8ce1d5e4be55ba87ac1658ec6dd98a522abb4f4e67f2e0a66557df062e",
+      "size": 351
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-codex-82/output/step-three.json",
+      "sha256": "45f4854c806de81d4cf000a82703913e8d457f12a43446eb02c58a3b4cf61f08",
+      "size": 353
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-codex-82/result.md",
+      "sha256": "72b243b231b67ef3fed75a3c40bc16fb234794a2a8ba5b736bbd950eafcf94fa",
+      "size": 638
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1794990746482635608,
+    "start": 1794990746715673588
+  },
+  "matrix": {
+    "reply_event": "$7uqeCd22T-7dlyrODouZC7YRkF5YP-lJsGfp-6E3eDI",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$GratpcoZbdFIVzndXMgJT037i6NikEr4Z6-TTFBlYrI"
+    ],
+    "read_receipt_events": [
+      "$hiP635U3Vbgo5P0PKl2pUctgqsFNbwUx7CX3ESs0Uy8"
+    ],
+    "first_source_read_ms": 1794990689795
+  }
+}

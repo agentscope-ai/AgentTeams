@@ -385,6 +385,18 @@ print(json.dumps({"hermes":hermes,"hermes_message_counts":counts,"hermes_shared"
         result["codex_shared"] = json.loads(docker("exec", "-i", PREFIX + "-worker-agent-a",
             "/opt/venv/bin/python", "-", TASK_ID, "recovery-team", task["room_id"],
             str(task["execution"]["generation"]), text=script))
+    if runtime == "deepseek-harness" and task.get("execution"):
+        name = PREFIX + "-worker-agent-a"
+        home = "/root/agentteams-fs/agents/agent-a"
+        script = (Path(__file__).parent / "fixtures/runtime_recovery_deepseek.cjs").read_text()
+        key = hashlib.sha256(json.dumps(["agents/agent-a", "task", "recovery-team", TASK_ID],
+            ensure_ascii=False, separators=(",", ":")).encode()).hexdigest() + ".json"
+        base = "agentteams/recovery-1631/agents/agent-a/runtime/sessions/deepseek-harness/"
+        listing = docker("exec", CONTROLLER, "mc", "ls", "--json", base)
+        cache = (json.loads(docker("exec", CONTROLLER, "mc", "cat", base + key))
+                 if any(json.loads(line).get("key") == key for line in listing.splitlines()) else None)
+        result["deepseek"] = {"native": json.loads(docker("exec", "-i", name, "node", "-",
+            home, TASK_ID, str(task["execution"]["generation"]), text=script)), "cache": cache}
     if runtime == "openclaw":
         # Use the pinned SDK's actual SQLite APIs, not a guessed session filename.
         probe = '''import fs from "node:fs";
@@ -522,6 +534,8 @@ def cutover(*, watch_return=False, watch_dashboard=False):
         assert_openhuman_native_cache(before["native_sessions"]["openhuman"], task["execution"], TASK_ID)
     if source == "codex" and not LEGACY_CODEX and MODE == "restart":
         assert_codex_native(before["native_sessions"]["codex_shared"], task, require_cache=True)
+    if source == "deepseek-harness" and MODE == "restart" and not FAULT:
+        assert_deepseek_native(before["native_sessions"]["deepseek"], task, require_cache=True)
     if source == "qwenpaw":
         assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"], cp, TASK_ID)
     if RETURN_TO_SOURCE:
@@ -818,6 +832,13 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     if final_runtime == "hermes":
         selected = native["hermes"][-1]["session_id"]
         assert native["hermes_message_counts"].get(selected, 0) > 0, "recovered input was not persisted in the selected native session"
+    if SOURCE == "deepseek-harness" and not FAULT:
+        assert_deepseek_native(before["native_sessions"]["deepseek"], before["task"], require_cache=MODE == "restart")
+    if final_runtime == "deepseek-harness":
+        selected = assert_deepseek_native(native["deepseek"], task)
+        if MODE == "restart":
+            original = before["native_sessions"]["deepseek"]["native"]
+            assert selected["session_id"] == original["session_id"] and selected["turn"] > original["turn"]
     if final_runtime == "openclaw":
         assert_openclaw_native_cache(native["openclaw"], cp)
         if MODE == "restart":
@@ -893,6 +914,27 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     path = Path("/tmp/1631-live-" + CASE + "-verified.json")
     path.write_text(json.dumps(proof, indent=2))
     print(json.dumps({"passed": True, "evidence": str(path), **proof}))
+
+
+def assert_deepseek_native(proof, task, *, require_cache=False):
+    execution = task["execution"]
+    item = proof["native"]
+    marker = f"recovery:recovery-team/{task['task_id']}:{execution['generation']}"
+    assert item and item["input_id"] == "matrix-" + hashlib.sha256(marker.encode()).hexdigest()
+    assert item["task_mentioned"] and item["completed"] and item["tool_calls"] and item["tool_results"]
+    if require_cache:
+        cache = proof["cache"]
+        cp = execution["checkpoint"]
+        work = {"kind": "task", "team_id": "recovery-team", "task_id": task["task_id"]}
+        digest = hashlib.sha256(json.dumps(cp, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert cache and cache["schema_version"] == 1 and cache["kind"] == "WorkerSessionCache"
+        assert cache["runtime"] == "deepseek-harness" and cache["member_prefix"] == "agents/agent-a"
+        assert cache["work"] == work and cache["generation"] == execution["generation"]
+        assert all(cache["start"][key] == execution[key] for key in ("process_id", "instance_id", "runtime"))
+        assert cache["expires_at"] > time.time() and cache["checkpoint_version"] == cp["version"]
+        assert cache["checkpoint_digest"] == digest
+        assert (cache["native_ref"], cache["native_digest"]) == (item["session_id"], item["native_digest"])
+    return item
 
 
 def assert_codex_native(proof, task, *, require_cache=False):

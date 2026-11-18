@@ -1396,3 +1396,18 @@ tool output, matching durable artifacts and one final Matrix reply with no
 new incoming message after shutdown. The local source and target images
 identify different Core contract snapshots in the evidence. This result adds
 one directed lane and does not claim the aligned full matrix.
+
+[Case81 Hermes → DeepSeek CLI handoff](evidence/runtime-recovery-1631-case81-verified.json)
+passed on Hermes `282c457`, DeepSeek `6f5aadb` and a common Core contract
+`52a3659b`. The independent ledger confirms one execution of each step, and
+Matrix readback confirms one final reply with no new incoming message after
+shutdown. The read-only probe also decoded the actual DeepSeek session file
+and found the generation-2 recovery input and native tool results. This local
+fixture explicitly selected a shell mode compatible with its Docker VM.
+That setting is not a change to the production default.
+
+[Case82 Codex restart](evidence/runtime-recovery-1631-case82-verified.json)
+used Codex `77e1215` and verified the original App Server thread with a new
+turn, continuing steps two and three after a native restart. The Task ID was
+unchanged, the execution generation increased, and each step and the final
+Matrix reply appeared once with no new incoming message.

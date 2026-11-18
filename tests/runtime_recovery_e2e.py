@@ -17,6 +17,7 @@ import time
 import urllib.parse
 import urllib.request
 
+DRIVER_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 PREFIX = os.getenv("RECOVERY_E2E_PREFIX", "recovery-1631-live-20261116")
 if not re.fullmatch(r"recovery-1631-live-\d{8}(?:-[a-z0-9]+)?", PREFIX):
     raise ValueError("Use a dated, disposable recovery-1631-live-YYYYMMDD prefix")
@@ -43,6 +44,7 @@ RETURN_TO_SOURCE = os.getenv("RECOVERY_E2E_RETURN") == "1"
 FAULT = os.getenv("RECOVERY_E2E_FAULT", "")
 EXPIRE_HERMES_SESSION = os.getenv("RECOVERY_E2E_EXPIRE_HERMES_SESSION") == "1"
 ABRUPT_RESTART = os.getenv("RECOVERY_E2E_ABRUPT_RESTART") == "1"
+OPENHUMAN_PREAPPROVED = os.getenv("RECOVERY_E2E_OPENHUMAN_PREAPPROVED") == "1"
 if FAULT not in {"", "after-effect"}:
     raise ValueError("Unknown recovery fault injection")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
@@ -57,6 +59,8 @@ if EXPIRE_HERMES_SESSION and (SOURCE != "hermes" or MODE != "restart" or FAULT):
     raise ValueError("Session expiry requires a Hermes restart at a committed step boundary")
 if ABRUPT_RESTART and (MODE != "restart" or FAULT or EXPIRE_HERMES_SESSION):
     raise ValueError("Abrupt restart requires a same-Harness committed step boundary")
+if OPENHUMAN_PREAPPROVED and "openhuman" not in {SOURCE, TARGET}:
+    raise ValueError("The OpenHuman fixture's authorization requires OpenHuman")
 CASE = os.getenv("RECOVERY_E2E_CASE", "01")
 if not re.fullmatch(r"[0-9]{2,3}", CASE):
     raise ValueError("RECOVERY_E2E_CASE must be two or three decimal digits")
@@ -519,6 +523,7 @@ def evidence(*, emit=True):
     for name in (CONTROLLER, PREFIX + "-worker-agent-a", PREFIX + "-worker-leader"):
         item = json.loads(docker("inspect", name))[0]
         instances.append({"name": name, "id": item["Id"], "image": item["Config"]["Image"],
+            "image_id": item["Image"],
             "running": item["State"]["Running"], "pid": item["State"]["Pid"],
             "started_at": item["State"]["StartedAt"], "finished_at": item["State"]["FinishedAt"]})
     ledger = step_ledger(task)
@@ -1033,7 +1038,7 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         sources["shared_contract_by_runtime"] = {SOURCE: source_pin, TARGET: target_pin}
     proof = {"task_id": TASK_ID, "case": CASE, "scope": f"one real {SOURCE}-to-{TARGET} in-progress continuation", "mode": MODE,
         "fixture_prefix": PREFIX, "authoritative_report_verified": True,
-        "sources": sources, "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "native_recovery_sessions": native,
+        "sources": sources, "driver_sha256": DRIVER_SHA256, "native_recovery_sessions": native,
         "generation_before": before["task"]["execution"]["generation"], "generation_after": execution["generation"],
         "checkpoint_before": before["task"]["execution"]["checkpoint"]["version"], "checkpoint_after": cp["version"],
         "execution": execution, "final_task_status": task["status"], "task_history": task["history"], "ledger": ledger, "artifacts_verified": artifacts,
@@ -1043,6 +1048,10 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         proof["expired_session"] = before["expired_session"]
     if ABRUPT_RESTART:
         proof["scope"] = f"{SOURCE} restart after SIGKILL at a committed step boundary"
+    if image_id := before["instances"][1].get("image_id"):
+        proof["images"] = {"controller": controller["Image"], "source": image_id, "target": current["Image"]}
+    if OPENHUMAN_PREAPPROVED:
+        proof["openhuman_preapproved_fixture"] = True
     if OPERATOR_HANDOFF:
         op = json.loads(agt("worker", "runtime-status", "--name", "agent-a", "-o", "json"))["handoff"]
         if middle:
@@ -1334,6 +1343,10 @@ def members():
             # The fixture runs only inside our disposable container; its
             # deterministic step helper needs the Controller/storage network.
             manifest["spec"]["env"] = {"CODEX_SANDBOX_MODE": "danger-full-access"}
+        if name == "agent-a" and OPENHUMAN_PREAPPROVED:
+            # Authorize the isolated fixture before assignment. Native command
+            # restrictions still apply, and other installations keep their policy.
+            manifest["spec"].setdefault("env", {})["AGENTTEAMS_YOLO"] = "1"
         agt("apply", "-f", "/dev/stdin", text=json.dumps(manifest))
     team = {"apiVersion": "agentteams.io/v1beta1", "kind": "Team", "metadata": {"name": "recovery-team"},
         "spec": {"teamName": "recovery-team", "admin": {"name": "recovery-admin"},

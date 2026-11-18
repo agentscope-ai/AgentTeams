@@ -1850,3 +1850,21 @@ original Task, room, new generation, and native session. The verifier observed
 one effect per step, zero rejected or repeated effect requests, no new Matrix
 input after cutover, and one final reply. Case125's partial result and
 case132's source timeout remain in the evidence log.
+
+[Case136 supervised OpenHuman](evidence/runtime-recovery-1631-case136-approval-held.json)
+used the checksum-verified executable from OpenHuman `8165de5`. The fixed
+provider parsed one native structured tool call. The real Matrix room then
+contained a pending `mcp_call_tool` approval for that same turn. The approval
+expired, the Task stayed assigned, and the independent ledger had no
+execution effects. This run verifies the approval hold and restored tool
+request shape. Task continuation remains a separate assertion.
+
+`RECOVERY_E2E_OPENHUMAN_PREAPPROVED=1` selects the existing `AGENTTEAMS_YOLO`
+policy for Agent A in the disposable fixture before assignment. It permits
+testing headless execution without sending human approval events after
+cutover. The local fixture retains its bounded shell command allowlist.
+Production approval configuration and the default supervised test path are
+unchanged. Cases 140 and 141 are running with the explicit fixture setting.
+The driver now captures its own hash at import and records immutable source,
+target and Controller image IDs in new reports. All 27 focused fixture and
+evidence tests passed with these changes.

@@ -17,11 +17,11 @@ the image and shared-contract pins actually tested.
 | Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | [Pass 121](evidence/runtime-recovery-1631-case121-verified.json) | — |
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
-| DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
-| OpenClaw | — | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | — | — | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
+| DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | — |
+| OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | — | — | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
-**5/6 normal restart lanes and 16/30 directed handoffs have passed.** A dash
+**5/6 normal restart lanes and 18/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1710,3 +1710,17 @@ created. OpenClaw created a native recovery session for the same Task and
 completed steps two and three in generation 2. Checkpoint 5 advanced to 11.
 The independent oracle recorded one effect per step. Stored artifact hashes
 matched, and Matrix contained one final reply and zero new inputs after cutover.
+
+[Case122 OpenClaw → Codex](evidence/runtime-recovery-1631-case122-verified.json)
+passed on Controller `6421981f`, OpenClaw `c6dcf56` and Codex `28dcf22`.
+The source read the original Matrix assignment and committed step one at
+checkpoint 4. Docker observed it die and be removed before the target was
+created. Codex continued the same Task at generation 2 and submitted at
+checkpoint 11. Each effect and the final Matrix reply occurred once.
+
+[Case123 DeepSeek → OpenClaw](evidence/runtime-recovery-1631-case123-verified.json)
+passed on Controller `6421981f`, DeepSeek `6f5aadb` and OpenClaw `c6dcf56`.
+After the old container was removed at checkpoint 5, OpenClaw recovered the
+original Task in a new native session and reached checkpoint 11 in generation
+2. The verifier matched the three independently counted effects to the
+persisted artifacts. Both cases had zero new Matrix inputs after cutover.

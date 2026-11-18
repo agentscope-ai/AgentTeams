@@ -1,5 +1,6 @@
 """Publish saved replies through the synchronous, unencrypted MatrixClient."""
 import asyncio
+import hashlib
 import json
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
@@ -18,6 +19,39 @@ def require_unencrypted_room(client, room_id):
             return
         raise
     raise RecoveryConflict("Raw Matrix transport cannot handle an encrypted room")
+
+
+def raw_room_history(client, matrix, account, room, source, admit):
+    """Read earlier authorized room messages for a new native session without dispatching them."""
+    from worker_matrix_state import matrix_event_key
+
+    path = "/_matrix/client/v3/rooms/" + quote(room, safe="") + "/context/" + quote(source, safe="") + "?limit=20"
+    page = client.request("GET", path)
+    anchor = page.get("event") or {}
+    if anchor.get("event_id") != source or anchor.get("room_id", room) != room or not isinstance(page.get("events_before"), list):
+        raise RecoveryConflict("Cannot establish Matrix room context at the source event")
+    history = []
+    for event in reversed(page["events_before"]):
+        content = event.get("content") or {}
+        event_id, sender, text = event.get("event_id"), event.get("sender"), content.get("body")
+        if (not event_id or not sender or event.get("room_id", room) != room or event.get("type") != "m.room.message"
+                or (event.get("unsigned") or {}).get("redacted_because") or content.get("msgtype") != "m.text"
+                or not isinstance(text, str)):
+            continue
+        parent = (content.get("m.relates_to") or {}).get("m.in_reply_to", {}).get("event_id") if sender == account else event_id
+        prior = matrix.input(matrix_event_key(room, parent)) if parent else None
+        if not prior or prior.get("intent") != "message" or prior.get("room_id") != room or prior.get("event_id") != parent:
+            continue
+        if sender == account:
+            cp = (prior.get("execution") or {}).get("checkpoint") or {}
+            if (cp.get("delivery") != "delivered" or cp.get("reply_event") != event_id
+                    or (cp.get("result") or {}).get("sha256") != hashlib.sha256(text.encode()).hexdigest()):
+                continue
+        elif prior["input"]["sender"] != sender or prior["input"]["content"] != content:
+            continue
+        if admit(room, {**prior["input"], "event_id": parent, "room_id": room}):
+            history.append({"sender": sender, "event_id": event_id, "text": text})
+    return history
 
 
 def publish_raw_saved(client, room_id, text, checkpoint, expected_sender, bind, *, content=None, legacy_transaction_id=None):

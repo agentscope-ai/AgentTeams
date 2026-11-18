@@ -156,3 +156,30 @@ def test_unreadable_encryption_policy_never_allows_raw_media(status, code):
                                          io.BytesIO(('{"errcode":"' + code + '"}').encode()))
     with pytest.raises(HTTPError):
         require_unencrypted_room(client, "!room:hs")
+
+
+def test_room_context_uses_only_prior_authorized_inputs_and_confirmed_worker_replies():
+    from worker_matrix_raw import raw_room_history
+    from worker_matrix_state import matrix_event_key
+
+    def event(id, sender, body, **extra):
+        return {"type":"m.room.message", "event_id":id, "sender":sender, "content":{"msgtype":"m.text", "body":body, **extra}}
+    room, worker = "!r:hs", "@w:hs"
+    user = event("$old", "@allowed:hs", "question")
+    relation = {"m.relates_to":{"m.in_reply_to":{"event_id":"$old"}}}
+    reply = event("$answer", worker, "answer", **relation)
+    others = [event("$unknown","@allowed:hs","new input"), event("$forged",worker,"answer",**relation),
+              event("$answer",worker,"changed",**relation), {**user,"room_id":"!other"}]
+    accepted = {"room_id":room,"event_id":"$old","intent":"message","input":{"sender": user["sender"],"content":user["content"]},
+                "execution":{"checkpoint":{"delivery":"delivered","reply_event":"$answer","result":{"sha256":hashlib.sha256(b"answer").hexdigest()}}}}
+    matrix, client = Mock(), Mock()
+    matrix.input.side_effect = lambda key: accepted if key==matrix_event_key(room,"$old") else None
+    client.request.return_value = {"event":{"event_id":"$now","room_id":room},"events_before":[*others,reply,user],"events_after":[user]}
+    allow = lambda _, item: item["sender"] == "@allowed:hs"
+    assert [row["event_id"] for row in raw_room_history(client,matrix,worker,room,"$now",allow)] == ["$old","$answer"]
+    assert raw_room_history(client,matrix,worker,room,"$now",lambda *_:False) == []
+    accepted["execution"]["checkpoint"]["delivery"]="pending"
+    assert [row["event_id"] for row in raw_room_history(client,matrix,worker,room,"$now",allow)] == ["$old"]
+    client.request.return_value["event"]["room_id"]="!other"
+    with pytest.raises(RecoveryConflict, match="context"):
+        raw_room_history(client,matrix,worker,room,"$now",allow)

@@ -1652,3 +1652,15 @@ new native OpenClaw session continued the same Task from generation 1,
 checkpoint 5 to generation 2, checkpoint 11. The verifier read three
 distinct step effects and one final Matrix reply, with no new Matrix input
 after cutover. The earlier OpenClaw OOM attempt remains historical evidence.
+
+[Case112 Manager Codex → Hermes → Codex](evidence/runtime-recovery-1631-case112-manager-verified.json)
+passed the original round-trip regression on Controller `6421981f`, shared
+Core `4fca52d0`, Codex `28dcf22` and Hermes `f5d74a3`. Hermes committed an
+explicit terminal Matrix receipt for the reply it delivered. The returning
+Codex consumed the older cursor and performed one turn for the earlier
+pending input, with zero turns or extra replies for the completed source.
+No new input was sent to the returning process. The same Manager identity
+and room were retained, with distinct container IDs. The preceding
+containers were absent on inspection, while Docker's historical lifecycle
+events were unavailable for this probe. Other Manager Harnesses and
+completion paths still need independent validation.

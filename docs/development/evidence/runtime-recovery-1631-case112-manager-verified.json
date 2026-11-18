@@ -1,0 +1,118 @@
+{
+  "fixture": "recovery-1631-live-20261118-manager112",
+  "identity": "@manager:recovery-1631.test",
+  "room": "!odYgFmQdztlSu0W562:recovery-1631.test",
+  "phases": [
+    {
+      "phase": "codex-input",
+      "container": {
+        "runtime": "codex",
+        "id": "bcd2497ccb85202e415c25dcdea5cd8139e543f3528d1d31967c60937ed22d3c",
+        "started_at": "2026-11-18T11:39:56.236638091Z",
+        "image_id": "sha256:e85bc5214caca23afc5cbc927c5f81efc8afe510ccc2cac01cc56f2c05e397de",
+        "harness_sha": "28dcf223b3f1d3dd0cb4abdbfe87b3e20dede024"
+      },
+      "marker": "AT_MANAGER_BASE_29e4380a9d",
+      "event": "$Xs98bkRkqFLA22WaOxFVVfQgQQaYkgFO_cafxY0FEdc"
+    },
+    {
+      "phase": "codex-reply",
+      "event_ids": [
+        "$4rn5j6KuaSfuS2CZykeX0jDpvY89cRUJzOJFCIm2rvk"
+      ],
+      "receipts": [
+        "$uwdoUAwvvdCuODu0Vy0Kc50Fwia-A4RFxlz_jATr6-8"
+      ]
+    },
+    {
+      "phase": "pending-input",
+      "container": {
+        "runtime": "hermes",
+        "id": "54bbbb07d4f1b0ba39c24bff20c0c6fada03612b889c27ca51bd96b404a6c3c6",
+        "started_at": "2026-11-18T11:40:12.783479503Z",
+        "image_id": "sha256:0160e4d40f498a32dec12e336cc4f628de7c706aded3b4f51e02df548d0c2d6c",
+        "harness_sha": "f5d74a34ae90f470263cab88371ad462b8583eef"
+      },
+      "marker": "AT_MANAGER_PENDING_03fbc8cf5f",
+      "event": "$zqRH8PqBi7_wU3c35t5dG0CWdarFI6rLlyn1S3FkTcU"
+    },
+    {
+      "phase": "hermes-input",
+      "container": {
+        "runtime": "hermes",
+        "id": "54bbbb07d4f1b0ba39c24bff20c0c6fada03612b889c27ca51bd96b404a6c3c6",
+        "started_at": "2026-11-18T11:40:12.783479503Z",
+        "image_id": "sha256:0160e4d40f498a32dec12e336cc4f628de7c706aded3b4f51e02df548d0c2d6c",
+        "harness_sha": "f5d74a34ae90f470263cab88371ad462b8583eef"
+      },
+      "marker": "AT_MANAGER_COMPLETE_7a596007f1",
+      "event": "$3YGULEgvNLccjLIcammNFE8GeeQAlH9YB8LJvktEmI8"
+    },
+    {
+      "phase": "hermes-reply",
+      "event_ids": [
+        "$LPrbDhm8GB1B61cydiqqtZTRk8GxHsmcHLQGrXIiBaA"
+      ],
+      "receipts": [
+        "$kp5NV4zPa00Oq8fX_yMNK1MR33yNSXG8KdkaO89I0WM"
+      ]
+    },
+    {
+      "phase": "return",
+      "container": {
+        "runtime": "codex",
+        "id": "921f8d3062bf70143305cc914927a6fbc76336b5754d69506b2fc08594786280",
+        "started_at": "2026-11-18T11:40:43.334247027Z",
+        "image_id": "sha256:e85bc5214caca23afc5cbc927c5f81efc8afe510ccc2cac01cc56f2c05e397de",
+        "harness_sha": "28dcf223b3f1d3dd0cb4abdbfe87b3e20dede024"
+      }
+    },
+    {
+      "phase": "verified",
+      "complete": "$3YGULEgvNLccjLIcammNFE8GeeQAlH9YB8LJvktEmI8",
+      "previous_reply": "$LPrbDhm8GB1B61cydiqqtZTRk8GxHsmcHLQGrXIiBaA",
+      "pending": "$zqRH8PqBi7_wU3c35t5dG0CWdarFI6rLlyn1S3FkTcU",
+      "pending_reply": "$iW2zzxlOGQzdGfeOHiMjP59BHjBJ1Bkx0zJIF3LxhrM",
+      "pending_receipts": [
+        "$fEy3dKmfa_RUe8i9sveEI6-5sv8fXuDGJ-xCj4U_pjU"
+      ],
+      "fresh_input_after_return": 0,
+      "returning_trace": [
+        {
+          "event": "inference.begin",
+          "event_id": "$zqRH8PqBi7_wU3c35t5dG0CWdarFI6rLlyn1S3FkTcU",
+          "reply_event_id": null,
+          "timestamp": "2026-11-18T11:40:44.894462+00:00",
+          "boot_id": "55b2ca59f37b4885802a46335d5762e9"
+        },
+        {
+          "event": "inference.end",
+          "event_id": "$zqRH8PqBi7_wU3c35t5dG0CWdarFI6rLlyn1S3FkTcU",
+          "reply_event_id": null,
+          "timestamp": "2026-11-18T11:40:55.498131+00:00",
+          "boot_id": "55b2ca59f37b4885802a46335d5762e9"
+        },
+        {
+          "event": "message.sent",
+          "event_id": "$zqRH8PqBi7_wU3c35t5dG0CWdarFI6rLlyn1S3FkTcU",
+          "reply_event_id": "$iW2zzxlOGQzdGfeOHiMjP59BHjBJ1Bkx0zJIF3LxhrM",
+          "timestamp": "2026-11-18T11:40:55.812308+00:00",
+          "boot_id": "55b2ca59f37b4885802a46335d5762e9"
+        }
+      ]
+    }
+  ],
+  "passed": true,
+  "sources": {
+    "controller": "6421981fcc9255a0b779a04557769650172e290e",
+    "shared_core": "4fca52d09d8568d6cbf5f5fc35f51b6a2c858db8",
+    "codex": "28dcf223b3f1d3dd0cb4abdbfe87b3e20dede024",
+    "hermes": "f5d74a34ae90f470263cab88371ad462b8583eef"
+  },
+  "previous_containers_absent": [
+    "bcd2497ccb85202e415c25dcdea5cd8139e543f3528d1d31967c60937ed22d3c",
+    "54bbbb07d4f1b0ba39c24bff20c0c6fada03612b889c27ca51bd96b404a6c3c6"
+  ],
+  "terminal_replay_count": 0,
+  "scope": "one real Codex to Hermes to Codex Manager round trip, with distinct terminal and pending inputs"
+}

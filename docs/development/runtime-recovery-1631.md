@@ -16,12 +16,12 @@ the image and shared-contract pins actually tested.
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | — | — |
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Failed 92](evidence/runtime-recovery-1631-case92-oom.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
-| QwenPaw | — | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | — | — | — |
+| QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | — | — | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | — | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
 | OpenClaw | — | — | — | — | [Partial 100](evidence/runtime-recovery-1631-case100-openclaw-partial.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
-**4/6 normal restart lanes and 9/30 directed handoffs have passed.** A dash
+**4/6 normal restart lanes and 10/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1568,3 +1568,12 @@ snapshot preceded the persisted native session descriptor, and the target
 used a different session. The driver now requires the matching OpenClaw
 session descriptor and actual native transcript before requesting a normal
 restart and checks the final execution used the captured startup.
+
+[Case103 QwenPaw → Codex continuation](evidence/runtime-recovery-1631-case103-verified.json)
+passed with Controller `6421981f`, QwenPaw `763877d` and Codex `ef12936`.
+QwenPaw completed step one at checkpoint 5. Docker recorded the old instance
+exiting and being removed before creating Codex. Without further Matrix input,
+Codex took generation 2 and completed the original Task at checkpoint 12. The
+independent ledger recorded each of the three step effects once, and Matrix
+recorded one final report. The verified report retains the exact shared-library
+pins used by each image.

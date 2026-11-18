@@ -1,0 +1,32 @@
+{
+  "case": "132",
+  "task_id": "live-openclaw-qwenpaw-132",
+  "scope": "source boundary timed out before switching; no cross-Harness acceptance",
+  "task_status": "assigned",
+  "execution": {
+    "generation": 1,
+    "instance_id": "docker/6cff3215f5e5c5b7a71a99c55acc2fdf39c3d685de85741e45887d5479701231/2026-11-18T13:21:51.596114182Z",
+    "process_id": "1:1795008111843910641:e965844b8a3c4b5d903187125d06d760",
+    "runtime": "openclaw",
+    "state": "active",
+    "checkpoint": {
+      "version": 2,
+      "completed_steps": null,
+      "remaining_steps": null,
+      "artifacts": null,
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-openclaw-qwenpaw-132/checkpoints/reply-c949bbb2406f3cf19c444409ed19e9426eff5f0794fbdca58c97e33eb70db01e.txt",
+        "sha256": "c949bbb2406f3cf19c444409ed19e9426eff5f0794fbdca58c97e33eb70db01e",
+        "size": 151
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:f267f75e2bbf4e1fa6a60dd26a9721a61d1b5b1ae3a6e5714bfb85e7640a65e2",
+      "reply_event": "$f9J3OmNq6DY8nCT-qicC9KOeqNTyh4JqB1LS8fuTo2g",
+      "saved_at": "2026-11-18T13:25:03.881788825Z"
+    },
+    "reply_generation": 1
+  },
+  "effects": [],
+  "calls": [],
+  "full_lane_passed": false
+}

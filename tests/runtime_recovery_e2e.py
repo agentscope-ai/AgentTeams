@@ -42,6 +42,7 @@ LEGACY_CODEX = os.getenv("RECOVERY_E2E_LEGACY_CODEX") == "1"
 RETURN_TO_SOURCE = os.getenv("RECOVERY_E2E_RETURN") == "1"
 FAULT = os.getenv("RECOVERY_E2E_FAULT", "")
 EXPIRE_HERMES_SESSION = os.getenv("RECOVERY_E2E_EXPIRE_HERMES_SESSION") == "1"
+ABRUPT_RESTART = os.getenv("RECOVERY_E2E_ABRUPT_RESTART") == "1"
 if FAULT not in {"", "after-effect"}:
     raise ValueError("Unknown recovery fault injection")
 if SOURCE not in HARNESS_IMAGES or TARGET not in HARNESS_IMAGES or MODE not in {"replace", "restart"}:
@@ -54,6 +55,8 @@ if RETURN_TO_SOURCE and (not OPERATOR_HANDOFF or (SOURCE, TARGET) != ("qwenpaw",
     raise ValueError("The stale QwenPaw session regression needs two operator handoffs via Hermes")
 if EXPIRE_HERMES_SESSION and (SOURCE != "hermes" or MODE != "restart" or FAULT):
     raise ValueError("Session expiry requires a Hermes restart at a committed step boundary")
+if ABRUPT_RESTART and (MODE != "restart" or FAULT or EXPIRE_HERMES_SESSION):
+    raise ValueError("Abrupt restart requires a same-Harness committed step boundary")
 CASE = os.getenv("RECOVERY_E2E_CASE", "01")
 if not re.fullmatch(r"[0-9]{2,3}", CASE):
     raise ValueError("RECOVERY_E2E_CASE must be two or three decimal digits")
@@ -679,6 +682,13 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
                 print("Captured second boundary; switch agent-a back to the original Harness through the Dashboard.", flush=True)
             elif watch_dashboard:
                 print("Captured the step boundary; submit the switch through the Dashboard.", flush=True)
+            elif ABRUPT_RESTART:
+                labels = json.loads(docker("inspect", CONTROLLER))[0]["Config"]["Labels"]
+                assert labels.get("io.agentteams.recovery.owner") == "1631"
+                assert old["HostConfig"]["RestartPolicy"]["Name"] in {"", "no"}
+                docker("kill", "--signal", "KILL", old["Id"])
+                assert docker("inspect", "-f", "{{.State.ExitCode}}", old["Id"]) == "137"
+                docker("start", old["Id"])
             elif MODE == "restart":
                 api("POST", "workers/agent-a/restart", {})
             elif OPERATOR_HANDOFF:
@@ -744,6 +754,9 @@ def cutover_lifecycle(before, suffix):
         target = next(row for row in rows if row["Action"] == "start" and row["Actor"]["ID"] == old)
         assert died["timeNano"] <= target["timeNano"]
         order = {"die": died["timeNano"], "start": target["timeNano"]}
+        if ABRUPT_RESTART:
+            assert died["Actor"]["Attributes"]["exitCode"] == "137"
+            order["exit_code"] = 137
     else:
         destroyed = next(row for row in rows if row["Action"] == "destroy" and row["Actor"]["ID"] == old)
         target = next(row for row in rows if row["Action"] == "create" and row["Actor"]["ID"] != old)
@@ -1028,6 +1041,8 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     if EXPIRE_HERMES_SESSION:
         proof["scope"] = "Hermes restart with an expired shared session descriptor"
         proof["expired_session"] = before["expired_session"]
+    if ABRUPT_RESTART:
+        proof["scope"] = f"{SOURCE} restart after SIGKILL at a committed step boundary"
     if OPERATOR_HANDOFF:
         op = json.loads(agt("worker", "runtime-status", "--name", "agent-a", "-o", "json"))["handoff"]
         if middle:

@@ -1802,3 +1802,26 @@ corresponding tool execution log and ACK. The installed ARM64 image for
 OpenHuman `7788c27` and Core contract `cdc2800c` has now passed startup
 configuration smoke. Case133 runs the same recovery scenario on that
 native image to check whether the failure is independent of emulation.
+
+[Case132](evidence/runtime-recovery-1631-case132-source-timeout.json) stopped
+at the OpenClaw source boundary before switching to QwenPaw. The original
+Task remained assigned, and the independent ledger recorded zero effects.
+Case125 remains the available partial execution and delivery evidence for
+that direction.
+
+OpenHuman case133 reproduced the tool-path timeout on the native ARM64
+image. In that same Worker identity, three direct reads through the packaged
+Task RPC succeeded. The native registry exposed seven tools, but the
+recorded model request contained no tool schemas. The routing provider read
+its remote provider's general capabilities, while the reliable and model
+route wrappers expose tool support through the dedicated method. OpenHuman
+PR #3 commit `8165de5` now forwards that method for remote-only routing and
+adds a native regression that constructs the actual gateway provider. This
+change preserves the existing local-model routing behavior. Native CI and
+full recovery on the fixed image remain pending.
+
+The live driver accepts `RECOVERY_E2E_ABRUPT_RESTART=1` for the same-Harness
+restart scenario. It sends SIGKILL at the committed boundary of a labelled
+fixture with Docker auto-restart disabled. The verifier requires exit 137,
+the original container's later start, the new process identity, and the
+same Task, effect and Matrix assertions. Case135 is exercising it on Codex.

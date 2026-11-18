@@ -1,0 +1,48 @@
+{
+  "case": "158",
+  "task_id": "live-openhuman-openclaw-158",
+  "source": "openhuman",
+  "target": "openclaw",
+  "source_read": {
+    "source_event": "$Gm7mtKQpQ3FZesv2mOC93b-LYubjYsWpMVX7QRw-deU",
+    "read_event": "$crXNP2pNTuxSc_DYP55qMOzCGKDi0RfmRTPkJFohaW8"
+  },
+  "target_revision": "c6dcf56695d1e924db750d53c8d3f0001959adee",
+  "target_image_id": "sha256:e291b053c457fbd49d3f5aa9dff3ab6618203a232954ffbe59d4d4bdb16689d5",
+  "target_state": {
+    "Status": "exited",
+    "ExitCode": 137,
+    "OOMKilled": true,
+    "StartedAt": "2026-11-18T15:19:29.935037904Z",
+    "FinishedAt": "2026-11-18T15:23:09.835379527Z"
+  },
+  "cutover_events": [
+    {
+      "action": "die",
+      "id": "047b7e7422a5ca24a31cd1e131fd6beb28a54cd330800df50ea25b85171b6eb6",
+      "time_ns": 1795015154637275377
+    },
+    {
+      "action": "destroy",
+      "id": "047b7e7422a5ca24a31cd1e131fd6beb28a54cd330800df50ea25b85171b6eb6",
+      "time_ns": 1795015163845348618
+    },
+    {
+      "action": "create",
+      "id": "2dfdd1e25f080bd5651f5755e6cf1fd059c41e4286ee6ede391565e5e5c5773c",
+      "time_ns": 1795015169844476893
+    },
+    {
+      "action": "start",
+      "id": "2dfdd1e25f080bd5651f5755e6cf1fd059c41e4286ee6ede391565e5e5c5773c",
+      "time_ns": 1795015170220013393
+    }
+  ],
+  "target_generation": 2,
+  "checkpoint_version": 5,
+  "completed_steps": [
+    "one"
+  ],
+  "passed": false,
+  "failure": "The started target exited 137 with Docker OOMKilled=true, after claiming the Task and before step two."
+}

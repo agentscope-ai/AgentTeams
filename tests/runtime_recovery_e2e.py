@@ -43,7 +43,8 @@ OPERATOR_HANDOFF = os.getenv("RECOVERY_E2E_HANDOFF") == "1"
 LEGACY_CODEX = os.getenv("RECOVERY_E2E_LEGACY_CODEX") == "1"
 RETURN_TO_SOURCE = os.getenv("RECOVERY_E2E_RETURN") == "1"
 FAULT = os.getenv("RECOVERY_E2E_FAULT", "")
-EXPIRE_HERMES_SESSION = os.getenv("RECOVERY_E2E_EXPIRE_HERMES_SESSION") == "1"
+EXPIRE_SESSION = any(os.getenv(key) == "1" for key in (
+    "RECOVERY_E2E_EXPIRE_SESSION", "RECOVERY_E2E_EXPIRE_HERMES_SESSION"))
 ABRUPT_RESTART = os.getenv("RECOVERY_E2E_ABRUPT_RESTART") == "1"
 OPENHUMAN_PREAPPROVED = os.getenv("RECOVERY_E2E_OPENHUMAN_PREAPPROVED") == "1"
 if FAULT not in {"", "after-effect"}:
@@ -56,9 +57,9 @@ if OPERATOR_HANDOFF and MODE != "replace":
     raise ValueError("The operator handoff requires a target Harness")
 if RETURN_TO_SOURCE and (not OPERATOR_HANDOFF or (SOURCE, TARGET) != ("qwenpaw", "hermes") or FAULT):
     raise ValueError("The stale QwenPaw session regression needs two operator handoffs via Hermes")
-if EXPIRE_HERMES_SESSION and (SOURCE != "hermes" or MODE != "restart" or FAULT):
-    raise ValueError("Session expiry requires a Hermes restart at a committed step boundary")
-if ABRUPT_RESTART and (MODE != "restart" or FAULT or EXPIRE_HERMES_SESSION):
+if EXPIRE_SESSION and (MODE != "restart" or FAULT or LEGACY_CODEX):
+    raise ValueError("Session expiry requires a shared-descriptor restart at a committed step boundary")
+if ABRUPT_RESTART and (MODE != "restart" or FAULT or EXPIRE_SESSION):
     raise ValueError("Abrupt restart requires a same-Harness committed step boundary")
 if OPENHUMAN_PREAPPROVED and "openhuman" not in {SOURCE, TARGET}:
     raise ValueError("The OpenHuman fixture's authorization requires OpenHuman")
@@ -681,13 +682,20 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
         if previous and previous["phase"] != "completed":
             raise RuntimeError("Another handoff is active")
         before["dashboard_cutover"] = {"previous_request_id": previous.get("id")}
-    if EXPIRE_HERMES_SESSION:
+    if EXPIRE_SESSION:
         # Leave the native session and Task intact. Only age the fixture's shared descriptor.
         labels = json.loads(docker("inspect", CONTROLLER))[0]["Config"]["Labels"]
         assert labels.get("io.agentteams.recovery.owner") == "1631"
         work = json.dumps(["agents/agent-a", "task", "recovery-team", TASK_ID], separators=(",", ":"))
-        key = "agentteams/recovery-1631/agents/agent-a/runtime/sessions/hermes/" + hashlib.sha256(work.encode()).hexdigest() + ".json"
-        previous = before["native_sessions"]["hermes_shared"]["cache"]
+        key = f"agentteams/recovery-1631/agents/agent-a/runtime/sessions/{source}/{hashlib.sha256(work.encode()).hexdigest()}.json"
+        sessions = before["native_sessions"]
+        proof_key, descriptor_key = {
+            "hermes": ("hermes_shared", "cache"), "qwenpaw": ("qwenpaw_shared", "cache"),
+            "codex": ("codex_shared", "cache"), "deepseek-harness": ("deepseek", "cache"),
+            "openclaw": ("openclaw", "shared_cache"), "openhuman": ("openhuman", "descriptor"),
+        }[source]
+        previous = sessions[proof_key][descriptor_key]
+        assert previous and previous["checkpoint_version"] == cp["version"]
         assert json.loads(docker("exec", CONTROLLER, "mc", "cat", key)) == previous
         expired = {**previous, "expires_at": int(time.time()) - 3600}
         docker("exec", "-i", CONTROLLER, "mc", "pipe", key, text=json.dumps(expired))
@@ -884,6 +892,15 @@ def matrix_cursors(task):
     return {"start": state["active_start"], "cursors": cursors, "through": state["rooms"][task["room_id"]]["through"]}
 
 
+def assert_restarted_native(original, resumed, before):
+    if EXPIRE_SESSION:
+        expired = before["expired_session"]
+        assert expired["native_ref"] == original and expired["expires_at"] < before["recorded_at"]
+        assert resumed != original, "an expired native Task session was reused"
+    else:
+        assert resumed == original, "valid native Task session was not reused"
+
+
 def verify():
     """Read back real task, storage, native receipt and Matrix evidence."""
     task = api("GET", "tasks/" + TASK_ID + "/meta?team=recovery-team")
@@ -994,7 +1011,8 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
     if final_runtime == "openhuman":
         assert_openhuman_native_cache(native["openhuman"], execution, TASK_ID, terminal=True)
         if MODE == "restart":
-            assert native["openhuman"]["cache"]["session_id"] == before["native_sessions"]["openhuman"]["cache"]["session_id"], "valid native Task session was not reused"
+            assert_restarted_native(before["native_sessions"]["openhuman"]["cache"]["session_id"],
+                native["openhuman"]["cache"]["session_id"], before)
     if SOURCE == "qwenpaw":
         assert_qwenpaw_native_cache(before["native_sessions"]["qwenpaw_shared"],
             before["task"]["execution"]["checkpoint"], TASK_ID)
@@ -1008,7 +1026,7 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         if MODE == "restart":
             source = before["native_sessions"]["qwenpaw_shared"]
             assert_qwenpaw_native_cache(source, before["task"]["execution"]["checkpoint"], TASK_ID)
-            assert selected["session_id"] == source["cache"]["native_ref"], "valid native Task session was not reused"
+            assert_restarted_native(source["cache"]["native_ref"], selected["session_id"], before)
     if SOURCE == "hermes":
         selected = before["native_sessions"]["hermes"][-1]["session_id"]
         assert before["native_sessions"]["hermes_message_counts"].get(selected, 0) > 0, "new route still used a different warm native Agent"
@@ -1022,7 +1040,9 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         selected = assert_deepseek_native(native["deepseek"], task)
         if MODE == "restart":
             original = before["native_sessions"]["deepseek"]["native"]
-            assert selected["session_id"] == original["session_id"] and selected["turn"] > original["turn"]
+            assert_restarted_native(original["session_id"], selected["session_id"], before)
+            if not EXPIRE_SESSION:
+                assert selected["turn"] > original["turn"]
     if final_runtime == "openclaw":
         proof = native["openclaw"]
         if proof["cache"]:
@@ -1040,14 +1060,15 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
             else:
                 assert_openclaw_native_cache(source_cache, source_checkpoint)
                 original = source_cache["native"]
-            assert selected["session_id"] == original["session_id"], "valid native Task session was not reused"
+            assert_restarted_native(original["session_id"], selected["session_id"], before)
     if not LEGACY_CODEX and SOURCE == "codex":
         assert_codex_native(before["native_sessions"]["codex_shared"], before["task"], require_cache=MODE == "restart")
     if not LEGACY_CODEX and final_runtime == "codex":
         target = assert_codex_native(native["codex_shared"], task)
         if MODE == "restart":
             original = before["native_sessions"]["codex_shared"]["native"]
-            assert target["thread_id"] == original["thread_id"] and target["turn_id"] != original["turn_id"]
+            assert_restarted_native(original["thread_id"], target["thread_id"], before)
+            assert target["turn_id"] != original["turn_id"]
     if LEGACY_CODEX and MODE == "restart" and SOURCE == "codex":
         cache = before["native_sessions"]["codex"]
         assert cache["runtime"] == "codex" and cache["expires_at"] > before["recorded_at"]
@@ -1062,12 +1083,8 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         assert_hermes_native_cache(before["native_sessions"]["hermes_shared"],
             before["task"]["execution"]["checkpoint"], TASK_ID)
         resumed = native["hermes"][-1]
-        if EXPIRE_HERMES_SESSION:
-            expired = before["expired_session"]
-            assert expired["native_ref"] == cache["session_id"] and expired["expires_at"] < before["recorded_at"]
-            assert resumed["session_id"] != cache["session_id"] and resumed["reused"] is False
-        else:
-            assert resumed["session_id"] == cache["session_id"] and resumed["reused"] is True
+        assert_restarted_native(cache["session_id"], resumed["session_id"], before)
+        assert resumed["reused"] is (not EXPIRE_SESSION)
     controller = json.loads(docker("inspect", CONTROLLER))[0]
     current = json.loads(docker("inspect", PREFIX + "-worker-agent-a"))[0]
     assert current["Id"] == last_target["ID"], "additional replacement requires separate evidence"
@@ -1097,8 +1114,8 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         proof["openhuman_source_session"] = before["native_sessions"]["openhuman"]["descriptor"]
     if SOURCE == "deepseek-harness":
         proof["deepseek_source_session"] = before["native_sessions"]["deepseek"]["native"]
-    if EXPIRE_HERMES_SESSION:
-        proof["scope"] = "Hermes restart with an expired shared session descriptor"
+    if EXPIRE_SESSION:
+        proof["scope"] = f"{SOURCE} restart with an expired shared session descriptor"
         proof["expired_session"] = before["expired_session"]
     if ABRUPT_RESTART:
         proof["scope"] = f"{SOURCE} restart after SIGKILL at a committed step boundary"

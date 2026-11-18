@@ -72,6 +72,27 @@ class SubmissionHistoryTests(unittest.TestCase):
                 assert_native_submission(task)
 
 
+class RestartSessionEvidenceTests(unittest.TestCase):
+    def test_reuse_requires_the_same_native_session(self):
+        import runtime_recovery_e2e as driver
+
+        with patch.object(driver, "EXPIRE_SESSION", False):
+            driver.assert_restarted_native("original", "original", {})
+            with self.assertRaises(AssertionError):
+                driver.assert_restarted_native("original", "different", {})
+
+    def test_expiry_requires_the_verified_old_descriptor_and_a_new_session(self):
+        import runtime_recovery_e2e as driver
+
+        before = {"recorded_at": 99, "expired_session": {"native_ref": "original", "expires_at": 98}}
+        with patch.object(driver, "EXPIRE_SESSION", True):
+            driver.assert_restarted_native("original", "different", before)
+            with self.assertRaises(AssertionError):
+                driver.assert_restarted_native("original", "original", before)
+            with self.assertRaises(AssertionError):
+                driver.assert_restarted_native("other", "different", before)
+
+
 class DeepSeekBoundaryTests(unittest.TestCase):
     def test_active_source_turn_still_needs_the_matching_native_tool_results(self):
         import hashlib

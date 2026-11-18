@@ -2034,3 +2034,17 @@ completed the original Task from its retained step-one boundary. The
 Matrix read arrived 18.357 seconds after the first effect, so the strict
 ordering check failed again. This run predates the prepared-assignment
 fixture used by the follow-up case.
+
+[Case158 OpenHuman → OpenClaw](evidence/runtime-recovery-1631-case158-target-oom.json)
+captured the new OpenClaw process claiming the original Task in generation
+2. Docker reported OOMKilled and exit 137 before step two. The Task remained
+in progress at checkpoint 5 with step one committed. No continuation pass
+is recorded for this attempt.
+
+`RECOVERY_E2E_EXPIRE_SESSION=1` selects the expiry scenario for a
+same-Harness restart on any of the six shared-descriptor adapters. The
+fixture first verifies the current native session and its descriptor. It
+then ages the descriptor in the isolated test stack, leaving the native
+session and Task intact. The verifier requires a different, proven native
+session after the restart, plus the original Task, effects, and reply
+checks. The Hermes-specific option remains valid for reproducing case130.

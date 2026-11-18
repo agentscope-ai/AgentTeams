@@ -19,9 +19,9 @@ the image and shared-contract pins actually tested.
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | [Pass 150](evidence/runtime-recovery-1631-case150-verified.json) |
 | OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Pass 138](evidence/runtime-recovery-1631-case138-verified.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
-| OpenHuman | [Pass 147](evidence/runtime-recovery-1631-case147-verified.json) | — | — | — | — | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
+| OpenHuman | [Pass 147](evidence/runtime-recovery-1631-case147-verified.json) | [Pass 152](evidence/runtime-recovery-1631-case152-verified.json) | [Pass 154](evidence/runtime-recovery-1631-case154-verified.json) | [Pass 151](evidence/runtime-recovery-1631-case151-verified.json) | — | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
 
-**6/6 normal restart lanes and 24/30 directed handoffs have passed.** A dash
+**6/6 normal restart lanes and 27/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1989,3 +1989,28 @@ target process started. OpenHuman finished the original Task in generation 2
 at checkpoint 9, with all effects executed once and all hashes matching.
 One final Matrix reply followed zero new inputs. The driver now verifies
 the actual started target and records any unstarted attempts separately.
+
+[Case151 OpenHuman → DeepSeek](evidence/runtime-recovery-1631-case151-verified.json)
+passed on Controller `6421981f`, OpenHuman `a7fd8fe`, and DeepSeek `6f5aadb`.
+The source read the assignment and committed step one at checkpoint 2.
+After Docker removed OpenHuman, DeepSeek created a native recovery session
+for the original Task and submitted at checkpoint 9 in generation 2. All
+effects ran once, four stored hashes matched, and Matrix recorded one final
+reply and no new inputs after the cutover.
+
+[Case152 OpenHuman → Hermes](evidence/runtime-recovery-1631-case152-verified.json)
+and [case154 OpenHuman → QwenPaw](evidence/runtime-recovery-1631-case154-verified.json)
+passed from OpenHuman `a7fd8fe` to Hermes `f5d74a3` and QwenPaw `a76f5c0`,
+respectively. Both passed the initial Matrix read ordering, the source stop
+and removal before starting the target, and native session readback.
+Checkpoints advanced from 2 to 9 and generation advanced from 1 to 2.
+Each Task had one effect per step, matching stored hashes, and one final
+Matrix reply without new incoming messages. The QwenPaw proof includes the
+trace route bound to its native session and the recovered generation.
+
+[Case153 QwenPaw → OpenHuman](evidence/runtime-recovery-1631-case153-late-source-read.json)
+completed the original Task with each effect executed once and one final
+reply. The source Task discovery ran before the Matrix assignment's read
+receipt, which arrived 55.708 seconds after the first effect. The verifier
+requires the source receipt before step one. The run remains partial,
+and a separate run exercises the full source-to-target ordering.

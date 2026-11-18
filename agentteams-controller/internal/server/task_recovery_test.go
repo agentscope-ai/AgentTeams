@@ -221,6 +221,80 @@ func TestStandaloneWorkerDiscoveryIsEmptyWithoutInspectingStorageOrBackend(t *te
 	}
 }
 
+func TestTaskRecoveryUsesCurrentAssigneeAfterRedelegation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-dev", "status": "assigned"}))
+	project := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+	h := NewTaskRecoveryHandler(project, ServerDeps{})
+	h.instance = func(_ context.Context, caller *authpkg.CallerIdentity) (string, string, error) {
+		return caller.Username + "/start", "hermes", nil
+	}
+	worker := func(name string) *authpkg.CallerIdentity {
+		return &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: name, Team: "alpha-team"}
+	}
+	old, next := worker("alpha-dev"), worker("beta-dev")
+	list := func(caller *authpkg.CallerIdentity) int {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.ListRecoverableTasks(w, withCaller(httptest.NewRequest(http.MethodGet, "/api/v1/tasks/recoverable", nil), caller))
+		var result struct {
+			Tasks []json.RawMessage `json:"tasks"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &result); w.Code != http.StatusOK || err != nil {
+			t.Fatalf("discovery for %s: %d %s (%v)", caller.Username, w.Code, w.Body, err)
+		}
+		return len(result.Tasks)
+	}
+	claim := func(caller *authpkg.CallerIdentity, etag string) *httptest.ResponseRecorder {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"action": "claim", "instance_id": caller.Username + "/start", "process_id": caller.Username + ":process"})
+		r := withCaller(httptest.NewRequest(http.MethodPost, "/api/v1/tasks/t1/execution?team=alpha-team", strings.NewReader(string(body))), caller)
+		r.SetPathValue("id", "t1")
+		r.Header.Set("If-Match", etag)
+		w := httptest.NewRecorder()
+		h.UpdateExecution(w, r)
+		return w
+	}
+	if r := claim(old, taskMetaETag(t, store, taskMetaKey)); r.Code != http.StatusOK {
+		t.Fatalf("original owner claim: %d %s", r.Code, r.Body)
+	}
+	data, err := store.GetObject(t.Context(), taskMetaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]json.RawMessage
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatal(err)
+	}
+	meta["assigned_to"] = json.RawMessage(`"beta-dev"`)
+	updated, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leader := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
+	if r := putTaskMetaRequest(t, project, "t1", contentETag(data), string(updated), leader); r.Code != http.StatusOK {
+		t.Fatalf("redelegate: %d %s", r.Code, r.Body)
+	}
+	if list(old) != 0 || list(next) != 1 {
+		t.Fatal("recovery discovery did not follow the new assignee")
+	}
+	etag := taskMetaETag(t, store, taskMetaKey)
+	if r := claim(old, etag); r.Code != http.StatusForbidden {
+		t.Fatalf("claim by replaced assignee: %d %s", r.Code, r.Body)
+	}
+	r := claim(next, etag)
+	var result struct {
+		Execution taskExecution `json:"execution"`
+		Task      struct {
+			ID string `json:"task_id"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal(r.Body.Bytes(), &result); r.Code != http.StatusOK || err != nil ||
+		result.Task.ID != "t1" || result.Execution.Generation != 2 || result.Execution.ProcessID != "beta-dev:process" {
+		t.Fatalf("replacement owner claim: %d %s (%v)", r.Code, r.Body, err)
+	}
+}
+
 func TestTaskRecoveryPendingReplyCannotBeReplacedOrDropped(t *testing.T) {
 	store := ossfake.NewMemory()
 	body := []byte("Saved answer")

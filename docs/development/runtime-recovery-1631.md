@@ -29,6 +29,22 @@ runs retain their source-pinned scope in the sections below. The
 [Harness comparison](../design/harness-recovery-boundaries.md) describes
 the implementation boundaries.
 
+### Fault acceptance by Harness
+
+These cases exercise the real Worker and Controller. For a saved reply,
+the listed evidence names whether the retry happened after restart or
+in the same process. Parking an uncertain effect is a safety pass with
+continuation pending verification.
+
+| Harness | SIGKILL and resume | Expired session and resume | Saved reply | Uncertain effect | Competing claim | Cancellation and restart | Reassignment |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Codex | [Pass 135](evidence/runtime-recovery-1631-case135-abrupt-restart-verified.json) | [Pass 162](evidence/runtime-recovery-1631-case162-expired-session-verified.json) | Case 01, real Matrix | [Parked 166](evidence/runtime-recovery-1631-case166-parked-effect.json) | [Rejected 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Pass 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | Open |
+| Hermes | [Pass 168](evidence/runtime-recovery-1631-case168-abrupt-restart-verified.json) | [Pass 130](evidence/runtime-recovery-1631-case130-expired-session-verified.json) | [Restart 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | [Verified, then resumed 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | Open | Open | Open |
+| QwenPaw | [Pass 171](evidence/runtime-recovery-1631-case171-abrupt-restart-verified.json) | [Pass 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | [Same-process retry 31](evidence/runtime-recovery-1631-case31-delivery.json) | Open | [Rejected 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | Open | Open |
+| DeepSeek | [Pass 137](evidence/runtime-recovery-1631-case137-abrupt-restart-verified.json) | [Pass 165](evidence/runtime-recovery-1631-case165-expired-session-verified.json) | Open | [Parked 170](evidence/runtime-recovery-1631-case170-parked-effect.json) | Open | Open | Open |
+| OpenClaw | [Pass 176](evidence/runtime-recovery-1631-case176-abrupt-restart-verified.json) | Open | Open | Open | Open | Open | Open |
+| OpenHuman | [Pass 161](evidence/runtime-recovery-1631-case161-abrupt-restart-verified.json) | [Partial 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open | [Rejected 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open |
+
 ## Source baseline
 
 Core base: `8dbf1eae8c8ca33c7a01a84fe6132dc6aaba4238`.
@@ -2165,3 +2181,24 @@ Hermes `f5d74a3` container, generation 3 recovered the accepted report
 through checkpoint 9. The ledger was unchanged, no inference start was
 recorded in the restarted Worker, and Matrix contained exactly one
 matching report with no incoming room message during delivery.
+
+
+[Case176 OpenClaw abrupt restart](evidence/runtime-recovery-1631-case176-abrupt-restart-verified.json)
+passed in a serial fixture with Controller `994c3f60`, OpenClaw
+`c6dcf56` and shared contract `cdc2800c`. The source read its Matrix
+assignment and stopped after step one at checkpoint 4. Docker recorded
+SIGKILL exit 137, followed by the start of the same container with a
+new process. The SDK reported a fresh lease from the previous PID
+namespace. The wrapper waited the reported 74 seconds before retrying
+and native readiness followed. OpenClaw reused the valid native session
+and completed the same Task in generation 2 at checkpoint 10. Three
+independent effects and four stored hashes verified. Matrix recorded
+one final report and no new incoming messages. All six Harnesses now
+have a passing SIGKILL recovery run.
+
+The [Controller reassignment test](../../agentteams-controller/internal/server/task_recovery_test.go)
+commits a pre-acknowledgement reassignment through the Task metadata API.
+The old Worker is omitted from discovery and receives HTTP 403 even with
+the current ETag. The new Worker claims the same Task ID in generation 2.
+This is a deterministic server check. A real Harness reassignment run
+remains open.

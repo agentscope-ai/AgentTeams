@@ -1,0 +1,228 @@
+{
+  "task_id": "live-openclaw-openclaw-176",
+  "case": "176",
+  "scope": "openclaw restart after SIGKILL at a committed step boundary",
+  "mode": "restart",
+  "fixture_prefix": "recovery-1631-live-20261118-v176",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "994c3f60ce75c9b3f11c102ec018f29196e4eed2",
+    "openclaw": "c6dcf56695d1e924db750d53c8d3f0001959adee",
+    "shared_contract": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6"
+  },
+  "driver_sha256": "bc1d1710ad3bec3b18c3b60412180d2b464081ba5033c69b7c7beb6854341b90",
+  "native_recovery_sessions": {
+    "hermes": [],
+    "hermes_message_counts": {},
+    "hermes_shared": null,
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "749dcd353228c0d17226499af91f7e78ad8d16bee599ab8c31d9ac86d766b273",
+      "descriptor": null,
+      "config_generation": null
+    },
+    "openclaw": {
+      "cache": null,
+      "native": null,
+      "shared_cache": {
+        "schema_version": 1,
+        "kind": "WorkerSessionCache",
+        "member_prefix": "agents/agent-a",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-openclaw-openclaw-176"
+        },
+        "runtime": "openclaw",
+        "start": {
+          "instance_id": "docker/9fbf0e64c8e8eb1b4fe383beb94dcae651c1c12dbb1f5b4ca2ea30065b06872e/2026-11-18T16:22:05.707327732Z",
+          "process_id": "1:1795018925822402694:0791062a67c148a1b64baea691cd8dd4",
+          "runtime": "openclaw"
+        },
+        "generation": 1,
+        "native_ref": "agent:main:agentteams-task:4b5e85311646d00f4e21e5072034bde5706b21aaa96fbddde42afae9b53a83c3:6e57964d-afd9-4ca4-95e1-615f5bdc72bc",
+        "native_digest": "bc8f814d01322cd32c04b265bf7314efd5de71ef7493271b8aafe97cc9d34864",
+        "checkpoint_version": 4,
+        "checkpoint_digest": "d7607bf747a6660809aec9028b5cb8c3e241467c5867b9cb977b1e394a4d98fc",
+        "config_generation": 3,
+        "expires_at": 1795105455,
+        "saved_at": "2026-11-18T16:24:18Z"
+      },
+      "shared_native": {
+        "session_key": "agent:main:agentteams-task:4b5e85311646d00f4e21e5072034bde5706b21aaa96fbddde42afae9b53a83c3:6e57964d-afd9-4ca4-95e1-615f5bdc72bc",
+        "session_id": "cf68fe57-b181-4a58-99e1-17f8fac91c35",
+        "native_digest": "f43da01e74059719df471bb25453865e49bb5ab0599413c85016bc360e8b6443",
+        "message_count": 65,
+        "task_mentioned": true,
+        "has_recovery_turn": true
+      },
+      "turn_sessions": [
+        {
+          "session_key": "agent:main:agentteams-task:4b5e85311646d00f4e21e5072034bde5706b21aaa96fbddde42afae9b53a83c3:6e57964d-afd9-4ca4-95e1-615f5bdc72bc",
+          "session_id": "cf68fe57-b181-4a58-99e1-17f8fac91c35",
+          "native_digest": "f43da01e74059719df471bb25453865e49bb5ab0599413c85016bc360e8b6443",
+          "message_count": 65,
+          "task_mentioned": true,
+          "has_recovery_turn": true
+        }
+      ],
+      "config_generation": 3
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 4,
+  "checkpoint_after": 10,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/9fbf0e64c8e8eb1b4fe383beb94dcae651c1c12dbb1f5b4ca2ea30065b06872e/2026-11-18T16:24:22.913197304Z",
+    "process_id": "1:1795019064625232919:912de201e11c4b588927a708e0513702",
+    "runtime": "openclaw",
+    "state": "active",
+    "checkpoint": {
+      "version": 10,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-openclaw-openclaw-176:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=d6281693597409b9f265422d21700b31d2b1ba7842ab0d53724ea384878e505c; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-176/output/step-one.json",
+          "sha256": "46637930687237e922ec2ecc578143b9cbe5b80f1533b9df616dd0f2cb2918d0",
+          "size": 358
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-176/output/step-two.json",
+          "sha256": "8afb9296d875f3bdb9403b009b3f0585f476c7e48f85a571f03dbb14d5a3f297",
+          "size": 358
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-176/output/step-three.json",
+          "sha256": "d6281693597409b9f265422d21700b31d2b1ba7842ab0d53724ea384878e505c",
+          "size": 360
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-176/result.md",
+        "sha256": "168c083221cd8bfef5d761e6cf212625c565b69fde029fb15020ba1bcd12983d",
+        "size": 919
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:a753a5b614d6df2fd89c7600ed93134055409d63c3d0511f78fd6ff2a34322e4",
+      "reply_event": "$yQc1r85fpBkXEWZoBHznBq0X7AOY3veF29zkVQzwVQc",
+      "saved_at": "2026-11-18T16:26:56.961982169Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T16:23:37Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 2,
+      "to": "submitted",
+      "ts": "2026-11-18T16:26:39Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795019033728628936,
+      "generation": 1,
+      "instance_id": "docker/9fbf0e64c8e8eb1b4fe383beb94dcae651c1c12dbb1f5b4ca2ea30065b06872e/2026-11-18T16:22:05.707327732Z",
+      "process_id": "1:1795018925822402694:0791062a67c148a1b64baea691cd8dd4",
+      "step": "one",
+      "task_id": "live-openclaw-openclaw-176",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 5,
+      "executed_at_ns": 1795019168761263423,
+      "generation": 2,
+      "instance_id": "docker/9fbf0e64c8e8eb1b4fe383beb94dcae651c1c12dbb1f5b4ca2ea30065b06872e/2026-11-18T16:24:22.913197304Z",
+      "process_id": "1:1795019064625232919:912de201e11c4b588927a708e0513702",
+      "step": "two",
+      "task_id": "live-openclaw-openclaw-176",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 7,
+      "executed_at_ns": 1795019182762623352,
+      "generation": 2,
+      "instance_id": "docker/9fbf0e64c8e8eb1b4fe383beb94dcae651c1c12dbb1f5b4ca2ea30065b06872e/2026-11-18T16:24:22.913197304Z",
+      "process_id": "1:1795019064625232919:912de201e11c4b588927a708e0513702",
+      "step": "three",
+      "task_id": "live-openclaw-openclaw-176",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-176/output/step-one.json",
+      "sha256": "46637930687237e922ec2ecc578143b9cbe5b80f1533b9df616dd0f2cb2918d0",
+      "size": 358
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-176/output/step-two.json",
+      "sha256": "8afb9296d875f3bdb9403b009b3f0585f476c7e48f85a571f03dbb14d5a3f297",
+      "size": 358
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-176/output/step-three.json",
+      "sha256": "d6281693597409b9f265422d21700b31d2b1ba7842ab0d53724ea384878e505c",
+      "size": 360
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-176/result.md",
+      "sha256": "168c083221cd8bfef5d761e6cf212625c565b69fde029fb15020ba1bcd12983d",
+      "size": 919
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1795019062291777324,
+    "start": 1795019064666897415,
+    "exit_code": 137
+  },
+  "matrix": {
+    "reply_event": "$yQc1r85fpBkXEWZoBHznBq0X7AOY3veF29zkVQzwVQc",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$zpLPk4QAeT8_9r96BilS2ZwFHcLUBPbrSNPrHpXLOU0"
+    ],
+    "read_receipt_events": [
+      "$d23ezXW89VKXMl0EOGFQszVzc1WTl-HD4ol6DpJk-Mc"
+    ],
+    "first_source_read_ms": 1795018964411
+  },
+  "images": {
+    "controller": "sha256:9adb9e4e5e5dcd9e901884e3153aa380ded64b9e72be146580b73994fb12156e",
+    "source": "sha256:e291b053c457fbd49d3f5aa9dff3ab6618203a232954ffbe59d4d4bdb16689d5",
+    "target": "sha256:e291b053c457fbd49d3f5aa9dff3ab6618203a232954ffbe59d4d4bdb16689d5"
+  }
+}

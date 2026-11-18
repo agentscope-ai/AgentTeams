@@ -14,21 +14,8 @@
 | --- | --- |
 | Controller 发布 `runtime/runtime.yaml` | 已有模型、MCP、Skills、身份、通道策略、凭证绑定和资产来源字段；仍须逐项验证原生生效值，投影测试不等于启动验收。 |
 | Task 自发现、执行权、条件提交、步骤检查点、产物与回复记录 | 继续使用现有 Task API 和对象存储，不新建 Task 数据库或第二套检查点。Core #1651、Codex #10、Hermes #9、DeepSeek #9 已合并。 |
-| 正常重启并复用有效 session | Codex08、Hermes11、QwenPaw29 有各自 SHA 的真实证据，共 3/6；并非六种完整故障集。 |
-| 有向切换的任务执行／交付 | Codex↔Hermes、Hermes↔DeepSeek、Hermes↔QwenPaw、Hermes→OpenClaw33，共 7/30；不是当前统一版本重跑。 |
-| 后续适配 | Core #1655、Hermes #11、QwenPaw #11、OpenClaw #10、OpenHuman #3 仍为 Draft。OpenHuman 原生测试及镜像 CI 通过，真实任务续跑未测。 |
 
-当前实质缺口：公共 receipt 只有收到／写入会话证据；QwenPaw 的 token、
-accepted-event 状态仍在 `WORKING_DIR`，其他 Harness 也有各自消费存储。
-公共消费记录、统一启动判断、持久交接操作、Dashboard／CLI 配套仍需补齐。
-OpenClaw34 完成了剩余步骤，但有效 session 复用失败，不能增加重启通过数。
-
-新公共契约的 Hermes 正常重启已在 case37 通过：Core262ecb13、Hermes59b756d、
-共享客户端19eb30c6、SDK2bd378ed。首次重启保持有效配置版本3并复用实际原生会话，
-无新 Matrix 输入完成剩余步骤，产物／最终回复无重复；见
-[case37 证据](../development/evidence/runtime-recovery-1631-case37-verified.json)。
-前一 case36 的配置版本误增／会话未复用保留为 partial。历史覆盖数仍为3/6、7/30，
-不把本次同 Harness 重跑算成新 Harness 或跨 Harness 方向；完整故障集和 UI 仍未验收。
+重启、切换和 1.2.7 升级的当前覆盖见[恢复验收记录](../development/runtime-recovery-1631.md)。
 
 方案选择：只搬私有目录不能解决消费语义；另建执行数据库会重复现有 Task
 权威。推荐补足 Worker 公共消息记录，并复用现有 Task 执行协议。
@@ -113,7 +100,7 @@ task_notification 或 control；Task 通知继续验证 #1646 的 receipt，不�
 已进入上下文的普通输入也可能尚未执行，不能因为 read 就从 pending 删除。
 纯上下文／控制事件只有经既有策略明确处理后，才能以原因记录结束接管。
 
-#支持设备绑定投递的适配器以 `X-AgentTeams-Reply-Scope: device-v1` 领取执行权。Task 和普通消息都先保存结果摘要、稳定的 `reply_txn` 及 `reply_attempt={"state":"ready"}`。首次发送前，用当前 Matrix token 调用 `/account/whoami`，通过检查点 CAS 持久化 `{"state":"sending","user_id":"…","device_id":"…"}`。同一账户、设备和事务号可以重试。在其他设备上，只有房间、发送者、事务标记和保存的正文都吻合的既有事件，才能用来确认投递。证据缺失时保留待核验结果。旧格式的待发记录仍可读，新的适配器先查可验证的历史事件。实际 Tuwunel 的跨设备事务行为见[隔离双设备试验](../development/evidence/runtime-recovery-1631-matrix-device-scope.json)。
+#支持设备绑定投递的适配器以 `X-AgentTeams-Reply-Scope: device-v1` 领取执行权。Task 和普通消息都先保存结果摘要、稳定的 `reply_txn` 及 `reply_attempt={"state":"ready"}`。首次发送前，用当前 Matrix token 调用 `/account/whoami`，通过检查点 CAS 持久化 `{"state":"sending","user_id":"…","device_id":"…"}`。同一账户、设备和事务号可以重试。在其他设备上，只有房间、发送者、事务标记和保存的正文都吻合的既有事件，才能用来确认投递。证据缺失时保留待核验结果。旧格式的待发记录仍可读，新的适配器先查可验证的历史事件。
 
 ## 持久化顺序与版本
 
@@ -264,5 +251,5 @@ Tracing／UI 用同一配置与证据字段验收，另列阻塞，保留验收�
 
 继续按用户授权开发、验证、推送和跟进 PR；未完成范围保持 Draft，#1631 保持开放。
 验证通过后可按授权合并，不发布版本／镜像、不部署现有安装。
-详细历史证据与实际 SHA 仍以 [恢复验收记录](../development/runtime-recovery-1631.md)
-及相邻 evidence 文件为准；配置现状见 [Member Runtime Config Contract](member-runtime-config-contract.md)。
+验收范围见 [恢复验收记录](../development/runtime-recovery-1631.md)。
+配置现状见 [Member Runtime Config Contract](member-runtime-config-contract.md)。

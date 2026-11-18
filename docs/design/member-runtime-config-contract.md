@@ -69,7 +69,7 @@ external storage-policy enforcement still needs verification.
 
 Implementation status: Controller projection and all-Harness configuration
 tests do not prove every native consumer conforms. See
-[Worker configuration recovery acceptance](../development/worker-config-recovery-1631.md)
+[Worker configuration recovery acceptance](../development/runtime-recovery-1631.md)
 for current gaps and evidence. Six-Harness startup, switching and Task recovery
 acceptance remains incomplete.
 

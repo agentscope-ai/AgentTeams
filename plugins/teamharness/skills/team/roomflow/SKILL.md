@@ -6,7 +6,7 @@ description: "Use for TeamHarness room classification and Matrix task-room setup
 # Roomflow
 
 Use this skill when a Leader needs to identify the current Matrix room or
-prepare the Matrix task room before Quick Task or Project Work state exists.
+prepare the Matrix task room for manual Project Work.
 
 ## Describe Room
 

@@ -246,11 +246,11 @@ For DingTalk requester compatibility, `requester` may use
 `dingtalk:{user_id}:{session_id}`; TeamHarness derives `reply_route` from that
 value when `replyRoute` is not provided.
 
-## Create Quick Project
+## Create an explicit single-node Project
 
-Use `create_quick_project` only after Quick Task mode is selected and the
-Leader is in the Matrix Task room that received the task request message. It is
-a shortcut for:
+Use `create_quick_project` only for an explicitly requested single-node Project
+after a manual handoff to its Matrix Task room. For an ordinary Task request,
+use `taskflow start_task`. This legacy Project action is a shortcut for:
 
 ```text
 create_project + plan single-node DAG + assigned task spec

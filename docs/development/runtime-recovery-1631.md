@@ -1724,3 +1724,22 @@ After the old container was removed at checkpoint 5, OpenClaw recovered the
 original Task in a new native session and reached checkpoint 11 in generation
 2. The verifier matched the three independently counted effects to the
 persisted artifacts. Both cases had zero new Matrix inputs after cutover.
+
+[Case118 interrupted effect](evidence/runtime-recovery-1631-case118-held.json)
+used Controller `6421981f`, Hermes `f5d74a3` and Codex `28dcf22`. Docker
+removed Hermes while the first tool process was still waiting to persist its
+artifact and checkpoint. The replacement claimed generation 2 and held
+checkpoint 1 in `needs_verification`. The independent ledger still had one
+POST when the automatic continuation run timed out. An operator then invoked
+only the fixture outcome verification in the same replacement container.
+That invocation read the original effect from the independent ledger and
+committed its artifact and verification as checkpoint 2. Codex discovered the
+verified Task and ran steps two and three without new Matrix input. It
+submitted at checkpoint 9 with one effect per step and one final reply.
+The automatic verification scenario remains open. [Explicit-verification evidence](evidence/runtime-recovery-1631-case118-operator-verified.json).
+
+The OpenHuman test image now installs its bounded command and policy wrapper
+from `tests/fixtures/openhuman-recovery.Dockerfile`. The wrapper selects the
+fixture Controller hostname at runtime, so the same local image tag works
+across cases. The command accepts the driver's two- or three-digit Task suffix.
+The 27 fixture, policy and evidence tests passed locally.

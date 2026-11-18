@@ -4,9 +4,31 @@ Status: **incomplete; Draft implementation**. This document records contract
 tests separately from native Harness and real-model acceptance. No existing
 installation was upgraded or deployed for this work.
 
-The historical source/evidence entries below retain their original scope.
-Current 1.2.8 candidate boundaries, including the failed QwenPaw case23 and
-partial case24, are in [the Harness comparison](../design/harness-recovery-boundaries.md).
+## Live acceptance by source and target
+
+The diagonal records normal restart with a compatible native session.
+Each off-diagonal pass requires the original Task to continue after the old
+instance stops, with a new process generation, verified independent effects
+and one final Matrix reply without a new incoming message. Each report keeps
+the image and shared-contract pins actually tested.
+
+| Source → Target | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
+| --- | --- | --- | --- | --- | --- | --- |
+| Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | — | — |
+| Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Failed 92](evidence/runtime-recovery-1631-case92-oom.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
+| QwenPaw | — | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | — | — | — |
+| DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | — | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
+| OpenClaw | — | — | — | — | [Partial 100](evidence/runtime-recovery-1631-case100-openclaw-partial.json) | — |
+| OpenHuman | — | — | — | — | — | — |
+
+**4/6 normal restart lanes and 9/30 directed handoffs have passed.** A dash
+indicates a lane awaiting acceptance on the common contract. The independent
+[QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
+verifies retained cursors and a fresh returning session. Fault scenarios and
+the original Manager replay regression are tracked separately. Historical
+runs retain their source-pinned scope in the sections below. The
+[Harness comparison](../design/harness-recovery-boundaries.md) describes
+the implementation boundaries.
 
 ## Source baseline
 

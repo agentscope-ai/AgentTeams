@@ -597,6 +597,19 @@ while True:
         text=json.dumps({"room": task["room_id"], "task": TASK_ID})))
 
 
+def same_step_boundary(previous, current):
+    if current["task_id"] != previous["task_id"] or current["status"] != "in_progress":
+        return False
+    old_execution, new_execution = previous["execution"], current["execution"]
+    old, new = old_execution["checkpoint"], new_execution["checkpoint"]
+    delivery_fields = {"version", "result", "delivery", "reply_txn", "reply_event", "reply_attempt"}
+    return ({k: v for k, v in old_execution.items() if k != "checkpoint"}
+            == {k: v for k, v in new_execution.items() if k != "checkpoint"}
+            and new["version"] >= old["version"]
+            and {k: v for k, v in old.items() if k not in delivery_fields}
+            == {k: v for k, v in new.items() if k not in delivery_fields})
+
+
 def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
     if watch_dashboard and (not OPERATOR_HANDOFF or watch_return):
         raise ValueError("Dashboard cutover requires the operator handoff in replacement mode")
@@ -633,7 +646,12 @@ def cutover(*, watch_return=False, watch_dashboard=False, cli_return=False):
     while True:
         before = evidence(emit=False)
         if before["task"]["execution"] != task["execution"]:
-            break
+            if FAULT or not same_step_boundary(task, before["task"]):
+                break
+            # Delivery may commit while the source publishes its native session.
+            # Keep observing the same process and verified effect at the newer checkpoint.
+            task = before["task"]
+            cp = task["execution"]["checkpoint"]
         if source == "qwenpaw":
             cache = before["native_sessions"]["qwenpaw_shared"]["cache"]
         elif source == "openhuman" and MODE == "restart" and not FAULT:

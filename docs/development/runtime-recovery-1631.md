@@ -16,13 +16,12 @@ the image and shared-contract pins actually tested.
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | [Pass 121](evidence/runtime-recovery-1631-case121-verified.json) | [Pass 149](evidence/runtime-recovery-1631-case149-verified.json) |
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Pass 144](evidence/runtime-recovery-1631-case144-verified.json) |
-| QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
+| QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | [Pass 167](evidence/runtime-recovery-1631-case167-verified.json) |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | [Pass 150](evidence/runtime-recovery-1631-case150-verified.json) |
 | OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Pass 138](evidence/runtime-recovery-1631-case138-verified.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | [Pass 159](evidence/runtime-recovery-1631-case159-verified.json) |
 | OpenHuman | [Pass 147](evidence/runtime-recovery-1631-case147-verified.json) | [Pass 152](evidence/runtime-recovery-1631-case152-verified.json) | [Pass 154](evidence/runtime-recovery-1631-case154-verified.json) | [Pass 151](evidence/runtime-recovery-1631-case151-verified.json) | [Pass 164](evidence/runtime-recovery-1631-case164-verified.json) | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
 
-**6/6 normal restart lanes and 29/30 directed handoffs have passed.** A dash
-indicates a lane awaiting acceptance on the common contract. The independent
+**6/6 normal restart lanes and 30/30 directed handoffs have passed.** The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
 the original Manager replay regression are tracked separately. Historical
@@ -2105,3 +2104,30 @@ still recorded the operation as started. The restarted process took
 generation 2, kept the same operation identity, and left the Task in
 `needs_verification`. The verifier found no second effect or target
 execution request. This is a live safety result for the parked outcome.
+
+[Case167 QwenPaw → OpenHuman](evidence/runtime-recovery-1631-case167-verified.json)
+passed on Controller `6421981f`, QwenPaw `a76f5c0`, and OpenHuman `a7fd8fe`.
+The source recorded its native read 19.462 seconds before step one. An initial
+boundary observation overlapped the source progress reply. After verifying
+that the same Task, process and step effect were still authoritative, the
+driver continued from the existing boundary. Docker removed QwenPaw and
+then started OpenHuman. The target built a new native session, continued
+the same Task at generation 2, and advanced checkpoint 5 to 12.
+All three effects ran once, four stored hashes matched, and Matrix held
+one final reply with zero new incoming messages after stop. The fixture
+observer now accepts progress-delivery updates at the same verified step
+boundary while still checking process identity, operation and artifacts.
+
+[Case168 Hermes abrupt restart](evidence/runtime-recovery-1631-case168-abrupt-restart-verified.json)
+passed with Controller `6421981f` and Hermes `f5d74a3`. After the deliberate
+SIGKILL and exit 137, the same container started a new process and reused
+its verified native session. The original Task finished in generation 2
+at checkpoint 12 with steps executed once and one final Matrix
+reply without any new input.
+
+[Case170 DeepSeek uncertain effect](evidence/runtime-recovery-1631-case170-parked-effect.json)
+stopped the source while its native tool was running, after the independent
+effect and before its verified checkpoint. The restarted DeepSeek process
+claimed generation 2, preserved the operation and entered
+`needs_verification`. The independent ledger held one effect and no target
+execution request.

@@ -7,6 +7,23 @@ with patch.dict("os.environ", {"RECOVERY_E2E_FROM": "codex", "RECOVERY_E2E_TO": 
 
 
 class ReceiptBoundaryTests(unittest.TestCase):
+    def test_boundary_observer_can_follow_reply_delivery_on_the_same_step(self):
+        from runtime_recovery_e2e import same_step_boundary
+
+        current = {"task_id": "task-a", "status": "in_progress",
+                   "execution": {"process_id": "source", "generation": 1,
+                                 "checkpoint": {"version": 2, "completed_steps": ["one"]}}}
+        checkpoint = current["execution"]["checkpoint"]
+        settled = {**current, "execution": {**current["execution"], "checkpoint": {
+            **checkpoint, "version": 5, "delivery": "delivered"}}}
+        self.assertTrue(same_step_boundary(current, settled))
+        self.assertFalse(same_step_boundary(settled, current))
+        self.assertFalse(same_step_boundary(current, {**settled, "status": "submitted"}))
+        self.assertFalse(same_step_boundary(current, {**settled, "execution": {
+            **settled["execution"], "process_id": "replacement"}}))
+        self.assertFalse(same_step_boundary(current, {**settled, "execution": {
+            **settled["execution"], "checkpoint": {**checkpoint, "completed_steps": ["one", "two"]}}}))
+
     def test_independent_proof_requires_single_effect_after_same_start_registration(self):
         effect = {"team_id": "team", "task_id": "T", "step": "two", "instance_id": "target",
                   "process_id": "process", "generation": 2, "checkpoint_version": 3, "executed_at_ns": 30}

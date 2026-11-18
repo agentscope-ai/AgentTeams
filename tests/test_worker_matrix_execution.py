@@ -149,3 +149,39 @@ def test_missing_or_ambiguous_tool_results_leave_original_operation_pending():
             with pytest.raises(RecoveryConflict):
                 matrix.message_finish_tools(identity(), op, results)
         upload.assert_not_called()
+
+
+def test_media_send_stages_result_and_bytes_then_atomically_releases_only_reply_delivery():
+    source = entry()
+    writes, uploads = [], []
+
+    def request(method, path, *args):
+        if method == "POST":
+            cp = args[0]["checkpoint"]
+            writes.append((copy.deepcopy(cp), list(uploads)))
+            source["execution"]["checkpoint"] = cp
+            source["recovery"] = "deliver" if cp.get("delivery") == "pending" else "verify"
+        return copy.deepcopy(source)
+
+    matrix = WorkerMatrix("hermes", recovery=Mock(process="current-process", device_delivery=True, request=request))
+    calls = [{"id": "plot.png", "name": "matrix.send_file", "arguments": {"sha256": hashlib.sha256(b"image").hexdigest()}}]
+    with patch.dict(os.environ, {"AGENTTEAMS_STORAGE_PREFIX": "storage/tenant"}), patch(
+        "worker_matrix_state.subprocess.run", side_effect=lambda *args, **kwargs: uploads.append(kwargs["input"])
+    ):
+        op = matrix.message_begin_tools(identity(), calls, reply="Here is the plot", output_bytes=[b"image"])
+        started, persisted = writes[0]
+        assert set(persisted) == {b"image", b"Here is the plot"}
+        assert started["result"]["sha256"] == hashlib.sha256(b"Here is the plot").hexdigest()
+        assert started["artifacts"][0]["sha256"] == calls[0]["arguments"]["sha256"]
+        assert "delivery" not in started and started["operation"]["state"] == "started"
+        with pytest.raises(RecoveryConflict):
+            matrix.message_save_reply(identity(), "replace output")
+        with pytest.raises(RecoveryConflict):
+            matrix.message_finish_tools(identity(), op, [], deliver_result=True)
+        assert len(writes) == 1
+        saved = matrix.message_finish_tools(identity(), op, [{"id": "plot.png", "content": {"event_id": "$media"}}], deliver_result=True)
+        final = saved["execution"]["checkpoint"]
+        assert final["result"] == started["result"] and final["artifacts"][0] == started["artifacts"][0]
+        assert final["delivery"] == "pending" and final["reply_attempt"] == {"state": "ready"}
+        assert final["version"] == started["version"] + 1 and final["operation"]["state"] == "verified"
+        assert final["completed_steps"] == ["one", op] and b"$media" in uploads[-1]

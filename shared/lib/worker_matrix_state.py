@@ -234,7 +234,7 @@ class WorkerMatrix:
         entry = self._message_owned(identity)
         return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "release" if release else "checkpoint", checkpoint))
 
-    def message_begin_tools(self, identity, calls):
+    def message_begin_tools(self, identity, calls, *, reply=None, output_bytes=()):
         """Commit the native call identities before the adapter invokes any tool."""
         entry = self.message_current(identity)
         if not calls or any(not c.get("id") or not c.get("name") or "arguments" not in c for c in calls):
@@ -251,10 +251,17 @@ class WorkerMatrix:
         expected = [{"id": c["id"], "name": c["name"], "arguments_sha256": Recovery.digest(c["arguments"])} for c in calls]
         cp.update(version=cp.get("version", 0) + 1,
                   operation={"id": op, "state": "started", "evidence": json.dumps(expected)})
+        if reply is not None:
+            if not reply:
+                raise RecoveryConflict("An attachment reply needs a saved result")
+            cp["result"] = self._message_artifact(entry, reply.encode())
+            cp["artifacts"] = list(cp.get("artifacts") or [])
+            for data in output_bytes:
+                cp["artifacts"].append(self._message_artifact(entry, data))
         self._message_update(identity["event_key"], entry, "checkpoint", cp)
         return op
 
-    def message_finish_tools(self, identity, operation_id, results):
+    def message_finish_tools(self, identity, operation_id, results, *, deliver_result=False):
         """Call only for confirmed tool returns. Uncertain effects remain fenced."""
         entry = self._message_owned(identity)
         cp = dict(entry["execution"].get("checkpoint") or {})
@@ -266,12 +273,16 @@ class WorkerMatrix:
         if (sorted(r["id"] for r in results) != sorted(c["id"] for c in expected)
                 or any("content" not in result for result in results)):
             raise RecoveryConflict("Native tool receipts differ from the admitted calls")
+        if deliver_result and not cp.get("result"):
+            raise RecoveryConflict("Message has no staged result")
         data = json.dumps({"calls": expected, "results": results}, ensure_ascii=False).encode()
         artifact = self._message_artifact(entry, data)
         cp.update(version=cp["version"] + 1,
                   completed_steps=[*(cp.get("completed_steps") or []), operation_id],
                   artifacts=[*(cp.get("artifacts") or []), artifact],
                   operation={"id": operation_id, "state": "verified", "evidence": artifact["key"]})
+        if deliver_result:
+            self._pending_reply(entry, cp)
         return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "checkpoint", cp))
 
     @staticmethod
@@ -289,16 +300,18 @@ class WorkerMatrix:
             return self.message_claim(identity["event_key"])
         if entry["recovery"] != "resume" or entry["execution"]["state"] != "active" or not text:
             raise RecoveryConflict("A verified active message and a result are required")
-        artifact = self._message_artifact(entry, text.encode())
         cp = dict(entry["execution"].get("checkpoint") or {})
-        cp.update(version=cp.get("version", 0)+1, result=artifact,
-                  delivery="pending", reply_txn="matrix-reply:" + Recovery.digest([
-                      entry["input"]["member_prefix"], entry["input"]["room_id"],
-                      entry["input"]["event_id"], cp.get("version", 0)+1, artifact["sha256"]]))
+        cp.update(version=cp.get("version", 0)+1, result=self._message_artifact(entry, text.encode()))
+        self._pending_reply(entry, cp)
+        return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "checkpoint", cp))
+
+    def _pending_reply(self, entry, cp):
+        cp.update(delivery="pending", reply_txn="matrix-reply:" + Recovery.digest([
+            entry["input"]["member_prefix"], entry["input"]["room_id"], entry["input"]["event_id"],
+            cp["version"], cp["result"]["sha256"]]))
         if getattr(self.recovery, "device_delivery", False) is True:
             cp["reply_attempt"] = {"state": "ready"}
         cp.pop("reply_event", None)
-        return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "checkpoint", cp))
 
     def message_delivered(self, identity, event_id):
         entry = self._message_owned(identity)

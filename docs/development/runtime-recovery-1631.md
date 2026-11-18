@@ -18,10 +18,10 @@ the image and shared-contract pins actually tested.
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | — |
-| OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | — | — | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
+| OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | — | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
-**5/6 normal restart lanes and 18/30 directed handoffs have passed.** A dash
+**5/6 normal restart lanes and 19/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1743,3 +1743,21 @@ from `tests/fixtures/openhuman-recovery.Dockerfile`. The wrapper selects the
 fixture Controller hostname at runtime, so the same local image tag works
 across cases. The command accepts the driver's two- or three-digit Task suffix.
 The 27 fixture, policy and evidence tests passed locally.
+
+[Case124 OpenClaw → DeepSeek](evidence/runtime-recovery-1631-case124-verified.json)
+passed with Controller `6421981f`, OpenClaw `c6dcf56` and DeepSeek `6f5aadb`.
+The original Task stayed in progress through replacement. DeepSeek built a
+native recovery session and completed steps two and three, moving checkpoint
+4 to 11 in generation 2. The independent ledger and object digests matched
+all three steps. Matrix recorded one final reply and zero new inputs.
+
+OpenHuman cases 117 and 126 were stopped and excluded from acceptance. The
+local test image had retained an older wrapper and executable path. Its
+active native executable hash was `06f732658bfe8ce85098e7cbf7d3fa3288bef5b33462b3013cd1521eb988e7fd`.
+The [CI artifact](https://github.com/agentteams-group/agentteams-harness-openhuman/actions/runs/44301182954)
+for Harness `7788c27` and Core `cdc2800c` has hash
+`22cbbf4687231dc0e35acc14110c728e7454ced89c94827f91ab791443100a26`.
+The local layer now routes to that executable and checks the hash before
+seeding new cases 127 (restart) and 128 (Hermes → OpenHuman). The fixture
+Dockerfile prioritizes the executable at the canonical image path over a
+retained wrapper target. OpenHuman runtime acceptance remains in progress.

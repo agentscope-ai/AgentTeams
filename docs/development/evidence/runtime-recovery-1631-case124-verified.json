@@ -1,0 +1,217 @@
+{
+  "task_id": "live-openclaw-deepseek-harness-124",
+  "case": "124",
+  "scope": "one real openclaw-to-deepseek-harness in-progress continuation",
+  "mode": "replace",
+  "fixture_prefix": "recovery-1631-live-20261118-v124",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "6421981fcc9255a0b779a04557769650172e290e",
+    "openclaw": "c6dcf56695d1e924db750d53c8d3f0001959adee",
+    "deepseek-harness": "6f5aadb0963092f050202211281ed964ba94d070",
+    "shared_contract_by_runtime": {
+      "openclaw": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6",
+      "deepseek-harness": "52a3659b719abb78c17368ce020403c442d4e5db"
+    }
+  },
+  "driver_sha256": "d248451f6e45af194071b4c2f1c5a1ccaa4c0ce87a7cdb9ee7a3d9fdf3ef1f2f",
+  "native_recovery_sessions": {
+    "hermes": [],
+    "hermes_message_counts": {},
+    "hermes_shared": null,
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "290eb2eb7eafc56bc3f65d42d0dceae23f66eda762537519f723c32d3b8658e7",
+      "descriptor": null,
+      "config_generation": null
+    },
+    "deepseek": {
+      "native": {
+        "session_id": "session-task-c74341a2033644a7ac1f40a0eec030a3",
+        "native_digest": "4fc4c799610f6d96021a548b6d22efd718413ba705a623ad6b62cb0a9d5ce6b1",
+        "turn": 1,
+        "input_id": "matrix-275d83cc7fe9f5ec6ce61661b3fe8a33e75d32cd8212202897410a3d9fa5253f",
+        "task_mentioned": true,
+        "tool_calls": 13,
+        "tool_results": 13,
+        "completed": true
+      },
+      "cache": null
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 4,
+  "checkpoint_after": 11,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/b744be304956223a4eeff08927dd38c0a465e34b8469d5e7479ee13ee1bffd65/2026-11-18T12:34:21.5811571Z",
+    "process_id": "7:1795005262466070152:28e4248f278f4649b69301694b2056aa",
+    "runtime": "deepseek-harness",
+    "state": "active",
+    "checkpoint": {
+      "version": 11,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-openclaw-deepseek-harness-124:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=065a8e08b117e6e99ed5f2c43f5085c7080a9f77b9ca59b9d6e3211baebf8cdf; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-deepseek-harness-124/output/step-one.json",
+          "sha256": "a12e4e97fa43191ec582ceff880f16e42d9c8a878af4a50dcb82a9915ffac974",
+          "size": 366
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-deepseek-harness-124/output/step-two.json",
+          "sha256": "ba01ce4050db0e8f0e3e3c0b8319bb9a00662bd92ff52fc5df9c2c3901e9a5f2",
+          "size": 364
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-deepseek-harness-124/output/step-three.json",
+          "sha256": "065a8e08b117e6e99ed5f2c43f5085c7080a9f77b9ca59b9d6e3211baebf8cdf",
+          "size": 366
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-openclaw-deepseek-harness-124/result.md",
+        "sha256": "3b6f8f13058bd687d7567c6f15d99864896b01306734568939707ef4069f1c59",
+        "size": 746
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:f1238d4e154a68fa5d5954e6879356eeb046cdec96f0ee8c5ee5430ebd59b538",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "xplNBXgALS"
+      },
+      "reply_event": "$ER3VKrMB6yxPJQvL-MjcNwwX_oSh3j2I-P5oBt0x6aM",
+      "saved_at": "2026-11-18T12:36:55.773479009Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T12:32:27Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 2,
+      "to": "submitted",
+      "ts": "2026-11-18T12:36:28Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795005163408491996,
+      "generation": 1,
+      "instance_id": "docker/5c95b63fc61cfa8dc19fe27ac10b5c1ac88a1626f6b994064fb97d8472e70e7b/2026-11-18T12:27:46.243875685Z",
+      "process_id": "1:1795004866484864576:50cfb11006c44033abd0710fe5d60049",
+      "step": "one",
+      "task_id": "live-openclaw-deepseek-harness-124",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 5,
+      "executed_at_ns": 1795005335406256730,
+      "generation": 2,
+      "instance_id": "docker/b744be304956223a4eeff08927dd38c0a465e34b8469d5e7479ee13ee1bffd65/2026-11-18T12:34:21.5811571Z",
+      "process_id": "7:1795005262466070152:28e4248f278f4649b69301694b2056aa",
+      "step": "two",
+      "task_id": "live-openclaw-deepseek-harness-124",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 7,
+      "executed_at_ns": 1795005352980332973,
+      "generation": 2,
+      "instance_id": "docker/b744be304956223a4eeff08927dd38c0a465e34b8469d5e7479ee13ee1bffd65/2026-11-18T12:34:21.5811571Z",
+      "process_id": "7:1795005262466070152:28e4248f278f4649b69301694b2056aa",
+      "step": "three",
+      "task_id": "live-openclaw-deepseek-harness-124",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-deepseek-harness-124/output/step-one.json",
+      "sha256": "a12e4e97fa43191ec582ceff880f16e42d9c8a878af4a50dcb82a9915ffac974",
+      "size": 366
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-deepseek-harness-124/output/step-two.json",
+      "sha256": "ba01ce4050db0e8f0e3e3c0b8319bb9a00662bd92ff52fc5df9c2c3901e9a5f2",
+      "size": 364
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-deepseek-harness-124/output/step-three.json",
+      "sha256": "065a8e08b117e6e99ed5f2c43f5085c7080a9f77b9ca59b9d6e3211baebf8cdf",
+      "size": 366
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-deepseek-harness-124/result.md",
+      "sha256": "3b6f8f13058bd687d7567c6f15d99864896b01306734568939707ef4069f1c59",
+      "size": 746
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1795005253811959045,
+    "destroy": 1795005254132105655,
+    "create": 1795005261390875121
+  },
+  "matrix": {
+    "reply_event": "$ER3VKrMB6yxPJQvL-MjcNwwX_oSh3j2I-P5oBt0x6aM",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$YDZcz9Ao283Twa11hJH8WRIIsWuc_TRiqjynEamN9-I"
+    ],
+    "read_receipt_events": [
+      "$KD3wrFUS7w_rZBGTX97M4-4O6lLpDspQyaCw8k3NbvU"
+    ],
+    "first_source_read_ms": 1795005002811
+  },
+  "operator_handoff": {
+    "id": "live-openclaw-deepseek-harness-124",
+    "phase": "completed",
+    "source": {
+      "instance_id": "docker/5c95b63fc61cfa8dc19fe27ac10b5c1ac88a1626f6b994064fb97d8472e70e7b/2026-11-18T12:27:46.243875685Z",
+      "process_id": "1:1795004866484864576:50cfb11006c44033abd0710fe5d60049",
+      "runtime": "openclaw"
+    },
+    "target_runtime": "deepseek-harness",
+    "target": {
+      "instance_id": "docker/b744be304956223a4eeff08927dd38c0a465e34b8469d5e7479ee13ee1bffd65/2026-11-18T12:34:21.5811571Z",
+      "process_id": "7:1795005262466070152:28e4248f278f4649b69301694b2056aa",
+      "runtime": "deepseek-harness"
+    },
+    "source_stop_observed_at": "2026-11-18T12:34:13.837077553Z",
+    "target_registered_at": "2026-11-18T12:34:30.86896717Z",
+    "completed_at": "2026-11-18T12:34:43.776710031Z",
+    "target_image": "recovery-1631/deepseek:local"
+  }
+}

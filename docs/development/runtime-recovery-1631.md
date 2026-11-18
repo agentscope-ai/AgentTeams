@@ -18,7 +18,7 @@ the image and shared-contract pins actually tested.
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Failed 92](evidence/runtime-recovery-1631-case92-oom.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | — | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | — | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
-| OpenClaw | — | — | — | — | [Failed 101](evidence/runtime-recovery-1631-case101-openclaw-partial.json) | — |
+| OpenClaw | — | — | — | — | [Partial 104](evidence/runtime-recovery-1631-case104-openclaw-oom.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
 **4/6 normal restart lanes and 11/30 directed handoffs have passed.** A dash
@@ -1596,3 +1596,13 @@ to 12 and generation 1 to 2. Docker stopped and removed QwenPaw before
 creating DeepSeek. The verifier checked one effect for each step, four
 artifact/report hashes, and one Matrix report with no new incoming message
 after the old instance stopped.
+
+[Case104 OpenClaw restart partial evidence](evidence/runtime-recovery-1631-case104-openclaw-oom.json)
+used OpenClaw `058ec67` on ARM64. The Worker waited 81 seconds for the
+previous gateway lease and started the gateway during the captured Docker
+restart. Generation 2 inferred without a new Matrix input and the oracle
+recorded all three steps once. Docker reported OOM exit 137 while the final
+reply was still unconfirmed. The run therefore adds no restart pass.
+OpenClaw `c6dcf56` separately prevents a replayed assignment from reusing
+the original native dedup key on a later generation. The SDK regression
+failed on the old adapter and passed on the rebuilt ARM64 adapter.

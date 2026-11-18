@@ -1,0 +1,143 @@
+{
+  "case": 104,
+  "passed": false,
+  "task_id": "live-openclaw-openclaw-104",
+  "scope": "lease-aware native restart reached all step effects; captured restart exited before final delivery verification",
+  "image": "sha256:e7f3b742bb15e2c0774c5e11ff18e1df47a64ed152c7b929700e6940d667520e",
+  "openclaw": "058ec6766b268e1c206afcd71804bb65662c5c5e",
+  "shared": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6",
+  "core": "6421981fcc9255a0b779a04557769650172e290e",
+  "source": {
+    "generation": 1,
+    "checkpoint": 4,
+    "read_receipt": {
+      "source_event": "$rxsh7rylXThYPAQsmB28ekkSqNEY2_IV7xGQucq8Uas",
+      "read_event": "$OgOPCZxqJkePxJx8v0unZ4zatvAu0Yr26PLalVSs9F0"
+    },
+    "native_session": {
+      "session_key": "agent:main:agentteams-task:b084c8382b898cf650e0dfc7ff6f8b749f9d4f97ef83687760116b8f3293fb4b:eaf6356a-edc6-412a-944e-7af6f80ada76",
+      "session_id": "1f0ec87e-1148-429c-a753-f1202e7c87d2",
+      "native_digest": "35cc6d62dc9816364548ffe44f9cabc0071ba308495fdb9e1a81b2d907dc5ee8",
+      "message_count": 35,
+      "task_mentioned": true,
+      "has_recovery_turn": true
+    },
+    "shared_cache": {
+      "schema_version": 1,
+      "kind": "WorkerSessionCache",
+      "member_prefix": "agents/agent-a",
+      "work": {
+        "kind": "task",
+        "team_id": "recovery-team",
+        "task_id": "live-openclaw-openclaw-104"
+      },
+      "runtime": "openclaw",
+      "start": {
+        "instance_id": "docker/aa7fc132d4dac2d13117b67de6e5c966fee0dfc61f808331c79368b7b5106812/2026-11-18T11:02:48.316293869Z",
+        "process_id": "1:1794999768483730244:9464f198c5c4453e8d8123400bc0e6f7",
+        "runtime": "openclaw"
+      },
+      "generation": 1,
+      "native_ref": "agent:main:agentteams-task:b084c8382b898cf650e0dfc7ff6f8b749f9d4f97ef83687760116b8f3293fb4b:eaf6356a-edc6-412a-944e-7af6f80ada76",
+      "native_digest": "35cc6d62dc9816364548ffe44f9cabc0071ba308495fdb9e1a81b2d907dc5ee8",
+      "checkpoint_version": 4,
+      "checkpoint_digest": "3b112159772faa36c0283c416289320f08d685ffc2d61ab09bd021fec27a8530",
+      "config_generation": 3,
+      "expires_at": 1795086384,
+      "saved_at": "2026-11-18T11:06:27Z"
+    }
+  },
+  "native_lease_wait": "[agentteams] Waiting 81s for the previous OpenClaw lease",
+  "recovery_message": "2026-11-18T11:08:23.894+00:00 [diagnostic] message received: channel=matrix chatId=room:!tl1NNKH3xqTu901xuw:recovery-1631.test messageId=recovery:recovery-team/live-openclaw-openclaw-104:2 sessionId=unknown sessionKey=agent:main:agentteams-task:b084c8382b898cf650e0dfc7ff6f8b749f9d4f97ef83687760116b8f3293fb4b:eaf6356a-edc6-412a-944e-7af6f80ada76 source=dispatchInboundMessage",
+  "docker_restart_events": [
+    {
+      "Type": "container",
+      "Action": "die",
+      "Actor": {
+        "ID": "aa7fc132d4dac2d13117b67de6e5c966fee0dfc61f808331c79368b7b5106812",
+        "Attributes": {
+          "agentteams.io/runtime": "openclaw",
+          "execDuration": "227",
+          "exitCode": "143",
+          "image": "recovery-1631/openclaw:local",
+          "io.agentteams.recovery.core-sha": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6",
+          "io.agentteams.recovery.harness-sha": "058ec6766b268e1c206afcd71804bb65662c5c5e",
+          "name": "recovery-1631-live-20261118-v104-worker-agent-a",
+          "org.opencontainers.image.ref.name": "ubuntu",
+          "org.opencontainers.image.version": "24.04"
+        }
+      },
+      "scope": "local",
+      "time": 1794999996,
+      "timeNano": 1794999996372283360
+    },
+    {
+      "Type": "container",
+      "Action": "start",
+      "Actor": {
+        "ID": "aa7fc132d4dac2d13117b67de6e5c966fee0dfc61f808331c79368b7b5106812",
+        "Attributes": {
+          "agentteams.io/runtime": "openclaw",
+          "image": "recovery-1631/openclaw:local",
+          "io.agentteams.recovery.core-sha": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6",
+          "io.agentteams.recovery.harness-sha": "058ec6766b268e1c206afcd71804bb65662c5c5e",
+          "name": "recovery-1631-live-20261118-v104-worker-agent-a",
+          "org.opencontainers.image.ref.name": "ubuntu",
+          "org.opencontainers.image.version": "24.04"
+        }
+      },
+      "scope": "local",
+      "time": 1794999997,
+      "timeNano": 1794999997647445264
+    }
+  ],
+  "exit": {
+    "oom": true,
+    "code": 137,
+    "started_at": "2026-11-18T11:06:37.076014588Z",
+    "finished_at": "2026-11-18T11:09:21.129758824Z"
+  },
+  "effects": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794999962767567061,
+      "generation": 1,
+      "instance_id": "docker/aa7fc132d4dac2d13117b67de6e5c966fee0dfc61f808331c79368b7b5106812/2026-11-18T11:02:48.316293869Z",
+      "process_id": "1:1794999768483730244:9464f198c5c4453e8d8123400bc0e6f7",
+      "step": "one",
+      "task_id": "live-openclaw-openclaw-104",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 5,
+      "executed_at_ns": 1795000120207846194,
+      "generation": 2,
+      "instance_id": "docker/aa7fc132d4dac2d13117b67de6e5c966fee0dfc61f808331c79368b7b5106812/2026-11-18T11:06:37.076014588Z",
+      "process_id": "1:1794999997720321504:3f96db091a4e41169f5db8ff4a97171e",
+      "step": "two",
+      "task_id": "live-openclaw-openclaw-104",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 7,
+      "executed_at_ns": 1795000135207087183,
+      "generation": 2,
+      "instance_id": "docker/aa7fc132d4dac2d13117b67de6e5c966fee0dfc61f808331c79368b7b5106812/2026-11-18T11:06:37.076014588Z",
+      "process_id": "1:1794999997720321504:3f96db091a4e41169f5db8ff4a97171e",
+      "step": "three",
+      "task_id": "live-openclaw-openclaw-104",
+      "team_id": "recovery-team"
+    }
+  ],
+  "final_task": {
+    "status": "completed",
+    "generation": 2,
+    "checkpoint": 8,
+    "steps": [
+      "one",
+      "two",
+      "three"
+    ],
+    "delivery": null
+  }
+}

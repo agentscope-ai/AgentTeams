@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shared/lib"))
 from task_recovery import RecoveryConflict
-from worker_matrix_raw import publish_raw_saved
+from worker_matrix_raw import publish_raw_saved, require_unencrypted_room
 
 
 def checkpoint(attempt, text="saved", txn="stable"):
@@ -93,7 +93,9 @@ def test_raw_worker_consumes_only_its_device_cursor_and_preserves_initial_timeli
     matrix.input.return_value = None
     matrix.prepare_input.return_value = {"room_id": room, "event_id": "$assignment"}
     client = Mock()
-    def respond(method, path, **kwargs):
+    def respond(method, path, body=None, **kwargs):
+        if path.endswith("/state/m.room.encryption/"):
+            raise HTTPError(path, 404, "missing", {}, io.BytesIO(b'{"errcode":"M_NOT_FOUND"}'))
         if path.endswith("/whoami"):
             return {"user_id": "@w:hs", "device_id": "current"}
         assert parse_qs(urlsplit(path).query) == {"timeout": ["0"], "full_state": ["true"], "since": ["my_cursor"]}
@@ -115,6 +117,7 @@ def test_raw_worker_retains_source_classification_and_stops_on_undecryptable_inp
 
     matrix, client, classify = Mock(), Mock(), Mock()
     matrix.input.return_value = {"intent": "context"}
+    client.request.side_effect = HTTPError("https://hs", 404, "missing", {}, io.BytesIO(b'{"errcode":"M_NOT_FOUND"}'))
     consumer = RawWorkerSync(matrix, client, "@w:hs", classify, Mock())
     raw = {"event_id": "$old", "type": "m.room.message", "sender": "@user:hs", "content": {"body": "text"}}
     consumer.inputs("!room:hs", [raw], "$old")
@@ -125,3 +128,31 @@ def test_raw_worker_retains_source_classification_and_stops_on_undecryptable_inp
     with pytest.raises(RecoveryConflict, match="different room"):
         consumer.inputs("!room:hs", [{**raw, "room_id": "!other:hs"}])
     matrix.sync.assert_not_called()
+
+
+def test_native_room_check_is_shared_by_history_rows_but_media_checks_current_state_again():
+    from worker_matrix_raw import RawWorkerSync
+
+    client, matrix = Mock(), Mock()
+    raw = {"event_id": "$one", "type": "m.room.message", "sender": "@u", "content": {"body": "A"}}
+    room = "!room:hs"
+    client.request.side_effect = [HTTPError("https://hs", 404, "missing", {}, io.BytesIO(b'{"errcode":"M_NOT_FOUND"}')),
+                                  {"algorithm": "m.megolm.v1.aes-sha2"}]
+    matrix.input.return_value = None
+    sync = RawWorkerSync(matrix, client, "@w:hs", lambda *_: ("message", None), Mock())
+    sync.inputs(room, [raw, {**raw, "event_id":"$two"}])
+    sync.inputs(room, [raw])  # A history page or pending input in the same round.
+    sync.require_room(room)
+    client.request.assert_called_once()
+    with pytest.raises(RecoveryConflict, match="encrypted"):
+        require_unencrypted_room(client, room)
+    assert client.request.call_count == 2
+
+
+@pytest.mark.parametrize(("status", "code"), [(403, "M_FORBIDDEN"), (404, "M_FORBIDDEN"), (500, "M_UNKNOWN")])
+def test_unreadable_encryption_policy_never_allows_raw_media(status, code):
+    client = Mock()
+    client.request.side_effect = HTTPError("https://hs", status, "unreadable", {},
+                                         io.BytesIO(('{"errcode":"' + code + '"}').encode()))
+    with pytest.raises(HTTPError):
+        require_unencrypted_room(client, "!room:hs")

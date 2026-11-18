@@ -8,6 +8,18 @@ from task_recovery import RecoveryConflict, RecoveryUnavailable
 from worker_matrix_delivery import publish_saved
 
 
+def require_unencrypted_room(client, room_id):
+    """Raw clients may act only when the homeserver confirms encryption state is absent."""
+    path = "/_matrix/client/v3/rooms/" + quote(room_id, safe="") + "/state/m.room.encryption/"
+    try:
+        client.request("GET", path, None)
+    except HTTPError as error:
+        if error.code == 404 and json.load(error).get("errcode") == "M_NOT_FOUND":
+            return
+        raise
+    raise RecoveryConflict("Raw Matrix transport cannot handle an encrypted room")
+
+
 def publish_raw_saved(client, room_id, text, checkpoint, expected_sender, bind, *, content=None, legacy_transaction_id=None):
     """bind(next_checkpoint) must confirm the device write on the active execution."""
     room = "/_matrix/client/v3/rooms/" + quote(room_id, safe="")
@@ -52,15 +64,7 @@ def publish_raw_saved(client, room_id, text, checkpoint, expected_sender, bind, 
         return None
 
     async def send(txn):
-        # This native transport has no Olm session. Even if the installation
-        # projects E2EE=false, a particular joined room can require encryption.
-        try:
-            client.request("GET", room + "/state/m.room.encryption/", None)
-        except HTTPError as error:
-            if error.code != 404 or json.load(error).get("errcode") != "M_NOT_FOUND":
-                raise
-        else:
-            raise RecoveryConflict("Raw Matrix delivery cannot send to an encrypted room")
+        require_unencrypted_room(client, room_id)
         data = {**(content or {}), "msgtype": "m.text", "body": text, "org.agentteams.reply_txn": txn}
         return client.send_content(room_id, data, txn)
 
@@ -77,6 +81,13 @@ class RawWorkerSync:
         self.classify = classify
         self.observe_rooms = observe_rooms
         self.ready = False
+        self.checked_rooms = set()
+
+    def require_room(self, room):
+        """Share a room policy lookup for this sync, its history pages and pending inputs."""
+        if room not in self.checked_rooms:
+            require_unencrypted_room(self.client, room)
+            self.checked_rooms.add(room)
 
     def inputs(self, room, events, until=None):
         from worker_matrix_state import matrix_event_key
@@ -89,6 +100,7 @@ class RawWorkerSync:
                 raise RecoveryConflict("Raw Matrix consumer cannot decode encrypted input")
             if event.get("type") != "m.room.message" or not event.get("event_id"):
                 continue
+            self.require_room(room)
             event_id = event["event_id"]
             previous = self.matrix.input(matrix_event_key(room, event_id))
             decision = (previous["intent"], None) if previous else self.classify(room, event)
@@ -104,6 +116,7 @@ class RawWorkerSync:
     def poll(self, timeout_ms=1000):
         from worker_matrix_history import backfill_round
 
+        self.checked_rooms.clear()
         snapshot = self.matrix.load()
         account = self.client.request("GET", "/_matrix/client/v3/account/whoami")
         if account.get("user_id") != self.sender or not account.get("device_id"):

@@ -591,21 +591,22 @@ type UpdateHumanRequest struct {
 }
 
 type HumanResponse struct {
-	SystemAdmin       bool                     `json:"systemAdmin,omitempty"`
-	Name              string                   `json:"name"`
-	Phase             string                   `json:"phase"`
-	DisplayName       string                   `json:"displayName"`
-	Email             string                   `json:"email,omitempty"`
-	PermissionLevel   int                      `json:"permissionLevel"`
-	AccessibleTeams   []string                 `json:"accessibleTeams,omitempty"`
-	AccessibleWorkers []string                 `json:"accessibleWorkers,omitempty"`
-	Capabilities      []string                 `json:"capabilities,omitempty"`
-	Note              string                   `json:"note,omitempty"`
-	MatrixUserID      string                   `json:"matrixUserID,omitempty"`
-	InitialPassword   string                   `json:"initialPassword,omitempty"`
-	Rooms             []string                 `json:"rooms,omitempty"`
-	Message           string                   `json:"message,omitempty"`
-	ModelAccess       *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
+	PasswordResetAvailable bool                     `json:"passwordResetAvailable,omitempty"`
+	SystemAdmin            bool                     `json:"systemAdmin,omitempty"`
+	Name                   string                   `json:"name"`
+	Phase                  string                   `json:"phase"`
+	DisplayName            string                   `json:"displayName"`
+	Email                  string                   `json:"email,omitempty"`
+	PermissionLevel        int                      `json:"permissionLevel"`
+	AccessibleTeams        []string                 `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers      []string                 `json:"accessibleWorkers,omitempty"`
+	Capabilities           []string                 `json:"capabilities,omitempty"`
+	Note                   string                   `json:"note,omitempty"`
+	MatrixUserID           string                   `json:"matrixUserID,omitempty"`
+	InitialPassword        string                   `json:"initialPassword,omitempty"`
+	Rooms                  []string                 `json:"rooms,omitempty"`
+	Message                string                   `json:"message,omitempty"`
+	ModelAccess            *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
 }
 
 type HumanListResponse struct {

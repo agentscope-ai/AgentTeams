@@ -613,6 +613,25 @@ func (c *TuwunelClient) SetPasswordAsAdmin(ctx context.Context, userID, password
 	return nil
 }
 
+// ResetUserPassword changes an existing password through the admin HTTP API.
+func (c *TuwunelClient) ResetUserPassword(ctx context.Context, userID, password string) error {
+	token, err := c.ensureAdminToken(ctx)
+	if err != nil {
+		return err
+	}
+	status, _, err := c.doJSON(ctx, http.MethodPost,
+		"/_synapse/admin/v1/reset_password/"+url.PathEscape(userID), token,
+		map[string]any{"new_password": password, "logout_devices": true}, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("Matrix password reset returned HTTP %d", status)
+	}
+	c.InvalidateUserToken(userID)
+	return nil
+}
+
 // doJSONWithASToken performs an HTTP request authenticated with the AppService
 // as_token instead of a user access token. Reuses the same JSON plumbing as
 // doJSON but substitutes the Bearer token.

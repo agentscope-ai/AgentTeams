@@ -32,7 +32,8 @@ After a source-session `PROJECT_REQUESTED` self-trigger succeeds, end that turn
 with `NO_REPLY`; do not sleep, poll project state or read task-room history in
 the source session. Resume coordination only in the task room.
 
-For a known DAG, prefer `projectflow start_project` to create its room, persist
+Only when the requester explicitly asks you to create a Project, use
+`projectflow start_project` for a known DAG to create its room, persist
 the plan and delegate its initially ready leaves in one call; include bounded
 specs and owners for every execution leaf when dispatchMode is automatic.
 This replaces the manual room/self-trigger sequence below; end the source turn
@@ -78,7 +79,7 @@ current Matrix room is unclear, load `teamharness-roomflow` and call
 ## Communication Contract
 
 Communication rules apply before selecting a request mode and at every outgoing
-message point in Direct Reply, Quick Task, and Project Work.
+message point in Direct Reply, Task Work, and Project Work.
 
 ### Matrix Mentions
 
@@ -141,42 +142,20 @@ In the Source channel / requester room:
   the relevant `shared/...` artifact path instead.
 - Do not create task room, project state, or task state.
 
-### Quick Task
+### Task Work
 
-Use for one bounded Worker-owned action with one owner, one expected result, no
-DAG, and no Loop.
-
-In the Source channel / requester room:
-
-- Load `teamharness-roomflow` and use `roomflow create_task_room` to create or
-  reuse the Matrix task room.
-- Load `teamharness-communication` to send the task request message to that
-  task room.
-- Stop in the source session. Do not call `create_quick_project`,
-  `delegate_task`, or send Worker assignment messages there.
-
-In the Task room:
-
-- On the task request message, load `teamharness-project-management` and use
-  `create_quick_project`. It writes the single assigned task state and spec.
-- Load `teamharness-task-delegation` to send the assignment message for that
-  assigned task as a normal reply in the current Task room. Do not call
-  `delegate_task` for Quick Task, and do not use the `message` tool for
-  same-room Worker assignment.
-- When the Worker reports `TASK_COMPLETED`, `TASK_BLOCKED`, or a task result
-  path such as `shared/tasks/{task-id}/result.md`, first resolve project context
-  with `projectflow resolve_project`.
-- Load `teamharness-task-delegation` for `check_task`; then use
-  `teamharness-project-management` for `accept_task_result` or rejection.
-- Publish report files and artifacts with `teamharness-file-sharing` or the
-  `artifact` MCP tool only when the destination supports Matrix room files, and
-  use `teamharness-communication` for the requester report through `replyRoute`.
+For ordinary delegated work, use `taskflow start_task` in the source session.
+This applies when the requester assigns work directly to you, even with
+multiple Workers, dependencies, acceptance gates, or deliverables. Load
+`teamharness-project-management` for the payload and use `complete_task` for
+its final report. Project membership is optional and requires an existing
+Project. Follow the existing lifecycle when continuing an already created plan.
 
 ### Project Work
 
-Use for multi-member work, durable shared state, deliverables, dependencies,
-acceptance gates, or follow-up tracking. Choose DAG for finite dependency work
-and Loop for iterative work with a stop condition.
+Use this flow when the requester explicitly asks you to create a Project or
+when you are continuing an existing Project plan. Choose DAG for finite
+dependency work and Loop for iterative work with a stop condition.
 
 For a finite plan whose owners/specs are known, call `start_project` directly
 in the source session as described above. When every execution leaf is accepted,

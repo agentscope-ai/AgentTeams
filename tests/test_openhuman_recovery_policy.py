@@ -10,9 +10,10 @@ policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
 
 
-def test_only_python_is_added_and_the_policy_survives_a_fixture_restart(tmp_path):
+@pytest.mark.parametrize("commands", ['["agt", "mc"]', '[\n    "agt",\n    "mc",\n]'])
+def test_only_python_is_added_and_the_policy_survives_a_fixture_restart(tmp_path, commands):
     path = tmp_path / "config.toml"
-    path.write_text('[autonomy]\nallowed_commands = ["agt", "mc"]\nworkspace_only = true\n\n[mcp_client]\nenabled = true\n')
+    path.write_text(f'[autonomy]\nallowed_commands = {commands}\nworkspace_only = true\n\n[mcp_client]\nenabled = true\n')
     for _ in range(2):
         policy.configure(path, "recovery-1631-live-20261117-v18", "http://recovery-1631-live-20261117-v18-controller:8090")
         result = tomllib.loads(path.read_text())

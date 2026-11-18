@@ -28,7 +28,11 @@ def configure(path, prefix, controller):
     if len(matches) != 1:
         raise ValueError("Expected one native autonomy section")
     body = matches[0][1]
-    body = re.sub(r"(?m)^(?:allowed_commands|level|require_approval_for_medium_risk)\s*=.*\n?", "", body)
+    # The installed config CLI serializes long command arrays across lines.
+    body, count = re.subn(r"(?m)^allowed_commands[ \t]*=[ \t]*\[[^\]]*\][ \t]*\n?", "", body)
+    if count != 1:
+        raise ValueError("Expected one native command array")
+    body = re.sub(r"(?m)^(?:level|require_approval_for_medium_risk)\s*=.*\n?", "", body)
     body += ('allowed_commands = ' + json.dumps(commands) + '\n'
              'level = "full"\nrequire_approval_for_medium_risk = false\n\n')
     replacement = text[:matches[0].start()] + "[autonomy]\n" + body + text[matches[0].end():]
@@ -38,7 +42,7 @@ def configure(path, prefix, controller):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["serve"]:
+    if sys.argv[1:] == ["serve"] and os.getenv("RECOVERY_E2E_PREFIX"):
         configure(Path(os.environ["OPENHUMAN_CONFIG"]), os.environ.get("RECOVERY_E2E_PREFIX", ""),
                   os.environ.get("AGENTTEAMS_CONTROLLER_URL", ""))
         print("Recovery fixture policy: Python step tool explicitly allowed before native startup", flush=True)

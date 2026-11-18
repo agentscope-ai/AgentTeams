@@ -16,10 +16,11 @@ def owned(recovery, identity):
 
 
 def native_reply_plan(checkpoint, request, bind):
-    from worker_matrix_delivery import plan_saved
+    from worker_matrix_delivery import confirm_bound, plan_saved
     mode, pending = plan_saved(checkpoint, request['text'], request['sender'], request['device'])
     if pending is not None:
-        bind(pending)
+        committed = bind(pending)
+        confirm_bound(committed["execution"], request["identity"], request["runtime"], pending)
     return {'mode': mode, 'reply_txn': checkpoint['reply_txn'], 'legacy': not checkpoint.get('reply_attempt')}
 
 

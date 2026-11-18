@@ -68,7 +68,10 @@ class RecoveryRPCTest(unittest.TestCase):
         cp = dict(version=4, delivery='pending', reply_txn='txn',
                   result={'size': 2, 'sha256': hashlib.sha256(b'ok').hexdigest()}, reply_attempt={'state': 'ready'})
         execution['checkpoint'] = cp
-        request = dict(action='plan_reply', identity=self.identity, device_delivery=True, text='ok', sender='@worker:d', device='A')
+        request = dict(action='plan_reply', runtime='openhuman', identity={**self.identity,'process_id':'boot'},
+                       device_delivery=True, text='ok', sender='@worker:d', device='A')
+        self.recovery.checkpoint.side_effect = lambda task,team,cp: {'execution':{
+            **execution,'runtime':'openhuman','state':'active','checkpoint':{**cp,'saved_at':'server-clock'}}}
         self.assertEqual(rpc.execute(request), {'mode': 'send', 'reply_txn': 'txn', 'legacy': False})
         committed = self.recovery.checkpoint.call_args.args[2]
         self.assertEqual(committed['reply_attempt'], {'state': 'sending', 'user_id': '@worker:d', 'device_id': 'A'})

@@ -1459,3 +1459,21 @@ used the rebuilt OpenClaw image from `957876c` with common contract
 Docker marked the target OOM-killed with exit code 137. The handoff remained
 in `creating` and the original Task remained in progress at generation 1,
 checkpoint 6, with step one complete. The target never claimed the Task.
+
+[Case93 QwenPaw → Hermes → QwenPaw partial proof](evidence/runtime-recovery-1631-case93-return-partial.json)
+continued the original Task in generations 1, 2 and 3, at checkpoints 5,
+11 and 16. Three independent effects and one final Matrix report were
+observed. The returning QwenPaw used its own earlier Matrix cursor at initial
+sync and created a different native session. The old session digest remained
+identical. The return Docker events verified source termination and removal
+before target creation. The first Docker capture timed out before replacement,
+so the complete round trip still needs a replay with both event streams.
+
+[Case94 Codex → DeepSeek CLI handoff](evidence/runtime-recovery-1631-case94-verified.json)
+passed on Codex `77e1215`, DeepSeek `6f5aadb` and Controller `52a3659b`.
+The Codex and DeepSeek images identify different common contract pins in
+the proof. The live cutover followed the source Matrix read and durable
+checkpoint 5. DeepSeek continued in a new native session at generation 2 and
+completed the original Task at checkpoint 12. The verifier recorded one
+effect per step, matching artifacts, one final Matrix reply and no external
+Matrix input after source shutdown.

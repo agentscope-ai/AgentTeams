@@ -1061,13 +1061,14 @@ def verify_parked_effect():
     print(f"Verified parked effect in {path}")
 
 
-def assert_restarted_native(original, resumed, before):
+def assert_restarted_native(original, resumed, before, *, descriptor_refs=None):
+    old_ref, resumed_ref = descriptor_refs or (original, resumed)
     if EXPIRE_SESSION:
         expired = before["expired_session"]
-        assert expired["native_ref"] == original and expired["expires_at"] < before["recorded_at"]
-        assert resumed != original, "an expired native Task session was reused"
+        assert expired["native_ref"] == old_ref and expired["expires_at"] < before["recorded_at"]
+        assert resumed_ref != old_ref and resumed != original, "an expired native Task session was reused"
     else:
-        assert resumed == original, "valid native Task session was not reused"
+        assert resumed_ref == old_ref and resumed == original, "valid native Task session was not reused"
 
 
 def verify():
@@ -1233,7 +1234,9 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
             else:
                 assert_openclaw_native_cache(source_cache, source_checkpoint)
                 original = source_cache["native"]
-            assert_restarted_native(original["session_id"], selected["session_id"], before)
+            # OpenClaw stores a lookup key and a distinct SDK session ID.
+            assert_restarted_native(original["session_id"], selected["session_id"], before,
+                descriptor_refs=(original["session_key"], selected["session_key"]))
     if not LEGACY_CODEX and SOURCE == "codex" and not FAULT:
         assert_codex_native(before["native_sessions"]["codex_shared"], before["task"], require_cache=MODE == "restart")
     if not LEGACY_CODEX and final_runtime == "codex":

@@ -42,7 +42,7 @@ continuation pending verification.
 | Hermes | [Pass 168](evidence/runtime-recovery-1631-case168-abrupt-restart-verified.json) | [Pass 130](evidence/runtime-recovery-1631-case130-expired-session-verified.json) | [Restart 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | [Verified, then resumed 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | Open | Open | Open |
 | QwenPaw | [Pass 171](evidence/runtime-recovery-1631-case171-abrupt-restart-verified.json) | [Pass 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | [Same-process retry 31](evidence/runtime-recovery-1631-case31-delivery.json) | Open | [Rejected 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | Open | Open |
 | DeepSeek | [Pass 137](evidence/runtime-recovery-1631-case137-abrupt-restart-verified.json) | [Pass 165](evidence/runtime-recovery-1631-case165-expired-session-verified.json) | Open | [Parked 170](evidence/runtime-recovery-1631-case170-parked-effect.json) | Open | Open | Open |
-| OpenClaw | [Pass 176](evidence/runtime-recovery-1631-case176-abrupt-restart-verified.json) | Open | Open | Open | Open | Open | Open |
+| OpenClaw | [Pass 176](evidence/runtime-recovery-1631-case176-abrupt-restart-verified.json) | [Pass 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open | [Rejected 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open |
 | OpenHuman | [Pass 161](evidence/runtime-recovery-1631-case161-abrupt-restart-verified.json) | [Partial 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open | [Rejected 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open |
 
 ## Source baseline
@@ -2202,3 +2202,15 @@ The old Worker is omitted from discovery and receives HTTP 403 even with
 the current ETag. The new Worker claims the same Task ID in generation 2.
 This is a deterministic server check. A real Harness reassignment run
 remains open.
+
+
+[Case177 OpenClaw expired session](evidence/runtime-recovery-1631-case177-expired-session-verified.json)
+passed on the same versions as case176. The source session was valid before
+the fixture aged its shared descriptor. The restarted Worker used a
+different native session lookup key and SDK session ID, continued the
+original Task with three single effects, and delivered one canonical
+report without new Matrix input. A competing process received HTTP 409
+at the original step boundary. The first verifier compared the shared
+lookup key with the old SDK session ID. The corrected verifier checks
+both identities and passed against the retained live Task without another
+restart or another execution.

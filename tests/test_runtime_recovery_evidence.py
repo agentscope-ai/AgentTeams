@@ -109,6 +109,17 @@ class RestartSessionEvidenceTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 driver.assert_restarted_native("other", "different", before)
 
+    def test_expiry_checks_distinct_descriptor_and_sdk_identities(self):
+        import runtime_recovery_e2e as driver
+
+        before = {"recorded_at": 99, "expired_session": {"native_ref": "old-key", "expires_at": 98}}
+        with patch.object(driver, "EXPIRE_SESSION", True):
+            driver.assert_restarted_native("old-id", "new-id", before, descriptor_refs=("old-key", "new-key"))
+            for new_id, refs in (("old-id", ("old-key", "new-key")), ("new-id", ("old-key", "old-key")),
+                                 ("new-id", ("wrong-key", "new-key"))):
+                with self.subTest(new_id=new_id, refs=refs), self.assertRaises(AssertionError):
+                    driver.assert_restarted_native("old-id", new_id, before, descriptor_refs=refs)
+
 
 class DeepSeekBoundaryTests(unittest.TestCase):
     def test_active_source_turn_still_needs_the_matching_native_tool_results(self):

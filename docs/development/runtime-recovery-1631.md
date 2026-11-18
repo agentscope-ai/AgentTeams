@@ -15,13 +15,13 @@ the image and shared-contract pins actually tested.
 | Source → Target | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | [Pass 121](evidence/runtime-recovery-1631-case121-verified.json) | — |
-| Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Partial 128](evidence/runtime-recovery-1631-case128-partial.json) |
+| Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Pass 144](evidence/runtime-recovery-1631-case144-verified.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | — |
 | OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Pass 138](evidence/runtime-recovery-1631-case138-verified.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
-| OpenHuman | — | — | — | — | — | — |
+| OpenHuman | — | — | — | — | — | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
 
-**5/6 normal restart lanes and 20/30 directed handoffs have passed.** A dash
+**6/6 normal restart lanes and 21/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1885,7 +1885,7 @@ its remaining turns probing shared paths through a native file tool that
 rejects paths outside the native workspace. It reached the ten-iteration
 limit without submitting the Task. The fixture now directs OpenHuman to
 submit the already persisted paths through TeamHarness. The full
-restart and final delivery remain pending in case143.
+restart and final delivery were later verified in case143.
 
 [Case141 Hermes → OpenHuman](evidence/runtime-recovery-1631-case141-iteration-limit.json)
 completed step two on generation 2 before the native turn exhausted its
@@ -1902,3 +1902,23 @@ descriptor finished publishing. A later read proved the original local
 session and shared descriptor both matched checkpoint 5. The restart uses
 that existing Task. Future valid-reuse checks wait for the matched native
 and shared records before requesting the restart.
+
+[Case143 OpenHuman restart](evidence/runtime-recovery-1631-case143-verified.json)
+passed on Controller `6421981f`, OpenHuman `8165de5` and shared contract
+`cdc2800c`. The same container restarted with a new process and reused
+the verified native session. The Task checkpoint advanced from 5 to 12
+and the generation advanced from 1 to 2.
+
+[Case144 Hermes → OpenHuman](evidence/runtime-recovery-1631-case144-verified.json)
+passed on the same Controller and OpenHuman source, with Hermes `f5d74a3`
+and its shared contract `4fca52d0`. Docker recorded Hermes exit and
+removal before OpenHuman creation. OpenHuman created a native session
+and took over the original Task. The handoff reached completed. The
+checkpoint advanced from 5 to 12 and the generation advanced from 1 to 2.
+
+Both fixtures used preapproved execution for the disposable worker. They
+verified one effect per step, the three persisted artifacts and final
+report hashes, and one final Matrix reply with zero new incoming events
+after the stop. The public reports retain native session IDs and digests,
+message counts, and tool result counts. Raw native chat history is kept
+in the local run evidence.

@@ -1,0 +1,203 @@
+{
+  "case": "186",
+  "task_id": "live-qwenpaw-qwenpaw-186",
+  "scope": "saved report delivered on restart without rerunning effects",
+  "passed": true,
+  "source_revision": "a76f5c0090811e8b8dd7ec9183d00cbefa92f996",
+  "target_revision": "a76f5c0090811e8b8dd7ec9183d00cbefa92f996",
+  "core_revision": "cb08ece332da423eabc56204f150de7adee9bf85",
+  "shared_revision": "b3f896834e34a5b883555875fb13e63b04fb8812",
+  "target_image_id": "sha256:fb25c933991635037d6c805b5a2338fc8692f4380e11740d5337e1a70ec2f4c1",
+  "source_read_receipt": {
+    "source_event": "$7kZ_p9olnZymsLO0IH7dC7sX4XvYLKOlPnQ9tE3U1ko",
+    "read_event": "$2PSCCTiiII2jgqg7efj9HHdx_nss4sr5VwTAgqd_s5A"
+  },
+  "source_tool_processes": [
+    {
+      "pid": 4882,
+      "start_ticks": "3460775"
+    }
+  ],
+  "execution_before": {
+    "generation": 1,
+    "instance_id": "docker/d8844a505d6e4478c565a8723ceb2746ed553a6ebcb07f69eb07550aaac89412/2026-11-18T17:17:30.451727269Z",
+    "process_id": "1:1795022250872798305:86e813962d214dbb8a348f633c40f8f4",
+    "runtime": "qwenpaw",
+    "state": "active",
+    "checkpoint": {
+      "version": 7,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-qwenpaw-qwenpaw-186:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=d50be30c315464486c8dd2c52d22b68a3ca81d7e9848a750799e65448a9e475e; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/output/step-one.json",
+          "sha256": "26db5c51cc5df36700743d8fe95388cd1057ca4e47e411627888bd63621be79b",
+          "size": 356
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/output/step-two.json",
+          "sha256": "c1757b35894dd631f404d8b896170eabc4e641b68978dfc4eb1ef50219af1621",
+          "size": 356
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/output/step-three.json",
+          "sha256": "d50be30c315464486c8dd2c52d22b68a3ca81d7e9848a750799e65448a9e475e",
+          "size": 358
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/result.md",
+        "sha256": "24e0e9eedd086500499f1198a4229b4f460a3ada18d72e0ae200f423d56b61c8",
+        "size": 74
+      },
+      "delivery": "pending",
+      "reply_txn": "task-reply:1ad44dac0f5fdd311a9ca887f40943b401c90a64542809eb2389d52dfe70fbec",
+      "reply_attempt": {
+        "state": "ready"
+      },
+      "saved_at": "2026-11-18T17:20:25.033485376Z"
+    }
+  },
+  "execution_after": {
+    "generation": 2,
+    "instance_id": "docker/d8844a505d6e4478c565a8723ceb2746ed553a6ebcb07f69eb07550aaac89412/2026-11-18T17:20:39.525046303Z",
+    "process_id": "1:1795022441121754668:909e8be5e77b4e65a576062c7eb6b0f8",
+    "runtime": "qwenpaw",
+    "state": "active",
+    "checkpoint": {
+      "version": 9,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-qwenpaw-qwenpaw-186:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=d50be30c315464486c8dd2c52d22b68a3ca81d7e9848a750799e65448a9e475e; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/output/step-one.json",
+          "sha256": "26db5c51cc5df36700743d8fe95388cd1057ca4e47e411627888bd63621be79b",
+          "size": 356
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/output/step-two.json",
+          "sha256": "c1757b35894dd631f404d8b896170eabc4e641b68978dfc4eb1ef50219af1621",
+          "size": 356
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/output/step-three.json",
+          "sha256": "d50be30c315464486c8dd2c52d22b68a3ca81d7e9848a750799e65448a9e475e",
+          "size": 358
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/result.md",
+        "sha256": "24e0e9eedd086500499f1198a4229b4f460a3ada18d72e0ae200f423d56b61c8",
+        "size": 74
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:1ad44dac0f5fdd311a9ca887f40943b401c90a64542809eb2389d52dfe70fbec",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "m8CTk9TFG8"
+      },
+      "reply_event": "$-3FbBjuKcLlVhvmaU_icbYyD5-DP9FdS_dWpx0Sxli8",
+      "saved_at": "2026-11-18T17:21:07.23406277Z"
+    }
+  },
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795022355235007918,
+      "generation": 1,
+      "instance_id": "docker/d8844a505d6e4478c565a8723ceb2746ed553a6ebcb07f69eb07550aaac89412/2026-11-18T17:17:30.451727269Z",
+      "process_id": "1:1795022250872798305:86e813962d214dbb8a348f633c40f8f4",
+      "step": "one",
+      "task_id": "live-qwenpaw-qwenpaw-186",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 3,
+      "executed_at_ns": 1795022379234506453,
+      "generation": 1,
+      "instance_id": "docker/d8844a505d6e4478c565a8723ceb2746ed553a6ebcb07f69eb07550aaac89412/2026-11-18T17:17:30.451727269Z",
+      "process_id": "1:1795022250872798305:86e813962d214dbb8a348f633c40f8f4",
+      "step": "two",
+      "task_id": "live-qwenpaw-qwenpaw-186",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 5,
+      "executed_at_ns": 1795022409234388409,
+      "generation": 1,
+      "instance_id": "docker/d8844a505d6e4478c565a8723ceb2746ed553a6ebcb07f69eb07550aaac89412/2026-11-18T17:17:30.451727269Z",
+      "process_id": "1:1795022250872798305:86e813962d214dbb8a348f633c40f8f4",
+      "step": "three",
+      "task_id": "live-qwenpaw-qwenpaw-186",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/output/step-one.json",
+      "sha256": "26db5c51cc5df36700743d8fe95388cd1057ca4e47e411627888bd63621be79b",
+      "size": 356
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/output/step-two.json",
+      "sha256": "c1757b35894dd631f404d8b896170eabc4e641b68978dfc4eb1ef50219af1621",
+      "size": 356
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/output/step-three.json",
+      "sha256": "d50be30c315464486c8dd2c52d22b68a3ca81d7e9848a750799e65448a9e475e",
+      "size": 358
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-qwenpaw-186/result.md",
+      "sha256": "24e0e9eedd086500499f1198a4229b4f460a3ada18d72e0ae200f423d56b61c8",
+      "size": 74
+    }
+  ],
+  "matrix_before_restart": {
+    "reports": [],
+    "external_inputs": []
+  },
+  "matrix_after_restart": {
+    "reports": [
+      {
+        "event_id": "$-3FbBjuKcLlVhvmaU_icbYyD5-DP9FdS_dWpx0Sxli8",
+        "sender": "@agent-a:recovery-1631.test",
+        "timestamp_ms": 1795022463060
+      }
+    ],
+    "external_inputs": []
+  },
+  "docker_order_ns": {
+    "die": 1795022439489018595,
+    "start": 1795022441028950544
+  },
+  "target_events": [
+    "http.begin",
+    "http.end",
+    "runtime.ready",
+    "startup.begin",
+    "startup.stage",
+    "startup.stage_complete"
+  ],
+  "driver_sha256": "8e1c403c014c9fdd8381d6f8a2bbddc4170c2b450b49692afe8bcd3256acfcdd"
+}

@@ -39,8 +39,8 @@ continuation pending verification.
 | Harness | SIGKILL and resume | Expired session and resume | Saved reply | Uncertain effect | Competing claim | Cancellation and restart | Reassignment |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Codex | [Pass 135](evidence/runtime-recovery-1631-case135-abrupt-restart-verified.json) | [Pass 162](evidence/runtime-recovery-1631-case162-expired-session-verified.json) | Case 01, real Matrix | [Parked 166](evidence/runtime-recovery-1631-case166-parked-effect.json) | [Rejected 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Pass 175](evidence/runtime-recovery-1631-case175-cancelled-restart.json) | [Old owner denied 182](evidence/runtime-recovery-1631-case182-reassignment-verified.json) |
-| Hermes | [Pass 168](evidence/runtime-recovery-1631-case168-abrupt-restart-verified.json) | [Pass 130](evidence/runtime-recovery-1631-case130-expired-session-verified.json) | [Restart 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | [Verified, then resumed 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | Open | Open | [New owner submitted 182](evidence/runtime-recovery-1631-case182-reassignment-verified.json) |
-| QwenPaw | [Pass 171](evidence/runtime-recovery-1631-case171-abrupt-restart-verified.json) | [Pass 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | [Same-process retry 31](evidence/runtime-recovery-1631-case31-delivery.json) | Open | [Rejected 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | Open | Open |
+| Hermes | [Pass 168](evidence/runtime-recovery-1631-case168-abrupt-restart-verified.json) | [Pass 130](evidence/runtime-recovery-1631-case130-expired-session-verified.json) | [Restart 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | [Verified, then resumed 173](evidence/runtime-recovery-1631-case173-completed-report-recovery.json) | [Rejected 187](evidence/runtime-recovery-1631-case187-cancelled-restart.json) | [Pass 187](evidence/runtime-recovery-1631-case187-cancelled-restart.json) | [New owner submitted 182](evidence/runtime-recovery-1631-case182-reassignment-verified.json) |
+| QwenPaw | [Pass 171](evidence/runtime-recovery-1631-case171-abrupt-restart-verified.json) | [Pass 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | [Restart 186](evidence/runtime-recovery-1631-case186-saved-reply-verified.json) | Open | [Rejected 174](evidence/runtime-recovery-1631-case174-expired-session-verified.json) | Open | Open |
 | DeepSeek | [Pass 137](evidence/runtime-recovery-1631-case137-abrupt-restart-verified.json) | [Pass 165](evidence/runtime-recovery-1631-case165-expired-session-verified.json) | Open | [Parked 170](evidence/runtime-recovery-1631-case170-parked-effect.json) | [Rejected 183](evidence/runtime-recovery-1631-case183-cancelled-restart.json) | [Pass 183](evidence/runtime-recovery-1631-case183-cancelled-restart.json) | Open |
 | OpenClaw | [Pass 176](evidence/runtime-recovery-1631-case176-abrupt-restart-verified.json) | [Pass 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open | [Rejected 177](evidence/runtime-recovery-1631-case177-expired-session-verified.json) | Open | Open |
 | OpenHuman | [Pass 161](evidence/runtime-recovery-1631-case161-abrupt-restart-verified.json) | [Pass 181](evidence/runtime-recovery-1631-case181-expired-session-verified.json) | Open | [Parked 185](evidence/runtime-recovery-1631-case185-parked-effect.json) | [Rejected 169](evidence/runtime-recovery-1631-case169-expiry-incomplete.json) | Open | Open |
@@ -2284,3 +2284,18 @@ completed its effects in the original process after the test helper imported
 the wrong MCP package. It sent its report without a restart. The helper now
 uses the packaged stdio server entry point, including QwenPaw's bundled
 location.
+
+[Case186 QwenPaw saved reply](evidence/runtime-recovery-1631-case186-saved-reply-verified.json)
+verified that the report was saved while the native tool was still running
+and before any matching reply reached Matrix. The replacement process
+advanced generation 1 to 2 and checkpoint 7 to 9. It delivered exactly
+one report using the saved transaction and artifact. The independent
+ledger, completed steps, and artifact digests were unchanged, and the
+replacement recorded no model start or incoming Matrix message. Case 31
+remains the separate same-process delivery-retry check.
+
+[Case187 Hermes cancellation](evidence/runtime-recovery-1631-case187-cancelled-restart.json)
+verified that a competing process received HTTP 409, then a Leader
+cancelled the Task after step one. The replacement did not discover
+the cancelled Task, and the independent ledger retained one effect
+from the original process.

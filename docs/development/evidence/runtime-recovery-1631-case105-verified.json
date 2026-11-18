@@ -1,0 +1,246 @@
+{
+  "task_id": "live-qwenpaw-deepseek-harness-105",
+  "case": "105",
+  "scope": "one real qwenpaw-to-deepseek-harness in-progress continuation",
+  "mode": "replace",
+  "fixture_prefix": "recovery-1631-live-20261118-v105",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "6421981fcc9255a0b779a04557769650172e290e",
+    "qwenpaw": "763877d9d98ef95b20a2327a1ae59d1e5724c751",
+    "deepseek-harness": "6f5aadb0963092f050202211281ed964ba94d070",
+    "shared_contract": "52a3659b719abb78c17368ce020403c442d4e5db"
+  },
+  "driver_sha256": "6241969a91cf64ccd022c71d571e66524ee8a861c2e97d8f8e729f1603c85aaf",
+  "native_recovery_sessions": {
+    "hermes": [],
+    "hermes_message_counts": {},
+    "hermes_shared": null,
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": {
+        "schema_version": 1,
+        "kind": "WorkerSessionCache",
+        "member_prefix": "agents/agent-a",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-qwenpaw-deepseek-harness-105"
+        },
+        "runtime": "qwenpaw",
+        "start": {
+          "instance_id": "docker/e64b95921587bc6d473e52ce54b327c24511cf3fa5355aed452b915157f1ddae/2026-11-18T11:03:41.532745088Z",
+          "process_id": "1:1794999821976066873:861e67f51a444278aedb3f0cd6fc4550",
+          "runtime": "qwenpaw"
+        },
+        "generation": 1,
+        "native_ref": "matrix:task:86f52ef83512251844df6406eb1e94bc345b083bf25e847a95c28e7ab04a4a81:472e770e27c64c54a5a55b2e160a3ca3",
+        "native_digest": "1702a71fe43a122c1391051c10d5b88b431547d46c726708390395fbd1ea62d5",
+        "checkpoint_version": 5,
+        "checkpoint_digest": "42875d81730fab3b26622a8740447a08b524e30ea93727bd0aa3cbe3c4bbb847",
+        "config_generation": 3,
+        "expires_at": 1795086383,
+        "saved_at": "2026-11-18T11:06:26Z"
+      },
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "41205a594e674d8d7f9eb337d1c24655b492560dafbb2acbe7bb44391712d13e",
+      "descriptor": null,
+      "config_generation": null
+    },
+    "deepseek": {
+      "native": {
+        "session_id": "session-task-85adb797941e4403870cd40713774095",
+        "native_digest": "7c252f438ab0e4d267f15468ef98c51ea0551c835851887847c2eb97dd4eb141",
+        "turn": 1,
+        "input_id": "matrix-3a82fe56bea069f04f927d1df5481bc29cf3a08ee93b1c3f25108da5990e8209",
+        "task_mentioned": true,
+        "tool_calls": 13,
+        "tool_results": 13,
+        "completed": true
+      },
+      "cache": null
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 5,
+  "checkpoint_after": 12,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/8e00dccf670ec0a1f93d2f1e74fed2d4be4e9994be7e63583df16aea127e64c2/2026-11-18T11:06:51.259917215Z",
+    "process_id": "7:1795000012021280070:435563c552454e76a70603509b4c9e9a",
+    "runtime": "deepseek-harness",
+    "state": "active",
+    "checkpoint": {
+      "version": 12,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-qwenpaw-deepseek-harness-105:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=cc204c3852e5eee5d1f41ca3b7943697d2b977cbf26a860b6f6d94e1fbb6bbc8; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-deepseek-harness-105/output/step-one.json",
+          "sha256": "633ef16a0bd097ffe4c802569e45f261611f5fa372861f1ff4f55e62d8402fcd",
+          "size": 365
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-deepseek-harness-105/output/step-two.json",
+          "sha256": "c33fc8355e342e409d62f4eb733fb579f3e2c9f0f30845da98c3ca74aa62a631",
+          "size": 365
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-qwenpaw-deepseek-harness-105/output/step-three.json",
+          "sha256": "cc204c3852e5eee5d1f41ca3b7943697d2b977cbf26a860b6f6d94e1fbb6bbc8",
+          "size": 367
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-qwenpaw-deepseek-harness-105/result.md",
+        "sha256": "14e24b723c5df6be78ef8bcab3f312da95ecfdf6e940e8acd2fa5c1f84ede3eb",
+        "size": 826
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:44847b948f17de1e9431631da41964df4e74fd8c429d5b351c15eccbc99b2abd",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "RA6HSi1fOj"
+      },
+      "reply_event": "$0274cysfFEfGWpTd5POvc9qHAl3eEQD33tWRsd6uFXo",
+      "saved_at": "2026-11-18T11:10:52.444342037Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T11:04:25Z"
+    },
+    {
+      "action": "progress",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "note": "Step one completed and verified; artifact persisted. Waiting for driver cutover to generation 2.",
+      "seq": 2,
+      "to": "in_progress",
+      "ts": "2026-11-18T11:05:45Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 3,
+      "to": "submitted",
+      "ts": "2026-11-18T11:10:19Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794999901242087881,
+      "generation": 1,
+      "instance_id": "docker/e64b95921587bc6d473e52ce54b327c24511cf3fa5355aed452b915157f1ddae/2026-11-18T11:03:41.532745088Z",
+      "process_id": "1:1794999821976066873:861e67f51a444278aedb3f0cd6fc4550",
+      "step": "one",
+      "task_id": "live-qwenpaw-deepseek-harness-105",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1795000138251658177,
+      "generation": 2,
+      "instance_id": "docker/8e00dccf670ec0a1f93d2f1e74fed2d4be4e9994be7e63583df16aea127e64c2/2026-11-18T11:06:51.259917215Z",
+      "process_id": "7:1795000012021280070:435563c552454e76a70603509b4c9e9a",
+      "step": "two",
+      "task_id": "live-qwenpaw-deepseek-harness-105",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 8,
+      "executed_at_ns": 1795000163060962514,
+      "generation": 2,
+      "instance_id": "docker/8e00dccf670ec0a1f93d2f1e74fed2d4be4e9994be7e63583df16aea127e64c2/2026-11-18T11:06:51.259917215Z",
+      "process_id": "7:1795000012021280070:435563c552454e76a70603509b4c9e9a",
+      "step": "three",
+      "task_id": "live-qwenpaw-deepseek-harness-105",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-deepseek-harness-105/output/step-one.json",
+      "sha256": "633ef16a0bd097ffe4c802569e45f261611f5fa372861f1ff4f55e62d8402fcd",
+      "size": 365
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-deepseek-harness-105/output/step-two.json",
+      "sha256": "c33fc8355e342e409d62f4eb733fb579f3e2c9f0f30845da98c3ca74aa62a631",
+      "size": 365
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-deepseek-harness-105/output/step-three.json",
+      "sha256": "cc204c3852e5eee5d1f41ca3b7943697d2b977cbf26a860b6f6d94e1fbb6bbc8",
+      "size": 367
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-qwenpaw-deepseek-harness-105/result.md",
+      "sha256": "14e24b723c5df6be78ef8bcab3f312da95ecfdf6e940e8acd2fa5c1f84ede3eb",
+      "size": 826
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1795000008276242632,
+    "destroy": 1795000008480735208,
+    "create": 1795000011191290144
+  },
+  "matrix": {
+    "reply_event": "$0274cysfFEfGWpTd5POvc9qHAl3eEQD33tWRsd6uFXo",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$s-DVGM0b4q-wg9hdY72L2zM1Ude68f0RJ-IMrs6Jd9k"
+    ],
+    "read_receipt_events": [
+      "$UNdP3hfvoPG0lR6CfC8eJgsNUEpIkj8jcNh5qE4tRNg"
+    ],
+    "first_source_read_ms": 1794999919908
+  },
+  "operator_handoff": {
+    "id": "live-qwenpaw-deepseek-harness-105",
+    "phase": "completed",
+    "source": {
+      "instance_id": "docker/e64b95921587bc6d473e52ce54b327c24511cf3fa5355aed452b915157f1ddae/2026-11-18T11:03:41.532745088Z",
+      "process_id": "1:1794999821976066873:861e67f51a444278aedb3f0cd6fc4550",
+      "runtime": "qwenpaw"
+    },
+    "target_runtime": "deepseek-harness",
+    "target": {
+      "instance_id": "docker/8e00dccf670ec0a1f93d2f1e74fed2d4be4e9994be7e63583df16aea127e64c2/2026-11-18T11:06:51.259917215Z",
+      "process_id": "7:1795000012021280070:435563c552454e76a70603509b4c9e9a",
+      "runtime": "deepseek-harness"
+    },
+    "source_stop_observed_at": "2026-11-18T11:06:48.312017453Z",
+    "target_registered_at": "2026-11-18T11:07:05.161123348Z",
+    "completed_at": "2026-11-18T11:07:35.253582656Z",
+    "target_image": "recovery-1631/deepseek:local"
+  }
+}

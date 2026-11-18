@@ -16,12 +16,12 @@ the image and shared-contract pins actually tested.
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | — | — |
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Failed 92](evidence/runtime-recovery-1631-case92-oom.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
-| QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | — | — | — |
+| QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | — | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | — | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
 | OpenClaw | — | — | — | — | [Failed 101](evidence/runtime-recovery-1631-case101-openclaw-partial.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
-**4/6 normal restart lanes and 10/30 directed handoffs have passed.** A dash
+**4/6 normal restart lanes and 11/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1588,3 +1588,11 @@ same checkpoint. OpenClaw rejected the attempted inference as a duplicate
 of the original Matrix assignment in the reused native session. The Task
 remained in progress with only step one complete. The gateway lease wait
 and the generation-specific native turn are separate fixes.
+
+[Case105 QwenPaw → DeepSeek](evidence/runtime-recovery-1631-case105-verified.json)
+passed on Controller `6421981f`, QwenPaw `763877d` and DeepSeek `6f5aadb`
+with shared Core `52a3659b`. The original task advanced from checkpoint 5
+to 12 and generation 1 to 2. Docker stopped and removed QwenPaw before
+creating DeepSeek. The verifier checked one effect for each step, four
+artifact/report hashes, and one Matrix report with no new incoming message
+after the old instance stopped.

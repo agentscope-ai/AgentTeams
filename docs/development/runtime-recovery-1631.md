@@ -1782,10 +1782,23 @@ structured tool schemas, and the response carried a textual TeamHarness ACK
 request. The native Task turn timed out again without an ACK. The precise
 point of failure in the tool path still needs diagnosis.
 
-The live driver now supports \`RECOVERY_E2E_EXPIRE_HERMES_SESSION=1\` for a
+The live driver now supports `RECOVERY_E2E_EXPIRE_HERMES_SESSION=1` for a
 normal Hermes restart with an expired shared descriptor. It first proves the
 old native session and checkpoint agree, ages only the test descriptor and
 restarts through the Controller. The verifier requires a fresh native session
 ID and the same Task, effects and result assertions as an ordinary restart.
-This scenario is running separately as case130. The 27 fixture, policy and
-evidence tests passed with the driver change.
+[Case130 passed](evidence/runtime-recovery-1631-case130-expired-session-verified.json)
+on Controller `6421981f` and Hermes `f5d74a3`. The same container stopped and
+started with a new process ID. It replaced the expired descriptor's session
+with a fresh native ID and advanced the original Task from checkpoint 5 to
+12 in generation 2. The oracle recorded each step once, with no new Matrix
+input and one final reply. This adds the expired-session fault scenario.
+The 27 fixture, policy and evidence tests passed with the driver change.
+
+OpenHuman case131 confirmed the native registry contained 52 tools, with
+seven visible to the Task, including the MCP call tool. The model's response
+was parsed into a textual tool request. This run timed out before the
+corresponding tool execution log and ACK. The installed ARM64 image for
+OpenHuman `7788c27` and Core contract `cdc2800c` has now passed startup
+configuration smoke. Case133 runs the same recovery scenario on that
+native image to check whether the failure is independent of emulation.

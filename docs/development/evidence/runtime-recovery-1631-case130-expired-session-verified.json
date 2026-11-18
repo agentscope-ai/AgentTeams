@@ -1,0 +1,261 @@
+{
+  "task_id": "live-hermes-hermes-130",
+  "case": "130",
+  "scope": "Hermes restart with an expired shared session descriptor",
+  "mode": "restart",
+  "fixture_prefix": "recovery-1631-live-20261118-v130",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "6421981fcc9255a0b779a04557769650172e290e",
+    "hermes": "f5d74a34ae90f470263cab88371ad462b8583eef",
+    "shared_contract": "4fca52d09d8568d6cbf5f5fc35f51b6a2c858db8"
+  },
+  "driver_sha256": "ca70264961cebb6024f3a15bab9b16a5f3142bf4ed9ff5372db75ab48c66d220",
+  "native_recovery_sessions": {
+    "hermes": [
+      {
+        "timestamp": "2026-11-18T13:03:25.155202+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "a31f6389c4ed4011a016d00fef1624f1",
+        "event": "task.recovery.session",
+        "task_id": "live-hermes-hermes-130",
+        "team_id": "recovery-team",
+        "generation": 1,
+        "session_id": "20261118_130324_67250560",
+        "checkpoint_version": 0,
+        "reused": false
+      },
+      {
+        "timestamp": "2026-11-18T13:06:42.620912+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "300111180b024199895b74e2fcf919f7",
+        "event": "task.recovery.session",
+        "task_id": "live-hermes-hermes-130",
+        "team_id": "recovery-team",
+        "generation": 2,
+        "session_id": "20261118_130642_bf198a68",
+        "checkpoint_version": 5,
+        "reused": false
+      }
+    ],
+    "hermes_message_counts": {
+      "20261118_130324_67250560": 18,
+      "20261118_130642_bf198a68": 40
+    },
+    "hermes_shared": {
+      "cache": {
+        "schema_version": 1,
+        "kind": "WorkerSessionCache",
+        "member_prefix": "agents/agent-a",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-hermes-hermes-130"
+        },
+        "runtime": "hermes",
+        "start": {
+          "instance_id": "docker/9e64d878bfebf87d956c64afd7b6b0c5e69a3e526985b20ecfbf1908424fe035/2026-11-18T13:01:30.422864315Z",
+          "process_id": "1:1795006891146719859:a31f6389c4ed4011a016d00fef1624f1",
+          "runtime": "hermes"
+        },
+        "generation": 1,
+        "native_ref": "20261118_130324_67250560",
+        "native_digest": "d29bed8e4fcfb0e7e17fc4f6c309b10b90d8d3fa3406c66ee40568ae1db82172",
+        "checkpoint_version": 5,
+        "checkpoint_digest": "b00b4af224f65329de159f58212dc052322c4ef063601cd0a27ec3407c24d815",
+        "config_generation": 3,
+        "expires_at": 1795003546,
+        "saved_at": "2026-11-18T13:05:38Z"
+      },
+      "native_digest": "d29bed8e4fcfb0e7e17fc4f6c309b10b90d8d3fa3406c66ee40568ae1db82172",
+      "message_count": 18,
+      "tool_count": 10,
+      "task_mentioned": true,
+      "config_generation": 3
+    },
+    "hermes_cache": [
+      {
+        "timestamp": "2026-11-18T13:05:38.275670+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "a31f6389c4ed4011a016d00fef1624f1",
+        "event": "task.recovery.cache",
+        "task_id": "live-hermes-hermes-130",
+        "team_id": "recovery-team",
+        "session_id": "20261118_130324_67250560",
+        "native_digest": "d29bed8e4fcfb0e7e17fc4f6c309b10b90d8d3fa3406c66ee40568ae1db82172",
+        "expires_at": 1795093535,
+        "checkpoint_digest": "b00b4af224f65329de159f58212dc052322c4ef063601cd0a27ec3407c24d815"
+      }
+    ],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "3e001dc8b7ed14df9c219b0fe11f2ee27bde6d1dbec3cc0260fd896a6d70a9e9",
+      "descriptor": null,
+      "config_generation": null
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 5,
+  "checkpoint_after": 12,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/9e64d878bfebf87d956c64afd7b6b0c5e69a3e526985b20ecfbf1908424fe035/2026-11-18T13:05:55.631365457Z",
+    "process_id": "1:1795007158909680472:300111180b024199895b74e2fcf919f7",
+    "runtime": "hermes",
+    "state": "active",
+    "checkpoint": {
+      "version": 12,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-hermes-hermes-130:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=ed8ddcf6bae939e1571ff1d3fa17b59493506072aa0af6f07befe0254f7b30ed; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-130/output/step-one.json",
+          "sha256": "0baf99a27c40c946d1f23198106dd710ec56e94efc7111af96f43dd5b0fa6188",
+          "size": 354
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-130/output/step-two.json",
+          "sha256": "d0abe1ca713996fcfc7afd9b7123acac463748c39488d565c300abac5f5ee7af",
+          "size": 354
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-130/output/step-three.json",
+          "sha256": "ed8ddcf6bae939e1571ff1d3fa17b59493506072aa0af6f07befe0254f7b30ed",
+          "size": 356
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-130/result.md",
+        "sha256": "909bcf6e152e8391b3c5111a866675e94f59ae3bcac77667125449c4d73d1f27",
+        "size": 812
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:3d3c9b96fb18a91a60861583e9c0088b784a0ede12b2d44c124a7558ab636143",
+      "reply_attempt": {
+        "state": "sending",
+        "user_id": "@agent-a:recovery-1631.test",
+        "device_id": "DKcNn2R4Mj"
+      },
+      "reply_event": "$uCgEXlJ94LfqRUfFP7WlBJYRmNzpXk-yUPcir3Dz5zI",
+      "saved_at": "2026-11-18T13:19:06.107039599Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T13:03:49Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 2,
+      "to": "submitted",
+      "ts": "2026-11-18T13:18:24Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795007082894039359,
+      "generation": 1,
+      "instance_id": "docker/9e64d878bfebf87d956c64afd7b6b0c5e69a3e526985b20ecfbf1908424fe035/2026-11-18T13:01:30.422864315Z",
+      "process_id": "1:1795006891146719859:a31f6389c4ed4011a016d00fef1624f1",
+      "step": "one",
+      "task_id": "live-hermes-hermes-130",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 6,
+      "executed_at_ns": 1795007280917197759,
+      "generation": 2,
+      "instance_id": "docker/9e64d878bfebf87d956c64afd7b6b0c5e69a3e526985b20ecfbf1908424fe035/2026-11-18T13:05:55.631365457Z",
+      "process_id": "1:1795007158909680472:300111180b024199895b74e2fcf919f7",
+      "step": "two",
+      "task_id": "live-hermes-hermes-130",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 8,
+      "executed_at_ns": 1795007871298805070,
+      "generation": 2,
+      "instance_id": "docker/9e64d878bfebf87d956c64afd7b6b0c5e69a3e526985b20ecfbf1908424fe035/2026-11-18T13:05:55.631365457Z",
+      "process_id": "1:1795007158909680472:300111180b024199895b74e2fcf919f7",
+      "step": "three",
+      "task_id": "live-hermes-hermes-130",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-130/output/step-one.json",
+      "sha256": "0baf99a27c40c946d1f23198106dd710ec56e94efc7111af96f43dd5b0fa6188",
+      "size": 354
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-130/output/step-two.json",
+      "sha256": "d0abe1ca713996fcfc7afd9b7123acac463748c39488d565c300abac5f5ee7af",
+      "size": 354
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-130/output/step-three.json",
+      "sha256": "ed8ddcf6bae939e1571ff1d3fa17b59493506072aa0af6f07befe0254f7b30ed",
+      "size": 356
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-hermes-hermes-130/result.md",
+      "sha256": "909bcf6e152e8391b3c5111a866675e94f59ae3bcac77667125449c4d73d1f27",
+      "size": 812
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1795007155570328466,
+    "start": 1795007158407534126
+  },
+  "matrix": {
+    "reply_event": "$uCgEXlJ94LfqRUfFP7WlBJYRmNzpXk-yUPcir3Dz5zI",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$2uTjfWdp4YiQeafc3c-NcpA8gvMwU-QVmdotky0njSQ"
+    ],
+    "read_receipt_events": [
+      "$oG7QxOUsrXF_hiLjb8PdghnEqKuLePmrifetTJsQOYk"
+    ],
+    "first_source_read_ms": 1795007019924
+  },
+  "expired_session": {
+    "native_ref": "20261118_130324_67250560",
+    "expires_at": 1795003546
+  }
+}

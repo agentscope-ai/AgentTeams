@@ -582,7 +582,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "summary": {
                     "type": "string",
-                    "description": "Worker result summary for submit_task.",
+                    "description": "Required non-blank result summary for submit_task, including when resultMarkdown is supplied.",
                 },
                 "resultMarkdown": {
                     "type": "string",

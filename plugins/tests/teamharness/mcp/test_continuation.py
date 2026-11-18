@@ -159,6 +159,35 @@ def successful_side_effects(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[A
     return calls
 
 
+@pytest.mark.parametrize("fields", [{}, {"summary": ""}, {"summary": " \t\n"}, {"summary": None}, {"summary": 42}])
+def test_submit_requires_nonblank_summary_before_persisting(
+    tmp_path: Path, successful_side_effects: dict[str, list[Any]], fields: dict[str, Any]
+) -> None:
+    project_id, task_id = _write_project_and_task(tmp_path)
+    task_dir = tmp_path / "shared" / "tasks" / task_id
+    task_meta = task_dir / "meta.json"
+    project_meta = tmp_path / "shared" / "projects" / project_id / "meta.json"
+    before = (task_meta.read_bytes(), project_meta.read_bytes())
+    payload = {
+        "taskId": task_id,
+        "status": "SUCCESS",
+        "resultMarkdown": "# Full report",
+        "conclusions": ["One", "Two", "Three"],
+        **fields,
+    }
+    args = {"role": "worker", "action": "submit_task", "workspaceDir": str(tmp_path), "payload": payload}
+
+    rejected = _tool_payload("taskflow", args)
+
+    assert rejected["ok"] is False
+    assert "summary" in rejected["error"]
+    assert (task_meta.read_bytes(), project_meta.read_bytes()) == before
+    assert not (task_dir / "result.md").exists()
+    assert not any(successful_side_effects.values())
+    payload["summary"] = "The result is ready."
+    assert _tool_payload("taskflow", args)["task"]["status"] == "submitted"
+
+
 def test_first_submission_records_stable_continuation_identity(
     tmp_path: Path,
     successful_side_effects: dict[str, list[Any]],

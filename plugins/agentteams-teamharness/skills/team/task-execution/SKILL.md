@@ -158,6 +158,7 @@ artifact's purpose, such as `analysis.md`, `trace-summary.log`, or
 `patch-notes.md`; avoid vague names like `output.md` when there are multiple
 files.
 
+Include a non-blank `payload.summary` with every `submit_task` call, even when you supply a full report.
 Supply your complete report as `payload.resultMarkdown` in `submit_task` to
 save `shared/tasks/{task-id}/result.md` and submit it in one call. Include the
 actual findings and verification evidence; this does not run tests for you.

@@ -269,11 +269,13 @@ def refresh_controller():
     print(json.dumps({"controller_image": CORE_IMAGE, "replaced_only_owned_fixture": True}))
 
 
-def native_sessions(previous_qwen_ref=""):
+def native_sessions(previous_qwen_ref="", *, verify_qwen_route=False):
     runtime = api("GET", "workers/agent-a").get("runtime")
     task = api("GET", "tasks/"+TASK_ID+"/meta?team=recovery-team")
     routes = []
-    if runtime == "qwenpaw":
+    # Cutover validates the source SDK session against its shared descriptor.
+    # Trace readback is mandatory when selecting the final QwenPaw route.
+    if runtime == "qwenpaw" and verify_qwen_route:
         traces = api("GET", "traces?"+urllib.parse.urlencode({"worker": "agent-a", "task": TASK_ID, "runtime": "qwenpaw", "limit": 100, "hours": 1}))
         for row in traces.get("data", []):
             meta = row.get("metadata") or {}
@@ -906,7 +908,7 @@ print(json.dumps({"reply_event":p["event"],"report_copies":len(matches),"externa
         first_registration = next(row for row in calls if row["method"] == "REGISTER" and row["step"] == "one")
         assert matrix["first_source_read_ms"] <= first_registration["at_ns"] // 1000000, "the initial source must be read before step one"
     old_ref = before["native_sessions"]["qwenpaw_shared"]["cache"]["native_ref"] if middle else ""
-    native = native_sessions(old_ref)
+    native = native_sessions(old_ref, verify_qwen_route=final_runtime == "qwenpaw")
     if SOURCE == "openhuman":
         assert_openhuman_native_cache(before["native_sessions"]["openhuman"], before["task"]["execution"], TASK_ID)
     if final_runtime == "openhuman":

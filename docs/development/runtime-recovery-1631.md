@@ -18,7 +18,7 @@ the image and shared-contract pins actually tested.
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | — | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
-| OpenClaw | — | — | — | — | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
+| OpenClaw | — | [Source timeout 113](evidence/runtime-recovery-1631-case113-openclaw-source-timeout.json) | — | — | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
 **5/6 normal restart lanes and 13/30 directed handoffs have passed.** A dash
@@ -1670,3 +1670,9 @@ then stopped the returned Codex container through the controller, sent one
 Matrix message while the instance was stopped, and started the same
 container and image. The new process handled that pending event once
 without further input.
+
+[Case113 OpenClaw → Hermes source failure](evidence/runtime-recovery-1631-case113-openclaw-source-timeout.json)
+reached the native OpenClaw prompt but never completed step one before
+the 600-second fixture deadline. The task remained assigned and the
+independent ledger had no effects, so no cutover was requested. This
+records an inconclusive switch attempt with an observed source failure.

@@ -188,6 +188,8 @@ case "$1" in
                 ;;
             *"printenv AGENTTEAMS_FS_ENDPOINT"*)
                 case "$*" in
+                    *"custom-worker"*) echo "http://custom-controller:9000" ;;
+                    *"custom-controller"*) echo "http://127.0.0.1:9000" ;;
                     *"agentteams-manager"*) echo "http://agentteams-controller:9000" ;;
                     *)
                         [ "${STUB_SCENARIO:-ok}" = "storage_embedded" ] && echo "http://127.0.0.1:9000" || echo "http://rustfs.example:9000"
@@ -196,7 +198,8 @@ case "$1" in
                 ;;
             *"printenv AGENTTEAMS_STORAGE_PROVIDER"*)
                 case "$*" in
-                    *"agentteams-manager"*) echo "minio" ;;
+                    *"custom-controller"*) echo "" ;;
+                    *"custom-worker"*|*"agentteams-manager"*) echo "minio" ;;
                     *) [ "${STUB_SCENARIO:-ok}" = "storage_embedded" ] && echo "" || echo "s3" ;;
                 esac
                 ;;
@@ -256,6 +259,11 @@ case "$1" in
         ;;
     rename|rm) exit 0 ;;
     ps)
+        if [ "${STUB_SCENARIO:-ok}" = "storage_other_stack" ]; then
+            printf '%s\n' custom-controller custom-worker
+            case "$*" in *"network=agentteams-net"*) ;; *) echo agentteams-controller ;; esac
+            exit 0
+        fi
         echo "agentteams-controller"
         case "${STUB_SCENARIO:-ok}" in storage_split|storage_embedded) echo "agentteams-manager" ;; esac
         ;;
@@ -386,6 +394,13 @@ run_case ok preflight --env-file "${TMP}/external.env" --backup-dir "${TMP}/b3s1
 assert_eq "${RC}" "0" "preflight storage consistent rc"
 assert_contains '"consistent":true' "${OUT}" "preflight storage consistent flag"
 assert_contains '"components":' "${OUT}" "preflight storage components array"
+
+# A separately named embedded stack uses loopback and its own controller DNS.
+run_case storage_other_stack preflight --controller-name custom-controller --env-file "${TMP}/embedded.env" --backup-dir "${TMP}/b3sn" --json
+assert_eq "${RC}" "0" "preflight isolated named stack rc"
+assert_contains '"consistent":true' "${OUT}" "preflight named embedded aliases"
+assert_contains '"name":"custom-worker"' "${OUT}" "preflight named worker included"
+assert_not_contains '"name":"agentteams-controller"' "${OUT}" "preflight excluded a different Docker network"
 
 # 3.9 live split-brain fails closed
 run_case storage_split preflight --env-file "${TMP}/external.env" --backup-dir "${TMP}/b3s2" --json

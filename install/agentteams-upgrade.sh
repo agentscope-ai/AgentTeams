@@ -854,6 +854,11 @@ cmd_preflight() {
     # one component still writes to the old engine, which is exactly the
     # state an upgrade/migration must not silently accept.
     local storage_components="" storage_consistent="true" storage_ref="" storage_bucket_ref="" c ep provider bucket comp ckey
+    local storage_ps_args=(ps --format '{{.Names}}')
+    case "${net}" in
+        ""|default|bridge|host|none|container:*) ;;
+        *) storage_ps_args+=(--filter "network=${net}") ;;
+    esac
     while IFS= read -r c; do
         [ -n "${c}" ] || continue
         case "${c}" in rustfs*|minio*|*minio*|agentteams-dashboard|agentteams-docker-proxy|*dashboard*|*proxy*) continue ;; esac
@@ -873,7 +878,7 @@ cmd_preflight() {
             s3|external-s3) ;;
             *)
                 case "${ep}" in
-                    *"127.0.0.1:9000"*|*"localhost:9000"*|*"agentteams-controller:9000"*)
+                    *"127.0.0.1:9000"*|*"localhost:9000"*|"http://${CONTROLLER_NAME}:9000")
                         ckey="embedded-minio"
                         ;;
                 esac
@@ -893,7 +898,7 @@ cmd_preflight() {
                 storage_consistent="false"
             fi
         fi
-    done < <("${DOCKER_CMD}" ps --format '{{.Names}}' 2>/dev/null || true)
+    done < <("${DOCKER_CMD}" "${storage_ps_args[@]}" 2>/dev/null || true)
     storage_components="[${storage_components}]"
     if [ "${storage_components}" = "[]" ]; then
         warn "no live component storage env found; storage consistency not verified"

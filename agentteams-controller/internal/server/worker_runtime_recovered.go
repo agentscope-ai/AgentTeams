@@ -74,6 +74,7 @@ func (h *WorkerMatrixHandler) ConfirmHandoffRecovery(w http.ResponseWriter, r *h
 
 func (h *WorkerMatrixHandler) observeRecoveredWork(ctx context.Context, name string, op *service.WorkerHandoff, owners []string, ref *service.WorkerCheckpointRef) error {
 	var raw json.RawMessage
+	var taskStatus string
 	switch ref.Kind {
 	case "task":
 		if !coordinationSafeID.MatchString(ref.TeamID) || !coordinationSafeID.MatchString(ref.TaskID) {
@@ -84,11 +85,11 @@ func (h *WorkerMatrixHandler) observeRecoveredWork(ctx context.Context, name str
 			return fmt.Errorf("recovery task snapshot unavailable: %w", err)
 		}
 		var task map[string]json.RawMessage
-		var taskID, status, assigned string
-		if json.Unmarshal(body, &task) != nil || json.Unmarshal(task["task_id"], &taskID) != nil || taskID != ref.TaskID || json.Unmarshal(task["status"], &status) != nil {
+		var taskID, assigned string
+		if json.Unmarshal(body, &task) != nil || json.Unmarshal(task["task_id"], &taskID) != nil || taskID != ref.TaskID || json.Unmarshal(task["status"], &taskStatus) != nil {
 			return errors.New("invalid recovery task snapshot")
 		}
-		if status == "cancelled" {
+		if taskStatus == "cancelled" {
 			ref.Outcome = "cancelled"
 			return nil
 		}
@@ -121,8 +122,23 @@ func (h *WorkerMatrixHandler) observeRecoveredWork(ctx context.Context, name str
 		return nil
 	}
 	cp := execution.Checkpoint
+	terminalWork := ref.Kind == "message" || taskStatus == "submitted" || taskStatus == "completed"
+	deliverySatisfiesWork := func() bool {
+		if cp == nil || cp.Delivery != "delivered" || cp.Result == nil || cp.ReplyEvent == "" {
+			return false
+		}
+		if ref.SourceProgressReplyTxn != "" {
+			// The Task continued beyond this source reply, even if the target
+			// had to deliver that reply before starting its own next step.
+			return terminalWork && cp.ReplyTxn != ref.SourceProgressReplyTxn
+		}
+		if ref.PendingReplyTxn != "" {
+			return cp.ReplyTxn == ref.PendingReplyTxn
+		}
+		return terminalWork
+	}
 	// Older handoff records can include work already delivered by the source.
-	if cp != nil && execution.Generation == ref.Generation && cp.Version == ref.CheckpointVersion && cp.Delivery == "delivered" && cp.ReplyEvent != "" {
+	if deliverySatisfiesWork() && execution.Generation == ref.Generation && cp.Version == ref.CheckpointVersion {
 		ref.Outcome, ref.ReplyEvent = "already_delivered", cp.ReplyEvent
 		return nil
 	}
@@ -137,9 +153,9 @@ func (h *WorkerMatrixHandler) observeRecoveredWork(ctx context.Context, name str
 		return fmt.Errorf("%w: target has not checkpointed its recovery execution", service.ErrWorkerStateConflict)
 	}
 	switch {
-	case cp.Delivery == "delivered" && cp.Result != nil && cp.ReplyEvent != "" && (ref.PendingReplyTxn == "" || ref.PendingReplyTxn == cp.ReplyTxn):
+	case deliverySatisfiesWork():
 		ref.Outcome, ref.ReplyEvent = "delivered", cp.ReplyEvent
-	case ref.PendingReplyTxn != "" || cp.Delivery == "pending":
+	case (ref.PendingReplyTxn != "" && ref.SourceProgressReplyTxn == "") || cp.Delivery == "pending":
 		return fmt.Errorf("%w: saved reply still awaits delivery", service.ErrWorkerStateConflict)
 	case ref.CompletedStepCount != nil && len(cp.CompletedSteps) > *ref.CompletedStepCount:
 		ref.Outcome = "advanced"

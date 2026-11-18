@@ -282,7 +282,7 @@ func TestRuntimeHandoffAcceptedTaskWithSavedReplyPermitsDeliveryOnly(t *testing.
 	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alice", Team: "alpha-team"}
 	refs := []service.WorkerCheckpointRef{}
 	raw, _ := json.Marshal(execution)
-	if err := collectBoundary(&refs, service.WorkerCheckpointRef{Kind: "task", TeamID: "alpha-team", TaskID: "t1"}, raw, &service.WorkerHandoff{ID: "switch", Source: f.start}); err != nil || len(refs) != 1 || refs[0].PendingReplyTxn != "fixed" {
+	if err := collectBoundary(&refs, service.WorkerCheckpointRef{Kind: "task", TeamID: "alpha-team", TaskID: "t1"}, raw, &service.WorkerHandoff{ID: "switch", Source: f.start}, false); err != nil || len(refs) != 1 || refs[0].PendingReplyTxn != "fixed" {
 		t.Fatalf("saved reply was not a safe handoff boundary: %+v %v", refs, err)
 	}
 	f.replace()
@@ -358,5 +358,82 @@ func TestRuntimeHandoffLostSourceClassifiesOnlyItsOwnAuthoritativeWork(t *testin
 	refs, err = inspector(ctx, &worker, &op)
 	if err != nil || len(refs) != 1 || refs[0].Kind != "message" {
 		t.Fatalf("reassigned task remained in recovery scope %+v %v", refs, err)
+	}
+}
+
+func TestRuntimeHandoffDeliveredProgressStillRequiresTargetStep(t *testing.T) {
+	f := newMatrixExecutionFixture(t, nil)
+	ctx := t.Context()
+	f.h.recovery.project = newProjectTestHandler(t, f.storage, teamWithRoster("alpha-team"))
+	owner := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alice", WorkerName: "runtime-alice", Team: "alpha-team"}
+	target := service.WorkerStart{Runtime: "codex", InstanceID: "actual/target", ProcessID: "target"}
+	op := &service.WorkerHandoff{ID: "switch", Source: f.start, Target: &target}
+	cp := &taskCheckpoint{Version: 5, CompletedSteps: []string{"one"}, RemainingSteps: []string{"two", "three"},
+		Operation: &taskOperation{ID: "one", State: "verified", Evidence: "output/one"},
+		Result:    &taskArtifact{Key: "progress.md"}, ReplyTxn: "progress-one", ReplyEvent: "$progress", Delivery: "delivered"}
+	e := taskExecution{Generation: 1, InstanceID: f.start.InstanceID, ProcessID: f.start.ProcessID, Runtime: f.start.Runtime, State: "active", Checkpoint: cp, ReplyAcknowledgedGeneration: 1}
+	put := func(status string) {
+		putTask(f.storage, taskMetaKey, taskMeta(map[string]any{"status": status, "assigned_to": "runtime-alice", "execution": e}))
+	}
+	put("in_progress")
+	refs, err := f.h.handoffRefs(ctx, owner, "runtime-alice", &service.WorkerMatrixState{}, op, false)
+	if err != nil || len(refs) != 1 || refs[0].SourceProgressReplyTxn != "progress-one" || refs[0].CheckpointVersion != 5 {
+		t.Fatalf("dropped source progress: %+v %v", refs, err)
+	}
+	ref := &refs[0]
+	e.Generation++ // A replacement can inherit the checkpoint, but not the acknowledgement.
+	put("in_progress")
+	if _, err := f.h.handoffRefs(ctx, owner, "runtime-alice", &service.WorkerMatrixState{}, op, false); !errors.Is(err, service.ErrWorkerStateConflict) {
+		t.Fatalf("active process inherited a release: %v", err)
+	}
+	e.Generation--
+	put("in_progress")
+	observe := func() error {
+		return f.h.observeRecoveredWork(ctx, "runtime-alice", op, []string{"runtime-alice"}, ref)
+	}
+	if err := observe(); !errors.Is(err, service.ErrWorkerStateConflict) {
+		t.Fatalf("old source delivery completed target: %v", err)
+	}
+	e.Generation, e.InstanceID, e.ProcessID, e.Runtime = 2, target.InstanceID, target.ProcessID, target.Runtime
+	cp.Version++
+	put("in_progress")
+	if err := observe(); !errors.Is(err, service.ErrWorkerStateConflict) {
+		t.Fatalf("reclaimed copy of the same step completed target: %v", err)
+	}
+	cp.CompletedSteps = append(cp.CompletedSteps, "two")
+	cp.Version++
+	put("in_progress")
+	if err := observe(); err != nil || ref.Outcome != "advanced" || ref.TargetGeneration != 2 {
+		t.Fatalf("new step not accepted: %+v %v", ref, err)
+	}
+	// A pending progress reply from an unfinished Task must first be delivered.
+	// Its own delivery receipt cannot also prove that the target resumed work.
+	cp.CompletedSteps = []string{"one"}
+	cp.Delivery, cp.ReplyEvent = "pending", ""
+	e.Generation, e.InstanceID, e.ProcessID, e.Runtime = 1, f.start.InstanceID, f.start.ProcessID, f.start.Runtime
+	put("in_progress")
+	refs, err = f.h.handoffRefs(ctx, owner, "runtime-alice", &service.WorkerMatrixState{}, op, false)
+	if err != nil || len(refs) != 1 || refs[0].PendingReplyTxn != "progress-one" || refs[0].SourceProgressReplyTxn != "progress-one" {
+		t.Fatalf("pending progress lost: %+v %v", refs, err)
+	}
+	ref = &refs[0]
+	e.Generation, e.InstanceID, e.ProcessID, e.Runtime = 2, target.InstanceID, target.ProcessID, target.Runtime
+	cp.Version++
+	cp.Delivery, cp.ReplyEvent = "delivered", "$progress"
+	put("in_progress")
+	if err := observe(); !errors.Is(err, service.ErrWorkerStateConflict) {
+		t.Fatalf("delivering a progress update completed unfinished work: %v", err)
+	}
+	cp.CompletedSteps = append(cp.CompletedSteps, "two")
+	cp.Version++
+	put("in_progress")
+	if err := observe(); err != nil || ref.Outcome != "advanced" {
+		t.Fatalf("pending progress blocked new completed step: %+v %v", ref, err)
+	}
+
+	put("submitted")
+	refs, err = f.h.handoffRefs(ctx, owner, "runtime-alice", &service.WorkerMatrixState{}, op, false)
+	if err != nil || len(refs) != 0 {
+		t.Fatalf("submitted and delivered Task remained active: %+v %v", refs, err)
 	}
 }

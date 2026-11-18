@@ -57,6 +57,7 @@ type WorkerCheckpointRef struct {
 	CheckpointVersion       uint64 `json:"checkpoint_version"`
 	CompletedStepCount      *int   `json:"completed_step_count,omitempty"`
 	PendingReplyTxn         string `json:"pending_reply_txn,omitempty"`
+	SourceProgressReplyTxn  string `json:"source_progress_reply_txn,omitempty"`
 	VerifiedOperation       string `json:"verified_operation,omitempty"`
 	RequiresVerification    bool   `json:"requires_verification,omitempty"`
 	Outcome                 string `json:"outcome,omitempty"`

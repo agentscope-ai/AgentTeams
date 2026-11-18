@@ -31,6 +31,8 @@ type taskExecution struct {
 	State      string          `json:"state"`
 	Checkpoint *taskCheckpoint `json:"checkpoint,omitempty"`
 	HandoffID  string          `json:"handoff_id,omitempty"`
+	// Only the CAS that acknowledges a saved reply can seal its native turn.
+	ReplyAcknowledgedGeneration uint64 `json:"reply_acknowledged_generation,omitempty"`
 }
 
 type taskArtifact struct {
@@ -377,6 +379,7 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		writeError(w, 409, "this saved result requires device-scoped Matrix delivery")
 		return
 	}
+	execution.ReplyAcknowledgedGeneration = 0
 	switch input.Action {
 	case "claim":
 		if !sameProcess {
@@ -404,6 +407,9 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		if err := h.validateCheckpoint(r.Context(), key, execution.Checkpoint, input.Checkpoint); err != nil {
 			writeError(w, 409, err.Error())
 			return
+		}
+		if previous := execution.Checkpoint; previous != nil && previous.Delivery == "pending" && input.Checkpoint.Delivery == "delivered" {
+			execution.ReplyAcknowledgedGeneration = execution.Generation
 		}
 		execution.Checkpoint = input.Checkpoint
 		execution.State = "active"

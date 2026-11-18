@@ -115,8 +115,8 @@ func (h *WorkerMatrixHandler) ConfirmHandoffBoundary(w http.ResponseWriter, r *h
 
 func (h *WorkerMatrixHandler) handoffRefs(ctx context.Context, caller *authpkg.CallerIdentity, name string, matrix *service.WorkerMatrixState, op *service.WorkerHandoff, lost bool) ([]service.WorkerCheckpointRef, error) {
 	refs := []service.WorkerCheckpointRef{}
-	collect := func(ref service.WorkerCheckpointRef, raw json.RawMessage) error {
-		err := collectBoundary(&refs, ref, raw, op)
+	collect := func(ref service.WorkerCheckpointRef, raw json.RawMessage, openTask bool) error {
+		err := collectBoundary(&refs, ref, raw, op, openTask)
 		if lost && errors.Is(err, service.ErrWorkerStateConflict) {
 			var execution taskExecution
 			if json.Unmarshal(raw, &execution) != nil {
@@ -138,12 +138,12 @@ func (h *WorkerMatrixHandler) handoffRefs(ctx context.Context, caller *authpkg.C
 			return nil, errors.New("owned tasks unavailable")
 		}
 		for _, row := range tasks {
-			var taskID string
-			if json.Unmarshal(row.Task["task_id"], &taskID) != nil {
+			var taskID, status string
+			if json.Unmarshal(row.Task["task_id"], &taskID) != nil || json.Unmarshal(row.Task["status"], &status) != nil {
 				return nil, errors.New("task identity unavailable")
 			}
 			ref := service.WorkerCheckpointRef{Kind: "task", TeamID: row.Team, TaskID: taskID}
-			if err := collect(ref, row.Task["execution"]); err != nil {
+			if err := collect(ref, row.Task["execution"], status == "in_progress" || status == "assigned"); err != nil {
 				return nil, err
 			}
 		}
@@ -155,7 +155,7 @@ func (h *WorkerMatrixHandler) handoffRefs(ctx context.Context, caller *authpkg.C
 		}
 		if input.Intent == "message" && (input.Work == nil || input.Work.Kind == "message") {
 			ref := service.WorkerCheckpointRef{Kind: "message", EventKey: key}
-			if err := collect(ref, input.Execution); err != nil {
+			if err := collect(ref, input.Execution, false); err != nil {
 				return nil, err
 			}
 		}
@@ -213,7 +213,7 @@ func NewLostHandoffInspector(deps ServerDeps) func(context.Context, *v1beta1.Wor
 	}
 }
 
-func collectBoundary(refs *[]service.WorkerCheckpointRef, ref service.WorkerCheckpointRef, raw json.RawMessage, op *service.WorkerHandoff) error {
+func collectBoundary(refs *[]service.WorkerCheckpointRef, ref service.WorkerCheckpointRef, raw json.RawMessage, op *service.WorkerHandoff, openTask bool) error {
 	if len(raw) == 0 {
 		zero := 0
 		ref.CompletedStepCount = &zero
@@ -224,7 +224,7 @@ func collectBoundary(refs *[]service.WorkerCheckpointRef, ref service.WorkerChec
 	if json.Unmarshal(raw, &execution) != nil || execution.Generation == 0 {
 		return errors.New("invalid authoritative execution record")
 	}
-	if execution.State == "cancelled" || (execution.Checkpoint != nil && execution.Checkpoint.Delivery == "delivered") {
+	if execution.State == "cancelled" || (!openTask && execution.Checkpoint != nil && execution.Checkpoint.Delivery == "delivered") {
 		return nil
 	}
 	cp := execution.Checkpoint
@@ -234,7 +234,19 @@ func collectBoundary(refs *[]service.WorkerCheckpointRef, ref service.WorkerChec
 	// A saved result permits only replay of its stable reply transaction.
 	// It can move even when the source stopped before recording release.
 	deliveryOnly := cp.Delivery == "pending" && cp.Result != nil && cp.ReplyTxn != ""
-	if !deliveryOnly && (execution.State != "released" || (execution.HandoffID != "" && execution.HandoffID != op.ID && execution.InstanceID == op.Source.InstanceID)) {
+	// Native turn completion can send a progress reply while the Task still
+	// has more steps. Its acknowledged result is a boundary only when the
+	// actual source also committed evidence of completed work.
+	acknowledgedProgress := execution.ReplyAcknowledgedGeneration == execution.Generation && openTask && cp.Delivery == "delivered" && cp.ReplyEvent != "" && cp.ReplyTxn != "" && cp.Result != nil &&
+		(len(cp.CompletedSteps) > 0 || (cp.Operation != nil && cp.Operation.State == "verified" && cp.Operation.Evidence != "")) &&
+		execution.InstanceID == op.Source.InstanceID && execution.ProcessID == op.Source.ProcessID && execution.Runtime == op.Source.Runtime
+	if openTask && (cp.Delivery == "delivered" || (deliveryOnly && len(cp.RemainingSteps) > 0)) {
+		ref.SourceProgressReplyTxn = cp.ReplyTxn
+		if ref.SourceProgressReplyTxn == "" {
+			return fmt.Errorf("%w: progress reply is missing its transaction", service.ErrWorkerStateConflict)
+		}
+	}
+	if !deliveryOnly && !acknowledgedProgress && (execution.State != "released" || (execution.HandoffID != "" && execution.HandoffID != op.ID && execution.InstanceID == op.Source.InstanceID)) {
 		return fmt.Errorf("%w: source execution has not released its current step", service.ErrWorkerStateConflict)
 	}
 	if len(cp.CompletedSteps)+len(cp.RemainingSteps) == 0 && cp.Result == nil && cp.Operation == nil {

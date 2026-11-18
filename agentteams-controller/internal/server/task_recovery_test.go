@@ -258,6 +258,32 @@ func TestTaskRecoveryPendingReplyCannotBeReplacedOrDropped(t *testing.T) {
 	if err := h.validateCheckpoint(t.Context(), taskMetaKey, old, next); err != nil {
 		t.Fatalf("same saved reply must accept delivery acknowledgement: %v", err)
 	}
+	// Only the original pending-to-delivered CAS seals the turn. Any later
+	// claim or checkpoint invalidates it, even if the old receipt remains.
+	owner := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	h.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
+		return "instance", "codex", nil
+	}
+	initial := taskExecution{Generation: 3, InstanceID: "instance", ProcessID: "proc", Runtime: "codex", State: "active", Checkpoint: old}
+	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": owner.Username, "execution": initial}))
+	update := func(action string, cp *taskCheckpoint, wantAck uint64) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"action": action, "instance_id": "instance", "process_id": "proc", "checkpoint": cp})
+		r := withCaller(httptest.NewRequest("POST", "/api/v1/tasks/t1/execution?team=alpha-team", strings.NewReader(string(body))), owner)
+		r.SetPathValue("id", "t1")
+		r.Header.Set("If-Match", taskMetaETag(t, store, taskMetaKey))
+		w := httptest.NewRecorder()
+		h.UpdateExecution(w, r)
+		var result struct{ Execution taskExecution }
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Execution.ReplyAcknowledgedGeneration != wantAck {
+			t.Fatalf("%s: %d %s", action, w.Code, w.Body)
+		}
+	}
+	update("checkpoint", next, 3)
+	update("claim", nil, 0)
+	next.Version++
+	update("checkpoint", next, 0)
+
 }
 
 func TestSubmittedTaskRecoversPersistedReportWithoutReexecuting(t *testing.T) {

@@ -1,0 +1,222 @@
+{
+  "task_id": "live-openclaw-openclaw-110",
+  "case": "110",
+  "scope": "one real openclaw-to-openclaw in-progress continuation",
+  "mode": "restart",
+  "fixture_prefix": "recovery-1631-live-20261118-v110",
+  "authoritative_report_verified": true,
+  "sources": {
+    "core": "6421981fcc9255a0b779a04557769650172e290e",
+    "openclaw": "c6dcf56695d1e924db750d53c8d3f0001959adee",
+    "shared_contract": "cdc2800ced029e48545eeb86e81fdc5d2e4d62f6"
+  },
+  "driver_sha256": "6241969a91cf64ccd022c71d571e66524ee8a861c2e97d8f8e729f1603c85aaf",
+  "native_recovery_sessions": {
+    "hermes": [],
+    "hermes_message_counts": {},
+    "hermes_shared": null,
+    "hermes_cache": [],
+    "codex": null,
+    "qwenpaw": null,
+    "qwenpaw_native": [],
+    "qwenpaw_shared": {
+      "cache": null,
+      "native": [],
+      "routes": []
+    },
+    "openclaw_cache": null,
+    "openhuman": {
+      "cache": null,
+      "authority": "9b680f14a48a1f3eaaa465b8e116c2a5b3b39735a29b9c96dfe7c78330609b02",
+      "descriptor": null,
+      "config_generation": null
+    },
+    "openclaw": {
+      "cache": null,
+      "native": null,
+      "shared_cache": {
+        "schema_version": 1,
+        "kind": "WorkerSessionCache",
+        "member_prefix": "agents/agent-a",
+        "work": {
+          "kind": "task",
+          "team_id": "recovery-team",
+          "task_id": "live-openclaw-openclaw-110"
+        },
+        "runtime": "openclaw",
+        "start": {
+          "instance_id": "docker/f5aff3fca535f3fa9bd8adf4d557f5ff3fc417fff7071f9174b682116bcdd355/2026-11-18T11:25:21.45262974Z",
+          "process_id": "1:1795001121594399727:7ab8f414185f4caea967369b5374c5b0",
+          "runtime": "openclaw"
+        },
+        "generation": 1,
+        "native_ref": "agent:main:agentteams-task:d8bd72a1e1e48fa69bec17d21d64b12af0ad676409c661c0acf0c550b6f866e6:54f11b88-6083-458e-971d-74922039b71b",
+        "native_digest": "24ed6d404a316405d11481f02eea99243a28fdaa746e190b287fc15cdaf4a6ad",
+        "checkpoint_version": 4,
+        "checkpoint_digest": "20bc9e54e75ebaaae59ac0e7fd16def0dc01060c2701b2b43d457977763eaba1",
+        "config_generation": 3,
+        "expires_at": 1795087667,
+        "saved_at": "2026-11-18T11:27:50Z"
+      },
+      "shared_native": {
+        "session_key": "agent:main:agentteams-task:d8bd72a1e1e48fa69bec17d21d64b12af0ad676409c661c0acf0c550b6f866e6:54f11b88-6083-458e-971d-74922039b71b",
+        "session_id": "dd948765-bc7b-4615-b7ea-dc699d63259b",
+        "native_digest": "b2da804f9ea5fee238b6ec1f456bb31cd5d4d00de925f310603c9aeaf020ae60",
+        "message_count": 69,
+        "task_mentioned": true,
+        "has_recovery_turn": true
+      },
+      "turn_sessions": [
+        {
+          "session_key": "agent:main:agentteams-task:d8bd72a1e1e48fa69bec17d21d64b12af0ad676409c661c0acf0c550b6f866e6:54f11b88-6083-458e-971d-74922039b71b",
+          "session_id": "dd948765-bc7b-4615-b7ea-dc699d63259b",
+          "native_digest": "b2da804f9ea5fee238b6ec1f456bb31cd5d4d00de925f310603c9aeaf020ae60",
+          "message_count": 69,
+          "task_mentioned": true,
+          "has_recovery_turn": true
+        }
+      ],
+      "config_generation": 3
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 4,
+  "checkpoint_after": 10,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/f5aff3fca535f3fa9bd8adf4d557f5ff3fc417fff7071f9174b682116bcdd355/2026-11-18T11:27:56.382295203Z",
+    "process_id": "1:1795001278878186211:fd8eef5770f94b6a99328445153dad0c",
+    "runtime": "openclaw",
+    "state": "active",
+    "checkpoint": {
+      "version": 10,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-openclaw-openclaw-110:three",
+        "state": "verified",
+        "evidence": "Independent effect ledger; persisted output SHA256=1665f84dc85922a0f40bfb70911bb9615ea812f03040fd822d81ca8192986588; step=three; count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-110/output/step-one.json",
+          "sha256": "af15b986e926c3bdd708c6f2daef9ffd05e7ba207dd4e335720b86923aabd84c",
+          "size": 357
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-110/output/step-two.json",
+          "sha256": "e5f8bc4a3cc1fdce58f591b74d4edfaccb7c50dac2dd1f7acd75d3dbbffe1843",
+          "size": 358
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-110/output/step-three.json",
+          "sha256": "1665f84dc85922a0f40bfb70911bb9615ea812f03040fd822d81ca8192986588",
+          "size": 360
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-110/result.md",
+        "sha256": "e31c331ecd13d15df7d4672b2ae505d942145186a48bfcc90f26bf95658cccc8",
+        "size": 790
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:123dc3839747295724220ff6f55a1af6586106e77957261df0ac5457d5b3c0bc",
+      "reply_event": "$2D5fOiVgl429CaD1WVGp2OB7LHcBziFq1StadDCFbIA",
+      "saved_at": "2026-11-18T11:30:33.494775673Z"
+    }
+  },
+  "final_task_status": "submitted",
+  "task_history": [
+    {
+      "action": "ack_task",
+      "actor": "worker:agent-a",
+      "from": "assigned",
+      "seq": 1,
+      "to": "in_progress",
+      "ts": "2026-11-18T11:26:59Z"
+    },
+    {
+      "action": "submit_task",
+      "actor": "worker:agent-a",
+      "from": "in_progress",
+      "seq": 2,
+      "to": "submitted",
+      "ts": "2026-11-18T11:30:13Z"
+    }
+  ],
+  "ledger": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1795001236819593021,
+      "generation": 1,
+      "instance_id": "docker/f5aff3fca535f3fa9bd8adf4d557f5ff3fc417fff7071f9174b682116bcdd355/2026-11-18T11:25:21.45262974Z",
+      "process_id": "1:1795001121594399727:7ab8f414185f4caea967369b5374c5b0",
+      "step": "one",
+      "task_id": "live-openclaw-openclaw-110",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 5,
+      "executed_at_ns": 1795001387108378125,
+      "generation": 2,
+      "instance_id": "docker/f5aff3fca535f3fa9bd8adf4d557f5ff3fc417fff7071f9174b682116bcdd355/2026-11-18T11:27:56.382295203Z",
+      "process_id": "1:1795001278878186211:fd8eef5770f94b6a99328445153dad0c",
+      "step": "two",
+      "task_id": "live-openclaw-openclaw-110",
+      "team_id": "recovery-team"
+    },
+    {
+      "checkpoint_version": 7,
+      "executed_at_ns": 1795001398892581075,
+      "generation": 2,
+      "instance_id": "docker/f5aff3fca535f3fa9bd8adf4d557f5ff3fc417fff7071f9174b682116bcdd355/2026-11-18T11:27:56.382295203Z",
+      "process_id": "1:1795001278878186211:fd8eef5770f94b6a99328445153dad0c",
+      "step": "three",
+      "task_id": "live-openclaw-openclaw-110",
+      "team_id": "recovery-team"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-110/output/step-one.json",
+      "sha256": "af15b986e926c3bdd708c6f2daef9ffd05e7ba207dd4e335720b86923aabd84c",
+      "size": 357
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-110/output/step-two.json",
+      "sha256": "e5f8bc4a3cc1fdce58f591b74d4edfaccb7c50dac2dd1f7acd75d3dbbffe1843",
+      "size": 358
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-110/output/step-three.json",
+      "sha256": "1665f84dc85922a0f40bfb70911bb9615ea812f03040fd822d81ca8192986588",
+      "size": 360
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-openclaw-openclaw-110/result.md",
+      "sha256": "e31c331ecd13d15df7d4672b2ae505d942145186a48bfcc90f26bf95658cccc8",
+      "size": 790
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1795001276349621088,
+    "start": 1795001278808803445
+  },
+  "matrix": {
+    "reply_event": "$2D5fOiVgl429CaD1WVGp2OB7LHcBziFq1StadDCFbIA",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$DxzHwAvHwv80NqnrZpV2lzftSo7xYF3DYzQXztvJF9c"
+    ],
+    "read_receipt_events": [
+      "$0Rgc6XgALPHuOHRNL3Xyuy3xDvVNLWnSyoK9pRQf9TA"
+    ],
+    "first_source_read_ms": 1795001171870
+  }
+}

@@ -18,10 +18,10 @@ the image and shared-contract pins actually tested.
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Failed 92](evidence/runtime-recovery-1631-case92-oom.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | — | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
-| OpenClaw | — | — | — | — | [Partial 106](evidence/runtime-recovery-1631-case106-openclaw-oom.json) | — |
+| OpenClaw | — | — | — | — | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
-**4/6 normal restart lanes and 12/30 directed handoffs have passed.** A dash
+**5/6 normal restart lanes and 12/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1634,3 +1634,13 @@ failure needs a terminal source-event fact shared across Matrix consumers.
 A generic reply relation is insufficient: Codex emitted an intermediate
 related event as well as a final reply. The proof includes Matrix relations
 and native inference/send trace events, separate from the Worker matrix.
+
+[Case110 OpenClaw normal restart](evidence/runtime-recovery-1631-case110-verified.json)
+passed on Controller `6421981f` and ARM64 OpenClaw `c6dcf56` with shared Core
+`cdc2800c`. The captured Docker restart reused the same native session ID
+and entered generation 2, checkpoint 10, from generation 1, checkpoint 4.
+The independent ledger verified exactly one effect per step. The Task
+verifier confirmed one final reply and zero new Matrix inputs after stop.
+This run stopped the completed disposable tracing stack before testing and
+sampled memory; the observed Worker cgroup peak was about 4.35 GiB during
+restart. The failure records for 104 and 106 remain available.

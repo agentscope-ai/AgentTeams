@@ -1,0 +1,127 @@
+{
+  "fixture": "recovery-1631-live-20261118-manager120",
+  "identity": "@manager:recovery-1631.test",
+  "room": "!N03KbQ1EKSormcSb11:recovery-1631.test",
+  "phases": [
+    {
+      "phase": "codex-input",
+      "container": {
+        "runtime": "codex",
+        "id": "5b0a7ceefb84564b8bf813b5d7a1ce80b088f98f31eb5b6a6e574a91987c74dc",
+        "started_at": "2026-11-18T12:00:06.52387385Z",
+        "image_id": "sha256:e85bc5214caca23afc5cbc927c5f81efc8afe510ccc2cac01cc56f2c05e397de",
+        "harness_sha": "28dcf223b3f1d3dd0cb4abdbfe87b3e20dede024"
+      },
+      "marker": "AT_MANAGER_BASE_491016920a",
+      "event": "$n_afRbLubiZ9piNiyJARe6OhWVpYNYHo9Y-NbE0ANCY"
+    },
+    {
+      "phase": "codex-reply",
+      "event_ids": [
+        "$an2TmRlDRsWxZ5P_nbIHFkV0KxzgLo5BzOFXbtD6D_I"
+      ],
+      "receipts": [
+        "$azWTQoMnaA1RacO79goWiHDI8vj2hS4fYProxijhmEs"
+      ]
+    },
+    {
+      "phase": "qwenpaw-input",
+      "container": {
+        "runtime": "qwenpaw",
+        "id": "7a680e9d2cbb7ca4ea98d5b01f944d1d67508c6ae413d8591ec4a83e8c9e98b9",
+        "started_at": "2026-11-18T12:00:28.578197062Z",
+        "image_id": "sha256:fb25c933991635037d6c805b5a2338fc8692f4380e11740d5337e1a70ec2f4c1",
+        "harness_sha": "a76f5c0090811e8b8dd7ec9183d00cbefa92f996"
+      },
+      "marker": "AT_MANAGER_QWEN_FINAL_ddee1e26ef",
+      "event": "$3_QZJ6qIEYTNo45rZrFiNXoC0EjkCp5ONs3CjzI9S9U"
+    },
+    {
+      "phase": "qwenpaw-reply",
+      "event_ids": [
+        "$pW-Vjg16ZkO6L3mOLXh8ZZ6g3kz6xC0MmQQ8SwrVzN8",
+        "$ESlPNIFfX5E63OUdbynCe5cFmaQR0a4mNCu68jZicC4"
+      ],
+      "receipts": [
+        "$I2rBGaQACoJI8ZhImd1WnfDStA0jvN4JLxz8lPFtst8"
+      ]
+    },
+    {
+      "phase": "return",
+      "container": {
+        "runtime": "codex",
+        "id": "1f78b8ab549258b7205fda4680938d154dcc718003089b81bd30efd234b6dae3",
+        "started_at": "2026-11-18T12:03:01.034481795Z",
+        "image_id": "sha256:e85bc5214caca23afc5cbc927c5f81efc8afe510ccc2cac01cc56f2c05e397de",
+        "harness_sha": "28dcf223b3f1d3dd0cb4abdbfe87b3e20dede024"
+      }
+    },
+    {
+      "phase": "verified",
+      "source": "$3_QZJ6qIEYTNo45rZrFiNXoC0EjkCp5ONs3CjzI9S9U",
+      "reply_event_ids": [
+        "$pW-Vjg16ZkO6L3mOLXh8ZZ6g3kz6xC0MmQQ8SwrVzN8",
+        "$ESlPNIFfX5E63OUdbynCe5cFmaQR0a4mNCu68jZicC4"
+      ],
+      "terminal_receipt": "$I2rBGaQACoJI8ZhImd1WnfDStA0jvN4JLxz8lPFtst8",
+      "fresh_input_after_return": 0,
+      "replay_count": 0
+    }
+  ],
+  "passed": true,
+  "scope": "one real Codex to QwenPaw to Codex Manager round trip",
+  "sources": {
+    "controller": "6421981fcc9255a0b779a04557769650172e290e",
+    "codex": "28dcf223b3f1d3dd0cb4abdbfe87b3e20dede024",
+    "qwenpaw": "a76f5c0090811e8b8dd7ec9183d00cbefa92f996",
+    "qwenpaw_core": "b3f896834e34a5b883555875fb13e63b04fb8812"
+  },
+  "previous_containers_absent": [
+    "5b0a7ceefb84564b8bf813b5d7a1ce80b088f98f31eb5b6a6e574a91987c74dc",
+    "7a680e9d2cbb7ca4ea98d5b01f944d1d67508c6ae413d8591ec4a83e8c9e98b9"
+  ],
+  "matrix_events": [
+    {
+      "event": "$3_QZJ6qIEYTNo45rZrFiNXoC0EjkCp5ONs3CjzI9S9U",
+      "sender": "@recovery-admin:recovery-1631.test",
+      "type": "m.room.message",
+      "timestamp_ms": 1795003372782,
+      "relation": null,
+      "status": null
+    },
+    {
+      "event": "$pW-Vjg16ZkO6L3mOLXh8ZZ6g3kz6xC0MmQQ8SwrVzN8",
+      "sender": "@manager:recovery-1631.test",
+      "type": "m.room.message",
+      "timestamp_ms": 1795003377362,
+      "relation": {
+        "event_id": "$lGd8VfELiPgF7svcyrma0A2kdcPHyNWrtEaemywyCiI",
+        "rel_type": "m.replace"
+      },
+      "status": null
+    },
+    {
+      "event": "$ESlPNIFfX5E63OUdbynCe5cFmaQR0a4mNCu68jZicC4",
+      "sender": "@manager:recovery-1631.test",
+      "type": "m.room.message",
+      "timestamp_ms": 1795003377150,
+      "relation": {
+        "event_id": "$lGd8VfELiPgF7svcyrma0A2kdcPHyNWrtEaemywyCiI",
+        "is_falling_back": false,
+        "rel_type": "m.thread"
+      },
+      "status": null
+    },
+    {
+      "event": "$I2rBGaQACoJI8ZhImd1WnfDStA0jvN4JLxz8lPFtst8",
+      "sender": "@manager:recovery-1631.test",
+      "type": "com.agentteams.session_receipt",
+      "timestamp_ms": 1795003377378,
+      "relation": {
+        "event_id": "$3_QZJ6qIEYTNo45rZrFiNXoC0EjkCp5ONs3CjzI9S9U",
+        "rel_type": "com.agentteams.session_receipt"
+      },
+      "status": "completed"
+    }
+  ]
+}

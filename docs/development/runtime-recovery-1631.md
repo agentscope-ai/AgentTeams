@@ -1683,3 +1683,13 @@ target OpenClaw `c6dcf56`. The verifier matched the source's actual SDK
 session to its shared descriptor. It observed removal of the old instance
 before target creation, three unique step effects on the original Task,
 one final Matrix event, and no new input after cutover.
+
+[Case120 Manager Codex → QwenPaw → Codex](evidence/runtime-recovery-1631-case120-manager-qwen-verified.json)
+passed on Controller `6421981f`, Codex `28dcf22`, and QwenPaw `a76f5c0` with
+its Core receipt adapter `b3f89683`. QwenPaw posted and edited the same
+thread reply, then durably emitted one terminal receipt for the original
+Matrix input. The returned Codex native consumer stayed live, performed no
+inference on that source, and sent no extra reply. No new input triggered
+the returned Manager. The previous two container identities were absent on
+inspection. The evidence retains the source, reply/edit, and receipt
+relations.

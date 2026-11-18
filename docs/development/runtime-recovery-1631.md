@@ -18,10 +18,10 @@ the image and shared-contract pins actually tested.
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Partial 128](evidence/runtime-recovery-1631-case128-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | — |
-| OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Partial 125](evidence/runtime-recovery-1631-case125-partial.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
+| OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Pass 138](evidence/runtime-recovery-1631-case138-verified.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
-**5/6 normal restart lanes and 19/30 directed handoffs have passed.** A dash
+**5/6 normal restart lanes and 20/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1833,3 +1833,20 @@ After exit 137, the same container started a new process. Codex reused the
 matching native session and submitted the original Task at checkpoint 12
 (generation 2). Matrix recorded one final reply and no new input after the
 stop. The independent ledger recorded each step once.
+
+[Case137 DeepSeek restart after SIGKILL](evidence/runtime-recovery-1631-case137-abrupt-restart-verified.json)
+passed on Controller `6421981f`, DeepSeek `6f5aadb`, and the shared contract
+`52a3659b`. Docker recorded exit 137 and a later start of the same container.
+The replacement process resumed the original Task in generation 2 using its
+matching native session. The checkpoint advanced from 5 to 12, all effects
+were recorded once and the single final Matrix reply followed zero new inputs.
+
+[Case138 OpenClaw → QwenPaw](evidence/runtime-recovery-1631-case138-verified.json)
+passed on Controller `6421981f`, OpenClaw `c6dcf56` and QwenPaw `a76f5c0`.
+The source completed step one and the old container was removed before the
+QwenPaw instance was created. QwenPaw finished the original Task in
+its native session at generation 2 and checkpoint 11. Its trace records the
+original Task, room, new generation, and native session. The verifier observed
+one effect per step, zero rejected or repeated effect requests, no new Matrix
+input after cutover, and one final reply. Case125's partial result and
+case132's source timeout remain in the evidence log.

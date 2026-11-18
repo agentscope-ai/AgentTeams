@@ -17,11 +17,11 @@ the image and shared-contract pins actually tested.
 | Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | — | — |
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Failed 92](evidence/runtime-recovery-1631-case92-oom.json) | [Partial 71](evidence/runtime-recovery-1631-case71-partial.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | — | — |
-| DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | — | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
+| DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | — | — |
 | OpenClaw | — | — | — | — | [Partial 104](evidence/runtime-recovery-1631-case104-openclaw-oom.json) | — |
 | OpenHuman | — | — | — | — | — | — |
 
-**4/6 normal restart lanes and 11/30 directed handoffs have passed.** A dash
+**4/6 normal restart lanes and 12/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -1606,3 +1606,11 @@ reply was still unconfirmed. The run therefore adds no restart pass.
 OpenClaw `c6dcf56` separately prevents a replayed assignment from reusing
 the original native dedup key on a later generation. The SDK regression
 failed on the old adapter and passed on the rebuilt ARM64 adapter.
+
+[Case107 DeepSeek → QwenPaw](evidence/runtime-recovery-1631-case107-verified.json)
+passed with the same Controller and Harness revisions as case 105. The old
+DeepSeek instance exited and was removed before creation of QwenPaw. The
+target claimed generation 2 and finished the original task with a single
+final Matrix report and no intervening external message. The Task oracle
+and storage independently verified three unique step effects and four
+artifact/report hashes.

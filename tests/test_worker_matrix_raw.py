@@ -76,3 +76,52 @@ def test_encrypted_room_rejects_native_plaintext():
     with pytest.raises(RecoveryConflict, match="encrypted"):
         publish_raw_saved(client, "!room:hs", "saved", cp, "@a:hs", Mock())
     client.send_content.assert_not_called()
+
+
+def test_raw_worker_consumes_only_its_device_cursor_and_preserves_initial_timeline():
+    from worker_matrix_raw import RawWorkerSync
+    from worker_matrix_state import WorkerMatrix
+
+    raw = {"event_id": "$assignment", "sender": "@manager:hs", "type": "m.room.message",
+           "origin_server_ts": 123, "content": {"body": "assignment"}}
+    room = "!task:hs"
+    state = {"state": {"rooms": {}}, "instance_id": "container"}
+    matrix = Mock(spec=WorkerMatrix)
+    matrix.load.return_value = matrix.sync.return_value = state
+    matrix.consumer.return_value = {"account": "@w:hs", "device": "current", "runtime": "codex",
+                                    "format": "matrix-raw/sync-v3", "token": "my_cursor"}
+    matrix.input.return_value = None
+    matrix.prepare_input.return_value = {"room_id": room, "event_id": "$assignment"}
+    client = Mock()
+    def respond(method, path, **kwargs):
+        if path.endswith("/whoami"):
+            return {"user_id": "@w:hs", "device_id": "current"}
+        assert parse_qs(urlsplit(path).query) == {"timeout": ["0"], "full_state": ["true"], "since": ["my_cursor"]}
+        return {"next_batch": "new", "rooms": {"join": {room: {"timeline": {"events": [raw], "limited": True, "prev_batch": "back"}}}}}
+    client.request.side_effect = respond
+    classify = Mock(return_value=("task_notification", "T"))
+    consumer = RawWorkerSync(matrix, client, "@w:hs", classify, lambda _: {room})
+    assert consumer.poll() == (state, {})
+    matrix.consumer.assert_called_once_with(state, account="@w:hs", device="current", format="matrix-raw/sync-v3")
+    classify.assert_called_once_with(room, raw)
+    expected = {k: raw[k] for k in ("sender", "type", "origin_server_ts", "content")}
+    matrix.prepare_input.assert_called_once_with(room, "$assignment", expected, "task_notification", task_id="T")
+    matrix.sync.assert_called_once_with(state, matrix.consumer.return_value, "new",
+        [{"room_id": room, "inputs": [matrix.prepare_input.return_value], "limited": True, "prev_batch": "back"}])
+
+
+def test_raw_worker_retains_source_classification_and_stops_on_undecryptable_input():
+    from worker_matrix_raw import RawWorkerSync
+
+    matrix, client, classify = Mock(), Mock(), Mock()
+    matrix.input.return_value = {"intent": "context"}
+    consumer = RawWorkerSync(matrix, client, "@w:hs", classify, Mock())
+    raw = {"event_id": "$old", "type": "m.room.message", "sender": "@user:hs", "content": {"body": "text"}}
+    consumer.inputs("!room:hs", [raw], "$old")
+    classify.assert_not_called()
+    assert matrix.prepare_input.call_args.args[-1] == "context"
+    with pytest.raises(RecoveryConflict, match="decode"):
+        consumer.inputs("!room:hs", [{**raw, "type": "m.room.encrypted"}])
+    with pytest.raises(RecoveryConflict, match="different room"):
+        consumer.inputs("!room:hs", [{**raw, "room_id": "!other:hs"}])
+    matrix.sync.assert_not_called()

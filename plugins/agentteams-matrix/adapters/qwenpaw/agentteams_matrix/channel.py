@@ -17,6 +17,7 @@ import re
 import sys
 import time
 import urllib.parse
+from contextvars import ContextVar
 from uuid import uuid4
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -198,6 +199,7 @@ _MATRIX_OWN_THREAD_ROOT_KEY = "matrix_own_thread_root_event_id"
 _MATRIX_PENDING_THREAD_PARTS_KEY = "matrix_pending_thread_parts"
 _MATRIX_PENDING_FINAL_MESSAGE_KEY = "matrix_pending_final_message"
 _MATRIX_STREAMING_FINAL_TEXT_KEY = "matrix_streaming_final_text"
+_MANAGER_FINAL_DELIVERY = ContextVar("manager_final_delivery", default=None)
 _MATRIX_FORCE_NOTICE_KEY = "matrix_force_notice"
 _MATRIX_PLACEHOLDER_THREAD_ROOT_KEY = "matrix_placeholder_thread_root"
 
@@ -4854,6 +4856,24 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # A silent turn that never ran a tool produced nothing: do not
         # report it as completed (#1320).
         no_output_marker = "已完成" if had_tool_activity else "本回合无产出"
+
+        async def deliver_final(send, *args, **kwargs):
+            source = send_meta.get("event_id") if request is not None else None
+            receipts = self._session_receipts
+            if (os.getenv("AGENTTEAMS_AGENT_ROLE") != "manager" or not receipts
+                    or not isinstance(source, str) or not source.startswith("$")
+                    or send_meta.get("teamharness_matrix_coordination")):
+                return await send(*args, **kwargs)
+            room = send_meta.get("room_id") or to_handle
+            outcomes = []
+            token = _MANAGER_FINAL_DELIVERY.set((room, outcomes))
+            try:
+                await send(*args, **kwargs)
+            finally:
+                _MANAGER_FINAL_DELIVERY.reset(token)
+            if any(kind == "m.text" for kind, _ in outcomes) and all(ok for _, ok in outcomes):
+                await receipts.complete(room, source)
+
         if is_placeholder:
             if streaming_final_text:
                 raw_text = streaming_final_text.strip()
@@ -4869,8 +4889,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         )
                     else:
                         html_body = _md_to_html(text)
-                        await self._edit_thread_root(
-                            to_handle, send_meta, text,
+                        await deliver_final(
+                            self._edit_thread_root, to_handle, send_meta, text,
                             msgtype="m.text", html=html_body,
                         )
             elif pending is not None:
@@ -4883,8 +4903,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     text = self._visible_final_text(raw_text)
                     if text:
                         html_body = _md_to_html(text)
-                        await self._edit_thread_root(
-                            to_handle, send_meta, text,
+                        await deliver_final(
+                            self._edit_thread_root, to_handle, send_meta, text,
                             msgtype="m.text", html=html_body,
                         )
                     else:
@@ -4897,9 +4917,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 )
             self._active_thread_roots.pop(to_handle, None)
         elif streaming_final_text:
-            await self.send(to_handle, streaming_final_text.strip(), send_meta)
+            await deliver_final(self.send, to_handle, streaming_final_text.strip(), send_meta)
         elif pending is not None:
-            await self.send_message_content(to_handle, pending, send_meta)
+            await deliver_final(self.send_message_content, to_handle, pending, send_meta)
         if gate_action == "note":
             await self._send_plain_text(
                 to_handle,
@@ -5044,6 +5064,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     }
             except Exception:
                 logger.debug("Message read audience unavailable", exc_info=True)
+        capture = _MANAGER_FINAL_DELIVERY.get()
+        msgtype = content.get("msgtype")
+        observed = (capture[1] if capture and capture[0] == room_id and message_type == "m.room.message"
+                    and msgtype != "m.notice" and content.get("org.agentteams.progress_only") is not True else None)
         tx_id = tx_id or str(uuid4())
         last_exc: Optional[Exception] = None
         last_err_resp: Any = None
@@ -5108,6 +5132,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         room_id=room_id,
                         detail=detail,
                     )
+                    if observed is not None:
+                        observed.append((msgtype, False))
                     return resp
 
                 # Success
@@ -5118,6 +5144,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         attempt,
                         room_id,
                     )
+                if observed is not None:
+                    observed.append((msgtype, bool(getattr(resp, "event_id", None))))
                 return resp
 
             except Exception as exc:
@@ -5152,6 +5180,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     room_id=room_id,
                     detail=describe_exception(exc),
                 )
+                if observed is not None:
+                    observed.append((msgtype, False))
                 raise
 
         # Should not reach here, but guard against it

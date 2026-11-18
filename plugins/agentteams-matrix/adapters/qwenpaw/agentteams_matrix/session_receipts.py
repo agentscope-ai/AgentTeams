@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote
@@ -26,6 +27,11 @@ class SessionReceipts:
         self.flush_lock = asyncio.Lock()
         self.wakeup = asyncio.Event()
         self.task = None
+        self._manager_outbox = None
+        if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+            from agentteams_receipts import Receipts
+
+            self._manager_outbox = Receipts(os.getenv("AGENTTEAMS_WORKER_HOME") or Path.home())
 
     async def start(self):
         for path in self.session_dir.rglob("*.json"):
@@ -56,9 +62,19 @@ class SessionReceipts:
                 self.pending[key].append(pending)
         self.wakeup.set()
 
+    async def complete(self, room_id, event_id):
+        if self._manager_outbox:
+            await asyncio.to_thread(self._manager_outbox.enqueue, room_id, event_id, "completed")
+            self.wakeup.set()
+
     async def flush(self):
         async with self.flush_lock:
             await self._flush()
+            if self._manager_outbox and self.channel._client:
+                from agentteams_receipts import matrix_request
+
+                request = matrix_request(self.channel.homeserver, self.channel._client.access_token)
+                await asyncio.to_thread(self._manager_outbox.flush, request)
 
     async def _flush(self):
         for key in list(self.pending):

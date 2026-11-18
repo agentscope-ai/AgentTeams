@@ -40,5 +40,14 @@
         "failed": 0
       }
     }
+  },
+  "worker_default_model": {
+    "failed_job": "https://github.com/agentscope-ai/AgentTeams/actions/runs/44378514101/job/135076107128",
+    "test": "test-03-assign-task after test-02-create-worker",
+    "workflow_default_model": "qwen3.6-plus",
+    "manager_request": "agt create worker --name alice --runtime hermes --model qwen --wait-timeout 45s -o json",
+    "worker_inference_result": "HTTP 404 model_not_found for qwen",
+    "change": "Document the CLI default path in both Manager skill bundles, and assert the Worker used the installed model in test 02.",
+    "verified_local": "agt CLI Go tests, including configured model precedence"
   }
 }

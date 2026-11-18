@@ -95,7 +95,12 @@ the proof files, so the model can return the actual tool output. Core `db4f9ab2`
 Worker publishes its Matrix identity. The same change waits for Team
 finalization before deleting referenced Workers in the cleanup test.
 The ARM64 Controller from `5530ea5c` passed the real Team Admin flow
-(25 assertions) and cleanup with a live Team (9 assertions).
+(25 assertions) and cleanup with a live Team (9 assertions). A separate
+QwenPaw Manager → Hermes Worker CI sample revealed that the Manager
+explicitly passed the Gateway provider name `qwen` as the Worker model.
+The Worker received the Matrix assignment and then got HTTP 404 from the
+model endpoint. The Manager skill now demonstrates the CLI's configured
+default, and the Worker creation fixture verifies the model in use.
 
 ## Live acceptance by source and target
 

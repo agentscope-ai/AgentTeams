@@ -199,12 +199,13 @@ print(json.dumps(any(row.get('event')=='runtime.ready' and datetime.datetime.fro
         task["recovery_fixture"]["pause_after_effect"] = "one"
     if oracle_proof()["effects"]:
         raise RuntimeError("This Task already has independent effects; retain its proof")
-    continuation = "When recovered in generation 2 or later, continue remaining steps two and three"
+    paused_turn = ("Once the helper commits the step, end the turn with a short progress reply. Leave the Task "
+                   "in_progress and make no further tool calls. The driver requests the cutover.")
+    continuation = "From generation 2 onward, run the helper for each remaining step."
     if RETURN_TO_SOURCE:
         task["recovery_fixture"]["return_to_source"] = True
-        continuation = ("In generation 2 run only step two, verify PAUSED_AT_STEP_BOUNDARY and finish with a short "
-                        "progress report, keeping this task in_progress. After returning to the original Harness "
-                        "in generation 3 continue step three")
+        continuation = ("In generation 2, run the helper only for step two. " + paused_turn
+                        + "\nIn generation 3, run the helper for step three.")
     spec = f"""You are executing a bounded real runtime-recovery acceptance task {task_id} in team {team}.
 Use your native TeamHarness taskflow MCP tool (Hermes: mcp__teamharness__taskflow; Codex: taskflow from the teamharness server). ACK with action=ack_task and confirm synced=true. Keep its stable task ID.
 Unless your active Harness is OpenHuman, use mc cp to pull acceptance.py from $AGENTTEAMS_STORAGE_PREFIX/teams/{team}/shared/tasks/{task_id}/acceptance.py into your task scratch directory.
@@ -212,8 +213,9 @@ The acceptance.py helper owns the fixture:* operation identities and records bot
 Use your native terminal tool to run python3 acceptance.py {task_id} {team}. If your active Harness is OpenHuman, use its Shell tool with the single command agentteams-recovery-step {task_id} {team} instead. Use the command directly without cd, an interpreter, or a shell prefix. This is the same acceptance helper installed in the isolated test image.
 Each invocation executes ONE real persisted side effect and commits its checkpoint through the real Controller.
 Read the authoritative completed_steps. Never repeat a completed step or edit the fixture, ledger or checkpoint outside the helper.
-In execution generation 1, run only step one. Then call the helper once more to verify PAUSED_AT_STEP_BOUNDARY and end your turn with a short progress report. Leave task status in_progress. Do not submit, wait, poll or request a new message.
-{continuation} with the same helper, then use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/{task_id}/output/step-one.json, shared/tasks/{task_id}/output/step-two.json, shared/tasks/{task_id}/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.
+In generation 1, run the helper only for step one. {paused_turn}
+{continuation}
+When all three steps are complete, use the native taskflow MCP tool with action=submit_task, status=SUCCESS, summary, 3 conclusions and workspace-relative deliverables shared/tasks/{task_id}/output/step-one.json, shared/tasks/{task_id}/output/step-two.json, shared/tasks/{task_id}/output/step-three.json. Do not edit meta.json or submit via raw HTTP/legacy filesync. Do not release execution just to end the turn; the adapter persists final delivery.
 Outputs are durable in the task's shared object-storage output/ directory; pull them to your task output/ directory before submission. Do not create a new task or send messages to other members.
 The external test driver will replace your container at a step boundary without sending any new Matrix message.
 """

@@ -1477,3 +1477,12 @@ checkpoint 5. DeepSeek continued in a new native session at generation 2 and
 completed the original Task at checkpoint 12. The verifier recorded one
 effect per step, matching artifacts, one final Matrix reply and no external
 Matrix input after source shutdown.
+
+[Case95 DeepSeek source failure](evidence/runtime-recovery-1631-case95-source-failed.json)
+received the task assignment, saved step one and its output, and then failed
+with `Task execution lost ownership`. The persisted generation-1 checkpoint
+contained a started `fixture:…:boundary` operation that the independent
+effect oracle did not register. No handoff was started. The fixture now asks
+the model to end its turn after the boundary step and scopes final submission
+to a turn with all three completed steps. The native tool and verifier still
+enforce the independent effect and checkpoint requirements.

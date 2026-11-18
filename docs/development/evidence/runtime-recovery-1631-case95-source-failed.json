@@ -1,0 +1,53 @@
+{
+  "case": "95",
+  "scope": "Source-side failure before handoff",
+  "task_id": "live-deepseek-harness-codex-95",
+  "status": "in_progress",
+  "source_image": {
+    "deepseek-harness": "6f5aadb0963092f050202211281ed964ba94d070",
+    "common_contract": "52a3659b719abb78c17368ce020403c442d4e5db"
+  },
+  "execution": {
+    "runtime": "deepseek-harness",
+    "generation": 1
+  },
+  "checkpoint": {
+    "version": 3,
+    "completed_steps": [
+      "one"
+    ],
+    "remaining_steps": [
+      "two",
+      "three"
+    ],
+    "operation": {
+      "id": "fixture:live-deepseek-harness-codex-95:boundary",
+      "state": "started"
+    },
+    "artifacts": [
+      {
+        "key": "teams/recovery-team/shared/tasks/live-deepseek-harness-codex-95/output/step-one.json",
+        "sha256": "a153769e7d096f35ad12a43da54f168f255bac2c0e19c3a90fb151414bec1af7",
+        "size": 362
+      }
+    ]
+  },
+  "native_read_receipt": {
+    "source_event": "$sagJB8UrmpihSaWjW4WHC5EaMeoHjaMRZ-3VnzB9XCQ",
+    "read_event": "$qb-BOP9KakDK1UfXgP1LGjw8AT9o4zKA0EYqM4qnw1o"
+  },
+  "tool_effects": [
+    {
+      "checkpoint_version": 1,
+      "executed_at_ns": 1794995457348920771,
+      "generation": 1,
+      "instance_id": "docker/6d36c1c63d695d9daf5e1eb657b086dbcf2b458f04db0732f4fce2463ee06537/2026-11-18T09:49:50.977639933Z",
+      "process_id": "7:1794995391296077487:431b3174a5dd4116a119898c90498dd7",
+      "step": "one",
+      "task_id": "live-deepseek-harness-codex-95",
+      "team_id": "recovery-team"
+    }
+  ],
+  "native_failure": "Task execution lost ownership",
+  "handoff_started": false
+}

@@ -1622,3 +1622,15 @@ own native input ID, and the oracle recorded one effect per step. The Docker
 container had no fixed memory limit and again reported OOM exit 137 before
 the final Matrix report was committed. The next run samples Worker peak and
 host-available memory with completed test stacks stopped.
+
+[Case109 original Manager replay reproduction](evidence/runtime-recovery-1631-case109-manager-replay.json)
+kept the same Manager resource, Matrix identity and room across Codex
+`ef12936` → Hermes `282c457` → Codex `ef12936` on Controller `6421981f`.
+Hermes replied to the ready-state probe. After returning, Codex inferred
+again on exactly that Matrix source event and produced its second reply.
+In the same returned boot, Codex also processed the earlier unanswered
+event that arrived before Hermes completed its initial sync. The reproduced
+failure needs a terminal source-event fact shared across Matrix consumers.
+A generic reply relation is insufficient: Codex emitted an intermediate
+related event as well as a final reply. The proof includes Matrix relations
+and native inference/send trace events, separate from the Worker matrix.

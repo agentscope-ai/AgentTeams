@@ -14,14 +14,14 @@ the image and shared-contract pins actually tested.
 
 | Source → Target | Codex | Hermes | QwenPaw | DeepSeek | OpenClaw | OpenHuman |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | [Pass 121](evidence/runtime-recovery-1631-case121-verified.json) | — |
+| Codex | [Pass 82](evidence/runtime-recovery-1631-case82-verified.json) | [Pass 86](evidence/runtime-recovery-1631-case86-verified.json) | [Pass 99](evidence/runtime-recovery-1631-case99-verified.json) | [Pass 94](evidence/runtime-recovery-1631-case94-verified.json) | [Pass 121](evidence/runtime-recovery-1631-case121-verified.json) | [Pass 149](evidence/runtime-recovery-1631-case149-verified.json) |
 | Hermes | [Pass 80](evidence/runtime-recovery-1631-case80-verified.json) | [Pass 68](evidence/runtime-recovery-1631-case68-verified.json) | [Pass 69](evidence/runtime-recovery-1631-case69-dashboard.json) | [Pass 81](evidence/runtime-recovery-1631-case81-verified.json) | [Pass 111](evidence/runtime-recovery-1631-case111-verified.json) | [Pass 144](evidence/runtime-recovery-1631-case144-verified.json) |
 | QwenPaw | [Pass 103](evidence/runtime-recovery-1631-case103-verified.json) | [Pass 70](evidence/runtime-recovery-1631-case70-verified.json) | [Pass 77](evidence/runtime-recovery-1631-case77-verified.json) | [Pass 105](evidence/runtime-recovery-1631-case105-verified.json) | [Pass 114](evidence/runtime-recovery-1631-case114-verified.json) | — |
 | DeepSeek | [Pass 97](evidence/runtime-recovery-1631-case97-verified.json) | [Pass 91](evidence/runtime-recovery-1631-case91-verified.json) | [Pass 107](evidence/runtime-recovery-1631-case107-verified.json) | [Pass 85](evidence/runtime-recovery-1631-case85-verified.json) | [Pass 123](evidence/runtime-recovery-1631-case123-verified.json) | — |
 | OpenClaw | [Pass 122](evidence/runtime-recovery-1631-case122-verified.json) | [Pass 115](evidence/runtime-recovery-1631-case115-verified.json) | [Pass 138](evidence/runtime-recovery-1631-case138-verified.json) | [Pass 124](evidence/runtime-recovery-1631-case124-verified.json) | [Pass 110](evidence/runtime-recovery-1631-case110-verified.json) | — |
 | OpenHuman | [Pass 147](evidence/runtime-recovery-1631-case147-verified.json) | — | — | — | — | [Pass 143](evidence/runtime-recovery-1631-case143-verified.json) |
 
-**6/6 normal restart lanes and 22/30 directed handoffs have passed.** A dash
+**6/6 normal restart lanes and 23/30 directed handoffs have passed.** A dash
 indicates a lane awaiting acceptance on the common contract. The independent
 [QwenPaw → Hermes → QwenPaw round trip](evidence/runtime-recovery-1631-case96-round-trip-verified.json)
 verifies retained cursors and a fresh returning session. Fault scenarios and
@@ -45,7 +45,7 @@ The isolated branch already contained `697d4e96` (backend disappearance) and
 | OpenClaw | `5e44ebecabf878eda499b668c9627208dbfa6049` | matched |
 | OpenHuman | `99fc3f518295b38061039da95df699f64f7f3ba8` | matched |
 
-Candidate companion pins on this Draft branch: Codex `6962984217dfff5d2cc0782960b3cecf95a8e8f8`
+Early candidate companion pins were Codex `6962984217dfff5d2cc0782960b3cecf95a8e8f8`
 and Hermes `0234f38f8668d943da499d2106230e62c6226087`, plus DeepSeek
 `008dd4db04ed32786bb4c2d9eabd32eee3a49893`. All consume the shared
 Core contract at `eb52bf70d0a33c848fe6a4af72833ec553cc5ce8`. These are review
@@ -54,6 +54,21 @@ Core `ecb44a61` main and each companion's latest main were merged into the
 isolated work branches, preserving the runtime Skill fixes. The contract
 commit includes those shared helpers and the current-member role fix; older
 real-model evidence retains its original exact source pins.
+
+Current release-build candidate pins on this Draft:
+
+| Harness | Candidate build pin | Shared Core input declared by the Harness |
+| --- | --- | --- |
+| Codex | `426bfdd` | `4fca52d0` |
+| Hermes | `f5d74a3` | `4fca52d0` |
+| QwenPaw | `a76f5c0` | `b3f89683` |
+| DeepSeek | `6f5aadb` | `c1039c29` |
+| OpenClaw | `c6dcf56` | `cdc2800c` |
+| OpenHuman | `a7fd8fe` | `cdc2800c` |
+
+Codex `426bfdd` updates the companion CI packaging pin for the native code
+at `28dcf22`. The evidence below records the image and shared-contract inputs
+actually run. The release-build candidate still needs its integrated gates.
 
 ## Implemented contract
 
@@ -409,7 +424,7 @@ AT_SOURCE="$PWD" PYTHONPATH="$PWD/shared/lib:$PWD/codex-harness/src:$PWD/deepsee
 The last command requires the independent Codex repository checked out at
 `codex-harness/`; that directory is a local companion checkout, not Core source.
 
-## Required remaining work
+## Open work at the first review checkpoint
 
 - Persist the complete cutover state machine: preflight, stop admission,
   checkpoint at a step boundary, stop old instance/tools, observe absence,
@@ -432,8 +447,8 @@ The last command requires the independent Codex repository checked out at
 - Verify all six same-Harness and 30 directed cross-Harness combinations,
   including switching back with stale native sessions/cursors retained.
 
-No matrix cell has completed its full required scenario set. Partial real
-execution is labelled separately from acceptance:
+This snapshot preceded the later live passes. The current matrix is at the
+top of this document. Partial and failed runs remain in the evidence below.
 
 ### Case 17: rejected apparent success
 
@@ -1947,3 +1962,14 @@ in generation 2, and submitted at checkpoint 9. The original Task had one
 effect per step, four matching stored hashes, and one final Matrix reply
 after zero new inputs. The verifier records the departing OpenHuman session
 descriptor and requires exact native cache matching for same-Harness reuse.
+
+[Case149 Codex → OpenHuman](evidence/runtime-recovery-1631-case149-verified.json)
+passed on Controller `6421981f`, Codex `28dcf22`, and OpenHuman `a7fd8fe`.
+The target used the updated startup scripts and the same CI-built amd64
+OpenHuman executable as case146. An independent readback confirmed the native
+link resolved to the canonical Worker shared directory. OpenHuman launched
+after the old Codex instance exited and was removed. It initialized a native
+Task session and advanced checkpoint 2 to 12 in generation 2.
+All three steps ran once and four artifact/report hashes matched. The same
+Task emitted one final Matrix reply with zero new incoming messages after
+the source stopped.

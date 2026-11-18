@@ -34,6 +34,38 @@ class HarnessReceiptTests(unittest.TestCase):
         with self.assertRaises(sqlite3.ProgrammingError):
             db.execute("SELECT 1")
 
+    def test_completed_reply_receipt_is_durable_and_uses_the_original_event(self):
+        self.receipts.enqueue("!room:hs", "$input", "completed")
+        request = Mock(side_effect=OSError("Matrix is temporarily unavailable"))
+        self.receipts.flush(request)
+        first = [call.args for call in request.call_args_list if call.args[2]["status"] == "completed"]
+        self.assertEqual(len(first), 1)
+        request = Mock(return_value={"event_id": "$receipt"})
+        Receipts(self.root).flush(request)
+        retried = [call.args for call in request.call_args_list if call.args[2]["status"] == "completed"]
+        self.assertEqual(first, retried)
+        self.assertEqual(retried[0][2]["m.relates_to"]["event_id"], "$input")
+
+    def test_manager_completion_requires_a_same_room_authenticated_terminal_receipt(self):
+        from agentteams_receipts import completed_turns
+
+        own_user = "@manager:hs"
+        def receipt(event_id, status, sender=own_user, version=1):
+            return {"type": "com.agentteams.session_receipt", "sender": sender,
+                    "content": {"status": status, "version": version, "m.relates_to": {
+                        "rel_type": "com.agentteams.session_receipt", "event_id": event_id}}}
+
+        progress = {"type": "m.room.message", "sender": own_user, "content": {
+            "m.relates_to": {"m.in_reply_to": {"event_id": "$progress"}}}}
+        redacted = {**receipt("$redacted", "completed"), "unsigned": {"redacted_because": {}}}
+        timeline = [progress, redacted, receipt("$onlyread", "read"),
+                    receipt("$foreign", "completed", sender="@other:hs"), receipt("$wrong", "completed", version=2),
+                    receipt("$completed", "completed")]
+        joined = {"!office:hs": {"timeline": {"events": timeline}},
+                  "!elsewhere:hs": {"timeline": {"events": [receipt("$moved", "completed")]}}}
+        self.assertEqual(completed_turns({"rooms": {"join": joined}}, own_user),
+                         {("!office:hs", "$completed"), ("!elsewhere:hs", "$moved")})
+
     def test_receipts_do_not_evict_messages_from_the_polling_window(self):
         events = [{"type": "com.agentteams.session_receipt", "event_id": f"$receipt-{i}"} for i in range(25)]
         events.append({"type": "m.room.message", "event_id": "$completed", "content": {"body": "TASK_COMPLETED"}})

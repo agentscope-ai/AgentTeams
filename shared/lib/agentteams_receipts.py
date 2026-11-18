@@ -1,4 +1,4 @@
-"""Exact Matrix receipts from committed Harness inputs, never from queue admission."""
+"""Durable Matrix receipts for committed native input and Manager turn completion."""
 from __future__ import annotations
 
 import argparse
@@ -38,7 +38,7 @@ class Receipts:
             yield db
 
     def enqueue(self, room, event, status="read"):
-        if not room.startswith("!") or not event.startswith("$") or status not in {"read", "received"}:
+        if not room.startswith("!") or not event.startswith("$") or status not in {"read", "received", "completed"}:
             return
         with self.connect() as db:
             db.execute("INSERT OR IGNORE INTO receipts(room,event,status) VALUES(?,?,?)", (room, event, status))
@@ -74,6 +74,28 @@ class Receipts:
                 continue
             with self.connect() as db:
                 db.execute("UPDATE receipts SET delivered=1 WHERE room=? AND event=? AND status=?", (room, event, status))
+
+
+
+def completed_turns(payload, user_id):
+    """Read terminal receipts for the same account, scoped to the joined room."""
+    completed = set()
+    for room_id, room in payload.get("rooms", {}).get("join", {}).items():
+        for event in room.get("timeline", {}).get("events", []):
+            if event.get("type") != RECEIPT_TYPE or event.get("sender") != user_id:
+                continue
+            if "redacted_because" in (event.get("unsigned") or {}):
+                continue
+            content = event.get("content")
+            if not isinstance(content, dict) or content.get("status") != "completed" or content.get("version") != 1:
+                continue
+            relation = content.get("m.relates_to")
+            if not isinstance(relation, dict) or relation.get("rel_type") != RECEIPT_TYPE:
+                continue
+            source = relation.get("event_id")
+            if isinstance(source, str) and source.startswith("$") and len(source) > 1:
+                completed.add((room_id, source))
+    return completed
 
 
 def matrix_request(homeserver, token):

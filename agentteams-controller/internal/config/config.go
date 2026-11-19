@@ -130,6 +130,15 @@ type Config struct {
 	// if empty, leader election falls back to the legacy global lease name.
 	ControllerName string
 
+	// Unified entry: expose only the Higress gateway and register /api
+	// (+ optional /dashboard) on it, so clients need one AgentTeams address.
+	// The /api upstream is the controller in this change; moving it to
+	// agentteams-service later is a follow-up.
+	UnifiedEntryEnabled bool
+	EntryInternalURL    string
+	EntryExternalURL    string
+	DashboardURL        string
+
 	// Embedded-mode Manager Agent container mounts (host paths, read from env)
 	ManagerWorkspaceDir string // e.g. ~/agentteams-manager — mounted as /root/manager-workspace
 	HostShareDir        string // e.g. ~/ — mounted as /host-share
@@ -358,6 +367,11 @@ func LoadConfig() *Config {
 
 		ControllerURL:  os.Getenv("AGENTTEAMS_CONTROLLER_URL"),
 		ControllerName: os.Getenv("AGENTTEAMS_CONTROLLER_NAME"),
+
+		UnifiedEntryEnabled: envBool("AGENTTEAMS_UNIFIED_ENTRY_ENABLED"),
+		EntryInternalURL:    os.Getenv("AGENTTEAMS_ENTRY_INTERNAL_URL"),
+		EntryExternalURL:    os.Getenv("AGENTTEAMS_ENTRY_EXTERNAL_URL"),
+		DashboardURL:        os.Getenv("AGENTTEAMS_DASHBOARD_URL"),
 
 		ManagerWorkspaceDir: os.Getenv("AGENTTEAMS_WORKSPACE_DIR"),
 		HostShareDir:        os.Getenv("AGENTTEAMS_HOST_SHARE_DIR"),

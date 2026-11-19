@@ -56,6 +56,15 @@ type Config struct {
 	AIStreamIdleTimeoutSeconds int
 	TuwunelURL                 string // internal Tuwunel URL, e.g. http://tuwunel:6167
 	ElementWebURL              string // internal Element Web URL (optional)
+
+	// Unified entry: when enabled the initializer registers the single
+	// front door routes (/api -> controller, /dashboard) on the gateway so
+	// clients only need one AgentTeams address.
+	UnifiedEntryEnabled bool
+	EntryInternalURL    string // single entry address shown to operators (informational)
+	EntryExternalURL    string // external address of the same entry (informational)
+	ControllerURL       string // controller root used as the /api upstream
+	DashboardURL        string // dashboard upstream served at /dashboard (optional)
 }
 
 func (c Config) managesGatewayRoutes() bool {
@@ -436,7 +445,14 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 		}
 	}
 
-	// 5. Remove Higress default landing page
+	// 5. Unified entry: /api and /dashboard on the single gateway entry.
+	if i.Config.UnifiedEntryEnabled {
+		if err := i.initUnifiedEntryRoutes(ctx); err != nil {
+			logger.Error(err, "failed to initialize unified entry routes (non-fatal)")
+		}
+	}
+
+	// 6. Remove Higress default landing page
 	if err := i.Gateway.DeleteRoute(ctx, "default"); err != nil {
 		logger.Error(err, "failed to remove default route (non-fatal)")
 	}

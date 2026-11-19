@@ -197,6 +197,7 @@ jobs:
           python -m pytest plugins/tests/teamharness/mcp/test_coordination_transport.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_main_task_plan.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_manager_handoff_schema.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_manager_worker_delivery.py -q
           PYTHONPATH="${GITHUB_WORKSPACE}/shared/lib" \
             python -m pytest plugins/tests/teamharness/mcp/test_worker_task_ownership.py -q
           ruby plugins/tests/teamharness/mcp/tools/test-roomflow.rb

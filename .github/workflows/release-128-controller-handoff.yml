@@ -1,0 +1,51 @@
+name: Recover verified 1.2.8 Controller artifact handoff
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+env:
+  REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
+jobs:
+  handoff:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 44544904996
+          name: image-controller
+          path: /tmp/controller
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Verify source, packaged binary and immutable native handoff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          source=d390f4eabd7bdfa74bc6bf70638a86febee31e43
+          test "$(gh api repos/agentscope-ai/AgentTeams/actions/runs/44544904996 --jq .head_sha)" = "$source"
+          git diff --exit-code 4006d756035c5da3d2b1e5c304b1c16d5d61fe1c "$source" -- agentteams-controller manager plugins shared hack/versions.env
+          gzip -t /tmp/controller/agentteams-controller.tar.gz
+          gzip -dc /tmp/controller/agentteams-controller.tar.gz | docker load
+          test "$(docker image inspect agentteams/agentteams-controller:latest --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          docker run --rm --entrypoint agt agentteams/agentteams-controller:latest tracing --help
+          image="${REGISTRY}/agentteams/agentteams-controller:ci-v1.2.8-d390f4eabd7b-amd64"
+          docker build -f scripts/release/128-controller-metadata.Dockerfile -t "$image" .
+          docker run --rm --entrypoint sha256sum "$image" /usr/local/bin/agentteams-controller /usr/local/bin/agt
+          docker push "$image"
+          amd="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+          arm_image="${REGISTRY}/agentteams/agentteams-controller:harness-v1.2.8-4006d756035c-arm64"
+          arm="$(docker buildx imagetools inspect "$arm_image" --format '{{.Manifest.Digest}}')"
+          docker pull --platform linux/amd64 "${image%:*}@${amd}"
+          docker run --rm --entrypoint agt "${image%:*}@${amd}" tracing --help
+          index="${REGISTRY}/agentteams/agentteams-controller:stage-v1.2.8-handoff-d390f4eabd7b"
+          docker buildx imagetools create -t "$index" "${image%:*}@${amd}" "${arm_image%:*}@${arm}"
+          docker buildx imagetools inspect "$index" --raw | jq -e '[.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort == ["amd64", "arm64"]'
+          digest="$(docker buildx imagetools inspect "$index" --format '{{.Manifest.Digest}}')"
+          echo "${index%:*}@${digest}" >> "$GITHUB_STEP_SUMMARY"

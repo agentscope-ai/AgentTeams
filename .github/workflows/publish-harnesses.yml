@@ -1,4 +1,4 @@
-name: Stage corrected 1.2.8 native artifacts
+name: Recover native AMD64 artifacts through verified transport
 on:
   workflow_dispatch:
 permissions:
@@ -8,107 +8,72 @@ env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
   SOURCE: a5ddf6ae0f6d14797bf14924de12452ab69c3f2a
 jobs:
-  dependencies:
+  transport:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
-        image: [controller, openclaw-base]
-        arch: [amd64, arm64]
         include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+          - artifact: controller
+            image: agentteams-controller
+          - artifact: openclaw-base
+            image: openclaw-base
+          - artifact: embedded
+            image: agentteams-embedded
+          - artifact: worker
+            image: agentteams-harness-openclaw
+          - artifact: qwenpaw-worker
+            image: agentteams-harness-qwenpaw
+          - artifact: hermes-worker
+            image: agentteams-harness-hermes
+          - artifact: deepseek-harness-worker
+            image: agentteams-harness-deepseek
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
       - uses: actions/download-artifact@v4
-        if: matrix.arch == 'amd64'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ matrix.image == 'controller' && '44551299004' || '44544904996' }}
-          name: ${{ matrix.image == 'controller' && 'image-controller' || 'image-openclaw-base' }}
+          run-id: 44551299004
+          name: image-${{ matrix.artifact }}
           path: /tmp/input
-      - name: Verify artifact source equivalence
-        if: matrix.arch == 'amd64'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          KIND: ${{ matrix.image }}
-        run: |
-          if [[ "$KIND" == controller ]]; then run=44551299004; source="$SOURCE"; else run=44544904996; source=d390f4eabd7bdfa74bc6bf70638a86febee31e43; fi
-          test "$(gh api repos/agentscope-ai/AgentTeams/actions/runs/$run --jq .head_sha)" = "$source"
-          git fetch --no-tags origin "$source" "$SOURCE"
-          if [[ "$KIND" == openclaw-base ]]; then git diff --exit-code "$source" "$SOURCE" -- openclaw-base; fi
-          gzip -dc /tmp/input/*.tar.gz | docker load
-      - name: Build native ARM64 Controller
-        if: matrix.image == 'controller' && matrix.arch == 'arm64'
-        run: |
-          make build-agentteams-controller HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
-            DOCKER_BUILD_ARGS="--build-arg GOPROXY=https://proxy.golang.org,direct --build-arg APT_MIRROR="
-      - name: Build native ARM64 OpenClaw base
-        if: matrix.image == 'openclaw-base' && matrix.arch == 'arm64'
-        uses: docker/build-push-action@v7
-        with:
-          context: ./openclaw-base
-          load: true
-          tags: agentteams/openclaw-base:latest
-          build-args: |
-            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com
-            APT_MIRROR=
-          cache-from: type=gha,scope=openclaw-base-arm64
-          cache-to: type=gha,mode=max,scope=openclaw-base-arm64,ignore-error=true,timeout=2m
-      - name: Label, smoke and push exact native dependency
-        env:
-          KIND: ${{ matrix.image }}
-          ARCH: ${{ matrix.arch }}
-        run: scripts/release/128-native-stage.sh dependency "$KIND" "$ARCH"
-  indexes:
-    needs: dependencies
-    runs-on: ubuntu-24.04
-    outputs:
-      controller: ${{ steps.refs.outputs.controller }}
-      base: ${{ steps.refs.outputs.base }}
-    steps:
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
-      - id: refs
+      - name: Load and label already native-built AMD64 bytes
+        env:
+          IMAGE: ${{ matrix.image }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for image in agentteams-controller openclaw-base; do
-            ref="$REGISTRY/agentteams/$image:stage-v1.2.8-${GITHUB_SHA:0:12}"
-            docker buildx imagetools create --annotation "index:org.opencontainers.image.revision=$SOURCE" -t "$ref" "$ref-amd64" "$ref-arm64"
-            docker buildx imagetools inspect "$ref" --raw | jq -e '[.manifests[]|select(.platform.os == "linux")|.platform.architecture]|sort == ["amd64","arm64"]'
-            digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')"
-            if [[ "$image" == agentteams-controller ]]; then key=controller; else key=base; fi
-            echo "$key=${ref%:*}@$digest" >> "$GITHUB_OUTPUT"
-            echo "$key=${ref%:*}@$digest" >> "$GITHUB_STEP_SUMMARY"
-          done
-  package:
-    needs: indexes
+          test "$(gh api repos/agentscope-ai/AgentTeams/actions/runs/44551299004 --jq .head_sha)" = "$SOURCE"
+          gzip -dc /tmp/input/*.tar.gz | docker load
+          input="agentteams/$IMAGE:latest"
+          test "$(docker image inspect "$input" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          image="$REGISTRY/agentteams/$IMAGE:transport-v1.2.8-a5ddf6ae-amd64"
+          docker build --platform linux/amd64 --build-arg "INPUT_IMAGE=$input" \
+            --label "org.opencontainers.image.revision=$SOURCE" --label org.opencontainers.image.version=v1.2.8 \
+            --label "io.agentteams.packaging-revision=$GITHUB_SHA" \
+            -f scripts/release/128-metadata.Dockerfile -t "$image" .
+      - name: Push without executing foreign architecture code
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          image="$REGISTRY/agentteams/$IMAGE:transport-v1.2.8-a5ddf6ae-amd64"
+          timeout 600 docker push "$image"
+          digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+          echo "$IMAGE ${image%:*}@$digest" >> "$GITHUB_STEP_SUMMARY"
+  verify:
+    needs: transport
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex, embedded]
-        arch: [amd64, arm64]
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+        image: [agentteams-controller, openclaw-base, agentteams-embedded, agentteams-harness-openclaw, agentteams-harness-qwenpaw, agentteams-harness-hermes, agentteams-harness-deepseek]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -119,10 +84,24 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Package corrected native artifact and verify immutable bytes
+      - name: Pull immutable bytes and verify on native AMD64
         env:
-          CONTROLLER: ${{ needs.indexes.outputs.controller }}
-          BASE: ${{ needs.indexes.outputs.base }}
-          RUNTIME: ${{ matrix.runtime }}
-          ARCH: ${{ matrix.arch }}
-        run: scripts/release/128-native-stage.sh package "$RUNTIME" "$ARCH"
+          IMAGE: ${{ matrix.image }}
+        run: |
+          image="$REGISTRY/agentteams/$IMAGE:transport-v1.2.8-a5ddf6ae-amd64"
+          digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+          ref="${image%:*}@$digest"
+          timeout 600 docker pull --platform linux/amd64 "$ref"
+          test "$(docker image inspect "$ref" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          if [[ "$IMAGE" == openclaw-base ]]; then
+            docker run --rm --entrypoint bash "$ref" -ec 'node --version; openclaw --version; grep -rFl "com.agentteams.read_audience" /opt/openclaw/dist/extensions/matrix >/dev/null'
+          else
+            docker run --rm --entrypoint agt "$ref" tracing --help
+          fi
+          case "$IMAGE" in
+            agentteams-harness-openclaw) docker run --rm --entrypoint bash -v "$PWD/worker/tests/image-smoke.sh:/tmp/smoke.sh:ro" "$ref" /tmp/smoke.sh ;;
+            agentteams-harness-qwenpaw) docker run --rm --entrypoint /opt/venv/qwenpaw/bin/python "$ref" -c 'import qwenpaw_worker' ;;
+            agentteams-harness-hermes) docker run --rm --entrypoint /opt/venv/hermes/bin/python "$ref" -c 'import hermes_worker' ;;
+            agentteams-harness-deepseek) docker run --rm --entrypoint python3 -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/smoke.py:ro" "$ref" /tmp/smoke.py ;;
+          esac
+          echo "$IMAGE $ref native AMD64 passed" >> "$GITHUB_STEP_SUMMARY"

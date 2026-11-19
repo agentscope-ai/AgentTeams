@@ -7,6 +7,10 @@ on:
         type: string
         default: v1.2.8
         required: true
+      images:
+        description: JSON array of components to stage
+        type: string
+        default: '["agentteams-controller","agentteams-embedded","agentteams-harness-openclaw","agentteams-harness-qwenpaw","agentteams-harness-hermes","agentteams-harness-deepseek","agentteams-harness-openhuman","agentteams-harness-codex"]'
 permissions:
   contents: read
 env:
@@ -20,7 +24,7 @@ jobs:
       fail-fast: false
       max-parallel: 8
       matrix:
-        image: [agentteams-controller, agentteams-embedded, agentteams-harness-openclaw, agentteams-harness-qwenpaw, agentteams-harness-hermes, agentteams-harness-deepseek, agentteams-harness-openhuman, agentteams-harness-codex]
+        image: ${{ fromJSON(inputs.images) }}
         arch: [amd64, arm64]
         include:
           - arch: amd64
@@ -108,6 +112,7 @@ jobs:
           COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/agentteams/plugins/teamharness-qwenpaw.zip
           COPY plugins/teamharness/mcp/message_tool.py plugins/teamharness/mcp/server.py /opt/agentteams/qwenpaw-builtin/plugins/teamharness/teamharness/mcp/
           COPY plugins/teamharness/prompts/manager/AGENTS.md /opt/agentteams/qwenpaw-builtin/plugins/teamharness/teamharness/prompts/manager/AGENTS.md
+          RUN /opt/venv/qwenpaw/bin/python -c 'from pathlib import Path; from qwenpaw_worker.worker import Worker; p=Path("/opt/agentteams/qwenpaw-builtin/plugins/teamharness"); (p/".agentteams-builtin-plugin.sha256").write_text(Worker._plugin_directory_digest(None,p)+"\n")'
           DOCKER
               ;;
             *)
@@ -157,6 +162,13 @@ jobs:
             docker run --rm --network none --entrypoint sh -e ZIP_SHA "$REPAIR_IMAGE" -ec \
               'echo "$ZIP_SHA  /opt/agentteams/plugins/teamharness-qwenpaw.zip" | sha256sum -c -'
             docker run --rm --network none --entrypoint /opt/venv/qwenpaw/bin/python "$REPAIR_IMAGE" -c 'import qwenpaw_worker'
+            docker run --rm --network none --entrypoint /opt/venv/qwenpaw/bin/python "$REPAIR_IMAGE" -c '
+          from pathlib import Path
+          from qwenpaw_worker.worker import Worker
+          p=Path("/opt/agentteams/qwenpaw-builtin/plugins/teamharness")
+          assert (p/".agentteams-builtin-plugin.sha256").read_text().strip() == Worker._plugin_directory_digest(None,p), "builtin marker does not match packaged plugin"
+          '
+            echo 'BUILTIN_MARKER_CHECK=passed' >> "$GITHUB_ENV"
           fi
           docker run --rm --network none --entrypoint agt "$REPAIR_IMAGE" tracing --help
       - name: Publish only the unique candidate and record provenance
@@ -174,6 +186,7 @@ jobs:
           record = {key:os.environ[key] for key in keys}
           record['nativeCLI'] = 'passed'
           record['packagedPayloadHashes'] = 'matched source'
+          record['builtinMarkerCheck'] = os.environ.get('BUILTIN_MARKER_CHECK', 'not_applicable')
           Path('/tmp/evidence.json').write_text(json.dumps(record,indent=2)+'\n')
           print(json.dumps(record))
           PY

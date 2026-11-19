@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote
@@ -26,6 +27,11 @@ class SessionReceipts:
         self.flush_lock = asyncio.Lock()
         self.wakeup = asyncio.Event()
         self.task = None
+        self._manager_outbox = None
+        if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+            from agentteams_receipts import Receipts
+
+            self._manager_outbox = Receipts(os.getenv("AGENTTEAMS_WORKER_HOME") or Path.home())
 
     async def start(self):
         for path in self.session_dir.rglob("*.json"):
@@ -56,9 +62,19 @@ class SessionReceipts:
                 self.pending[key].append(pending)
         self.wakeup.set()
 
+    async def complete(self, room_id, event_id):
+        if self._manager_outbox:
+            await asyncio.to_thread(self._manager_outbox.enqueue, room_id, event_id, "completed")
+            self.wakeup.set()
+
     async def flush(self):
         async with self.flush_lock:
             await self._flush()
+            if self._manager_outbox and self.channel._client:
+                from agentteams_receipts import matrix_request
+
+                request = matrix_request(self.channel.homeserver, self.channel._client.access_token)
+                await asyncio.to_thread(self._manager_outbox.flush, request)
 
     async def _flush(self):
         for key in list(self.pending):
@@ -101,6 +117,39 @@ class SessionReceiptMiddleware(MiddlewareBase):
     def __init__(self, ctx):
         self.ctx = ctx
 
+    async def _message_turn(self):
+        identity = (getattr(self.ctx.request, "channel_meta", None) or {}).get("message_execution")
+        if not identity:
+            return None
+        from task_recovery import RecoveryConflict
+        channel = await self.ctx.workspace.channel_manager.get_channel("agentteams_matrix")
+        messages = channel._task_execution.messages
+        turn = messages.turns.get(identity["event_key"])
+        if not turn or turn["identity"] != identity:
+            raise RecoveryConflict("Native Matrix message was replaced before model or tool admission")
+        return messages.matrix, turn
+
+    async def on_reasoning(self, agent, input_kwargs, next_handler):
+        if (getattr(self.ctx.request, "channel_meta", {}) or {}).get("task_execution"):
+            channel = await self.ctx.workspace.channel_manager.get_channel("agentteams_matrix")
+            await channel._task_execution.assignments.before_reasoning(self.ctx, agent)
+        managed = await self._message_turn()
+        if managed:
+            matrix, turn = managed
+            await asyncio.to_thread(matrix.message_current, turn["identity"])
+        async for item in next_handler(**input_kwargs):
+            yield item
+
+    async def on_acting(self, agent, input_kwargs, next_handler):
+        managed = await self._message_turn()
+        if managed:
+            from qwenpaw_message_execution import guarded_tool
+            stream = guarded_tool(*managed, input_kwargs["tool_call"], next_handler, input_kwargs)
+        else:
+            stream = next_handler(**input_kwargs)
+        async for item in stream:
+            yield item
+
     async def on_reply(self, agent, input_kwargs, next_handler):
         checkpointed = False
         async for event in next_handler(**input_kwargs):
@@ -120,7 +169,11 @@ class SessionReceiptMiddleware(MiddlewareBase):
             return
         channel = await ctx.workspace.channel_manager.get_channel("agentteams_matrix")
         delivery = getattr(channel, "_session_receipts", None)
-        if delivery is None:
+        required = meta.get("shared_input_keys") or []
+        execution = getattr(channel, "_task_execution", None)
+        if required and execution is None:
+            raise RuntimeError("Managed Matrix input persistence adapter is unavailable")
+        if delivery is None and not required:
             return
         pending = agent.state.middle_context.setdefault(PENDING_KEY, [])
         added = []
@@ -139,11 +192,17 @@ class SessionReceiptMiddleware(MiddlewareBase):
                 channel="agentteams_matrix",
                 agent=proxy,
             )
+            if required and execution is not None:
+                await execution.commit_inputs(ctx.session_id,
+                    getattr(ctx.request, "user_id", "") or ctx.session_id, room_id, event_ids, required)
         except Exception:
             # A later turn-end save must not publish a read whose checkpoint
-            # failed. Leave the response path running and omit its receipt.
+            # failed. Required managed inputs also stop before native inference.
             for entry in added:
                 pending.remove(entry)
             logger.warning("Session input checkpoint failed; read receipt omitted", exc_info=True)
+            if required and execution is not None:
+                raise  # A managed accepted input must not enter inference unrecorded.
             return
-        await delivery.submit(room_id, event_ids, pending)
+        if delivery is not None:
+            await delivery.submit(room_id, event_ids, pending)

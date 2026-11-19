@@ -53,32 +53,33 @@ log_info "Triggering heartbeat (runtime=${MANAGER_RUNTIME})..."
 case "${MANAGER_RUNTIME}" in
     copaw|qwenpaw)
         # CoPaw: the internal _heartbeat APScheduler job has no manual trigger API.
-        # Send a heartbeat instruction via Matrix DM to make the Agent execute HEARTBEAT.md.
+        # Wait for the final report before another test uses the same Manager DM.
+        COMPLETION_MARKER="AT_HEARTBEAT_DONE_$(date +%s)_$$"
         matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-            "Please execute your heartbeat check now. Read ~/HEARTBEAT.md and follow the full checklist. Report findings here."
+            "Please execute your heartbeat check now. Read HEARTBEAT.md in your current workspace and follow the full checklist. Report findings here. After all checks finish, end your final report with this exact plain-text line: ${COMPLETION_MARKER}"
+        log_info "Waiting for the final Manager heartbeat report..."
+        REPORT=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" \
+            "(^|[[:space:]])${COMPLETION_MARKER}[[:space:]]*$" 900)
+        assert_not_empty "${REPORT}" "Manager finished the heartbeat checklist and sent the final report"
         ;;
     *)
         # OpenClaw: trigger via system event
         docker exec "${MANAGER_CONTAINER}" bash -c \
             "cd ~/agentteams-fs/agents/manager && openclaw system event --mode now" 2>/dev/null || \
             log_info "Could not trigger OpenClaw heartbeat via system event"
+        log_info "Waiting for heartbeat inquiry..."
+        sleep 60
+
+        log_section "Verify Heartbeat Inquiry"
+        MESSAGES=$(matrix_read_messages "${ADMIN_TOKEN}" "${DM_ROOM}" 30)
+        INQUIRY=$(echo "${MESSAGES}" | jq -r '[.chunk[] | select(.sender | startswith("@manager")) | .content.body] | map(select(test("status|progress|heartbeat|how"; "i"))) | first // empty')
+        if [ -n "${INQUIRY}" ]; then
+            log_pass "Manager sent heartbeat inquiry"
+        else
+            log_info "Heartbeat inquiry not detected (may need longer wait or different room)"
+        fi
         ;;
 esac
-
-log_info "Waiting for heartbeat inquiry..."
-sleep 60
-
-log_section "Verify Heartbeat Inquiry"
-
-# Check for Manager inquiry message in Alice's room
-MESSAGES=$(matrix_read_messages "${ADMIN_TOKEN}" "${DM_ROOM}" 30)
-INQUIRY=$(echo "${MESSAGES}" | jq -r '[.chunk[] | select(.sender | startswith("@manager")) | .content.body] | map(select(test("status|progress|heartbeat|how"; "i"))) | first // empty')
-
-if [ -n "${INQUIRY}" ]; then
-    log_pass "Manager sent heartbeat inquiry"
-else
-    log_info "Heartbeat inquiry not detected (may need longer wait or different room)"
-fi
 
 log_section "Collect Metrics"
 wait_for_worker_session_stable "alice" 5 120

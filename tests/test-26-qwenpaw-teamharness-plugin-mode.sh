@@ -579,9 +579,7 @@ Complete these steps immediately before handling the user's request:
 1. Run the packaged hello script:
    sh bootstrap/test26-hello.sh
 
-2. Reply with exactly this marker:
-
-${bootstrap_marker}
+2. Reply with exactly the marker printed by the script.
 EOF
         cat >\"\${work}/config/bootstrap/test26-seed.md\" <<'EOF'
 # TEST26 AgentSpec Config Bootstrap
@@ -598,6 +596,7 @@ role=\"\${AGENTTEAMS_WORKER_ROLE:-\${AGENTTEAMS_AGENT_ROLE:-unknown}}\"
 mkdir -p bootstrap
 printf '%s\n' \"\${marker}\" > bootstrap/test26-hello-result.txt
 printf '%s\n' \"\${role}\" > bootstrap/test26-hello-role.txt
+printf '%s\n' \"\${marker}\"
 EOF
         chmod +x \"\${work}/config/bootstrap/test26-hello.sh\"
         cat >\"\${work}/config/materials/test26-note.md\" <<'EOF'
@@ -993,12 +992,6 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
         log_fail "${container} contains legacy agentteam plugin state"
     fi
 
-    if docker exec "${container}" test -f "${workspace}/TEAMS.md" >/dev/null 2>&1; then
-        log_pass "${container} workspace TeamHarness prompt exists"
-    else
-        log_fail "${container} workspace TeamHarness prompt missing"
-    fi
-
     if _wait_workspace_team_context "${container}" "${workspace}/TEAMS.md" "${role}" 120; then
         log_pass "${container} TEAMS.md contains ${role} team context"
         if docker exec "${container}" test ! -e "${qwenpaw_dir}/teamharness/team-context.json" >/dev/null 2>&1; then
@@ -1305,16 +1298,16 @@ fi
 
 log_section "QwenPaw Native Bootstrap"
 
-LEADER_BOOTSTRAP_PROMPT="Please run your package bootstrap now. Follow BOOTSTRAP.md exactly: run the packaged hello script, then reply with the requested marker. Do not ask me to confirm identity."
-if matrix_send_message "${ADMIN_TOKEN}" "${LEADER_DM}" "${LEADER_BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
+BOOTSTRAP_PROMPT="Please run your package bootstrap now. Follow BOOTSTRAP.md exactly. Run the packaged hello script and reply with only the marker printed by the script. Do not ask me to confirm identity."
+if matrix_send_message "${ADMIN_TOKEN}" "${LEADER_DM}" "${BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
     log_pass "Admin sent package bootstrap request to QwenPaw leader"
 else
     log_fail "Admin failed to send package bootstrap request to QwenPaw leader"
 fi
 
 LEADER_BOOTSTRAP_REPLY=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${LEADER_DM}" "${LEADER_MXID}" "${BOOTSTRAP_LEADER_MARKER}" 360 2>/dev/null || true)
-if echo "${LEADER_BOOTSTRAP_REPLY}" | grep -Fq "${BOOTSTRAP_LEADER_MARKER}"; then
+    "${ADMIN_TOKEN}" "${LEADER_DM}" "${LEADER_MXID}" "^${BOOTSTRAP_LEADER_MARKER}$" 360 2>/dev/null || true)
+if echo "${LEADER_BOOTSTRAP_REPLY}" | grep -Fxq "${BOOTSTRAP_LEADER_MARKER}"; then
     log_pass "QwenPaw leader completed package bootstrap instructions"
 else
     log_fail "QwenPaw leader did not complete package bootstrap instructions"
@@ -1326,22 +1319,21 @@ else
     log_fail "QwenPaw leader did not write bootstrap completion flag"
 fi
 
-if docker exec "${LEADER_CONTAINER}" sh -c "grep -Fq '${BOOTSTRAP_LEADER_MARKER}' '${LEADER_DEFAULT_WS}/bootstrap/test26-hello-result.txt'" >/dev/null 2>&1; then
+if _wait_workspace_marker "${LEADER_CONTAINER}" "${LEADER_DEFAULT_WS}/bootstrap/test26-hello-result.txt" "${BOOTSTRAP_LEADER_MARKER}" 120; then
     log_pass "QwenPaw leader hello script wrote expected marker"
 else
     log_fail "QwenPaw leader hello script did not write expected marker"
 fi
 
-WORKER_BOOTSTRAP_PROMPT="Please run your package bootstrap now. Follow BOOTSTRAP.md exactly: run the packaged hello script, then reply with the requested marker. Do not ask me to confirm identity."
-if matrix_send_mention_message "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${WORKER_BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
+if matrix_send_mention_message "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
     log_pass "Admin sent package bootstrap mention to QwenPaw worker"
 else
     log_fail "Admin failed to send package bootstrap mention to QwenPaw worker"
 fi
 
 WORKER_BOOTSTRAP_REPLY=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${BOOTSTRAP_WORKER_MARKER}" 360 2>/dev/null || true)
-if echo "${WORKER_BOOTSTRAP_REPLY}" | grep -Fq "${BOOTSTRAP_WORKER_MARKER}"; then
+    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "^${BOOTSTRAP_WORKER_MARKER}$" 360 2>/dev/null || true)
+if echo "${WORKER_BOOTSTRAP_REPLY}" | grep -Fxq "${BOOTSTRAP_WORKER_MARKER}"; then
     log_pass "QwenPaw worker completed package bootstrap instructions"
 else
     log_fail "QwenPaw worker did not complete package bootstrap instructions"
@@ -1353,7 +1345,7 @@ else
     log_fail "QwenPaw worker did not write bootstrap completion flag"
 fi
 
-if docker exec "${WORKER_CONTAINER}" sh -c "grep -Fq '${BOOTSTRAP_WORKER_MARKER}' '${WORKER_DEFAULT_WS}/bootstrap/test26-hello-result.txt'" >/dev/null 2>&1; then
+if _wait_workspace_marker "${WORKER_CONTAINER}" "${WORKER_DEFAULT_WS}/bootstrap/test26-hello-result.txt" "${BOOTSTRAP_WORKER_MARKER}" 120; then
     log_pass "QwenPaw worker hello script wrote expected marker"
 else
     log_fail "QwenPaw worker hello script did not write expected marker"

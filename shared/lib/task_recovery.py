@@ -25,21 +25,29 @@ class RecoveryUnavailable(ValueError):
 
 
 class Recovery:
-    def __init__(self, *, request=None):
+    def __init__(self, *, request=None, device_delivery=False):
+        self.device_delivery = device_delivery
         self.request = request or self._request
         self.process = os.environ["AGENTTEAMS_PROCESS_ID"]
 
-    def _request(self, method, path, body=None, etag=None):
+    def _request(self, method, path, body=None, etag=None, *, create=False, response_etag=False):
         token = Path(os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE") or "/var/run/secrets/agentteams/token").read_text().strip()
         headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json",
                    "X-AgentTeams-Process-ID": self.process}
-        if etag:
+        if self.device_delivery:
+            headers["X-AgentTeams-Reply-Scope"] = "device-v1"
+        if create and etag:
+            raise ValueError("Use one conditional write precondition")
+        if create:
+            headers["If-None-Match"] = "*"
+        elif etag:
             headers["If-Match"] = etag
         request = urllib.request.Request(os.environ["AGENTTEAMS_CONTROLLER_URL"].rstrip("/") + "/api/v1/" + path,
             data=json.dumps(body).encode() if body is not None else None, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=15) as response:
-                return json.load(response)
+                payload = json.load(response)
+                return (payload, response.headers.get("ETag")) if response_etag else payload
         except urllib.error.HTTPError as error:
             if error.code in {403, 404, 409, 412}:
                 raise RecoveryConflict(error.read().decode()[:1024]) from error
@@ -89,6 +97,10 @@ class Recovery:
         subprocess.run(["mc", "pipe", os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/" + key],
                        input=data, check=True, capture_output=True, timeout=30)
         version = cp.get("version", 0) + 1
+        if self.device_delivery:
+            cp["reply_attempt"] = {"state": "ready"}
+        else:
+            cp.pop("reply_attempt", None)
         cp.pop("reply_event", None)
         cp.update(version=version, result={"key": key, "sha256": digest, "size": len(data)},
                   delivery="pending", reply_txn="task-reply:" + hashlib.sha256(f"{team}/{task_id}/{version}/{digest}".encode()).hexdigest())
@@ -108,8 +120,8 @@ class Recovery:
         # submit_task permits a summary without a report file. While this
         # process still owns active execution, persist its final answer before
         # asking claim to recover an already persisted submitted report.
-        submitted_report = entry["task"]["status"] == "submitted" and entry["task"].get("result_path")
-        if execution.get("state") == "active" and not (execution.get("checkpoint") or {}).get("result") and not submitted_report:
+        final_report = entry["task"]["status"] in {"submitted", "completed"} and entry["task"].get("result_path")
+        if execution.get("state") == "active" and not (execution.get("checkpoint") or {}).get("result") and not final_report:
             return self.save_reply(task_id, team, text), text
         claimed = self.claim(snapshot, entry)
         cp = claimed["execution"].get("checkpoint") or {}
@@ -128,20 +140,7 @@ class Recovery:
         return self.checkpoint(task_id, team, cp)
 
     def interrupted(self, task_id, team):
-        task = self.current(task_id, team)
-        if task is None:
-            return
-        cp = dict(task["execution"].get("checkpoint") or {})
-        if cp.get("result") and cp.get("delivery") != "delivered":
-            return
-        operation = cp.get("operation") or {}
-        if operation.get("state") in {"started", "unknown"}:
-            return  # Already fenced for verification; never replace its identity.
-        for field in ("result", "delivery", "reply_txn", "reply_event"):
-            cp.pop(field, None)
-        operation = {"id": "native-turn:" + self.process}
-        cp.update(version=cp.get("version", 0)+1, operation={**operation, "state": "unknown"})
-        return self.checkpoint(task_id, team, cp)
+        """Keep the last durable checkpoint; registered operations retain their own state."""
 
     @staticmethod
     def session_usable(session, task, runtime, *, now=None):
@@ -160,13 +159,15 @@ class Recovery:
         execution = task["execution"]
         checkpoint = execution.get("checkpoint")
         return ("Recover your existing Task from the authoritative task system. Do not create a new task.\n"
-            "Before any new side effect, record its operation identity with checkpoint_task. If an operation is "
+            "Before a new external side effect, record its operation identity with checkpoint_task. If an operation is "
             "started or unknown, verify its external outcome and save evidence before continuing; do not rerun it. "
-            "Completed steps must not run again. Pull and verify referenced artifacts before using them. "
+            "Continue from the last saved progress. Repeat unsaved reasoning or replayable work when needed. "
+            "Pull and verify referenced artifacts before using them. "
             "Save artifacts before committing their checkpoint. A read receipt or ACK is not a checkpoint.\n"
             "Use taskflow.checkpoint_task at step boundaries. If your assigned executor already persists these "
             "checkpoints, invoke it unchanged; do not pre-register its operation IDs or commit a duplicate checkpoint "
-            "outside its protocol. Use the same task ID for submission.\n"
+            "outside its protocol. Call submit_task directly with the same Task ID once prior operations are verified. "
+            "It saves its own canonical result; do not register submission itself as a started operation.\n"
             + json.dumps({"task_id": task["task_id"], "team_id": task.get("team_id"),
                 "status": task["status"], "title": task.get("title"), "spec": task.get("spec"),
                 "project_id": task.get("project_id"), "main_task_id": task.get("main_task_id"),

@@ -65,19 +65,40 @@ class Ledger:
                 identity = {"team_id": team, "task_id": task_id, "step": step,
                             "process_id": process, "instance_id": execution["instance_id"],
                             "generation": execution["generation"]}
+                version = cp.get("version", 0)
+                verified_intents = task.get("recovery_fixture", {}).get("oracle_version") == 4
+                scope = (team, task_id, step)
+                intents = [r for r in self.data["intents"] if (r["team_id"], r["task_id"], r["step"]) == scope]
+                exact_start = operation.get("id") == f"fixture:{task_id}:{step}" and operation.get("state") == "started"
+                # Only this ledger can authorize and execute an effect. A missing
+                # result with an outstanding intent is never proof of non-execution.
+                never_authorized = (verified_intents and exact_start and not intents and existing is None
+                                    and [r["step"] for r in effects] == done)
+                negative = {**identity, "checkpoint_version": version, "verification": "never_authorized"}
                 if method == "REGISTER":
-                    if execution["state"] != "active" or operation.get("state") not in {None, "verified"} or existing:
-                        raise ValueError("Register intent before the durable operation start")
                     if [row["step"] for row in effects] != done:
                         raise ValueError("Task disagrees with independent completed prefix")
-                    result = {**identity, "checkpoint_version": cp.get("version", 0) + 1}
+                    if (execution["state"] == "active" and operation.get("state") in {None, "verified"}
+                            and not existing and (not verified_intents or not intents)):
+                        result = {**identity, "checkpoint_version": version + 1}
+                    elif never_authorized and any(row.get("accepted") and row.get("method") == "GET"
+                            and all(row.get(k) == v for k, v in negative.items()) for row in self.data["calls"]):
+                        # Recheck under the same lock before allocating a single
+                        # intent at the current, already-persisted checkpoint.
+                        result = {**identity, "checkpoint_version": version}
+                    else:
+                        raise ValueError("Register before start or verify that this exact operation was never authorized")
                     self.data["intents"].append(result)
                 elif operation.get("id") != f"fixture:{task_id}:{step}" or operation.get("state") not in {"started", "unknown"}:
                     raise ValueError("Register this step operation before executing or verifying it")
                 elif method == "GET":
-                    if existing is None:
+                    if existing is not None:
+                        result = existing
+                    elif never_authorized:
+                        call.update(negative)
+                        result = negative
+                    else:
                         raise ValueError("Needs verification: no verified external result; no rerun")
-                    result = existing
                 elif method == "POST":
                     if existing:
                         raise ValueError("Side effect already executed; verify its result instead")

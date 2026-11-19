@@ -25,6 +25,7 @@ import (
 
 // ServerDeps aggregates all dependencies needed by the HTTP API handlers.
 type ServerDeps struct {
+	HandoffMatrix    service.WorkerHandoffMatrix
 	WorkerEnvBuilder *service.WorkerEnvBuilder
 	Client           client.Client
 	// APIReader reads CRs straight from the API server (uncached). Write-path
@@ -306,6 +307,20 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	projh.recovery = recovery
 	mux.Handle("GET /api/v1/tasks/recoverable", mw.Authenticate(http.HandlerFunc(recovery.ListRecoverableTasks)))
 	mux.Handle("POST /api/v1/tasks/{id}/execution", mw.Authenticate(http.HandlerFunc(recovery.UpdateExecution)))
+	workerMatrix := NewWorkerMatrixHandler(deps, recovery)
+	mux.Handle("GET /api/v1/runtime/handoff", mw.Authenticate(http.HandlerFunc(workerMatrix.SelfHandoff)))
+	mux.Handle("POST /api/v1/runtime/handoff/recovered", mw.Authenticate(http.HandlerFunc(workerMatrix.ConfirmHandoffRecovery)))
+	mux.Handle("GET /api/v1/workers/{name}/runtime-handoff", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(workerMatrix.RuntimeHandoff)))
+	mux.Handle("POST /api/v1/workers/{name}/runtime-handoff", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(workerMatrix.RuntimeHandoff)))
+	mux.Handle("GET /api/v1/runtime/sessions", mw.Authenticate(http.HandlerFunc(workerMatrix.GetSession)))
+	mux.Handle("PUT /api/v1/runtime/sessions", mw.Authenticate(http.HandlerFunc(workerMatrix.RememberSession)))
+	mux.Handle("GET /api/v1/runtime/matrix", mw.Authenticate(http.HandlerFunc(workerMatrix.Get)))
+	mux.Handle("POST /api/v1/runtime/matrix", mw.Authenticate(http.HandlerFunc(workerMatrix.Update)))
+	mux.Handle("GET /api/v1/runtime/matrix/events/{key}", mw.Authenticate(http.HandlerFunc(workerMatrix.GetInput)))
+	mux.Handle("GET /api/v1/runtime/matrix/events/{key}/native", mw.Authenticate(http.HandlerFunc(workerMatrix.GetNativeInput)))
+	mux.Handle("POST /api/v1/runtime/matrix/events/{key}/native", mw.Authenticate(http.HandlerFunc(workerMatrix.CommitNativeInput)))
+	mux.Handle("GET /api/v1/runtime/matrix/events/{key}/execution", mw.Authenticate(http.HandlerFunc(workerMatrix.GetExecution)))
+	mux.Handle("POST /api/v1/runtime/matrix/events/{key}/execution", mw.Authenticate(http.HandlerFunc(workerMatrix.UpdateExecution)))
 	projh.taskAssigned = s.coordination.wakeRunner
 	if deps.APIReader != nil {
 		projh.configReader = deps.APIReader

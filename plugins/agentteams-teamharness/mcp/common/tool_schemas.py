@@ -527,7 +527,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "review_task",
                     ],
                     "description": (
-                        "Task lifecycle operation. checkpoint_task saves payload.checkpoint with the next version, completed_steps, remaining_steps, operation (id/state/evidence), persisted artifacts (key/sha256/size), and optional saved result and pending delivery. Persist artifacts first; this action verifies their digests. Use before/after each side effect and at step boundaries. report_progress records a "
+                        "Task lifecycle operation. checkpoint_task saves payload.checkpoint with the next version, completed_steps, remaining_steps, operation (id/state/evidence), persisted artifacts (key/sha256/size), and optional saved result and pending delivery. Persist artifacts first; this action verifies their digests. "
+                        "Use before/after an external side effect and at step boundaries. submit_task saves its own canonical "
+                        "result. Call it directly after prior operations are verified. report_progress records a "
                         "non-terminal progress note on an in-flight task (state "
                         "unchanged, no leader notification). request_attention "
                         "pulls a human decision (kind: approval / decision / "

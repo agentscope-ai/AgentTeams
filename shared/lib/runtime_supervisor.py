@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import uuid
 import json
@@ -57,6 +58,11 @@ def main():
         log_dir().mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         print('[runtime-logs] log directory unavailable: ' + redact(str(exc)), file=sys.stderr, flush=True)
+    ready_dir = None
+    if args.role != "manager" and os.getenv("AGENTTEAMS_CONTROLLER_URL"):
+        ready_dir = tempfile.TemporaryDirectory(prefix="agentteams-supervisor-")
+        ready_path = Path(ready_dir.name) / "recovery-scanned"
+        os.environ["AGENTTEAMS_SUPERVISOR_READY_FILE"] = str(ready_path)
     event('startup.begin')
     started = time.monotonic()
     try:
@@ -66,6 +72,10 @@ def main():
         event('startup.failed', stage='process.spawn', error_type=type(exc).__name__, error=str(exc))
         event('runtime.exit', exit_code=127)
         return 127
+    if ready_dir:
+        from worker_handoff import SupervisorHandoff
+        handoff = SupervisorHandoff(runtime, child, ready_path)
+        threading.Thread(target=handoff.monitor, daemon=True).start()
     def monitor():
         runtime = os.environ['AGENTTEAMS_LOG_RUNTIME']
         # Hermes' wrapper endpoint is liveness-only; its live event says so explicitly.

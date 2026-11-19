@@ -486,14 +486,16 @@ func (k *K8sBackend) Status(ctx context.Context, name string) (*WorkerResult, er
 	}
 
 	return &WorkerResult{
-		Name:           name,
-		Backend:        "k8s",
-		DeploymentMode: DeployCloud,
-		Status:         status,
-		InstanceID:     podInstanceID(pod),
-		Runtime:        pod.Labels[v1beta1.LabelRuntime],
-		Message:        message,
-		RawStatus:      rawStatus,
+		Name:            name,
+		Backend:         "k8s",
+		DeploymentMode:  DeployCloud,
+		Status:          status,
+		InstanceID:      podInstanceID(pod),
+		Runtime:         pod.Labels[v1beta1.LabelRuntime],
+		HandoffLabel:    pod.Labels[RuntimeHandoffLabel],
+		HandoffSpecHash: pod.Labels[RuntimeHandoffSpecLabel],
+		Message:         message,
+		RawStatus:       rawStatus,
 	}, nil
 }
 

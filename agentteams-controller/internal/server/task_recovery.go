@@ -12,12 +12,13 @@ import (
 	"path"
 	"sort"
 	"strings"
-	"time"
 
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 )
 
 // Execution is part of the task CAS, never the notification outbox lease.
@@ -29,6 +30,10 @@ type taskExecution struct {
 	Runtime    string          `json:"runtime"`
 	State      string          `json:"state"`
 	Checkpoint *taskCheckpoint `json:"checkpoint,omitempty"`
+	HandoffID  string          `json:"handoff_id,omitempty"`
+	// The process generation that saved the current reply. Only its own
+	// acknowledged final callback can seal its native turn.
+	ReplyGeneration uint64 `json:"reply_generation,omitempty"`
 }
 
 type taskArtifact struct {
@@ -43,17 +48,24 @@ type taskOperation struct {
 	Evidence string `json:"evidence,omitempty"`
 }
 
+type matrixReplyAttempt struct {
+	State  string `json:"state"`
+	User   string `json:"user_id,omitempty"`
+	Device string `json:"device_id,omitempty"`
+}
+
 type taskCheckpoint struct {
-	Version        uint64         `json:"version"`
-	CompletedSteps []string       `json:"completed_steps"`
-	RemainingSteps []string       `json:"remaining_steps"`
-	Operation      *taskOperation `json:"operation,omitempty"`
-	Artifacts      []taskArtifact `json:"artifacts"`
-	Result         *taskArtifact  `json:"result,omitempty"`
-	Delivery       string         `json:"delivery,omitempty"` // pending, delivered
-	ReplyTxn       string         `json:"reply_txn,omitempty"`
-	ReplyEvent     string         `json:"reply_event,omitempty"`
-	SavedAt        string         `json:"saved_at"`
+	Version        uint64              `json:"version"`
+	CompletedSteps []string            `json:"completed_steps"`
+	RemainingSteps []string            `json:"remaining_steps"`
+	Operation      *taskOperation      `json:"operation,omitempty"`
+	Artifacts      []taskArtifact      `json:"artifacts"`
+	Result         *taskArtifact       `json:"result,omitempty"`
+	Delivery       string              `json:"delivery,omitempty"` // pending, delivered
+	ReplyTxn       string              `json:"reply_txn,omitempty"`
+	ReplyAttempt   *matrixReplyAttempt `json:"reply_attempt,omitempty"`
+	ReplyEvent     string              `json:"reply_event,omitempty"`
+	SavedAt        string              `json:"saved_at"`
 }
 
 type TaskRecoveryHandler struct {
@@ -73,13 +85,21 @@ func recoveryCaller(caller *authpkg.CallerIdentity) bool {
 }
 
 func (h *TaskRecoveryHandler) currentInstance(ctx context.Context, caller *authpkg.CallerIdentity) (string, string, error) {
-	if h.deps.Backend == nil || !recoveryCaller(caller) {
+	if h.deps.Backend == nil || caller == nil || (caller.Role != authpkg.RoleWorker && caller.Role != authpkg.RoleTeamLeader) {
 		return "", "", fmt.Errorf("managed worker backend required")
 	}
 	w, err := NewCoordinationHandler(h.deps).worker(ctx, caller.Username)
 	if err != nil {
 		return "", "", err
 	}
+	return h.runningWorkerInstance(ctx, w)
+}
+
+func (h *TaskRecoveryHandler) runningWorkerInstance(ctx context.Context, w *v1beta1.Worker) (string, string, error) {
+	if h.deps.Backend == nil {
+		return "", "", fmt.Errorf("worker backend unavailable")
+	}
+	var err error
 	recorded := w.Status.BackendRuntime
 	if recorded == "" {
 		recorded = w.Spec.GetBackendRuntime()
@@ -114,17 +134,24 @@ func (h *TaskRecoveryHandler) currentInstance(ctx context.Context, caller *authp
 	return b.Name() + "/" + status.InstanceID, status.Runtime, nil
 }
 
-func (h *TaskRecoveryHandler) owns(ctx context.Context, caller *authpkg.CallerIdentity, task map[string]json.RawMessage) bool {
+func taskAssignedTo(task map[string]json.RawMessage, names ...string) bool {
 	var assigned string
 	_ = json.Unmarshal(task["assigned_to"], &assigned)
-	for _, name := range []string{caller.Username, caller.WorkerName, caller.MatrixUserID} {
+	for _, name := range names {
 		if name != "" && assigned == name {
 			return true
 		}
 	}
-	if h.deps.Client != nil {
+	return false
+}
+
+func (h *TaskRecoveryHandler) owns(ctx context.Context, caller *authpkg.CallerIdentity, task map[string]json.RawMessage) bool {
+	if taskAssignedTo(task, caller.Username, caller.WorkerName, caller.MatrixUserID) {
+		return true
+	}
+	if h.deps.Client != nil || h.deps.APIReader != nil {
 		w, err := NewCoordinationHandler(h.deps).worker(ctx, caller.Username)
-		return err == nil && (assigned == w.Name || assigned == w.Spec.EffectiveWorkerName(w.Name) || (w.Status.MatrixUserID != "" && assigned == w.Status.MatrixUserID))
+		return err == nil && taskAssignedTo(task, w.Name, w.Spec.EffectiveWorkerName(w.Name), w.Status.MatrixUserID)
 	}
 	return false
 }
@@ -136,14 +163,40 @@ func recoveryStatus(task map[string]json.RawMessage) bool {
 		return true
 	}
 	var execution taskExecution
-	return status == "submitted" && json.Unmarshal(task["execution"], &execution) == nil && execution.Generation > 0
+	if json.Unmarshal(task["execution"], &execution) != nil || execution.Generation == 0 {
+		return false
+	}
+	// Acceptance may race a crash between saving the answer and sending
+	// its Matrix reply. A completed Task is eligible for delivery only.
+	if status == "submitted" {
+		return true
+	}
+	if status != "completed" {
+		return false
+	}
+	if cp := execution.Checkpoint; cp != nil {
+		if cp.Delivery == "pending" && cp.Result != nil {
+			return true
+		}
+		if cp.Result != nil || cp.Delivery != "" || unresolvedOperation(cp) {
+			return false
+		}
+	}
+	// The Leader can accept the canonical report before the native callback
+	// records the reply. Claim verifies the persisted bytes before delivery.
+	var taskID, submissionID, reportPath string
+	_ = json.Unmarshal(task["task_id"], &taskID)
+	_ = json.Unmarshal(task["submission_id"], &submissionID)
+	_ = json.Unmarshal(task["result_path"], &reportPath)
+	return taskID != "" && submissionID != "" && path.Clean(reportPath) == reportPath &&
+		strings.HasPrefix(reportPath, "shared/tasks/"+taskID+"/")
 }
 
 // ListRecoverableTasks grants only self discovery; Project list stays closed.
 // Namespace is fixed by this Controller and teams come from the bearer identity.
 func (h *TaskRecoveryHandler) ListRecoverableTasks(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
-	if caller == nil || (caller.Role != authpkg.RoleWorker && caller.Role != authpkg.RoleTeamLeader) {
+	if caller == nil || (caller.Role != authpkg.RoleWorker && caller.Role != authpkg.RoleTeamLeader) || (caller.ServiceAccountNamespace != "" && caller.ServiceAccountNamespace != h.deps.Namespace) {
 		writeError(w, 403, "team worker identity required")
 		return
 	}
@@ -156,46 +209,67 @@ func (h *TaskRecoveryHandler) ListRecoverableTasks(w http.ResponseWriter, r *htt
 		writeError(w, 503, err.Error())
 		return
 	}
-	prefixes, aliases, err := h.project.taskMetaPrefixes(r.Context())
+	tasks, err := h.discoverRecoverableTasks(r.Context(), caller)
 	if err != nil {
-		writeError(w, 503, "task scopes unavailable")
+		writeError(w, 503, err.Error())
 		return
 	}
-	tasks := []map[string]any{}
+	httputil.WriteJSON(w, 200, map[string]any{"tasks": tasks, "instance_id": instance, "runtime": runtime})
+}
+
+type taskRecoveryItem struct {
+	ETag string                     `json:"etag"`
+	Task map[string]json.RawMessage `json:"task"`
+	Team string                     `json:"team_id"`
+}
+
+func (h *TaskRecoveryHandler) discoverRecoverableTasks(ctx context.Context, caller *authpkg.CallerIdentity) ([]taskRecoveryItem, error) {
+	prefixes, aliases, err := h.project.taskMetaPrefixes(ctx)
+	if err != nil {
+		return nil, errors.New("task scopes unavailable")
+	}
+	owners := []string{caller.Username, caller.WorkerName, caller.MatrixUserID}
+	if h.deps.Client != nil || h.deps.APIReader != nil {
+		// Resolve aliases once. A failed lookup must never shrink the set of
+		// executions that a handoff needs to drain.
+		worker, err := NewCoordinationHandler(h.deps).worker(ctx, caller.Username)
+		if err != nil {
+			return nil, errors.New("Worker task identity unavailable")
+		}
+		owners = append(owners, worker.Name, worker.Spec.EffectiveWorkerName(worker.Name), worker.Status.MatrixUserID)
+	}
+	tasks := []taskRecoveryItem{}
 	for _, prefix := range prefixes {
 		team := candidateTeam(prefix)
 		if !callerMatchesStorageTeam(caller, team, aliases) {
 			continue
 		}
-		children, err := h.project.oss.ListObjects(r.Context(), prefix)
+		children, err := h.project.oss.ListObjects(ctx, prefix)
 		if err != nil {
-			writeError(w, 503, "task discovery unavailable")
-			return
+			return nil, errors.New("task discovery unavailable")
 		}
 		for _, child := range children {
 			key, ok := metaKeyFromListResult(prefix, child)
 			if !ok {
 				continue
 			}
-			data, err := h.project.oss.GetObject(r.Context(), key)
+			data, err := h.project.oss.GetObject(ctx, key)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			var task map[string]json.RawMessage
 			if err != nil || json.Unmarshal(data, &task) != nil {
-				writeError(w, 503, "task snapshot unavailable")
-				return
+				return nil, errors.New("task snapshot unavailable")
 			}
 			var taskID string
 			_ = json.Unmarshal(task["task_id"], &taskID)
 			if taskID != path.Base(path.Dir(key)) {
-				writeError(w, 503, "task identity does not match storage scope")
-				return
+				return nil, errors.New("task identity does not match storage scope")
 			}
-			if !recoveryStatus(task) || !h.owns(r.Context(), caller, task) {
+			if !recoveryStatus(task) || !taskAssignedTo(task, owners...) {
 				continue
 			}
-			tasks = append(tasks, map[string]any{"team_id": team, "task": task, "etag": contentETag(data)})
+			tasks = append(tasks, taskRecoveryItem{Team: team, Task: task, ETag: contentETag(data)})
 		}
 	}
 	sort.Slice(tasks, func(i, j int) bool {
@@ -203,7 +277,7 @@ func (h *TaskRecoveryHandler) ListRecoverableTasks(w http.ResponseWriter, r *htt
 		b, _ := json.Marshal(tasks[j])
 		return string(a) < string(b)
 	})
-	httputil.WriteJSON(w, 200, map[string]any{"tasks": tasks, "instance_id": instance, "runtime": runtime})
+	return tasks, nil
 }
 
 func unresolvedOperation(cp *taskCheckpoint) bool {
@@ -211,84 +285,11 @@ func unresolvedOperation(cp *taskCheckpoint) bool {
 }
 
 func (h *TaskRecoveryHandler) validateCheckpoint(ctx context.Context, key string, old, cp *taskCheckpoint) error {
-	version := uint64(1)
-	if old != nil {
-		version = old.Version + 1
+	var store oss.StorageClient
+	if h.project != nil {
+		store = h.project.oss
 	}
-	if cp == nil || cp.Version != version {
-		return fmt.Errorf("checkpoint version must advance from the authoritative snapshot")
-	}
-	if old != nil && old.Delivery == "pending" && (old.Result == nil || cp.Result == nil || *old.Result != *cp.Result || cp.ReplyTxn != old.ReplyTxn || (cp.Delivery != "pending" && cp.Delivery != "delivered")) {
-		return fmt.Errorf("acknowledge delivery before changing a pending saved reply")
-	}
-	if unresolvedOperation(old) && (cp.Operation == nil || cp.Operation.ID != old.Operation.ID || cp.Operation.State != "verified" || strings.TrimSpace(cp.Operation.Evidence) == "") {
-		return fmt.Errorf("verify the previous operation before continuing")
-	}
-	if op := cp.Operation; op != nil && (op.ID == "" || (op.State != "started" && op.State != "unknown" && op.State != "verified") || (op.State == "verified" && strings.TrimSpace(op.Evidence) == "")) {
-		return fmt.Errorf("operation requires an identity, state and verification evidence")
-	}
-	if op := cp.Operation; op != nil && op.State == "verified" && (old == nil || old.Operation == nil || old.Operation.ID != op.ID) {
-		return fmt.Errorf("record the operation start before verifying it")
-	}
-	completed := map[string]bool{}
-	for _, step := range cp.CompletedSteps {
-		if step == "" || completed[step] {
-			return fmt.Errorf("completed steps must have unique identities")
-		}
-		completed[step] = true
-	}
-	if old != nil {
-		for _, step := range old.CompletedSteps {
-			if !completed[step] {
-				return fmt.Errorf("a checkpoint cannot forget completed steps")
-			}
-		}
-		retained := map[taskArtifact]bool{}
-		for _, artifact := range cp.Artifacts {
-			retained[artifact] = true
-		}
-		for _, artifact := range old.Artifacts {
-			if !retained[artifact] {
-				return fmt.Errorf("a checkpoint cannot discard persisted artifact references")
-			}
-		}
-		if old.Operation != nil && old.Operation.State == "verified" && (cp.Operation == nil || (cp.Operation.ID == old.Operation.ID && *cp.Operation != *old.Operation)) {
-			return fmt.Errorf("a verified operation cannot be restarted or its evidence rewritten")
-		}
-	}
-	for _, step := range cp.RemainingSteps {
-		if step == "" || completed[step] {
-			return fmt.Errorf("remaining steps overlap completed work")
-		}
-	}
-	artifacts := append([]taskArtifact{}, cp.Artifacts...)
-	if cp.Result != nil {
-		artifacts = append(artifacts, *cp.Result)
-	}
-	for _, artifact := range artifacts {
-		if artifact.Size < 0 || len(artifact.SHA256) != 64 || path.Clean(artifact.Key) != artifact.Key || !strings.HasPrefix(artifact.Key, path.Dir(key)+"/") || artifact.Key == key {
-			return fmt.Errorf("artifact must reference this task's persisted files")
-		}
-		data, err := h.project.oss.GetObject(ctx, artifact.Key)
-		if err != nil {
-			return fmt.Errorf("artifact is not durably readable: %s", artifact.Key)
-		}
-		sum := sha256.Sum256(data)
-		if int64(len(data)) != artifact.Size || hex.EncodeToString(sum[:]) != artifact.SHA256 {
-			return fmt.Errorf("artifact digest mismatch: %s", artifact.Key)
-		}
-	}
-	if cp.Delivery != "" && cp.Delivery != "pending" && cp.Delivery != "delivered" {
-		return fmt.Errorf("invalid delivery state")
-	}
-	if cp.Delivery != "" && (cp.Result == nil || cp.ReplyTxn == "" || unresolvedOperation(cp)) {
-		return fmt.Errorf("delivery requires a saved result, stable transaction and verified operations")
-	}
-	if cp.Delivery == "delivered" && cp.ReplyEvent == "" {
-		return fmt.Errorf("delivered result requires a Matrix event")
-	}
-	cp.SavedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	return nil
+	return validateWorkCheckpoint(ctx, store, key, path.Dir(key)+"/", old, cp)
 }
 
 // UpdateExecution changes only the execution record in the versioned task.
@@ -299,7 +300,7 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		return
 	}
 	caller := authpkg.CallerFromContext(r.Context())
-	if !recoveryCaller(caller) {
+	if !recoveryCaller(caller) || (caller.ServiceAccountNamespace != "" && caller.ServiceAccountNamespace != h.deps.Namespace) {
 		writeError(w, 403, "team worker identity required")
 		return
 	}
@@ -361,6 +362,34 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		writeError(w, 409, "invalid authoritative execution record")
 		return
 	}
+	var status string
+	_ = json.Unmarshal(task["status"], &status)
+	if status == "completed" && input.Action != "claim" {
+		cp := execution.Checkpoint
+		if input.Action != "checkpoint" || cp == nil || cp.Delivery != "pending" || cp.Result == nil {
+			writeError(w, 409, "a completed Task permits only delivery recovery")
+			return
+		}
+	}
+	name := caller.Username
+	if h.deps.Client != nil || h.deps.APIReader != nil {
+		worker, err := NewCoordinationHandler(h.deps).worker(r.Context(), caller.Username)
+		if err != nil {
+			writeError(w, 403, "Worker identity unavailable")
+			return
+		}
+		name = worker.Spec.EffectiveWorkerName(worker.Name)
+	}
+	start := service.WorkerStart{InstanceID: instance, ProcessID: input.ProcessID, Runtime: runtime}
+	op, err := executionHandoff(r.Context(), h.project.oss, name, start)
+	if err != nil {
+		writeHandoffAdmissionError(w, err)
+		return
+	}
+	if err := checkHandoffExecution(op, start, input.Action); err != nil {
+		writeError(w, 409, err.Error())
+		return
+	}
 	sameProcess := execution.InstanceID == instance && execution.ProcessID == input.ProcessID
 	spec, err := h.project.oss.GetObject(r.Context(), path.Dir(key)+"/spec.md")
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -377,6 +406,10 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		}
 		savedResult = string(result)
 	}
+	if input.Action == "claim" && !canClaimSavedReply(r, execution.Checkpoint) {
+		writeError(w, 409, "this saved result requires device-scoped Matrix delivery")
+		return
+	}
 	switch input.Action {
 	case "claim":
 		if !sameProcess {
@@ -384,6 +417,15 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 				writeError(w, 409, "another process owns this live instance")
 				return
 			}
+			// Older adapters recorded an interruption itself as an unknown operation.
+			// A real operation has its own ID and remains subject to verification.
+			if cp := execution.Checkpoint; cp != nil && cp.Operation != nil &&
+				cp.Operation.State == "unknown" && cp.Operation.Evidence == "" &&
+				cp.Operation.ID == "native-turn:"+execution.ProcessID {
+				cp.Operation = nil
+				cp.Version++
+			}
+			execution.HandoffID = ""
 			execution.Generation++
 			execution.InstanceID, execution.ProcessID, execution.Runtime = instance, input.ProcessID, runtime
 		}
@@ -396,9 +438,19 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 			writeError(w, 409, "execution ownership changed")
 			return
 		}
+		if cp := execution.Checkpoint; cp != nil && cp.Delivery == "pending" && (input.Action != "checkpoint" || !savedReplyUpdateOnly(cp, input.Checkpoint)) {
+			writeError(w, 409, "a saved Task result permits only acknowledgement of its reply")
+			return
+		}
 		if err := h.validateCheckpoint(r.Context(), key, execution.Checkpoint, input.Checkpoint); err != nil {
 			writeError(w, 409, err.Error())
 			return
+		}
+		if previous := execution.Checkpoint; previous == nil || previous.Delivery != "pending" {
+			execution.ReplyGeneration = 0
+			if input.Checkpoint.Delivery == "pending" {
+				execution.ReplyGeneration = execution.Generation
+			}
 		}
 		execution.Checkpoint = input.Checkpoint
 		execution.State = "active"
@@ -418,10 +470,9 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 	}
 	// submit_task saves result.md before publishing submitted metadata. A
 	// process may stop before its native final-text hook saves delivery.
-	var status, submissionID string
-	_ = json.Unmarshal(task["status"], &status)
+	var submissionID string
 	_ = json.Unmarshal(task["submission_id"], &submissionID)
-	if input.Action == "claim" && status == "submitted" && (execution.Checkpoint == nil || execution.Checkpoint.Result == nil) {
+	if input.Action == "claim" && (status == "submitted" || status == "completed") && (execution.Checkpoint == nil || execution.Checkpoint.Result == nil) {
 		old := execution.Checkpoint
 		if unresolvedOperation(old) || submissionID == "" {
 			writeError(w, 409, "verify the submitted operation and result before delivery")
@@ -452,6 +503,10 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		cp.Result = &taskArtifact{Key: resultKey, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(result))}
 		txn := sha256.Sum256([]byte(key + "/" + submissionID + "/" + cp.Result.SHA256))
 		cp.Delivery, cp.ReplyTxn, cp.ReplyEvent = "pending", "task-reply:"+hex.EncodeToString(txn[:]), ""
+		cp.ReplyAttempt = nil
+		if r.Header.Get("X-AgentTeams-Reply-Scope") == "device-v1" {
+			cp.ReplyAttempt = &matrixReplyAttempt{State: "ready"}
+		}
 		if err := h.validateCheckpoint(r.Context(), key, old, &cp); err != nil {
 			writeError(w, 409, err.Error())
 			return
@@ -472,6 +527,9 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		} else {
 			writeError(w, 503, "execution commit failed")
 		}
+		return
+	}
+	if input.Action == "claim" && !handoffClaimStillOpen(w, r, h.project.oss, name, start) {
 		return
 	}
 	w.Header().Set("ETag", contentETag(body))

@@ -55,6 +55,7 @@ wait_for_session_stable 5 60
 # Snapshot metrics baseline before sending message (to calculate delta later)
 METRICS_BASELINE=$(snapshot_baseline)
 TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_MODEL="${AGENTTEAMS_DEFAULT_MODEL:-$(exec_in_agent printenv AGENTTEAMS_DEFAULT_MODEL 2>/dev/null)}"
 
 # Send create worker request.
 #
@@ -68,12 +69,13 @@ TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
 # confirmation, so the test exercises actual Worker creation rather than the
 # LLM's confirmation-loop behavior.
 #
-# The runtime is explicit for the same reason: CI matrix runtime must win over
-# any rendered fallback text the Manager may have cached in its workspace.
+# The runtime and model policy are explicit. CI selects the runtime, and the
+# CLI must use the installed default model when the request omits a model ID.
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
     "Please create a new Worker now using these exact values — do not ask me to confirm any of them:
 - name: alice
 - runtime: ${TEST_WORKER_RUNTIME} (use this exact runtime; do not reinterpret it as the install default)
+- model: use the configured default by omitting --model
 - SOUL/role: Frontend developer specializing in modern web frameworks, responsive design, and clean UI implementation
 - skills: github-operations (file-sync / task-progress / project-participation are auto-included, no need to ask)
 
@@ -169,6 +171,10 @@ ALICE_WORKER_JSON=$(exec_in_agent agt get workers alice -o json 2>/dev/null || e
 ALICE_RUNTIME=$(echo "${ALICE_WORKER_JSON}" | jq -r '.runtime // empty')
 assert_eq "${TEST_WORKER_RUNTIME}" "${ALICE_RUNTIME}" \
     "Worker Alice runtime matches test matrix (got: '${ALICE_RUNTIME}', want: '${TEST_WORKER_RUNTIME}')"
+if [ -n "${TEST_WORKER_MODEL}" ]; then
+    ALICE_MODEL=$(echo "${ALICE_WORKER_JSON}" | jq -r '.model // empty')
+    assert_eq "${TEST_WORKER_MODEL}" "${ALICE_MODEL}" "Worker Alice uses the configured default model"
+fi
 
 log_section "Start Worker Container"
 

@@ -231,11 +231,18 @@ jobs:
         with:
           version: v3.14.0
 
-      - name: Add dependency repos
-        run: helm repo add higress.io https://higress.io/helm-charts
-
       - name: Build dependencies
-        run: helm dependency build helm/agentteams/
+        run: |
+          if helm repo add higress.io https://higress.io/helm-charts; then
+            helm dependency build helm/agentteams/
+          else
+            # The official regional mirror also publishes the pinned Higress chart.
+            helm repo add higress-mirror https://higress.cn/helm-charts
+            version=$(helm dependency list helm/agentteams/ | awk '$1 == "higress" {print $2}')
+            test -n "$version"
+            mkdir -p helm/agentteams/charts
+            helm pull higress-mirror/higress --version "$version" --destination helm/agentteams/charts
+          fi
 
       - name: Lint
         run: helm lint helm/agentteams/

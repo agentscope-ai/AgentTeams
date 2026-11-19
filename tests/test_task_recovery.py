@@ -125,14 +125,13 @@ class RecoveryTests(unittest.TestCase):
                 self.recovery.save_reply("stable-task", "team", "Do not replace")
             upload.assert_not_called()
 
-    def test_interrupted_next_turn_does_not_hide_behind_a_delivered_progress_reply(self):
+    def test_interrupted_turn_leaves_saved_progress_available_to_the_next_start(self):
         cp = self.task["execution"]["checkpoint"]
         cp.update(result={"key": "progress.txt"}, delivery="delivered", reply_txn="progress", reply_event="$progress")
+        before = copy.deepcopy(self.task)
         self.recovery.interrupted("stable-task", "team")
-        saved = self.request.call_args.args[2]["checkpoint"]
-        self.assertEqual(saved["operation"]["state"], "unknown")
-        self.assertEqual(saved["completed_steps"], ["one"])
-        self.assertNotIn("delivery", saved)
+        self.assertEqual(self.task, before)
+        self.request.assert_not_called()
 
     def test_native_callback_reclaims_only_its_process_and_delivers_saved_submission(self):
         self.task.update(status="submitted")
@@ -148,6 +147,13 @@ class RecoveryTests(unittest.TestCase):
         with patch.object(self.recovery, "claim") as claim, self.assertRaises(RecoveryConflict):
             self.recovery.prepare_reply("stable-task", "team", "Stale answer")
         claim.assert_not_called()
+
+    def test_interruption_after_durable_submission_keeps_delivery_recoverable(self):
+        self.task.update(status="submitted", result_path="shared/tasks/stable-task/result.md")
+        before = copy.deepcopy(self.task)
+        self.recovery.interrupted("stable-task", "team")
+        self.assertEqual(self.task, before)
+        self.request.assert_not_called()
 
     def test_active_submitted_callback_saves_its_answer_before_delivery_claim(self):
         self.task.update(status="submitted")
@@ -165,6 +171,15 @@ class RecoveryTests(unittest.TestCase):
         with patch.object(self.recovery, "claim", return_value=claimed) as claim, patch.object(self.recovery, "save_reply") as save:
             saved, body = self.recovery.prepare_reply("stable-task", "team", "Stale native summary")
         self.assertEqual((saved, body), (claimed, "Authoritative report"))
+        claim.assert_called_once()
+        save.assert_not_called()
+
+    def test_completed_callback_recovers_the_accepted_report(self):
+        self.task.update(status="completed", result_path="shared/tasks/stable-task/result.md")
+        claimed = {"task": self.task, "execution": {"checkpoint": {"delivery": "pending"}}, "saved_result": "Accepted report"}
+        with patch.object(self.recovery, "claim", return_value=claimed) as claim, patch.object(self.recovery, "save_reply") as save:
+            result = self.recovery.prepare_reply("stable-task", "team", "Stale native summary")
+        self.assertEqual(result, (claimed, "Accepted report"))
         claim.assert_called_once()
         save.assert_not_called()
 

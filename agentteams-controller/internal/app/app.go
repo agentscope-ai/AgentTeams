@@ -584,6 +584,8 @@ func (a *App) initReconcilers(_ context.Context) error {
 		remoteDynamicClientProvider = a.remoteClientCache
 	}
 	if _, err := (&controller.WorkerReconciler{
+		HandoffMatrix:               a.provisioner.HandoffMatrix(),
+		RuntimeStore:                &service.WorkerRuntimeStore{Storage: a.oss},
 		Client:                      a.mgr.GetClient(),
 		ObservabilityReader:         a.mgr.GetAPIReader(),
 		Provisioner:                 a.provisioner,
@@ -610,13 +612,14 @@ func (a *App) initReconcilers(_ context.Context) error {
 	}
 
 	if _, err := (&controller.TeamReconciler{
-		Client:          a.mgr.GetClient(),
-		Provisioner:     a.provisioner,
-		Deployer:        a.deployer,
-		ManagerConfig:   a.managerConfig,
-		DefaultRuntime:  a.cfg.DefaultWorkerRuntime,
-		GatewayClient:   a.gateway,
-		SystemAdminUser: a.cfg.MatrixAdminUser,
+		Client:              a.mgr.GetClient(),
+		ObservabilityReader: a.mgr.GetAPIReader(),
+		Provisioner:         a.provisioner,
+		Deployer:            a.deployer,
+		ManagerConfig:       a.managerConfig,
+		DefaultRuntime:      a.cfg.DefaultWorkerRuntime,
+		GatewayClient:       a.gateway,
+		SystemAdminUser:     a.cfg.MatrixAdminUser,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup TeamReconciler: %w", err)
 	}
@@ -673,6 +676,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 
 func (a *App) initHTTPServer(_ context.Context) error {
 	a.httpServer = server.NewHTTPServer(a.cfg.HTTPAddr, server.ServerDeps{
+		HandoffMatrix:   a.provisioner.HandoffMatrix(),
 		Client:          a.mgr.GetClient(),
 		APIReader:       a.mgr.GetAPIReader(),
 		Backend:         a.registry,

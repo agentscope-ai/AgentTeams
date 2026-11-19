@@ -952,7 +952,7 @@ func (c *TuwunelClient) GetRoomState(ctx context.Context, roomID, eventType, sta
 	if err != nil {
 		return nil, fmt.Errorf("get room state %s %s: %w", roomID, eventType, err)
 	}
-	if statusCode == http.StatusNotFound {
+	if statusCode == http.StatusNotFound && (eventType != "m.room.encryption" || apiErrorFromBody(statusCode, respBody).ErrCode == "M_NOT_FOUND") {
 		return nil, nil // state event never set on this room
 	}
 	if statusCode != http.StatusOK {
@@ -965,6 +965,9 @@ func (c *TuwunelClient) GetRoomState(ctx context.Context, roomID, eventType, sta
 	var content map[string]interface{}
 	if err := json.Unmarshal(respBody, &content); err != nil {
 		return nil, fmt.Errorf("get room state %s %s: decode: %w", roomID, eventType, err)
+	}
+	if eventType == "m.room.encryption" && content == nil {
+		return nil, fmt.Errorf("get room encryption state %s: missing content", roomID)
 	}
 	return content, nil
 }

@@ -247,6 +247,8 @@ jobs:
           submodules: recursive
       - name: Check Worker config pull and workspace upload
         run: |
+          python3 -m pip install 'PyYAML>=6,<7'
+          python3 shared/tests/test_worker_runtime_config.py
           bash shared/tests/test-worker-file-sync.sh
           bash shared/tests/test-merge-openclaw-config.sh
 

@@ -97,6 +97,7 @@ TYPING_MAX_DURATION_S = 120
 DM_CACHE_TTL_MS = 30_000
 DM_MEMBERSHIP_TIMEOUT_S = 5.0
 MATRIX_EVENT_CALLBACK_TIMEOUT_S = 120.0
+TASK_OWNERSHIP_POLL_S = 3.0
 MATRIX_SYNC_STATE_FILENAME = "matrix_sync_state.json"
 MATRIX_SYNC_ACCEPTED_EVENT_RECOVERY_THRESHOLD = 4096
 TASK_ROOM_CACHE_TTL_MS = 30_000
@@ -164,6 +165,7 @@ _MATRIX_OWN_THREAD_ROOT_KEY = "matrix_own_thread_root_event_id"
 _MATRIX_PENDING_THREAD_PARTS_KEY = "matrix_pending_thread_parts"
 _MATRIX_PENDING_FINAL_MESSAGE_KEY = "matrix_pending_final_message"
 _MATRIX_STREAMING_FINAL_TEXT_KEY = "matrix_streaming_final_text"
+_MANAGER_FINAL_DELIVERY = ContextVar("manager_final_delivery", default=None)
 _MATRIX_FORCE_NOTICE_KEY = "matrix_force_notice"
 _MATRIX_PLACEHOLDER_THREAD_ROOT_KEY = "matrix_placeholder_thread_root"
 
@@ -413,6 +415,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
     channel = CHANNEL_KEY  # type: ignore[assignment]
     uses_manager_queue: bool = True
     _session_receipts = None
+    _task_execution = None
+    _managed_sync = None
+    _task_recovery_loop = None
 
     def __init__(
         self,
@@ -569,6 +574,24 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
     async def _stream_with_tracker(self, payload: Any):
         meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
+        if meta.get("message_execution"):
+            key = meta["message_execution"]["event_key"]
+            messages = self._task_execution.messages
+            turn = messages.turns[key]
+            if turn["identity"] != meta["message_execution"]:
+                raise RuntimeError("Native message turn was replaced")
+            async for item in messages.stream(turn, self._stream_matrix_payload(payload)):
+                yield item
+            return
+        async for item in self._stream_matrix_payload(payload):
+            yield item
+
+    async def _stream_matrix_payload(self, payload: Any):
+        meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
+        if meta.get("task_execution"):
+            async for item in self._stream_recovered_task(payload):
+                yield item
+            return
         room_id, run_id = meta.get("room_id"), meta.get("event_id")
         if not meta.get("is_dm") or not room_id or not run_id:
             async for item in super()._stream_with_tracker(payload):
@@ -611,6 +634,113 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 if self._direct_runs.get(room_id) is run:
                     self._direct_runs.pop(room_id, None)
                 await self._publish_direct_execution(room_id, run_id, status, message_id)
+
+    async def _stream_recovered_task(self, payload):
+        from task_recovery import RecoveryConflict, RecoveryUnavailable
+        identity = payload["meta"]["task_execution"]
+        try:
+            await asyncio.to_thread(self._task_execution.verify, identity)
+            producer = asyncio.current_task()
+
+            async def monitor():
+                while True:
+                    await asyncio.sleep(TASK_OWNERSHIP_POLL_S)
+                    try:
+                        await asyncio.to_thread(self._task_execution.verify, identity, monitoring=True)
+                    except RecoveryUnavailable:
+                        continue  # Connection failure does not prove replacement.
+                    except RecoveryConflict as exc:
+                        logger.warning("Native Task execution stopped: %s", exc)
+                        producer.cancel("Task ownership changed")
+                        return
+
+            guard = asyncio.create_task(monitor())
+            stream = super()._stream_with_tracker(payload)
+            interrupted = False
+            try:
+                async for item in stream:
+                    yield item
+            except BaseException:
+                interrupted = True
+                raise
+            finally:
+                guard.cancel()
+                await asyncio.gather(guard, return_exceptions=True)
+                await stream.aclose()
+                if interrupted:
+                    try:
+                        await asyncio.to_thread(self._task_execution.recovery.interrupted,
+                                                identity["task_id"], identity["team_id"])
+                    except (RecoveryConflict, RecoveryUnavailable):
+                        logger.warning("Interrupted Task checkpoint could not be committed; retain authority")
+                else:
+                    # The SDK can save turn usage after its completion callback.
+                    # Bind the cache only after all native persistence has ended.
+                    await self._task_execution.remember(identity, payload["meta"]["task_session_id"])
+        finally:
+            self._task_execution.native_closed(identity)
+
+    async def _recover_owned_tasks(self):
+        from task_recovery import RecoveryConflict, RecoveryUnavailable
+        # Channels start before WorkspaceManager commits the workspace. Do
+        # not block start() waiting for a binding it is responsible for.
+        while self._workspace._manager is None:
+            await asyncio.sleep(0.01)
+        while True:
+            try:
+                await self._task_execution.recover()
+                if self._managed_sync:
+                    self._managed_sync.task_scan_complete()
+            except (RecoveryConflict, RecoveryUnavailable):
+                logger.warning("Task startup recovery deferred; authority is unavailable or changed")
+            except Exception:
+                logger.exception("Task startup recovery deferred")
+            await asyncio.sleep(10)
+
+    async def enqueue_recovered_task(self, payload):
+        payload = {**payload, "channel_id": self.channel,
+                   "sender_id": self.matrix_user_id,
+                   "content_parts": [TextContent(type=ContentType.TEXT, text=payload["recovery_text"])]}
+        if self._enqueue is None:
+            raise RuntimeError("Native Matrix queue is not ready for Task recovery")
+        self._enqueue(payload)
+
+    async def send_message_reply(self, source, text, txn):
+        event = source["event_id"]
+        parent = source["input"]["content"].get("m.relates_to", {})
+        relation = {"m.in_reply_to": {"event_id": event}}
+        if parent.get("rel_type") == "m.thread" and parent.get("event_id"):
+            relation.update(rel_type="m.thread", event_id=parent["event_id"], is_falling_back=True)
+        response = await self._room_send_with_retry(source["room_id"], "m.room.message", {
+            "msgtype": "m.text", "body": text, "m.relates_to": relation, "org.agentteams.reply_txn": txn}, tx_id=txn)
+        if isinstance(response, RoomSendError) or not getattr(response, "event_id", None):
+            raise RuntimeError("Matrix has not acknowledged the saved message reply")
+        return response.event_id
+
+    def _enqueue_matrix_input(self, payload, turn):
+        if turn:
+            identity = turn["identity"]
+            payload["meta"].update(message_execution=identity, message_session_id=turn["session_id"])
+            if turn.get("history"):
+                payload["content_parts"].insert(0, TextContent(type=ContentType.TEXT, text=turn["history"]))
+            if turn["resume_text"]:
+                payload["content_parts"].append(TextContent(type=ContentType.TEXT, text=turn["resume_text"]))
+            self._task_execution.messages.turns[identity["event_key"]] = turn
+            try:
+                self._enqueue(payload)
+            except BaseException:
+                self._task_execution.messages.turns.pop(identity["event_key"], None)
+                raise
+        else:
+            self._enqueue(payload)
+
+    async def send_task_reply(self, room_id, text, txn):
+        response = await self._room_send_with_retry(room_id, "m.room.message", {
+            "msgtype": "m.text", "body": text, "org.agentteams.progress_only": True, "org.agentteams.reply_txn": txn,
+        }, tx_id=txn)
+        if isinstance(response, RoomSendError) or not getattr(response, "event_id", None):
+            raise RuntimeError("Task reply was not acknowledged by Matrix")
+        return response.event_id
 
     async def _handle_direct_control(self, payload: dict, event: Any) -> bool:
         """Return True when consumed; False keeps the supplementary text queued."""
@@ -662,6 +792,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         if run[2].done():
             return action == "stop"
+        if self._managed_sync and self._managed_sync.messages:
+            from worker_matrix_state import matrix_event_key
+            messages = self._managed_sync.messages
+            current = messages.turns.get(matrix_event_key(room_id, run[0]))
+            if current:
+                key = current["identity"]["event_key"]
+                view = await asyncio.to_thread(messages.matrix.message, key)
+                if action == "steer" and view["recovery"] == "verify":
+                    await self._send_plain_text(room_id, "当前工具操作的结果仍待核验，已保留原执行。")
+                    return True
+                await asyncio.to_thread(messages.matrix.message_cancel, current["identity"])
         if not run[2].cancelling():
             run[2].cancel("user")
         await self._publish_direct_execution(room_id, run[0], "stopping")
@@ -694,7 +835,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
             meta = dict(getattr(payload, "channel_meta", None) or {})
             meta[_MATRIX_FORCE_NOTICE_KEY] = True
             payload.channel_meta = meta
-        return await super()._access_control_gate(payload)
+        blocked = await super()._access_control_gate(payload)
+        identity = meta.get("message_execution")
+        if blocked and identity and self._task_execution:
+            self._task_execution.messages.turns.pop(identity["event_key"], None)
+        return blocked
 
     # ------------------------------------------------------------------
     # Debounce key — serialize by room_id (avoid concurrent session access)
@@ -703,6 +848,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
     def get_debounce_key(self, payload: Any) -> str:
         if isinstance(payload, dict):
             meta = payload.get("meta") or {}
+            if meta.get("message_execution"):
+                return meta["message_session_id"]
+            if meta.get("task_execution"):
+                return meta["task_session_id"]
             room_id = meta.get("room_id")
             if room_id:
                 return f"matrix:{room_id}"
@@ -723,7 +872,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         event_id = (request.channel_meta or {}).get("event_id") or str(uuid4())
         key = (*session, event_id)
         if key not in deliveries:
-            lock = tracker._agentteams_matrix_delivery_locks.setdefault(session, asyncio.Lock())
+            room = (request.channel_meta or {}).get("room_id")
+            lock_key = ("matrix-room", room) if room else session
+            lock = tracker._agentteams_matrix_delivery_locks.setdefault(lock_key, asyncio.Lock())
 
             async def deliver() -> None:
                 async with lock:
@@ -1447,22 +1598,23 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 )
                 return False
             logger.info("MatrixChannel: E2E keys uploaded component=matrix")
-        # Encrypted media events (decrypted by nio, delivered as
-        # RoomEncrypted* types)
-        self._client.add_event_callback(
-            self._schedule_room_encrypted_media_event,
-            (
-                RoomEncryptedImage,
-                RoomEncryptedAudio,
-                RoomEncryptedVideo,
-                RoomEncryptedFile,
-            ),
-        )
-        # Undecryptable events (missing session key)
-        self._client.add_event_callback(
-            self._schedule_megolm_event,
-            (MegolmEvent,),
-        )
+        if not self._managed_sync:
+            # Encrypted media events (decrypted by nio, delivered as
+            # RoomEncrypted* types)
+            self._client.add_event_callback(
+                self._schedule_room_encrypted_media_event,
+                (
+                    RoomEncryptedImage,
+                    RoomEncryptedAudio,
+                    RoomEncryptedVideo,
+                    RoomEncryptedFile,
+                ),
+            )
+            # Undecryptable events (missing session key)
+            self._client.add_event_callback(
+                self._schedule_megolm_event,
+                (MegolmEvent,),
+            )
         self._client.add_to_device_callback(
             self._on_key_verification_event,
             (KeyVerificationEvent,),
@@ -1519,7 +1671,19 @@ class AgentTeamsMatrixChannel(BaseChannel):
             logger.error("MatrixChannel: no credentials configured component=matrix")
             return
 
-        self._register_plain_room_callbacks()
+        if os.getenv("AGENTTEAMS_CONTROLLER_URL") and os.getenv("AGENTTEAMS_PROCESS_ID"):
+            from task_recovery import enabled
+        else:
+            enabled = lambda: False
+        if enabled():
+            from .task_execution import TaskExecution
+            from qwenpaw_matrix_sync import ManagedNioSync
+
+            self._task_execution = TaskExecution(self)
+            self._managed_sync = ManagedNioSync(self, self._task_execution)
+        else:
+            self._managed_sync = None
+            self._register_plain_room_callbacks()
         if not await self._setup_e2ee_after_login():
             return
 
@@ -1534,10 +1698,16 @@ class AgentTeamsMatrixChannel(BaseChannel):
             self, (self._workspace_dir or Path(WORKING_DIR)) / "sessions"
         )
         await self._session_receipts.start()
-        self._sync_task = asyncio.create_task(self._sync_loop())
+        if self._managed_sync:
+            self._task_recovery_loop = asyncio.create_task(self._recover_owned_tasks())
+        self._sync_task = (asyncio.create_task(self._managed_sync.run()) if self._managed_sync
+                           else asyncio.create_task(self._sync_loop()))
         logger.info("MatrixChannel: sync loop started component=matrix")
 
     async def stop(self) -> None:
+        if self._task_recovery_loop:
+            self._task_recovery_loop.cancel()
+            await asyncio.gather(self._task_recovery_loop, return_exceptions=True)
         if self._session_receipts:
             await self._session_receipts.stop()
         if self._sync_task:
@@ -3057,7 +3227,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self,
         room: MatrixRoom,
         event: Any,
-    ) -> None:
+        *,
+        prepare=None, input_key=None, turn=None,
+    ):
         """Handle decrypted encrypted media (RoomEncryptedImage, etc.).
 
         Delivered by matrix-nio after Megolm decrypt. File bytes are still
@@ -3075,7 +3247,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if self._is_channel_disabled(sender_id, room_id, is_dm):
             return
 
-        await self._announce_session_receipts(room_id, event.event_id)
+        if prepare is None:
+            await self._announce_session_receipts(room_id, event.event_id)
 
         if not is_dm:
             if self._require_mention(room_id) and not self._was_mentioned(
@@ -3108,6 +3281,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         if body
                         else "[sent an encrypted file]"
                     )
+                if prepare:
+                    return await prepare(room_id, event, "context")
+                if self._task_execution and not input_key:
+                    await self._task_execution.accept_input(room_id, event, "context")
                 self._record_history(
                     room_id,
                     HistoryEntry(
@@ -3125,6 +3302,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
         key = getattr(event, "key", {}) or {}
         hashes = getattr(event, "hashes", {}) or {}
         iv = getattr(event, "iv", "") or ""
+
+        if prepare:
+            if mxc_url and key and iv:
+                return await prepare(room_id, event, "message")
+            return
 
         content_parts: list[Any] = []
 
@@ -3243,12 +3425,15 @@ class AgentTeamsMatrixChannel(BaseChannel):
             # consume it.
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
-            self._enqueue(payload)
+            if self._task_execution:
+                key = input_key or await self._task_execution.accept_input(room_id, event, "message")
+                payload["meta"]["shared_input_keys"] = [key]
+            self._enqueue_matrix_input(payload, turn)
             self._mark_event_callback_accepted()
             if not is_dm:
                 self._clear_history(room_id)
 
-        if self._session_receipts is None:
+        if prepare is None and self._session_receipts is None and self._task_execution is None:
             await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
@@ -3512,9 +3697,28 @@ class AgentTeamsMatrixChannel(BaseChannel):
         self,
         room: MatrixRoom,
         event: RoomMessageText,
-    ) -> None:
+        *,
+        prepare=None, input_key=None, turn=None,
+    ):
         if (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.progress_only") is True:
             return
+        content = (getattr(event, "source", {}) or {}).get("content", {})
+        if self._task_execution and "org.agentteams.coordination" in content:
+            from task_coordination import notification, IgnoredNotification
+            try:
+                canonical = await asyncio.to_thread(notification, content, room.room_id, event.sender, self._user_id)
+            except IgnoredNotification:
+                return
+            if canonical["meta"]["teamharness_coordination"]["kind"] == "task_assigned":
+                if prepare:
+                    return await prepare(room.room_id, event, "task_notification",
+                        task_id=canonical["meta"]["teamharness_coordination"]["task_id"])
+                if not input_key:
+                    await self._task_execution.accept_input(room.room_id, event, "task_notification",
+                        task_id=canonical["meta"]["teamharness_coordination"]["task_id"])
+                await self._task_execution.recover(canonical["meta"]["teamharness_coordination"]["task_id"], event, source_room=room.room_id, source_text=canonical["text"])
+                self._mark_event_callback_accepted()
+                return
         room_id = room.room_id
         sender_id = event.sender
         teamharness_self_trigger = None
@@ -3548,7 +3752,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if self._is_channel_disabled(sender_id, room_id, is_dm):
             return
 
-        await self._announce_session_receipts(room_id, event.event_id)
+        if prepare is None:
+            await self._announce_session_receipts(room_id, event.event_id)
 
         if teamharness_self_trigger is None and _is_teamharness_tool_display(text):
             logger.info(
@@ -3565,6 +3770,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Readiness probe: reply directly without enqueuing to the agent
         readiness_reply = self._targeted_readiness_probe_reply(event, text)
         if readiness_reply:
+            if prepare:
+                return await prepare(room_id, event, "control")
             await self._send_plain_text(room_id, readiness_reply)
             return
 
@@ -3584,6 +3791,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     sender_id,
                     event.event_id,
                 )
+                if prepare:
+                    return await prepare(room_id, event, "context")
+                if self._task_execution and not input_key:
+                    await self._task_execution.accept_input(room_id, event, "context")
                 self._record_history(
                     room_id,
                     HistoryEntry(
@@ -3609,7 +3820,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 sender_id,
                 room_id,
             )
-            await self._send_typing(room_id, False)
+            if prepare is None:
+                await self._send_typing(room_id, False)
             return
 
         control_text = self._control_command_text(stripped)
@@ -3634,6 +3846,13 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     text,
                     command_text,
                 )
+
+        direct = content.get(DIRECT_CONTROL_KEY)
+        stop_control = isinstance(direct, dict) and direct.get("action") == "stop"
+        intent = "control" if (control_text is not None or cmd in _SLASH_COMMANDS or stop_control
+            or "org.agentteams.coordination" in content) else "message"
+        if prepare:
+            return await prepare(room_id, event, intent)
 
         # Build content parts, prepending accumulated history for group rooms.
         # Skip history prepend for slash commands — QwenPaw's command parser
@@ -3696,17 +3915,22 @@ class AgentTeamsMatrixChannel(BaseChannel):
             # consume it.
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
+            if self._task_execution:
+                key = input_key or await self._task_execution.accept_input(room_id, event, intent)
+                payload["meta"]["shared_input_keys"] = [key]
             if await self._handle_direct_control(payload, event):
+                if turn:
+                    await asyncio.to_thread(self._task_execution.matrix.message_cancel, turn["identity"])
                 self._mark_event_callback_accepted()
                 return
-            self._enqueue(payload)
+            self._enqueue_matrix_input(payload, turn)
             self._mark_event_callback_accepted()
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
 
         # These are best-effort UX operations.  Enqueue first so a slow
         # homeserver cannot prevent an accepted message from reaching QwenPaw.
-        if self._session_receipts is None:
+        if prepare is None and self._session_receipts is None and self._task_execution is None:
             await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
@@ -3722,7 +3946,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # ------------------------------------------------------------------
 
     # pylint: disable=too-many-branches,too-many-statements
-    async def _on_room_media_event(self, room: MatrixRoom, event: Any) -> None:
+    async def _on_room_media_event(self, room: MatrixRoom, event: Any, *, prepare=None, input_key=None, turn=None):
         """Handle incoming media messages (image, file, audio, video)."""
         if event.sender == self._user_id:
             return
@@ -3736,7 +3960,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if self._is_channel_disabled(sender_id, room_id, is_dm):
             return
 
-        await self._announce_session_receipts(room_id, event.event_id)
+        if prepare is None:
+            await self._announce_session_receipts(room_id, event.event_id)
 
         is_thread_event = self._is_thread_event(event)
 
@@ -3755,6 +3980,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     sender_id,
                     event.event_id,
                 )
+                if prepare:
+                    return await prepare(room_id, event, "context")
+                if self._task_execution and not input_key:
+                    await self._task_execution.accept_input(room_id, event, "context")
                 await self._record_media_history(
                     room,
                     event,
@@ -3765,6 +3994,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         mxc_url: str = getattr(event, "url", "") or ""
         body: str = event.body or ""  # filename or caption
+
+        if prepare:
+            if mxc_url:
+                return await prepare(room_id, event, "message")
+            return
 
         content_parts: list[Any] = []
 
@@ -3885,12 +4119,15 @@ class AgentTeamsMatrixChannel(BaseChannel):
             # consume it.
             self._capture_send_gate_snapshot(payload["meta"], room_id)
         if self._enqueue:
-            self._enqueue(payload)
+            if self._task_execution:
+                key = input_key or await self._task_execution.accept_input(room_id, event, "message")
+                payload["meta"]["shared_input_keys"] = [key]
+            self._enqueue_matrix_input(payload, turn)
             self._mark_event_callback_accepted()
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)
 
-        if self._session_receipts is None:
+        if prepare is None and self._session_receipts is None and self._task_execution is None:
             await self._send_read_receipt(room_id, event.event_id)
         await self._send_typing(
             room_id,
@@ -4116,7 +4353,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             meta.setdefault("otel_delivery", {})
         sender_id = native_payload.get("sender_id", "")
         room_id = meta.get("room_id", sender_id)
-        session_id = f"matrix:{room_id}"
+        session_id = meta.get("message_session_id") or meta.get("task_session_id") or f"matrix:{room_id}"
 
         # content_parts are already ContentType objects (from both
         # _on_room_event and _on_room_media_event); filter out None.
@@ -4136,7 +4373,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             channel_id=CHANNEL_KEY,
             sender_id=(
                 sender_id
-                if meta.get("is_group") and not self.share_session_in_group
+                if meta.get("is_group") and not self.share_session_in_group and not (meta.get("task_execution") or meta.get("message_execution"))
                 else room_id
             ),
             session_id=session_id,
@@ -5172,6 +5409,12 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """Route completed messages behind a processing root."""
         del request
         message_type = getattr(event, "type", None)
+        if send_meta.get("message_execution"):
+            if self._is_message_event(message_type):
+                send_meta[_MATRIX_PENDING_FINAL_MESSAGE_KEY] = event
+                return
+            send_meta.pop(_MATRIX_PENDING_FINAL_MESSAGE_KEY, None)
+            send_meta.pop(_MATRIX_STREAMING_FINAL_TEXT_KEY, None)
         if self._is_reasoning_message(message_type) and not getattr(
             self, "show_thinking", True
         ):
@@ -5237,6 +5480,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
         accumulated_text: str = "",
     ) -> None:
         del request, accumulated_text
+        if send_meta.get("message_execution") and stream_type == "message":
+            return
         if stream_type == "reasoning":
             send_meta.pop(_MATRIX_STREAMING_REASONING_EVENT_ID_KEY, None)
             send_meta.pop(_MATRIX_STREAMING_REASONING_LAST_EDIT_KEY, None)
@@ -5576,6 +5821,17 @@ class AgentTeamsMatrixChannel(BaseChannel):
         send_meta: Dict[str, Any],
     ) -> None:
         """Edit thread root with final reply, or send directly if no thread."""
+        if send_meta.get("message_execution") or send_meta.get("task_execution"):
+            text = send_meta.pop(_MATRIX_STREAMING_FINAL_TEXT_KEY, "")
+            pending = send_meta.pop(_MATRIX_PENDING_FINAL_MESSAGE_KEY, None)
+            if not text and pending is not None:
+                text = self._text_from_message_event(pending)
+            if send_meta.get("message_execution"):
+                await self._task_execution.messages.finish(send_meta["message_execution"], text)
+            else:
+                await self._task_execution.finish(send_meta["task_execution"], request.session_id, text)
+            await self._send_typing(to_handle, False)
+            return
         gate_action, gate_new_count = self._evaluate_send_gate(send_meta, to_handle)
         if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in ("true", "1"):
             try:
@@ -5603,6 +5859,24 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # A silent turn that never ran a tool produced nothing: do not
         # report it as completed (#1320).
         no_output_marker = "已完成" if had_tool_activity else "本回合无产出"
+
+        async def deliver_final(send, *args, **kwargs):
+            source = send_meta.get("event_id") if request is not None else None
+            receipts = self._session_receipts
+            if (os.getenv("AGENTTEAMS_AGENT_ROLE") != "manager" or not receipts
+                    or not isinstance(source, str) or not source.startswith("$")
+                    or send_meta.get("teamharness_matrix_coordination")):
+                return await send(*args, **kwargs)
+            room = send_meta.get("room_id") or to_handle
+            outcomes = []
+            token = _MANAGER_FINAL_DELIVERY.set((room, outcomes))
+            try:
+                await send(*args, **kwargs)
+            finally:
+                _MANAGER_FINAL_DELIVERY.reset(token)
+            if any(kind == "m.text" for kind, _ in outcomes) and all(ok for _, ok in outcomes):
+                await receipts.complete(room, source)
+
         if is_placeholder:
             if streaming_final_text:
                 raw_text = streaming_final_text.strip()
@@ -5618,8 +5892,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         )
                     else:
                         html_body = _md_to_html(text)
-                        await self._edit_thread_root(
-                            to_handle, send_meta, text,
+                        await deliver_final(
+                            self._edit_thread_root, to_handle, send_meta, text,
                             msgtype="m.text", html=html_body,
                         )
             elif pending is not None:
@@ -5632,8 +5906,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     text = self._visible_final_text(raw_text)
                     if text:
                         html_body = _md_to_html(text)
-                        await self._edit_thread_root(
-                            to_handle, send_meta, text,
+                        await deliver_final(
+                            self._edit_thread_root, to_handle, send_meta, text,
                             msgtype="m.text", html=html_body,
                         )
                     else:
@@ -5646,9 +5920,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 )
             self._active_thread_roots.pop(to_handle, None)
         elif streaming_final_text:
-            await self.send(to_handle, streaming_final_text.strip(), send_meta)
+            await deliver_final(self.send, to_handle, streaming_final_text.strip(), send_meta)
         elif pending is not None:
-            await self.send_message_content(to_handle, pending, send_meta)
+            await deliver_final(self.send_message_content, to_handle, pending, send_meta)
         await self._send_typing(
             to_handle,
             False,
@@ -5683,6 +5957,19 @@ class AgentTeamsMatrixChannel(BaseChannel):
         """Edit thread root on error; suppress cancellation noise; mask raw errors before room send."""
         request_meta = getattr(request, "channel_meta", None)
         typing_lifecycle = self._typing_lifecycle_from_meta(request_meta)
+        if (request_meta or {}).get("message_execution"):
+            await self._send_typing(to_handle, False)
+            return
+        if (request_meta or {}).get("task_execution"):
+            from task_recovery import RecoveryConflict
+            identity = request_meta["task_execution"]
+            try:
+                await asyncio.to_thread(self._task_execution.recovery.interrupted, identity["task_id"], identity["team_id"])
+            except RecoveryConflict:
+                pass
+            await self._send_typing(to_handle, False, lifecycle_token=typing_lifecycle)
+            logger.warning("Task turn interrupted; preserve its checkpoint for recovery or verification")
+            return
         root_id = self._active_thread_roots.pop(to_handle, None)
         if root_id:
             fallback_meta = {_MATRIX_OWN_THREAD_ROOT_KEY: root_id}
@@ -5773,6 +6060,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         *,
         max_retries: int = 3,
         base_delay: float = 1.0,
+        tx_id: str | None = None,
     ) -> Any:
         """Wrap ``_prepare_room_send`` + ``room_send`` with limited retries.
 
@@ -5797,7 +6085,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     }
             except Exception:
                 logger.debug("Message read audience unavailable", exc_info=True)
-        tx_id = str(uuid4())
+        capture = _MANAGER_FINAL_DELIVERY.get()
+        msgtype = content.get("msgtype")
+        observed = (capture[1] if capture and capture[0] == room_id and message_type == "m.room.message"
+                    and msgtype != "m.notice" and content.get("org.agentteams.progress_only") is not True else None)
+        tx_id = tx_id or str(uuid4())
         last_exc: Optional[Exception] = None
         last_err_resp: Any = None
 
@@ -5846,6 +6138,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                             getattr(resp, "status_code", "?"),
                             getattr(resp, "message", ""),
                         )
+                    if observed is not None:
+                        observed.append((msgtype, False))
                     return resp
 
                 # Success
@@ -5856,6 +6150,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         attempt,
                         room_id,
                     )
+                if observed is not None:
+                    observed.append((msgtype, bool(getattr(resp, "event_id", None))))
                 return resp
 
             except Exception as exc:
@@ -5884,6 +6180,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         room_id,
                         exc,
                     )
+                if observed is not None:
+                    observed.append((msgtype, False))
                 raise
 
         # Should not reach here, but guard against it

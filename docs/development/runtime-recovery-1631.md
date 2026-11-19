@@ -1,8 +1,52 @@
 # Worker recovery evidence for #1631
 
-Status: **incomplete; Draft implementation**. This document records contract
-tests separately from native Harness and real-model acceptance. No existing
-installation was upgraded or deployed for this work.
+## Regression after synchronizing main
+
+The Docker acceptance runs used the published 1.2.7 source for upgrade tests and the
+isolated 1.2.8 candidate for recovery. Core `21f3f47c` includes main `f99e1442`;
+the final Worker and Controller upgrade images use `5530ea5c`. Dashboard `f886072`
+includes main `87e0c62`. The browser switch was exercised on Dashboard `ad4239e`.
+
+| Scenario | Verified result |
+| --- | --- |
+| Worker restart and Task continuation | All six Harnesses resumed the original Task without new Matrix input. OpenClaw used SIGKILL. |
+| Worker Harness switch | Codex → Hermes and QwenPaw → Hermes via CLI, OpenClaw → Hermes via Dashboard. All three continued the same in-progress Task and delivered one final reply. |
+| Manager replay | Codex → Hermes → Codex preserved the Matrix identity and processed a pending event without rerunning the completed Hermes event. |
+| Docker upgrade from 1.2.7 | The Controller kept its data volume. All six candidate Workers started with their original Matrix accounts and rooms, could still read old events, and replied to a new probe. The retained Dashboard login and upgraded Worker list worked. |
+| In-progress 1.2.7 Task | The full ARM64 Controller and QwenPaw images discovered an old-format Task written through the 1.2.7 API. QwenPaw reused the existing artifact and submitted the original Task once, with one Matrix reply and no new task-room input. |
+| Hosted integration | Core `21f3f47c` passed the image builds and all seven integration shards. Dashboard `f886072` passed lint, type checking, tests and docs checks. |
+
+## Live acceptance by source and target
+
+All 30 directed switches and all six Harness restarts passed on their recorded
+revisions. The historical fault runs also passed the six SIGKILL and six
+expired-session restart cases. The post-main run repeated the three switch
+directions above.
+
+### Fault acceptance by Harness
+
+Saved-reply delivery, uncertain external effects, cancellation and reassignment
+have individual live cases. Coverage of these paths varies by Harness. A parked
+uncertain effect confirms the hold behavior. Continuation requires external
+verification of the effect.
+
+The 1.2.7 upgrade used an AMD64 candidate for OpenHuman and ARM64 for the other
+five Harnesses. The OpenHuman ARM64 upgrade, legacy in-progress Task continuation
+on the other five Harnesses, and upgrades with Kubernetes or external storage
+remain unverified. A MinIO secret starting with a hyphen can still fail at
+`mc alias set` because the client parses it as an option.
+
+The executable fixtures and assertions are in
+[the recovery driver](../../tests/runtime_recovery_e2e.py) and
+[the evidence verifier tests](../../tests/test_runtime_recovery_evidence.py).
+[Issue #1631](https://github.com/agentscope-ai/AgentTeams/issues/1631) tracks the review
+and companion revisions. [Core CI](https://github.com/agentscope-ai/AgentTeams/actions/runs/44396365251)
+and [Dashboard CI](https://github.com/agentteams-group/agentteams-dashboard/actions/runs/44366113987)
+record the checks on the tested revisions.
+
+---
+
+Earlier results below describe the original implementation and its source pins.
 
 ## Source baseline
 

@@ -161,6 +161,9 @@ func (l *ManagerConfigStore) PutManagerRuntimeConfig(ctx context.Context, doc me
 	if doc.Desired.ChannelPolicy == nil {
 		doc.Desired.ChannelPolicy = &v1beta1.ChannelPolicySpec{}
 	}
+	if err := preserveRuntimeConfigGeneration(ctx, l.OSS, key, &doc); err != nil {
+		return err
+	}
 	payload, err := yaml.Marshal(doc)
 	if err != nil {
 		return err
@@ -195,6 +198,9 @@ func (l *ManagerConfigStore) updateManagerRuntimeAllowFrom(ctx context.Context, 
 		next = append(next, matrixID)
 	}
 	doc.Desired.ChannelPolicy.GroupAllowExtra = next
+	if err := preserveRuntimeConfigGeneration(ctx, l.OSS, key, &doc); err != nil {
+		return true, err
+	}
 	payload, err := yaml.Marshal(doc)
 	if err != nil {
 		return true, err

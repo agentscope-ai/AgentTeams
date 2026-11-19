@@ -36,13 +36,14 @@ operations and the returned Matrix IDs and room IDs for communication.
 For a new Worker, choose its model, Harness, and skills from the request:
 
 ```bash
-agt create worker --name example-worker --runtime qwenpaw --model MODEL --wait-timeout 45s -o json
+agt create worker --name example-worker --runtime qwenpaw --wait-timeout 45s -o json
 ```
 
 Read `~/skills/worker-management/SKILL.md` before creating or resetting a Worker.
-Use the request's name, runtime, role and skills; use the configured default model
-when the request does not choose one. Do not scan your environment, image files,
-or CLI help to rediscover this documented path.
+Use the request's name, runtime, role and skills. Omit `--model` to use the
+configured default. If the request specifies a model, pass its model ID as
+`--model`. Gateway provider names from `agt gateway models list` identify
+providers. Do not scan your environment or image files for the default.
 
 For one Worker, run the create command once. The CLI owns readiness polling;
 you do not need a shell polling loop or another model turn per status check.

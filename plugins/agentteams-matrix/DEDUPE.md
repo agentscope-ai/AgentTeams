@@ -23,6 +23,8 @@ commit: `fc25f272` (= main `23315f8e` + this PR's content).
 ## Target / copied files
 
 - `adapters/qwenpaw/agentteams_matrix/__init__.py`
+- `adapters/qwenpaw/agentteams_matrix/session_receipts.py`
+- `adapters/qwenpaw/agentteams_matrix/task_execution.py`
 - `adapters/qwenpaw/plugin.py` — the plugin entry point
 
 Not byte-copied: `adapters/qwenpaw/agentteams_matrix/channel.py` has been
@@ -34,6 +36,10 @@ bundle's `core/` package instead of carrying its own copy. The legacy tree's
 `channel.py` remains the standalone reference implementation; the drift
 test still checks the file's presence on both sides and exempts only the
 byte-compare.
+
+The bundle-owned channel also connects the shared Task execution module at
+startup, native admission, interruption and final delivery. Recovery tests
+exercise both channel entry points; copying the helper alone is insufficient.
 
 Not copied: the QwenPaw manifest (`adapters/qwenpaw/plugin.json`) and the
 adapter scaffolding (`README.md`, `install.sh`, `uninstall.sh`) are bundle

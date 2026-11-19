@@ -9,7 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shared/lib"))
@@ -33,6 +33,38 @@ class HarnessReceiptTests(unittest.TestCase):
             db.execute("SELECT 1")
         with self.assertRaises(sqlite3.ProgrammingError):
             db.execute("SELECT 1")
+
+    def test_completed_reply_receipt_is_durable_and_uses_the_original_event(self):
+        self.receipts.enqueue("!room:hs", "$input", "completed")
+        request = Mock(side_effect=OSError("Matrix is temporarily unavailable"))
+        self.receipts.flush(request)
+        first = [call.args for call in request.call_args_list if call.args[2]["status"] == "completed"]
+        self.assertEqual(len(first), 1)
+        request = Mock(return_value={"event_id": "$receipt"})
+        Receipts(self.root).flush(request)
+        retried = [call.args for call in request.call_args_list if call.args[2]["status"] == "completed"]
+        self.assertEqual(first, retried)
+        self.assertEqual(retried[0][2]["m.relates_to"]["event_id"], "$input")
+
+    def test_manager_completion_requires_a_same_room_authenticated_terminal_receipt(self):
+        from agentteams_receipts import completed_turns
+
+        own_user = "@manager:hs"
+        def receipt(event_id, status, sender=own_user, version=1):
+            return {"type": "com.agentteams.session_receipt", "sender": sender,
+                    "content": {"status": status, "version": version, "m.relates_to": {
+                        "rel_type": "com.agentteams.session_receipt", "event_id": event_id}}}
+
+        progress = {"type": "m.room.message", "sender": own_user, "content": {
+            "m.relates_to": {"m.in_reply_to": {"event_id": "$progress"}}}}
+        redacted = {**receipt("$redacted", "completed"), "unsigned": {"redacted_because": {}}}
+        timeline = [progress, redacted, receipt("$onlyread", "read"),
+                    receipt("$foreign", "completed", sender="@other:hs"), receipt("$wrong", "completed", version=2),
+                    receipt("$completed", "completed")]
+        joined = {"!office:hs": {"timeline": {"events": timeline}},
+                  "!elsewhere:hs": {"timeline": {"events": [receipt("$moved", "completed")]}}}
+        self.assertEqual(completed_turns({"rooms": {"join": joined}}, own_user),
+                         {("!office:hs", "$completed"), ("!elsewhere:hs", "$moved")})
 
     def test_receipts_do_not_evict_messages_from_the_polling_window(self):
         events = [{"type": "com.agentteams.session_receipt", "event_id": f"$receipt-{i}"} for i in range(25)]
@@ -128,6 +160,39 @@ class HarnessReceiptTests(unittest.TestCase):
         self.assertTrue({("$input", "read"), ("$retained", "read")} <= self.states())
         self.assertNotIn(("$truncated", "read"), self.states())
 
+    def test_managed_hermes_read_waits_for_matching_common_native_fact(self):
+        path = self.root / ".hermes/state.db"
+        path.parent.mkdir(parents=True)
+        with sqlite3.connect(path) as db:
+            db.executescript("CREATE TABLE sessions(id TEXT,source TEXT); CREATE TABLE messages(session_id TEXT,role TEXT,platform_message_id TEXT);")
+            db.execute("INSERT INTO sessions VALUES('native-session','matrix')")
+            db.execute("INSERT INTO messages VALUES('native-session','user','$input')")
+        matrix = Mock()
+        fact = {"runtime": "hermes", "native_ref": "native-session", "native_digest": "a" * 64}
+        with patch("task_recovery.enabled", return_value=True), \
+                patch("worker_matrix_state.WorkerMatrix", return_value=matrix):
+            for case in ["legacy", "pending", "old-start", "foreign", "wrong-session", "empty-digest", "unavailable"]:
+                with self.subTest(case=case):
+                    matrix.input.return_value = None if case == "legacy" else {}
+                    proof = dict(fact)
+                    if case == "foreign": proof["runtime"] = "qwenpaw"
+                    if case == "wrong-session": proof["native_ref"] = "older-session"
+                    if case == "empty-digest": proof["native_digest"] = ""
+                    view = {"current": case != "old-start", "input": {"native_commit": proof}}
+                    if case == "pending": view["input"] = {}
+                    matrix.native_input.return_value = view
+                    matrix.native_input.side_effect = OSError("common fact unavailable") if case == "unavailable" else None
+                    if case == "unavailable":
+                        with self.assertRaises(OSError):
+                            scan_inputs(self.receipts, "hermes", {})
+                    else:
+                        scan_inputs(self.receipts, "hermes", {})
+                    self.assertNotIn(("$input", "read"), self.states())
+            matrix.native_input.side_effect = None
+            matrix.native_input.return_value = {"current": True, "input": {"native_commit": fact}}
+            scan_inputs(self.receipts, "hermes", {})
+            self.assertIn(("$input", "read"), self.states())
+
     def test_deepseek_and_openhuman_require_saved_input_checkpoints(self):
         for runtime, directory in [("deepseek", "dsh-checkpoints"), ("openhuman", "matrix-sessions")]:
             with self.subTest(runtime=runtime):
@@ -137,6 +202,19 @@ class HarnessReceiptTests(unittest.TestCase):
                 path.write_text(json.dumps({"receipts": [{"room_id": "!room:hs", "event_id": "$" + runtime}]}))
                 scan_inputs(self.receipts, runtime, {})
                 self.assertIn(("$" + runtime, "read"), self.states())
+
+    def test_managed_codex_journal_cannot_ack_an_assignment(self):
+        path = self.root / "runtime/codex-bridge-state.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"events": {"turn": {"input_checkpointed": True, "event": {
+            "room_id": "!room:hs", "event_id": "recovery:T", "session_source_event_ids": ["$source"]}}}}))
+        with patch.dict(os.environ, {"AGENTTEAMS_CODEX_NATIVE_INPUTS":"1", "AGENTTEAMS_CONTROLLER_URL":"test",
+                                     "AGENTTEAMS_PROCESS_ID":"process", "AGENTTEAMS_AGENT_ROLE":"worker"}):
+            scan_inputs(self.receipts, "codex", {})
+            self.assertNotIn(("$source", "read"), self.states())
+            self.receipts.enqueue("!room:hs", "$source", "received")
+            self.receipts.committed(["$source"])
+            self.assertIn(("$source", "read"), self.states())
 
     def test_codex_running_and_answer_failure_do_not_imply_or_undo_read(self):
         path = self.root / "runtime/codex-bridge-state.json"

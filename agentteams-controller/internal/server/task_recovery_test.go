@@ -221,6 +221,80 @@ func TestStandaloneWorkerDiscoveryIsEmptyWithoutInspectingStorageOrBackend(t *te
 	}
 }
 
+func TestTaskRecoveryUsesCurrentAssigneeAfterRedelegation(t *testing.T) {
+	store := ossfake.NewMemory()
+	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-dev", "status": "assigned"}))
+	project := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+	h := NewTaskRecoveryHandler(project, ServerDeps{})
+	h.instance = func(_ context.Context, caller *authpkg.CallerIdentity) (string, string, error) {
+		return caller.Username + "/start", "hermes", nil
+	}
+	worker := func(name string) *authpkg.CallerIdentity {
+		return &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: name, Team: "alpha-team"}
+	}
+	old, next := worker("alpha-dev"), worker("beta-dev")
+	list := func(caller *authpkg.CallerIdentity) int {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.ListRecoverableTasks(w, withCaller(httptest.NewRequest(http.MethodGet, "/api/v1/tasks/recoverable", nil), caller))
+		var result struct {
+			Tasks []json.RawMessage `json:"tasks"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &result); w.Code != http.StatusOK || err != nil {
+			t.Fatalf("discovery for %s: %d %s (%v)", caller.Username, w.Code, w.Body, err)
+		}
+		return len(result.Tasks)
+	}
+	claim := func(caller *authpkg.CallerIdentity, etag string) *httptest.ResponseRecorder {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"action": "claim", "instance_id": caller.Username + "/start", "process_id": caller.Username + ":process"})
+		r := withCaller(httptest.NewRequest(http.MethodPost, "/api/v1/tasks/t1/execution?team=alpha-team", strings.NewReader(string(body))), caller)
+		r.SetPathValue("id", "t1")
+		r.Header.Set("If-Match", etag)
+		w := httptest.NewRecorder()
+		h.UpdateExecution(w, r)
+		return w
+	}
+	if r := claim(old, taskMetaETag(t, store, taskMetaKey)); r.Code != http.StatusOK {
+		t.Fatalf("original owner claim: %d %s", r.Code, r.Body)
+	}
+	data, err := store.GetObject(t.Context(), taskMetaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]json.RawMessage
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatal(err)
+	}
+	meta["assigned_to"] = json.RawMessage(`"beta-dev"`)
+	updated, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leader := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
+	if r := putTaskMetaRequest(t, project, "t1", contentETag(data), string(updated), leader); r.Code != http.StatusOK {
+		t.Fatalf("redelegate: %d %s", r.Code, r.Body)
+	}
+	if list(old) != 0 || list(next) != 1 {
+		t.Fatal("recovery discovery did not follow the new assignee")
+	}
+	etag := taskMetaETag(t, store, taskMetaKey)
+	if r := claim(old, etag); r.Code != http.StatusForbidden {
+		t.Fatalf("claim by replaced assignee: %d %s", r.Code, r.Body)
+	}
+	r := claim(next, etag)
+	var result struct {
+		Execution taskExecution `json:"execution"`
+		Task      struct {
+			ID string `json:"task_id"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal(r.Body.Bytes(), &result); r.Code != http.StatusOK || err != nil ||
+		result.Task.ID != "t1" || result.Execution.Generation != 2 || result.Execution.ProcessID != "beta-dev:process" {
+		t.Fatalf("replacement owner claim: %d %s (%v)", r.Code, r.Body, err)
+	}
+}
+
 func TestTaskRecoveryPendingReplyCannotBeReplacedOrDropped(t *testing.T) {
 	store := ossfake.NewMemory()
 	body := []byte("Saved answer")
@@ -258,6 +332,33 @@ func TestTaskRecoveryPendingReplyCannotBeReplacedOrDropped(t *testing.T) {
 	if err := h.validateCheckpoint(t.Context(), taskMetaKey, old, next); err != nil {
 		t.Fatalf("same saved reply must accept delivery acknowledgement: %v", err)
 	}
+	// A scan can reclaim its own generation without starting a new native turn.
+	// A checkpoint that copies an old receipt cannot seal more work.
+	owner := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	h.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
+		return "instance", "codex", nil
+	}
+	initial := taskExecution{Generation: 3, InstanceID: "instance", ProcessID: "proc", Runtime: "codex", State: "active"}
+	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": owner.Username, "execution": initial}))
+	update := func(action string, cp *taskCheckpoint, wantAck uint64) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"action": action, "instance_id": "instance", "process_id": "proc", "checkpoint": cp})
+		r := withCaller(httptest.NewRequest("POST", "/api/v1/tasks/t1/execution?team=alpha-team", strings.NewReader(string(body))), owner)
+		r.SetPathValue("id", "t1")
+		r.Header.Set("If-Match", taskMetaETag(t, store, taskMetaKey))
+		w := httptest.NewRecorder()
+		h.UpdateExecution(w, r)
+		var result struct{ Execution taskExecution }
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Execution.ReplyGeneration != wantAck {
+			t.Fatalf("%s: %d %s", action, w.Code, w.Body)
+		}
+	}
+	update("checkpoint", old, 3)
+	update("checkpoint", next, 3)
+	update("claim", nil, 3)
+	next.Version++
+	update("checkpoint", next, 0)
+
 }
 
 func TestSubmittedTaskRecoversPersistedReportWithoutReexecuting(t *testing.T) {
@@ -313,5 +414,86 @@ func TestSubmittedTaskRecoversPersistedReportWithoutReexecuting(t *testing.T) {
 				t.Fatalf("changed persisted result must fail closed: %d %s", changed.Code, changed.Body)
 			}
 		})
+	}
+}
+
+func TestCompletedTaskRecoversReportAcceptedBeforeWorkerSavedReply(t *testing.T) {
+	store := ossfake.NewMemory()
+	report := []byte("The Leader accepted this persisted result before the Worker saved its reply checkpoint.")
+	key := "teams/alpha-team/shared/tasks/t1/result.md"
+	if err := store.PutObject(t.Context(), key, report); err != nil {
+		t.Fatal(err)
+	}
+	putTask(store, taskMetaKey, taskMeta(map[string]any{
+		"assigned_to": "alpha-dev", "status": "completed", "submission_id": "submission-one",
+		"result_path": "shared/tasks/t1/result.md",
+		"execution": taskExecution{Generation: 1, InstanceID: "old-instance", ProcessID: "old-process",
+			Runtime: "hermes", State: "active",
+			Checkpoint: &taskCheckpoint{Version: 6, CompletedSteps: []string{"one", "two", "three"}}},
+	}))
+	h := NewTaskRecoveryHandler(newProjectTestHandler(t, store, teamWithRoster("alpha-team")), ServerDeps{})
+	h.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
+		return "new-instance", "hermes", nil
+	}
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	discover := func() string {
+		r := withCaller(httptest.NewRequest("GET", "/api/v1/tasks/recoverable", nil), caller)
+		w := httptest.NewRecorder()
+		h.ListRecoverableTasks(w, r)
+		if w.Code != 200 {
+			t.Fatalf("discover: %d %s", w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	if !strings.Contains(discover(), `"task_id":"t1"`) {
+		t.Fatal("completed Task with a saved report was omitted from recovery")
+	}
+	execute := func(action, instance, process string, checkpoint *taskCheckpoint) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{
+			"action": action, "instance_id": instance, "process_id": process, "checkpoint": checkpoint,
+		})
+		r := withCaller(httptest.NewRequest("POST", "/api/v1/tasks/t1/execution?team=alpha-team", strings.NewReader(string(body))), caller)
+		r.SetPathValue("id", "t1")
+		r.Header.Set("If-Match", taskMetaETag(t, store, taskMetaKey))
+		w := httptest.NewRecorder()
+		h.UpdateExecution(w, r)
+		return w
+	}
+	if attempted := execute("checkpoint", "new-instance", "new-process", &taskCheckpoint{Version: 7}); attempted.Code != 409 {
+		t.Fatalf("completed Task accepted a checkpoint before claiming its report: %d %s", attempted.Code, attempted.Body)
+	}
+	w := execute("claim", "new-instance", "new-process", nil)
+	var reply struct {
+		Task        map[string]json.RawMessage `json:"task"`
+		Execution   taskExecution              `json:"execution"`
+		SavedResult string                     `json:"saved_result"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &reply) != nil {
+		t.Fatalf("claim saved report: %d %s", w.Code, w.Body)
+	}
+	cp := reply.Execution.Checkpoint
+	if cp == nil || cp.Version != 7 || cp.Delivery != "pending" || cp.Result == nil || cp.Result.Key != key ||
+		reply.SavedResult != string(report) || string(reply.Task["status"]) != `"completed"` || reply.Execution.Generation != 2 {
+		t.Fatalf("claim did not preserve completed status and pending delivery: %s", w.Body)
+	}
+	duplicate := execute("claim", "new-instance", "new-process", nil)
+	var retry struct{ Execution taskExecution }
+	if duplicate.Code != 200 || json.Unmarshal(duplicate.Body.Bytes(), &retry) != nil ||
+		retry.Execution.Checkpoint.ReplyTxn != cp.ReplyTxn || retry.Execution.Checkpoint.Version != cp.Version {
+		t.Fatalf("retry changed the delivery identity: %d %s", duplicate.Code, duplicate.Body)
+	}
+	invalid := *cp
+	invalid.Version++
+	invalid.CompletedSteps = append(append([]string(nil), cp.CompletedSteps...), "unexpected")
+	if attempted := execute("checkpoint", "new-instance", "new-process", &invalid); attempted.Code != 409 {
+		t.Fatalf("completed Task allowed new steps: %d %s", attempted.Code, attempted.Body)
+	}
+	cp.Version++
+	cp.Delivery, cp.ReplyEvent = "delivered", "$final"
+	if delivered := execute("checkpoint", "new-instance", "new-process", cp); delivered.Code != 200 {
+		t.Fatalf("acknowledge delivery: %d %s", delivered.Code, delivered.Body)
+	}
+	if strings.Contains(discover(), `"task_id":"t1"`) {
+		t.Fatal("completed Task remained recoverable after delivery")
 	}
 }

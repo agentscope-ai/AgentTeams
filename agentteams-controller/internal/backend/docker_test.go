@@ -465,6 +465,22 @@ func TestDockerStatus(t *testing.T) {
 	}
 }
 
+func TestDockerStatusReportsOOMKill(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"State":{"Status":"exited","OOMKilled":true,"ExitCode":137,"Pid":0,"Running":false}}`))
+	}))
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+
+	result, err := b.Status(t.Context(), "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusStopped || result.Message != "Container ran out of memory (OOMKilled)." {
+		t.Fatalf("unexpected exited container status: %+v", result)
+	}
+}
+
 func TestDockerStatusNotFound(t *testing.T) {
 	srv := mockDockerAPI(t)
 	defer srv.Close()

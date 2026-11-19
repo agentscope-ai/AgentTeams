@@ -49,6 +49,8 @@ const (
 type WorkerReconciler struct {
 	client.Client
 	ObservabilityReader client.Reader
+	RuntimeStore        *service.WorkerRuntimeStore
+	HandoffMatrix       service.WorkerHandoffMatrix
 
 	Provisioner                 service.WorkerProvisioner
 	Deployer                    service.WorkerDeployer
@@ -194,6 +196,31 @@ func edgeHeartbeatStale(lastHeartbeat string, timeout time.Duration) bool {
 // member reconcile phases, and writes runtime state back to Worker.Status.
 func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker, state *MemberState) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
+	var targetHandoff *service.WorkerHandoff
+	var handoffETag string
+	if w.Annotations[service.WorkerRuntimeHandoffAnnotation] != "" && r.RuntimeStore != nil {
+		record, etag, err := r.RuntimeStore.ResumeStop(ctx, w.Spec.EffectiveWorkerName(w.Name))
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		op := record.Handoff
+		if op != nil && op.Phase != "completed" {
+			switch op.Phase {
+			case "stopping", "stopped":
+				return r.reconcileHandoffSource(ctx, w, op, etag, state)
+			case "creating", "recovering":
+				if w.Spec.DesiredState() == "Running" && w.Spec.DesiredContainerMan() {
+					if w.Spec.Runtime != op.TargetRuntime {
+						return reconcile.Result{RequeueAfter: handoffPoll}, r.applyHandoffTargetSpec(ctx, w, op)
+					}
+					if w.Spec.Image != "" && w.Spec.Image != op.TargetImage {
+						return reconcile.Result{}, fmt.Errorf("Worker image changed during handoff")
+					}
+					targetHandoff, handoffETag = op, etag
+				}
+			}
+		}
+	}
 
 	deps := MemberDeps{
 		ObservabilityReader:         r.ObservabilityReader,
@@ -233,6 +260,12 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		teamLlmTuning = r.owningTeamLlmTuning(ctx, w)
 	}
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy, teamLlmTuning)
+	if targetHandoff == nil && r.RuntimeStore != nil && mctx.SpecChanged && effectiveSpec.DesiredContainerMan() && effectiveSpec.DesiredState() == "Running" && !isEdgeWorker(w) {
+		handled, err := r.beginDesiredRuntimeHandoff(ctx, w, mctx)
+		if err != nil || handled {
+			return reconcile.Result{RequeueAfter: handoffPoll}, err
+		}
+	}
 	mctx.TeamName, err = r.workerTeamName(ctx, w)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -372,9 +405,15 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if !skillsBeforeConfig {
 		reconcileMemberSkills(ctx, deps, configContext, state)
 	}
-	if res, err := ReconcileMemberContainer(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
+	var containerResult reconcile.Result
+	if targetHandoff != nil {
+		containerResult, err = r.reconcileHandoffTarget(ctx, w, deps, mctx, state, targetHandoff, handoffETag)
+	} else {
+		containerResult, err = ReconcileMemberContainer(ctx, deps, mctx, state)
+	}
+	if err != nil || containerResult.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
-		return res, err
+		return containerResult, err
 	}
 	applyDeploymentTargetStatus(w, mctx)
 	svcName, err := ReconcileMemberService(ctx, &mctx, &deps)
@@ -578,6 +617,9 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 		return reconcile.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
+	if result, err := r.finishDeletingHandoffSource(ctx, w); err != nil || result.RequeueAfter > 0 {
+		return result, err
+	}
 	deps := MemberDeps{
 		ObservabilityReader:         r.ObservabilityReader,
 		Provisioner:                 r.Provisioner,

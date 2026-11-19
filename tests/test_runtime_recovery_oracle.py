@@ -57,6 +57,36 @@ class IndependentLedgerTests(unittest.TestCase):
         self.assertEqual(len(self.ledger.proof("team", "stable")["effects"]), 1)
         self.assertFalse(self.ledger.proof("team", "stable")["calls"][-1]["accepted"])
 
+    def test_started_without_external_authorization_requires_fenced_negative_proof(self):
+        self.task["recovery_fixture"] = {"oracle_version": 4}
+        self.ledger = Ledger(Path(self.directory.name) / "new-task.json")
+        with self.assertRaises(ValueError):
+            self.call(method="REGISTER")
+        negative = self.call(method="GET")
+        self.assertEqual(negative["verification"], "never_authorized")
+        self.assertEqual(negative["checkpoint_version"], 1)
+        self.snapshot["instance_id"] = "docker/target"
+        self.task["execution"].update(instance_id="docker/target", process_id="replacement", generation=2)
+        with self.assertRaises(ValueError):
+            self.call(method="REGISTER", process="replacement")
+        self.call(method="GET", process="replacement")
+        self.call(method="REGISTER", process="replacement")
+        with self.assertRaises(ValueError):
+            self.call(method="GET", process="replacement")
+        row = self.call(method="POST", process="replacement")
+        self.assertEqual(self.call(method="GET", process="replacement"), row)
+        self.assertEqual(len(self.ledger.proof("team", "stable")["effects"]), 1)
+
+    def test_unknown_operation_cannot_be_authorized_by_an_empty_ledger(self):
+        self.task["recovery_fixture"] = {"oracle_version": 4}
+        self.ledger = Ledger(Path(self.directory.name) / "new-task.json")
+        self.task["execution"]["checkpoint"]["operation"]["state"] = "unknown"
+        with self.assertRaises(ValueError):
+            self.call(method="GET")
+        with self.assertRaises(ValueError):
+            self.call(method="REGISTER")
+        self.assertEqual(self.ledger.proof("team", "stable")["intents"], [])
+
     def test_worker_uploaded_receipts_cannot_create_an_effect(self):
         self.task["execution"]["checkpoint"]["artifacts"] = [{"key": "forged/receipt.json", "sha256": "test"}]
         with self.assertRaisesRegex(ValueError, "no verified external result"):

@@ -238,7 +238,11 @@ func (h *ProjectHandler) resolveTaskMetaCommitKey(
 // scoped access check.
 func (h *ProjectHandler) taskMetaPrefixes(ctx context.Context) ([]string, map[string]string, error) {
 	var teams v1beta1.TeamList
-	if err := h.client.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
+	reader := h.configReader
+	if reader == nil {
+		reader = h.client
+	}
+	if err := reader.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
 		return nil, nil, err
 	}
 	prefixes := make([]string, 0, len(teams.Items))
@@ -1407,12 +1411,31 @@ func (h *ProjectHandler) checkStatusLane(
 		}
 		return true
 	}
+	if curStatus == "assigned" && bodStatus == "prepared" && preparesTaskReassignment(cur, bod) {
+		return true
+	}
 	if !legalStatusTransition(curStatus, bodStatus) {
 		writeError(w, http.StatusForbidden,
 			"the requested status transition is not allowed by the task lifecycle contract")
 		return false
 	}
 	return true
+}
+
+// A fresh delegation may replace an assignment before any Worker has claimed
+// it. Keep the Task undiscoverable until its new assignment is delivered.
+func preparesTaskReassignment(cur, next map[string]json.RawMessage) bool {
+	if _, claimed := cur["execution"]; claimed {
+		return false
+	}
+	oldAssignee, _ := recordStringField(cur, "assigned_to")
+	newAssignee, _ := recordStringField(next, "assigned_to")
+	oldAccount, newAccount := canonicalAccount(oldAssignee), canonicalAccount(newAssignee)
+	oldTxn, _ := recordStringField(cur, "notifyTxn")
+	newTxn, _ := recordStringField(next, "notifyTxn")
+	_, tookOldEvent := next["eventId"]
+	return oldAccount != "" && newAccount != "" && oldAccount != newAccount &&
+		strings.TrimSpace(newTxn) != "" && newTxn != oldTxn && !tookOldEvent
 }
 
 // validateW2DecisionAuthority is the server-side W2 decision-authority guard

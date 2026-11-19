@@ -201,13 +201,17 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			return nil, fmt.Errorf("marshal create payload: %w", err)
 		}
 
-		containerID, err := d.doCreate(ctx, containerName, body)
+		containerID, err := d.doCreate(ctx, containerName, body, req.Labels[RuntimeHandoffLabel] == "")
 		if err != nil {
 			return nil, err
 		}
 		if req.AuthToken != "" && req.AuthTokenFile != "" {
 			if err := d.writeContainerFile(ctx, containerID, req.AuthTokenFile, req.AuthToken); err != nil {
-				_ = d.Delete(ctx, req.Name)
+				if req.Labels[RuntimeHandoffLabel] != "" {
+					_, _ = d.dockerInstanceRequest(ctx, http.MethodDelete, containerID, "?force=true")
+				} else {
+					_ = d.Delete(ctx, req.Name)
+				}
 				return nil, fmt.Errorf("project auth token: %w", err)
 			}
 		}
@@ -239,7 +243,11 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			log.Printf("[Docker] Host port %d in use, retrying with %d...", hostPort, hostPort+1)
 			hostPort++
 			// Clean up the container we just created
-			d.Delete(ctx, req.Name)
+			if req.Labels[RuntimeHandoffLabel] != "" {
+				_, _ = d.dockerInstanceRequest(ctx, http.MethodDelete, containerID, "?force=true")
+			} else {
+				_ = d.Delete(ctx, req.Name)
+			}
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
@@ -568,7 +576,7 @@ func readDockerExecStream(r io.Reader) (string, string, error) {
 
 // doCreate sends the container create request to Docker, handling conflict by
 // deleting the existing container and retrying once.
-func (d *DockerBackend) doCreate(ctx context.Context, containerName string, body []byte) (string, error) {
+func (d *DockerBackend) doCreate(ctx context.Context, containerName string, body []byte, replaceConflict bool) (string, error) {
 	for retry := 0; retry < 2; retry++ {
 		u := fmt.Sprintf("http://localhost/containers/create?name=%s", url.QueryEscape(containerName))
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(body)))
@@ -584,7 +592,7 @@ func (d *DockerBackend) doCreate(ctx context.Context, containerName string, body
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		if resp.StatusCode == http.StatusConflict && retry == 0 {
+		if resp.StatusCode == http.StatusConflict && replaceConflict && retry == 0 {
 			// Remove existing container and retry once
 			log.Printf("[Docker] Container %s already exists, removing before recreate", containerName)
 			// Extract worker name from container name
@@ -723,6 +731,10 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 		State struct {
 			Status    string `json:"Status"`
 			StartedAt string `json:"StartedAt"`
+			PID       *int   `json:"Pid"`
+			Running   *bool  `json:"Running"`
+			OOMKilled bool   `json:"OOMKilled"`
+			ExitCode  int    `json:"ExitCode"`
 		} `json:"State"`
 	}
 	if err := json.Unmarshal(body, &inspectResp); err != nil {
@@ -733,15 +745,28 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 	if inspectResp.ID != "" && inspectResp.State.StartedAt != "" {
 		instanceID = inspectResp.ID + "/" + inspectResp.State.StartedAt
 	}
+	status := normalizeDockerStatus(inspectResp.State.Status)
+	var message string
+	if status == StatusStopped {
+		if inspectResp.State.OOMKilled {
+			message = "Container ran out of memory (OOMKilled)."
+		} else if inspectResp.State.ExitCode != 0 {
+			message = fmt.Sprintf("Container exited with code %d.", inspectResp.State.ExitCode)
+		}
+	}
 	return &WorkerResult{
-		Name:           name,
-		Backend:        "docker",
-		DeploymentMode: DeployLocal,
-		Status:         normalizeDockerStatus(inspectResp.State.Status),
-		ContainerID:    inspectResp.ID,
-		InstanceID:     instanceID,
-		Runtime:        inspectResp.Config.Labels[v1beta1.LabelRuntime],
-		RawStatus:      inspectResp.State.Status,
+		Name:                name,
+		Backend:             "docker",
+		DeploymentMode:      DeployLocal,
+		Status:              status,
+		Message:             message,
+		ContainerID:         inspectResp.ID,
+		InstanceID:          instanceID,
+		Runtime:             inspectResp.Config.Labels[v1beta1.LabelRuntime],
+		HandoffLabel:        inspectResp.Config.Labels[RuntimeHandoffLabel],
+		HandoffSpecHash:     inspectResp.Config.Labels[RuntimeHandoffSpecLabel],
+		dockerProcessExited: inspectResp.State.PID != nil && *inspectResp.State.PID == 0 && inspectResp.State.Running != nil && !*inspectResp.State.Running,
+		RawStatus:           inspectResp.State.Status,
 	}, nil
 }
 
@@ -882,6 +907,10 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 		Labels:     map[string]string{v1beta1.LabelRuntime: ResolveRuntime(req.Runtime, req.RuntimeFallback)},
 	}
 
+	if handoff := req.Labels[RuntimeHandoffLabel]; handoff != "" {
+		p.Labels[RuntimeHandoffLabel] = handoff
+		p.Labels[RuntimeHandoffSpecLabel] = req.Labels[RuntimeHandoffSpecLabel]
+	}
 	hc := &dockerHostConfig{
 		NetworkMode: req.Network,
 		ExtraHosts:  req.ExtraHosts,

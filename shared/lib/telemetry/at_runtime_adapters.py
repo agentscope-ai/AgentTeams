@@ -4,6 +4,7 @@ import inspect
 import importlib.metadata
 import logging
 import os
+import re
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -214,10 +215,16 @@ def agentscope(module):
 
 def hermes_turn(module):
     def run(wrapped, instance, args, kwargs):
-        fields = telemetry.turn_fields(str(getattr(instance, "session_id", "")), metadata={
+        metadata = {
             "room_id": getattr(instance, "_chat_id", ""),
             "event_id": kwargs.get("persist_user_platform_id", ""),
-        })
+        }
+        # Internal recovery admissions retain this ID through the native SDK.
+        # Decode it for tracing only; execution authority stays in Task tools.
+        admission = re.fullmatch(r"recovery:([^/:]+)/([^/:]+):([1-9][0-9]*)", metadata["event_id"] or "")
+        if admission:
+            metadata.update(team_id=admission[1], task_id=admission[2], execution_generation=int(admission[3]))
+        fields = telemetry.turn_fields(str(getattr(instance, "session_id", "")), metadata=metadata)
         if kwargs.get("task_id"):
             fields["agentteams.runtime.task_id"] = str(kwargs["task_id"])
         if getattr(instance, "_parent_session_id", None):

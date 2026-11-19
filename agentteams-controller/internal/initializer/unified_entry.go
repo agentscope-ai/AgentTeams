@@ -24,10 +24,11 @@ const (
 
 type unifiedEntryRoute struct {
 	name, path, backend string
+	appliedBackend      string
 }
 
-// ReconcileUnifiedEntryRoutes retries startup registration independently of
-// Manager and Dashboard startup. Only the controller leader should call it.
+// ReconcileUnifiedEntryRoutes retries startup and refreshes resolved container
+// addresses after recreation. Only the controller leader should call it.
 func (i *Initializer) ReconcileUnifiedEntryRoutes(ctx context.Context) {
 	i.reconcileUnifiedEntryRoutes(ctx, 5*time.Second)
 }
@@ -39,25 +40,27 @@ func (i *Initializer) reconcileUnifiedEntryRoutes(ctx context.Context, interval 
 	logger := ctrl.Log.WithName("initializer").WithName("unified-entry")
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	pending := i.desiredUnifiedEntryRoutes()
+	routes := i.desiredUnifiedEntryRoutes()
+	ready := false
 	for attempts := 0; ctx.Err() == nil; attempts++ {
 		var failures []error
-		remaining := pending[:0]
-		for _, route := range pending {
+		for index := range routes {
+			route := &routes[index]
 			if err := i.reconcileUnifiedEntryRoute(ctx, route); err != nil {
 				failures = append(failures, fmt.Errorf("%s: %w", route.name, err))
-				remaining = append(remaining, route)
 			}
 		}
-		pending = remaining
-		if len(pending) == 0 {
-			if i.Config.UnifiedEntryEnabled {
+		if len(failures) == 0 {
+			if !i.Config.UnifiedEntryEnabled {
+				return
+			}
+			if !ready {
 				logger.Info("unified entry routes reconciled", "internal", i.Config.EntryInternalURL,
 					"external", i.Config.EntryExternalURL)
 			}
-			return
 		}
-		if ctx.Err() == nil && attempts%6 == 0 {
+		ready = len(failures) == 0
+		if len(failures) > 0 && ctx.Err() == nil && attempts%6 == 0 {
 			logger.Error(errors.Join(failures...), "unified entry route reconciliation failed; retrying")
 		}
 		select {
@@ -81,10 +84,17 @@ func (i *Initializer) desiredUnifiedEntryRoutes() []unifiedEntryRoute {
 	}
 }
 
-func (i *Initializer) reconcileUnifiedEntryRoute(ctx context.Context, route unifiedEntryRoute) error {
+func (i *Initializer) reconcileUnifiedEntryRoute(ctx context.Context, route *unifiedEntryRoute) error {
 	name, path, backend := route.name, route.path, route.backend
 	if !i.Config.UnifiedEntryEnabled || backend == "" {
-		return i.Gateway.DeleteRoute(ctx, name)
+		if route.appliedBackend == "disabled" {
+			return nil
+		}
+		if err := i.Gateway.DeleteRoute(ctx, name); err != nil {
+			return err
+		}
+		route.appliedBackend = "disabled"
+		return nil
 	}
 	managed, ok := i.Gateway.(interface {
 		EnsureManagedRoute(ctx context.Context, name, serviceName string, port int, pathPrefix string) error
@@ -100,12 +110,19 @@ func (i *Initializer) reconcileUnifiedEntryRoute(ctx context.Context, route unif
 	if err != nil {
 		return fmt.Errorf("%s backend host: %w", path, err)
 	}
+	resolvedBackend := fmt.Sprintf("%s://%s:%d", protocol, host, port)
+	if route.appliedBackend == resolvedBackend {
+		return nil
+	}
+	// A partially applied update must be retried even if DNS changes back.
+	route.appliedBackend = ""
 	if err := i.ensureCustomServiceSource(ctx, name, host, port, protocol); err != nil {
 		return fmt.Errorf("service source %s: %w", name, err)
 	}
 	if err := managed.EnsureManagedRoute(ctx, name, customServiceName(name, host), port, path); err != nil {
 		return fmt.Errorf("route %s: %w", name, err)
 	}
+	route.appliedBackend = resolvedBackend
 	return nil
 }
 

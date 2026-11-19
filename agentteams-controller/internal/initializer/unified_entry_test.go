@@ -59,7 +59,7 @@ func newUnifiedEntryInitializer(cfg Config) (*Initializer, *recordingGateway) {
 func runUnifiedEntryPass(i *Initializer) error {
 	var failures []error
 	for _, route := range i.desiredUnifiedEntryRoutes() {
-		failures = append(failures, i.reconcileUnifiedEntryRoute(context.Background(), route))
+		failures = append(failures, i.reconcileUnifiedEntryRoute(context.Background(), &route))
 	}
 	return errors.Join(failures...)
 }
@@ -202,8 +202,29 @@ func TestUnifiedEntryRetriesLateDashboardDNS(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	i.reconcileUnifiedEntryRoutes(ctx, time.Millisecond)
-	if lookups != 2 || len(g.routes) != 2 || g.routes[1].service != "unified-entry-dashboard.static" {
+	if lookups < 2 || len(g.routes) != 2 || g.routes[1].service != "unified-entry-dashboard.static" {
 		t.Fatalf("want late Dashboard route after retry: lookups=%d routes=%v", lookups, g.routes)
+	}
+}
+
+func TestUnifiedEntryRefreshesRecreatedDashboardAddress(t *testing.T) {
+	old := entryLookupHost
+	defer func() { entryLookupHost = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	lookups := 0
+	entryLookupHost = func(context.Context, string) ([]string, error) {
+		lookups++
+		if lookups == 1 {
+			return []string{"192.0.2.10"}, nil
+		}
+		cancel()
+		return []string{"192.0.2.11"}, nil
+	}
+	i, g := newUnifiedEntryInitializer(Config{UnifiedEntryEnabled: true, DashboardURL: "http://dashboard:3000"})
+	i.reconcileUnifiedEntryRoutes(ctx, time.Millisecond)
+	if len(g.sources) != 2 || g.sources[1].address != "192.0.2.11" {
+		t.Fatalf("expected the recreated Dashboard address to replace the old upstream, got %v", g.sources)
 	}
 }
 

@@ -927,7 +927,9 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     "submit_task requires a durable acknowledgment: delegate the task first, "
                     "then call ack_task and confirm synced=true before retrying submit_task"
                 )
-            summary = str(payload.get("summary") or "")
+            summary = payload.get("summary")
+            if not isinstance(summary, str) or not summary.strip():
+                raise ValueError("submit_task requires a non-blank summary")
             status = _validate_task_result_status(payload.get("status"))
             deliverables = payload.get("deliverables") or []
             if not isinstance(deliverables, list):

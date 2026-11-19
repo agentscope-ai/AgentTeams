@@ -650,7 +650,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     context_result_path = pathlib.Path("#{workspace}") / context_report_source
     invalid_inline = payload("taskflow", {
         "role": "worker", "action": "submit_task",
-        "payload": {"taskId": context_task_id, "status": "SUCCESS", "resultMarkdown": 42},
+        "payload": {"taskId": context_task_id, "status": "SUCCESS", "summary": "Ready", "resultMarkdown": 42},
     })
     if invalid_inline.get("ok") or context_result_path.exists():
         raise AssertionError(f"invalid inline report must fail without a write: {invalid_inline!r}")

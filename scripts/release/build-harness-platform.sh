@@ -21,7 +21,7 @@ case "$runtime" in
 esac
 if [[ "$runtime" != codex ]]; then
   make -o build-agentteams-controller "build-${target}" \
-    "$output=$image" "LOCAL_CONTROLLER_BUILD_IMAGE=$controller" \
+    "$output=$image" "LOCAL_CONTROLLER_BUILD_IMAGE=$controller" "OPENCLAW_BASE_VERSION=$RELEASE_VERSION" \
     "DOCKER_PLATFORM=$platform" HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
     "DOCKER_BUILD_ARGS=${common[*]}"
 fi

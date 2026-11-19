@@ -33,6 +33,21 @@ func newTeamTestClient(t *testing.T, objs ...client.Object) client.Client {
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 }
 
+func TestTeamRoomAliasNameKeepsLegacyNamesAndSupportsWhitespace(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"alpha", "alpha"},
+		{"前端团队", "前端团队"},
+		{"Release smoke", "release-smoke"},
+		{"Release\tteam", "release-smoke"},
+		{"前端\u3000团队", "release-smoke"},
+	} {
+		team := &v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "release-smoke"}, Spec: v1beta1.TeamSpec{TeamName: tc.name}}
+		if got := teamRoomAliasName(team); got != tc.want {
+			t.Errorf("name %q: alias name %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func newTestManagerConfig(t *testing.T) (*service.ManagerConfigStore, *ossfake.Memory) {
 	t.Helper()
 	fake := ossfake.NewMemory()

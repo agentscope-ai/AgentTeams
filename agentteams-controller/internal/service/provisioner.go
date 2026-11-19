@@ -49,6 +49,7 @@ type WorkerDeprovisionRequest struct {
 // TeamRoomRequest describes rooms to create for a team.
 type TeamRoomRequest struct {
 	TeamName             string
+	TeamAliasName        string
 	LeaderName           string
 	LeaderCredentialName string
 	WorkerNames          []string
@@ -823,6 +824,10 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	}
 
 	teamMeta := teamRoomMeta(req, teamAdminID, leaderMatrixID, p.matrix.UserID)
+	teamAliasName := req.TeamAliasName
+	if teamAliasName == "" {
+		teamAliasName = req.TeamName
+	}
 	teamRoom, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
 		Name:          fmt.Sprintf("Team: %s", req.TeamName),
 		Topic:         fmt.Sprintf("Team room for %s", req.TeamName),
@@ -830,7 +835,7 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		PowerLevels:   teamRoomPowerLevels,
 		CreatorToken:  req.TeamAdminActorToken,
 		InitialState:  roomMetaState(teamMeta),
-		RoomAliasName: roomAliasLocalpart("team", req.TeamName),
+		RoomAliasName: roomAliasLocalpart("team", teamAliasName),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("team room creation failed: %w", err)

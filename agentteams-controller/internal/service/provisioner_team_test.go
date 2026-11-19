@@ -87,6 +87,21 @@ func newFakeTeamMatrix() *fakeTeamMatrix {
 	}
 }
 
+func TestProvisionTeamRoomsUsesAliasNameWithoutChangingDisplayName(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	p := NewProvisioner(ProvisionerConfig{Matrix: matrixClient, AdminUser: "admin"})
+	_, err := p.ProvisionTeamRooms(context.Background(), TeamRoomRequest{
+		TeamName: "Release smoke", TeamAliasName: "release-smoke", LeaderName: "lead",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := matrixClient.createRooms[0]
+	if room.RoomAliasName != "agentteams-team-release-smoke" || room.Name != "Team: Release smoke" {
+		t.Fatalf("alias=%q display name=%q", room.RoomAliasName, room.Name)
+	}
+}
+
 func (f *fakeTeamMatrix) EnsureUser(context.Context, matrix.EnsureUserRequest) (*matrix.UserCredentials, error) {
 	return &matrix.UserCredentials{
 		Password:    "matrix-password",

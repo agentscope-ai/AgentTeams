@@ -7,6 +7,10 @@ on:
         description: 'Shared Harness version (for example v1.2.7); does not create a Core tag'
         required: true
         type: string
+      publish:
+        description: 'Publish final version tags after building and smoke-testing staging images'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -130,6 +134,7 @@ jobs:
 
   publish:
     needs: [prepare, harness-platform]
+    if: inputs.publish
     strategy:
       fail-fast: false
       matrix:

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
@@ -333,6 +334,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
 		TeamName:             teamRuntimeName,
+		TeamAliasName:        teamRoomAliasName(t),
 		LeaderName:           leaderRuntimeName,
 		LeaderCredentialName: leaderRef.Name,
 		WorkerNames:          workerRuntimeNames,
@@ -1114,7 +1116,7 @@ func (r *TeamReconciler) handleDeleteTeam(ctx context.Context, t *v1beta1.Team) 
 	// clean aliases.
 	leaderRuntimeName := r.teamLeaderRuntimeName(ctx, t, leaderRef)
 	r.archiveTeamRooms(ctx, t, teamRuntimeName, leaderRuntimeName)
-	if err := r.Provisioner.DeleteTeamRoomAliases(ctx, teamRuntimeName, leaderRuntimeName); err != nil {
+	if err := r.Provisioner.DeleteTeamRoomAliases(ctx, teamRoomAliasName(t), leaderRuntimeName); err != nil {
 		logger.Error(err, "failed to delete team room aliases (non-fatal)")
 	}
 
@@ -1146,6 +1148,14 @@ func (r *TeamReconciler) teamLeaderRuntimeName(ctx context.Context, t *v1beta1.T
 		}
 	}
 	return leaderRef.Name
+}
+
+func teamRoomAliasName(t *v1beta1.Team) string {
+	name := t.Spec.EffectiveTeamName(t.Name)
+	if strings.IndexFunc(name, unicode.IsSpace) >= 0 {
+		return t.Name
+	}
+	return name
 }
 
 func (r *TeamReconciler) archiveTeamRooms(ctx context.Context, t *v1beta1.Team, teamRuntimeName, leaderRuntimeName string) {

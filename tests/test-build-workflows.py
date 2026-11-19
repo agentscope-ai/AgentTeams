@@ -21,6 +21,11 @@ RELEASE = workflow('release.yml')
 
 
 class BuildWorkflowTests(unittest.TestCase):
+    def test_release_runtime_smokes_follow_the_requested_release_version(self):
+        self.assertEqual(RELEASE['env']['DEEPSEEK_HARNESS_WORKER_VERSION'], '${{ inputs.version }}')
+        self.assertEqual(RELEASE['env']['CODEX_WORKER_IMAGE'],
+                         'higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:${{ inputs.version }}')
+
     def test_worker_consumers_checkout_submodules_and_track_gitlink(self):
         for name, job_name in [('test-controller.yml', 'matrix-bundle-core'),
                                ('test-manager.yml', 'manager-tools')]:

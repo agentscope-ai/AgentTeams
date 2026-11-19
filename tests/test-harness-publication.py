@@ -7,10 +7,18 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import yaml
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/release/build-harness-platform.sh'
 
 class HarnessPublicationTest(unittest.TestCase):
+    def test_staging_only_build_cannot_publish_release_tags(self):
+        workflow = yaml.safe_load((SCRIPT.parents[2] / '.github/workflows/publish-harnesses.yml').read_text())
+        inputs = workflow[True]['workflow_dispatch']['inputs']
+        self.assertEqual(inputs['publish']['type'], 'boolean')
+        self.assertTrue(inputs['publish']['default'])
+        self.assertEqual(workflow['jobs']['publish']['if'], 'inputs.publish')
+
     def exercise(self, runtime, fail_smoke=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

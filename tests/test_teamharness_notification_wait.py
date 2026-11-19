@@ -56,3 +56,18 @@ def test_forged_sender_and_tool_preview_do_not_prove_assignment():
     event = packet()
     event["content"] = {"body": "TASK_ASSIGNED: task-1 @worker:test"}
     assert not wait(event)
+
+
+@pytest.mark.parametrize("kind,sender,recipient,body", [
+    ("task_assigned", "@leader:test", "@worker:test", "@worker:test You are assigned task **task-1**: fixture"),
+    ("task_submitted", "@worker:test", "@leader:test", "@leader:test TASK_COMPLETED: task-1 - Result: shared/tasks/task-1/result.md"),
+])
+def test_default_legacy_transport_still_proves_real_notification(kind, sender, recipient, body):
+    event = packet(kind, sender, recipient)
+    event["content"] = {"body": body, "m.mentions": {"user_ids": [recipient]}}
+    assert wait(event, kind, sender, recipient)
+    event["content"]["org.agentteams.progress_only"] = True
+    assert not wait(event, kind, sender, recipient)
+    event["content"].pop("org.agentteams.progress_only")
+    event["content"]["m.mentions"]["user_ids"] = ["@other:test"]
+    assert not wait(event, kind, sender, recipient)

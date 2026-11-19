@@ -374,8 +374,12 @@ raise SystemExit(1)
 # A real Leader may already have accepted the result before this observer checks.
 # effective is intentionally false after acceptance; require its recorded history.
 _task_check_succeeded() {
-    jq -e --arg task "${TASK_ID}" --arg marker "${MARKER}" '
+    jq -e --arg task "${TASK_ID}" --arg marker "${MARKER}" \
+        --arg project "${PROJECT_ID}" --arg room "${TEAM_ROOM}" \
+        --arg worker "${TEST_WORKER}" --arg mxid "${WORKER_MXID}" '
         .ok == true and .task.task_id == $task and
+        .task.project_id == $project and .task.room_id == $room and
+        (.task.assigned_to == $worker or .task.assigned_to == $mxid) and
         .result.status == "SUCCESS" and
         (.result.summary | contains($marker)) and
         (.validationErrors | type == "array" and length == 0) and
@@ -1358,11 +1362,19 @@ _wait_coordination_message() {
             --arg kind "${kind}" --arg sender "${sender}" --arg recipient "${recipient}" \
             --arg task "${TASK_ID}" --arg project "${PROJECT_ID}" '
             .chunk[] | select(.type == "m.room.message" and .sender == $sender and .event_id != null) |
-            .content["org.agentteams.coordination"].channel_meta as $meta |
+            .content as $content |
+            $content["org.agentteams.coordination"].channel_meta as $meta |
             $meta.teamharness_coordination as $event |
-            select($meta.sender_id == $sender and $meta.agent_matrix_user_id == $recipient and
+            select(($meta.sender_id == $sender and $meta.agent_matrix_user_id == $recipient and
                 $event.kind == $kind and $event.task_id == $task and $event.project_id == $project and
-                ($event.id // "") != "")' | head -n 1)
+                ($event.id // "") != "") or
+                ($content["org.agentteams.coordination"] == null and
+                 $content["org.agentteams.progress_only"] != true and
+                 (($content["m.mentions"].user_ids // []) | index($recipient)) != null and
+                 (($kind == "task_assigned" and
+                   (($content.body // "") | startswith($recipient + " You are assigned task **" + $task + "**:"))) or
+                  ($kind == "task_submitted" and
+                   (($content.body // "") | startswith($recipient + " TASK_COMPLETED: " + $task + " -"))))))' | head -n 1)
         if [ -n "${matching}" ]; then
             echo "${matching}"
             return 0
@@ -1411,7 +1423,7 @@ Then call taskflow submit_task with status SUCCESS, a summary containing
 ${MARKER}, and both shared/tasks/${TASK_ID}/result.md and
 shared/tasks/${TASK_ID}/workspace/readiness-note.txt as deliverables.
 
-After submit_task succeeds, its automatic task_submitted coordination event
+After submit_task succeeds, its automatic completion notification
 must reach the same Team Room and notify the leader. Do not send a duplicate
 completion notification.
 EOF
@@ -1423,7 +1435,7 @@ else
     log_fail "Admin failed to send task to QwenPaw leader"
 fi
 
-# Check the authenticated coordination envelope, not wording in prose/tool previews.
+# Check the coordination envelope or the default legacy protocol with real mentions.
 LEADER_ASSIGNMENT=$(_wait_coordination_message task_assigned "${LEADER_MXID}" "${WORKER_MXID}" 480 || true)
 if [ -n "${LEADER_ASSIGNMENT}" ]; then
     log_pass "Leader assigned TeamHarness task to worker in Team Room"

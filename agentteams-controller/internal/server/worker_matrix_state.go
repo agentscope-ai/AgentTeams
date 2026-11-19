@@ -36,12 +36,12 @@ func (h *WorkerMatrixHandler) identity(w http.ResponseWriter, r *http.Request) (
 		writeError(w, 403, "Worker belongs to another Controller namespace")
 		return "", "", "", "", false
 	}
-	worker, err := NewCoordinationHandler(h.deps).worker(r.Context(), caller.Username)
+	worker, err := h.recovery.worker(r.Context(), caller)
 	if err != nil {
 		writeError(w, 403, "Worker identity unavailable")
 		return "", "", "", "", false
 	}
-	instance, runtime, err := h.recovery.instance(r.Context(), caller)
+	instance, runtime, err := h.recovery.resolveInstance(r.Context(), caller, worker)
 	if err != nil {
 		writeError(w, 503, "actual Worker start unavailable")
 		return "", "", "", "", false

@@ -193,6 +193,10 @@ spec:
                   type: array
                   items:
                     type: string
+                managerRooms:
+                  type: object
+                  additionalProperties:
+                    type: string
                 emailSent:
                   type: boolean
                 message:

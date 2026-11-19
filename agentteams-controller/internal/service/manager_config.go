@@ -171,7 +171,7 @@ func (l *ManagerConfigStore) PutManagerRuntimeConfig(ctx context.Context, doc me
 	return l.OSS.PutObject(ctx, key, payload)
 }
 
-func (l *ManagerConfigStore) updateManagerRuntimeAllowFrom(ctx context.Context, matrixID string, add bool) (bool, error) {
+func (l *ManagerConfigStore) updateManagerRuntimeAllowFrom(ctx context.Context, matrixID string, add, human bool) (bool, error) {
 	key := memberRuntimeConfigObjectKey(l.ManagerName)
 	data, err := l.OSS.GetObject(ctx, key)
 	if os.IsNotExist(err) {
@@ -188,6 +188,18 @@ func (l *ManagerConfigStore) updateManagerRuntimeAllowFrom(ctx context.Context, 
 		doc.Desired.ChannelPolicy = &v1beta1.ChannelPolicySpec{}
 	}
 	ids := doc.Desired.ChannelPolicy.GroupAllowExtra
+	if human && add {
+		groupPresent, dmPresent := false, false
+		for _, id := range ids {
+			groupPresent = groupPresent || id == matrixID
+		}
+		for _, id := range doc.Desired.ChannelPolicy.DmAllowExtra {
+			dmPresent = dmPresent || id == matrixID
+		}
+		if groupPresent && dmPresent {
+			return backend.UsesMemberRuntimeConfig(doc.Member.Runtime), nil
+		}
+	}
 	next := make([]string, 0, len(ids)+1)
 	for _, id := range ids {
 		if id != matrixID {
@@ -198,6 +210,19 @@ func (l *ManagerConfigStore) updateManagerRuntimeAllowFrom(ctx context.Context, 
 		next = append(next, matrixID)
 	}
 	doc.Desired.ChannelPolicy.GroupAllowExtra = next
+	if human {
+		ids := doc.Desired.ChannelPolicy.DmAllowExtra
+		next := make([]string, 0, len(ids)+1)
+		for _, id := range ids {
+			if id != matrixID {
+				next = append(next, id)
+			}
+		}
+		if add {
+			next = append(next, matrixID)
+		}
+		doc.Desired.ChannelPolicy.DmAllowExtra = next
+	}
 	if err := preserveRuntimeConfigGeneration(ctx, l.OSS, key, &doc); err != nil {
 		return true, err
 	}
@@ -321,6 +346,16 @@ func mergeGroupAllowFrom(oldCfg, newCfg map[string]interface{}) {
 // UpdateManagerGroupAllowFrom adds or removes a worker Matrix ID from the
 // Manager's openclaw.json groupAllowFrom list via OSS.
 func (l *ManagerConfigStore) UpdateManagerGroupAllowFrom(workerMatrixID string, add bool) error {
+	return l.updateManagerAllowFrom(workerMatrixID, add, false)
+}
+
+// L1 Humans need both DM and group sender permission: legacy Matrix adapters
+// can classify a direct room as a group until their next membership sync.
+func (l *ManagerConfigStore) UpdateManagerHumanAllowFrom(matrixID string, add bool) error {
+	return l.updateManagerAllowFrom(matrixID, add, true)
+}
+
+func (l *ManagerConfigStore) updateManagerAllowFrom(workerMatrixID string, add, human bool) error {
 	if !l.Enabled() {
 		return nil
 	}
@@ -329,7 +364,7 @@ func (l *ManagerConfigStore) UpdateManagerGroupAllowFrom(workerMatrixID string, 
 	defer l.mu.Unlock()
 
 	ctx := context.Background()
-	if handled, err := l.updateManagerRuntimeAllowFrom(ctx, workerMatrixID, add); handled {
+	if handled, err := l.updateManagerRuntimeAllowFrom(ctx, workerMatrixID, add, human); handled {
 		return err
 	}
 	key := l.managerAgentPrefix() + "/openclaw.json"
@@ -356,7 +391,11 @@ func (l *ManagerConfigStore) UpdateManagerGroupAllowFrom(workerMatrixID string, 
 		return nil
 	}
 
-	if updateGroupAllowFrom(matrixCfg, workerMatrixID, add) {
+	changed := updateGroupAllowFrom(matrixCfg, workerMatrixID, add)
+	if human {
+		changed = updateHumanDMAllowFrom(matrixCfg, workerMatrixID, add) || changed
+	}
+	if changed {
 		out, err := json.MarshalIndent(config, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshal manager config: %w", err)
@@ -368,7 +407,7 @@ func (l *ManagerConfigStore) UpdateManagerGroupAllowFrom(workerMatrixID string, 
 	// Keep an already-running Manager's local allowlist in sync without
 	// replacing its entire local config (which may contain Manager-owned
 	// fields and customizations).
-	l.updateManagerLocalGroupAllowFrom(workerMatrixID, add)
+	l.updateManagerLocalAllowFrom(workerMatrixID, add, human)
 	return nil
 }
 
@@ -376,7 +415,11 @@ func (l *ManagerConfigStore) UpdateManagerGroupAllowFrom(workerMatrixID string, 
 // changed the slice. Keeping the local and OSS paths on one mutator prevents
 // the two copies from drifting.
 func updateGroupAllowFrom(matrixCfg map[string]interface{}, workerMatrixID string, add bool) bool {
-	allowList := extractStringSlice(matrixCfg["groupAllowFrom"])
+	return updateAllowFrom(matrixCfg, "groupAllowFrom", workerMatrixID, add)
+}
+
+func updateAllowFrom(matrixCfg map[string]interface{}, key, workerMatrixID string, add bool) bool {
+	allowList := extractStringSlice(matrixCfg[key])
 	if add {
 		for _, id := range allowList {
 			if id == workerMatrixID {
@@ -396,13 +439,17 @@ func updateGroupAllowFrom(matrixCfg map[string]interface{}, workerMatrixID strin
 		}
 		allowList = filtered
 	}
-	matrixCfg["groupAllowFrom"] = allowList
+	matrixCfg[key] = allowList
 	return true
 }
 
 // updateManagerLocalGroupAllowFrom mutates only the allowlist in the live
 // local Manager config, preserving Manager-owned fields and customizations.
 func (l *ManagerConfigStore) updateManagerLocalGroupAllowFrom(workerMatrixID string, add bool) {
+	l.updateManagerLocalAllowFrom(workerMatrixID, add, false)
+}
+
+func (l *ManagerConfigStore) updateManagerLocalAllowFrom(workerMatrixID string, add, human bool) {
 	path := l.managerLocalConfigPath()
 	if path == "" {
 		return
@@ -420,7 +467,14 @@ func (l *ManagerConfigStore) updateManagerLocalGroupAllowFrom(workerMatrixID str
 		return
 	}
 	matrixCfg, _ := channels["matrix"].(map[string]interface{})
-	if matrixCfg == nil || !updateGroupAllowFrom(matrixCfg, workerMatrixID, add) {
+	if matrixCfg == nil {
+		return
+	}
+	changed := updateGroupAllowFrom(matrixCfg, workerMatrixID, add)
+	if human {
+		changed = updateHumanDMAllowFrom(matrixCfg, workerMatrixID, add) || changed
+	}
+	if !changed {
 		return
 	}
 	out, err := json.MarshalIndent(config, "", "  ")
@@ -430,6 +484,15 @@ func (l *ManagerConfigStore) updateManagerLocalGroupAllowFrom(workerMatrixID str
 	if err := writeManagerLocalConfigAtomic(path, out); err != nil {
 		fmt.Printf("warning: failed to update manager local allowlist %s: %v\n", path, err)
 	}
+}
+
+func updateHumanDMAllowFrom(matrixCfg map[string]interface{}, matrixID string, add bool) bool {
+	dm, _ := matrixCfg["dm"].(map[string]interface{})
+	if dm == nil {
+		dm = map[string]interface{}{}
+		matrixCfg["dm"] = dm
+	}
+	return updateAllowFrom(dm, "allowFrom", matrixID, add)
 }
 
 func extractStringSlice(v interface{}) []string {

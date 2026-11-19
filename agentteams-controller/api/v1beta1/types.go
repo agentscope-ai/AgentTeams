@@ -779,8 +779,10 @@ type HumanStatus struct {
 	InitialPassword             string   `json:"initialPassword,omitempty"` // Set on creation, shown once
 	DisplayNameSyncedGeneration int64    `json:"displayNameSyncedGeneration,omitempty"`
 	Rooms                       []string `json:"rooms,omitempty"`
-	EmailSent                   bool     `json:"emailSent,omitempty"`
-	Message                     string   `json:"message,omitempty"`
+	// ManagerRooms retains personal DM mappings across demotion/re-promotion.
+	ManagerRooms map[string]string `json:"managerRooms,omitempty"`
+	EmailSent    bool              `json:"emailSent,omitempty"`
+	Message      string            `json:"message,omitempty"`
 }
 
 // EffectiveUsername returns the Matrix localpart for a Human.

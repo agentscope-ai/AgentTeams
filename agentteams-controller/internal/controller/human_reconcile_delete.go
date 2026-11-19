@@ -23,12 +23,23 @@ func (r *HumanReconciler) reconcileHumanDelete(ctx context.Context, s *humanScop
 	logger := log.FromContext(ctx)
 	h := s.human
 	logger.Info("deleting human", "name", h.Name)
+	if r.ManagerConfig != nil && len(h.Status.ManagerRooms) > 0 {
+		if err := r.ManagerConfig.UpdateManagerHumanAllowFrom(h.Status.MatrixUserID, false); err != nil {
+			return reconcile.Result{RequeueAfter: reconcileRetryDelay}, err
+		}
+	}
 
 	humanUserID := h.Status.MatrixUserID
 	if humanUserID == "" {
 		humanUserID = s.identity.MatrixUserID
 	}
-	for _, roomID := range h.Status.Rooms {
+	rooms := append([]string(nil), h.Status.Rooms...)
+	for _, roomID := range h.Status.ManagerRooms {
+		if !containsString(rooms, roomID) {
+			rooms = append(rooms, roomID)
+		}
+	}
+	for _, roomID := range rooms {
 		if err := r.Provisioner.ForceLeaveRoom(ctx, humanUserID, roomID); err != nil {
 			logger.Error(err, "force-leave-room failed (non-fatal)",
 				"user", humanUserID, "roomID", roomID)

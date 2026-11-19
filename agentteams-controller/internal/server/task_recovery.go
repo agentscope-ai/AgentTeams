@@ -19,6 +19,8 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Execution is part of the task CAS, never the notification outbox lease.
@@ -76,8 +78,33 @@ type TaskRecoveryHandler struct {
 
 func NewTaskRecoveryHandler(project *ProjectHandler, deps ServerDeps) *TaskRecoveryHandler {
 	h := &TaskRecoveryHandler{project: project, deps: deps}
-	h.instance = h.currentInstance
 	return h
+}
+
+func (h *TaskRecoveryHandler) worker(ctx context.Context, caller *authpkg.CallerIdentity) (*v1beta1.Worker, error) {
+	reader := client.Reader(h.deps.Client)
+	if h.deps.APIReader != nil {
+		reader = h.deps.APIReader
+	}
+	var worker v1beta1.Worker
+	err := reader.Get(ctx, client.ObjectKey{Namespace: h.deps.Namespace, Name: caller.Username}, &worker)
+	if err == nil {
+		return &worker, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	return NewCoordinationHandler(h.deps).worker(ctx, caller.Username)
+}
+
+func (h *TaskRecoveryHandler) resolveInstance(ctx context.Context, caller *authpkg.CallerIdentity, worker *v1beta1.Worker) (string, string, error) {
+	if h.instance != nil {
+		return h.instance(ctx, caller)
+	}
+	if worker != nil {
+		return h.runningWorkerInstance(ctx, worker)
+	}
+	return h.currentInstance(ctx, caller)
 }
 
 func recoveryCaller(caller *authpkg.CallerIdentity) bool {
@@ -88,7 +115,7 @@ func (h *TaskRecoveryHandler) currentInstance(ctx context.Context, caller *authp
 	if h.deps.Backend == nil || caller == nil || (caller.Role != authpkg.RoleWorker && caller.Role != authpkg.RoleTeamLeader) {
 		return "", "", fmt.Errorf("managed worker backend required")
 	}
-	w, err := NewCoordinationHandler(h.deps).worker(ctx, caller.Username)
+	w, err := h.worker(ctx, caller)
 	if err != nil {
 		return "", "", err
 	}
@@ -204,7 +231,7 @@ func (h *TaskRecoveryHandler) ListRecoverableTasks(w http.ResponseWriter, r *htt
 		httputil.WriteJSON(w, 200, map[string]any{"tasks": []any{}})
 		return
 	}
-	instance, runtime, err := h.instance(r.Context(), caller)
+	instance, runtime, err := h.resolveInstance(r.Context(), caller, nil)
 	if err != nil {
 		writeError(w, 503, err.Error())
 		return
@@ -348,7 +375,7 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		writeError(w, 409, "task is not recoverable")
 		return
 	}
-	instance, runtime, err := h.instance(r.Context(), caller)
+	instance, runtime, err := h.resolveInstance(r.Context(), caller, nil)
 	if err != nil {
 		writeError(w, 503, err.Error())
 		return
@@ -553,7 +580,7 @@ func (h *ProjectHandler) validateExecutionCommit(w http.ResponseWriter, r *http.
 		writeError(w, 403, "task execution ownership unavailable")
 		return false
 	}
-	instance, _, err := h.recovery.instance(r.Context(), caller)
+	instance, _, err := h.recovery.resolveInstance(r.Context(), caller, nil)
 	if err != nil || instance != execution.InstanceID || execution.ProcessID != r.Header.Get("X-AgentTeams-Process-ID") || execution.State != "active" {
 		writeError(w, 409, "execution changed or requires operation verification")
 		return false

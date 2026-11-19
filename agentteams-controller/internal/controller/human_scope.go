@@ -62,8 +62,9 @@ func computeHumanPhase(h *v1beta1.Human, reconcileErr error) string {
 // admin is deliberately not a member of those rooms), while worker DM
 // rooms and teams without an Admin keep the default homeserver-admin actor.
 type humanRoomOrigin struct {
-	teamName   string // non-empty for team rooms (team.Status.TeamRoomID)
-	workerName string // non-empty for worker DM rooms (worker.Status.RoomID)
+	teamName    string // non-empty for team rooms (team.Status.TeamRoomID)
+	workerName  string // non-empty for worker DM rooms (worker.Status.RoomID)
+	managerName string // personal Manager DM; invited by the Manager
 }
 
 // buildDesiredHumanRooms resolves Spec.AccessibleWorkers / AccessibleTeams
@@ -79,6 +80,14 @@ type humanRoomOrigin struct {
 // set and needs the origin to choose the room-state actor.
 func buildDesiredHumanRooms(ctx context.Context, c client.Client, h *v1beta1.Human) map[string]humanRoomOrigin {
 	desired := make(map[string]humanRoomOrigin)
+	if h.Spec.PermissionLevel == 1 {
+		for name, roomID := range h.Status.ManagerRooms {
+			var manager v1beta1.Manager
+			if err := c.Get(ctx, client.ObjectKey{Name: name, Namespace: h.Namespace}, &manager); err == nil && manager.DeletionTimestamp.IsZero() {
+				desired[roomID] = humanRoomOrigin{managerName: name}
+			}
+		}
+	}
 	for _, workerName := range h.Spec.AccessibleWorkers {
 		var worker v1beta1.Worker
 		if err := c.Get(ctx, client.ObjectKey{Name: workerName, Namespace: h.Namespace}, &worker); err != nil {
@@ -151,6 +160,9 @@ func buildDesiredHumanRooms(ctx context.Context, c client.Client, h *v1beta1.Hum
 // window, so access revocation stays prompt.
 func teamRoomRevocationLag(ctx context.Context, c client.Client, h *v1beta1.Human) (deferUnknown bool, knownRoomIDs map[string]struct{}) {
 	knownRoomIDs = make(map[string]struct{})
+	for _, roomID := range h.Status.ManagerRooms {
+		knownRoomIDs[roomID] = struct{}{}
+	}
 	var teams v1beta1.TeamList
 	if err := c.List(ctx, &teams, client.InNamespace(h.Namespace)); err != nil {
 		return false, knownRoomIDs

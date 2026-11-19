@@ -202,6 +202,7 @@ type ManagerEnvBuilderI interface {
 // pulling the heavier Worker/Manager credential + registry machinery into
 // the Human path.
 type HumanProvisioner interface {
+	EnsureHumanManagerRoom(ctx context.Context, req HumanManagerRoomRequest) (string, error)
 	// EnsureHumanUser registers a new Matrix account for this human, or
 	// logs in an existing one. Called only during first-time provisioning
 	// (Status.MatrixUserID == ""); steady-state reconciles must use

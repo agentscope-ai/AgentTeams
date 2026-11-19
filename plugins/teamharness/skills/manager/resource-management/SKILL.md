@@ -1,9 +1,30 @@
 ---
 name: resource-management
-description: Manage AgentTeams resources through the Controller as Manager.
+description: Manage AgentTeams resources and publish Skills to the asset center through Controller as Manager.
 ---
 
 # Resource Management
+
+## Publish a Skill to the asset center
+
+When asked to upload or publish a Skill to the asset center (资产中心的技能库),
+package the complete Skill directory and use the Controller publication command:
+
+```bash
+python3 -m zipfile -c /tmp/travel-card.zip /path/to/travel-card
+agt skill publish -f /tmp/travel-card.zip
+```
+
+Replace the example paths with your actual Skill directory and archive. Include
+`SKILL.md` with `name` and `description` frontmatter, plus its scripts and references.
+The directory name must match `name`. Your existing Manager identity is used by
+the CLI; do not extract credentials. Report publication only after the command
+returns the Skill name, `scope: deployment`, file count and scan result. If it
+fails, report the error rather than claiming the Skill was published.
+
+Copying a Skill into `shared/skills/`, your own workspace, or a Worker's package
+does not publish it to this catalog. Publishing also does not assign the Skill
+to a Worker; preserve existing assignments unless asked to change them.
 
 ## Task room archive
 

@@ -1,0 +1,10 @@
+{
+  "agentteams-controller": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller@sha256:fc1151b728ae94e2dd897da6715734b870cf9bfd2b5f8145a1f7e834e2f50ccb",
+  "agentteams-embedded": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-embedded@sha256:2250a9c39cac26fb3281ebd57d0a334d45ad2764a913c595ed02ffb056381ce4",
+  "agentteams-harness-codex": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex@sha256:ef0fd8b32933c65012afcf4f2383048306678f0c1d54d3d08a2fdf709be787a9",
+  "agentteams-harness-deepseek": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-deepseek@sha256:8e748cdac7d73340cd43716950ac4f280d66caf5849fe7c2b46cee15a496c78e",
+  "agentteams-harness-hermes": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-hermes@sha256:2baeb6cc24f9e6aa072a681e35fefc54113609da61343d5982bc685767e75bac",
+  "agentteams-harness-openclaw": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw@sha256:f469119cf89e5f119b41c5ba42078f6a5c22680d6b7bbc39ecdf640ed3d80605",
+  "agentteams-harness-openhuman": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openhuman@sha256:46ad76ce6e3f357c35d07fe723387a1eeb67c70959537cc5e9c4891e6bab61df",
+  "agentteams-harness-qwenpaw": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-qwenpaw@sha256:0fe35de3efd6d10a0cf7d6db481f04180f7b2d0ca6d5fba48621b5ef2e553bbd"
+}

@@ -1,99 +1,26 @@
-name: Publish shared Harness images
-
+name: Stage repaired release payloads on native runners
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Shared Harness version (for example v1.2.7); does not create a Core tag'
-        required: true
+        description: Candidate metadata version; does not publish stable tags
         type: string
-      publish:
-        description: 'Publish final version tags after building and smoke-testing staging images'
-        type: boolean
-        default: true
-
+        default: v1.2.8
+        required: true
 permissions:
   contents: read
-
-concurrency:
-  group: publish-harnesses-${{ inputs.version }}
-  cancel-in-progress: false
-
 env:
+  SOURCE: 36ec639154a0ce1002b12e284dcb906469d18bd4
+  BASE_SOURCE: dc3c35452cdac773244c6aed60e408741bf3c991
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
-  CODEX_REF: 426bfdd7b0d2eade599afcc166baf1771367d937
-
 jobs:
-  prepare:
-    runs-on: ubuntu-24.04
-    outputs:
-      version: ${{ steps.meta.outputs.version }}
-      candidate: ${{ steps.meta.outputs.candidate }}
-    steps:
-      - name: Freeze publication identity
-        id: meta
-        env:
-          VERSION: ${{ inputs.version }}
-        run: |
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "candidate=harness-${VERSION}-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
-
-  controller-platform:
-    needs: prepare
+  patch:
+    timeout-minutes: 35
     strategy:
       fail-fast: false
+      max-parallel: 8
       matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Build shared CLI and builtin assets on native runner
-        env:
-          CANDIDATE: ${{ needs.prepare.outputs.candidate }}
-          ARCH: ${{ matrix.arch }}
-        run: |
-          image="${REGISTRY}/agentteams/agentteams-controller:${CANDIDATE}-${ARCH}"
-          make build-agentteams-controller LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \
-            DOCKER_BUILD_ARGS="--label org.opencontainers.image.revision=${GITHUB_SHA}"
-          docker run --rm --entrypoint agt "$image" tracing --help
-          docker push "$image"
-
-  controller-index:
-    needs: [prepare, controller-platform]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Assemble immutable candidate dependency
-        env:
-          CANDIDATE: ${{ needs.prepare.outputs.candidate }}
-        run: |
-          image="${REGISTRY}/agentteams/agentteams-controller:${CANDIDATE}"
-          docker buildx imagetools create --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
-            -t "$image" "${image}-amd64" "${image}-arm64"
-
-  harness-platform:
-    needs: [prepare, controller-index]
-    strategy:
-      fail-fast: false
-      matrix:
-        runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
+        image: [agentteams-controller, agentteams-embedded, agentteams-harness-openclaw, agentteams-harness-qwenpaw, agentteams-harness-hermes, agentteams-harness-deepseek, agentteams-harness-openhuman, agentteams-harness-codex]
         arch: [amd64, arm64]
         include:
           - arch: amd64
@@ -101,80 +28,156 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          path: ops
       - uses: actions/checkout@v4
-        if: matrix.runtime == 'codex'
         with:
-          repository: agentteams-group/agentteams-harness-codex
-          ref: ${{ env.CODEX_REF }}
-          path: codex-harness
+          ref: ${{ env.SOURCE }}
+          path: source
+          fetch-depth: 0
+      - name: Verify unchanged compiled-runtime inputs
+        working-directory: source
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+          assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', os.environ['VERSION'])
+          allowed = {
+              '.github/workflows/test-controller.yml', '.github/workflows/test-integration.yml',
+              'plugins/tests/teamharness/mcp/test_manager_worker_delivery.py',
+              'plugins/tests/teamharness/mcp/tools/test-message.rb',
+          }
+          allowed.update('plugins/'+root+'/'+rel for root in ['teamharness','agentteams-teamharness']
+                         for rel in ['mcp/message_tool.py','mcp/server.py','prompts/manager/AGENTS.md'])
+          changed = set(subprocess.check_output(
+              ['git','diff','--name-only',os.environ['BASE_SOURCE'],os.environ['SOURCE']],text=True).splitlines())
+          assert changed and changed <= allowed, sorted(changed - allowed)
+          print('Compiled frameworks, Controller Go source, dependency locks and entrypoints are unchanged')
+          PY
       - uses: ruby/setup-ruby@v1
-        if: matrix.runtime == 'qwenpaw'
+        if: matrix.image == 'agentteams-harness-qwenpaw'
         with:
           ruby-version: '3.3'
+      - name: Build and inspect repaired QwenPaw plugin archive
+        if: matrix.image == 'agentteams-harness-qwenpaw'
+        working-directory: source
+        run: |
+          OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          with zipfile.ZipFile('dist/adapters/qwenpaw/teamharness-qwenpaw.zip') as archive:
+              assert archive.testzip() is None
+              for suffix in ['mcp/message_tool.py','mcp/server.py','prompts/manager/AGENTS.md']:
+                  names = [n for n in archive.namelist() if n.endswith('/teamharness/'+suffix)]
+                  assert len(names) == 1
+                  assert archive.read(names[0]) == Path('plugins/teamharness',suffix).read_bytes(), suffix
+          PY
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Build, smoke and push native platform staging image
+      - name: Package changed payloads over the verified immutable native runtime
+        working-directory: source
         env:
-          CANDIDATE: ${{ needs.prepare.outputs.candidate }}
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          IMAGE: ${{ matrix.image }}
           ARCH: ${{ matrix.arch }}
-          RUNTIME: ${{ matrix.runtime }}
+          VERSION: ${{ inputs.version }}
         run: |
-          scripts/release/build-harness-platform.sh "$RUNTIME" "${CANDIDATE}-${ARCH}" "linux/$ARCH" \
-            "${REGISTRY}/agentteams/agentteams-controller:${CANDIDATE}"
-
-  publish:
-    needs: [prepare, harness-platform]
-    if: inputs.publish
-    strategy:
-      fail-fast: false
-      matrix:
-        runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Publish verified architecture index without overwriting existing release
+          base=$(jq -er --arg image "$IMAGE" '.[$image]' ../ops/scripts/release/repair-bases.json)
+          [[ "$base" =~ @sha256:[a-f0-9]{64}$ ]]
+          candidate="$REGISTRY/agentteams/$IMAGE:repair-${{ github.run_id }}-${{ matrix.arch }}"
+          tree=$(git rev-parse 'HEAD^{tree}')
+          mkdir -p dist/release-repair
+          dockerfile="$PWD/dist/release-repair/Dockerfile"
+          printf 'ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n' > "$dockerfile"
+          case "$IMAGE" in
+            agentteams-controller|agentteams-embedded)
+              cat >> "$dockerfile" <<'DOCKER'
+          COPY plugins/ /opt/agentteams/plugins/
+          COPY plugins/teamharness/prompts/manager/AGENTS.md /opt/agentteams/agent/manager-agent/AGENTS.md
+          DOCKER
+              ;;
+            agentteams-harness-qwenpaw)
+              cat >> "$dockerfile" <<'DOCKER'
+          COPY dist/adapters/qwenpaw/teamharness-qwenpaw.zip /opt/agentteams/plugins/teamharness-qwenpaw.zip
+          COPY plugins/teamharness/mcp/message_tool.py plugins/teamharness/mcp/server.py /opt/agentteams/qwenpaw-builtin/plugins/teamharness/teamharness/mcp/
+          COPY plugins/teamharness/prompts/manager/AGENTS.md /opt/agentteams/qwenpaw-builtin/plugins/teamharness/teamharness/prompts/manager/AGENTS.md
+          DOCKER
+              ;;
+            *)
+              cat >> "$dockerfile" <<'DOCKER'
+          COPY plugins/teamharness/mcp/message_tool.py plugins/teamharness/mcp/server.py /opt/agentteams/plugins/teamharness/mcp/
+          COPY plugins/teamharness/prompts/manager/AGENTS.md /opt/agentteams/plugins/teamharness/prompts/manager/AGENTS.md
+          DOCKER
+              if [[ "$IMAGE" == agentteams-harness-codex ]]; then
+                echo 'COPY plugins/teamharness/prompts/manager/AGENTS.md /opt/agentteams/agent/manager-agent/AGENTS.md' >> "$dockerfile"
+              fi
+              ;;
+          esac
+          docker build --platform "linux/$ARCH" --build-arg "BASE_IMAGE=$base" \
+            --label "org.opencontainers.image.revision=$SOURCE" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "io.agentteams.source-tree=$tree" \
+            --label "io.agentteams.base-image=$base" \
+            --label "io.agentteams.packaging-revision=${{ github.sha }}" \
+            -f "$dockerfile" -t "$candidate" .
+          test "$(docker image inspect "$candidate" --format '{{.Os}}/{{.Architecture}}')" = "linux/$ARCH"
+          echo "REPAIR_IMAGE=$candidate" >> "$GITHUB_ENV"
+          echo "REPAIR_BASE=$base" >> "$GITHUB_ENV"
+          echo "REPAIR_TREE=$tree" >> "$GITHUB_ENV"
+      - name: Verify exact repaired assets and execute native CLI
+        working-directory: source
         env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-          CANDIDATE: ${{ needs.prepare.outputs.candidate }}
-          RUNTIME: ${{ matrix.runtime }}
+          IMAGE: ${{ matrix.image }}
         run: |
-          image="${REGISTRY}/agentteams/agentteams-harness-${RUNTIME}"
-          final="${image}:${VERSION}"
-          if docker buildx imagetools inspect "$final" --raw > manifest.json 2>existing-error.txt; then
-            scripts/release/verify-harness-image.sh "$final" "$GITHUB_SHA" "$VERSION" < manifest.json || {
-              echo "Refusing to overwrite an unverified existing version $final" >&2
-              exit 1
-            }
-            echo "Reused already verified $final from $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          elif ! grep -qiE 'not found|manifest unknown' existing-error.txt; then
-            cat existing-error.txt >&2
-            exit 1
+          export MESSAGE_SHA="$(sha256sum plugins/teamharness/mcp/message_tool.py | cut -d' ' -f1)"
+          export SERVER_SHA="$(sha256sum plugins/teamharness/mcp/server.py | cut -d' ' -f1)"
+          export PROMPT_SHA="$(sha256sum plugins/teamharness/prompts/manager/AGENTS.md | cut -d' ' -f1)"
+          docker run --rm --network none --entrypoint sh -e MESSAGE_SHA -e SERVER_SHA -e PROMPT_SHA "$REPAIR_IMAGE" -ec '
+            files=$(find /opt/agentteams -name message_tool.py -type f)
+            test -n "$files"
+            for file in $files; do
+              echo "$MESSAGE_SHA  $file" | sha256sum -c -
+              echo "$SERVER_SHA  ${file%/*}/server.py" | sha256sum -c -
+              echo "$PROMPT_SHA  ${file%/mcp/message_tool.py}/prompts/manager/AGENTS.md" | sha256sum -c -
+            done
+          '
+          if [[ "$IMAGE" == agentteams-controller || "$IMAGE" == agentteams-embedded ]]; then
+            docker run --rm --network none --entrypoint sh -e PROMPT_SHA "$REPAIR_IMAGE" -ec \
+              'echo "$PROMPT_SHA  /opt/agentteams/agent/manager-agent/AGENTS.md" | sha256sum -c -'
           fi
-          docker buildx imagetools create \
-            --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
-            --annotation "index:org.opencontainers.image.version=$VERSION" \
-            -t "$final" "${image}:${CANDIDATE}-amd64" "${image}:${CANDIDATE}-arm64"
-          docker buildx imagetools inspect "$final" --raw > manifest.json
-          scripts/release/verify-harness-image.sh "$final" "$GITHUB_SHA" "$VERSION" < manifest.json
-          docker buildx imagetools inspect "$final" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$IMAGE" == agentteams-harness-qwenpaw ]]; then
+            export ZIP_SHA="$(sha256sum dist/adapters/qwenpaw/teamharness-qwenpaw.zip | cut -d' ' -f1)"
+            docker run --rm --network none --entrypoint sh -e ZIP_SHA "$REPAIR_IMAGE" -ec \
+              'echo "$ZIP_SHA  /opt/agentteams/plugins/teamharness-qwenpaw.zip" | sha256sum -c -'
+            docker run --rm --network none --entrypoint /opt/venv/qwenpaw/bin/python "$REPAIR_IMAGE" -c 'import qwenpaw_worker'
+          fi
+          docker run --rm --network none --entrypoint agt "$REPAIR_IMAGE" tracing --help
+      - name: Publish only the unique candidate and record provenance
+        env:
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          docker push "$REPAIR_IMAGE"
+          export REPAIR_DIGEST="$(docker buildx imagetools inspect "$REPAIR_IMAGE" --format '{{.Manifest.Digest}}')"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          keys = ['IMAGE','ARCH','VERSION','SOURCE','BASE_SOURCE','REPAIR_BASE','REPAIR_TREE','REPAIR_IMAGE','REPAIR_DIGEST']
+          record = {key:os.environ[key] for key in keys}
+          record['nativeCLI'] = 'passed'
+          record['packagedPayloadHashes'] = 'matched source'
+          Path('/tmp/evidence.json').write_text(json.dumps(record,indent=2)+'\n')
+          print(json.dumps(record))
+          PY
       - uses: actions/upload-artifact@v4
         with:
-          name: manifest-${{ matrix.runtime }}
-          path: manifest.json
+          name: repaired-image-${{ matrix.image }}-${{ matrix.arch }}
+          path: /tmp/evidence.json

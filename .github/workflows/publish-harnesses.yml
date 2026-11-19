@@ -117,7 +117,12 @@ jobs:
                   node -e "const v=process.versions.node.split(\".\").map(Number); if(v[0]!==24 || v[1]<22 || (v[1]===22 && v[2]<1)) process.exit(1)"
                   openclaw --version
                   grep -rFl "com.agentteams.read_audience" /opt/openclaw/dist/extensions/matrix >/dev/null
-                  binary=$(find /opt/openclaw/node_modules -name "matrix-sdk-crypto.linux-*.node" -print -quit)
+                  case "$(uname -m)" in
+                    x86_64) binary_name=matrix-sdk-crypto.linux-x64-gnu.node ;;
+                    aarch64) binary_name=matrix-sdk-crypto.linux-arm64-gnu.node ;;
+                    *) exit 1 ;;
+                  esac
+                  binary=$(find /opt/openclaw/node_modules -name "$binary_name" -print -quit)
                   test -n "$binary"
                   node -e "require(process.argv[1])" "$binary"
                 ' ;;

@@ -15,6 +15,14 @@ on:
         type: choice
         options: [both, amd64, arm64]
         default: both
+      dashboard_version:
+        description: Dashboard image tag to verify
+        default: v1.4.3
+        type: string
+      dashboard_tree:
+        description: Expected Dashboard source tree
+        default: 138e742d499078dc5b5f970339cfd226185eace0
+        type: string
 permissions:
   contents: read
 env:
@@ -68,11 +76,13 @@ jobs:
         env:
           IMAGE: ${{ matrix.image }}
           ARCH: ${{ matrix.arch }}
+          DASHBOARD_VERSION: ${{ inputs.dashboard_version }}
+          DASHBOARD_TREE: ${{ inputs.dashboard_tree }}
         run: |
           if [[ "$IMAGE" == dashboard* ]]; then
-            ref="$REGISTRY/agentteams/agentteams-dashboard:v1.4.2"
+            ref="$REGISTRY/agentteams/agentteams-dashboard:$DASHBOARD_VERSION"
             [[ "$IMAGE" != dashboard-unified ]] || ref="$ref-unified"
-            expected=c8c5629aa4499fa2a365f7b1afdb45e1b040cb56
+            expected="$DASHBOARD_TREE"
           else
             ref="$REGISTRY/agentteams/$IMAGE:v1.2.8"
             expected="$(git rev-parse 'HEAD^{tree}')"

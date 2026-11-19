@@ -23,8 +23,7 @@ jobs:
   plan:
     runs-on: ubuntu-24.04
     outputs:
-      images: ${{ steps.plan.outputs.images }}
-      arches: ${{ steps.plan.outputs.arches }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - id: plan
         env:
@@ -41,8 +40,9 @@ jobs:
           images=json.loads(os.environ['IMAGES']) if os.environ['IMAGES'] else allowed
           assert images and set(images) <= set(allowed)
           arches=['amd64','arm64'] if os.environ['ARCH']=='both' else [os.environ['ARCH']]
+          matrix=[{'image': image, 'arch': arch, 'runner': 'ubuntu-24.04-arm' if arch=='arm64' else 'ubuntu-24.04'} for image in images for arch in arches]
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-            f.write('images='+json.dumps(images)+'\narches='+json.dumps(arches)+'\n')
+            f.write('matrix='+json.dumps(matrix)+'\n')
           PY
   verify:
     needs: plan
@@ -52,13 +52,7 @@ jobs:
       fail-fast: false
       max-parallel: 8
       matrix:
-        image: ${{ fromJSON(needs.plan.outputs.images) }}
-        arch: ${{ fromJSON(needs.plan.outputs.arches) }}
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:

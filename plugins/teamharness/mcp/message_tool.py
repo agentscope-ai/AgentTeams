@@ -89,6 +89,27 @@ def _message_type(arguments: dict[str, Any]) -> str:
     return ""
 
 
+def _manager_recipient(recipient: str) -> tuple[str, bool]:
+    """Resolve registered aliases and keep standalone messages out of Leader coordination."""
+    token = Path(os.environ["AGENTTEAMS_AUTH_TOKEN_FILE"]).read_text().strip()
+    controller = os.environ["AGENTTEAMS_CONTROLLER_URL"].rstrip("/")
+    request = urllib.request.Request(controller + "/api/v1/workers", headers={"Authorization": "Bearer " + token})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        workers = json.loads(response.read().decode()).get("workers", [])
+    matches = [worker for worker in workers if recipient and recipient in {
+        worker.get("name"), worker.get("workerName"), worker.get("matrixUserID"), worker.get("matrixUserId"),
+    }]
+    if len(matches) != 1:
+        raise ValueError("recipient must identify one registered Worker or Team Leader")
+    worker = matches[0]
+    matrix_id = str(worker.get("matrixUserID") or worker.get("matrixUserId") or "").strip()
+    if not _is_matrix_user_id(matrix_id):
+        raise ValueError("registered recipient has no Matrix identity")
+    if worker.get("team") and worker.get("role") != "team_leader":
+        raise ValueError("send the request to this Worker's Team Leader")
+    return matrix_id, not bool(worker.get("team"))
+
+
 def _direct_message_room(homeserver: str, token: str, recipient: str) -> str:
     """Resolve the current sender's private pair, never an admin-owned DM."""
     if not _is_matrix_user_id(recipient) or any(c.isspace() for c in recipient):
@@ -444,9 +465,20 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
     except ValueError as exc:
         return {"ok": False, "tool": "message", "error": str(exc)}
     direct_handoff = target_kind == "user"
-    if direct_handoff and refs.resolve("_runtime_role")() == "manager":
+    manager_handoff = direct_handoff and refs.resolve("_runtime_role")() == "manager"
+    standalone_worker = False
+    if manager_handoff:
         if arguments.get("dryRun"):
             return {"ok": True, "tool": "message", "dryRun": True, "targetKind": "user", "target": target_id}
+        if os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip():
+            try:
+                target_id, standalone_worker = _manager_recipient(target_id)
+            except (OSError, ValueError, KeyError) as exc:
+                error = str(exc) if isinstance(exc, ValueError) else f"registered recipient lookup failed: {type(exc).__name__}"
+                return {"ok": False, "tool": "message", "error": error}
+        if standalone_worker and arguments.get("tasks"):
+            return {"ok": False, "tool": "message", "error": "structured task handoff requires a Team Leader; send an ordinary message to a standalone Worker"}
+    if manager_handoff and not standalone_worker:
         handoff_room = ""
         if (os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip() or arguments.get("tasks")) and not arguments.get("dryRun"):
             try:
@@ -512,13 +544,13 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
                     attach_report = True
                     send_text = "\n".join(lines[:5]) + "\n…完整报告见本房间附件 report.md"
     content = deps.matrix_content(send_text, mentions)
-    api_coordination = bool(os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip())
+    api_coordination = bool(os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip()) and not standalone_worker
     if api_coordination:
         if _message_type(arguments) in SELF_TRIGGER_MESSAGE_TYPES:
             return {"ok": False, "error": "API coordination does not dispatch through Matrix; use projectflow start_project or taskflow delegate_task"}
         content["org.agentteams.progress_only"] = True
     coordinator_route = arguments.get("coordinatorReplyRoute")
-    if direct_handoff and refs.resolve("_runtime_role")() == "manager":
+    if manager_handoff:
         coordinator_route = {"channel": "matrix", "target_session": target_id, "target_user": _matrix_user_id()}
     if isinstance(coordinator_route, dict) and coordinator_route.get("target_session"):
         content["org.agentteams.coordinator_route"] = coordinator_route
@@ -633,6 +665,8 @@ def message(arguments: dict[str, Any], deps: MessageToolDeps) -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8") or "{}")
         base["messageId"] = data.get("event_id")
+        if not base["messageId"]:
+            return {"ok": False, "tool": "message", "error": "Matrix did not return a message event ID; delivery is not confirmed"}
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:200]
         return {"ok": False, "tool": "message", "error": f"Matrix API error: HTTP {exc.code}: {body}"}

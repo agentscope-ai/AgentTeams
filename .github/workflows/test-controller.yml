@@ -176,7 +176,7 @@ jobs:
           NO_PROXY: 127.0.0.1,localhost
         run: |
           ruby plugins/tests/teamharness/test-contracts.rb
-          python -m pytest tests/test_task_coordination.py -q
+          python -m pytest tests/test_task_coordination.py tests/test_teamharness_notification_wait.py -q
           python -m pytest tests/test_task_recovery.py -q
           python -m pytest tests/test_worker_matrix*.py tests/test_worker_sessions.py tests/test_worker_handoff.py -q
           python -m unittest discover -s tests -p 'test_task_recovery_rpc.py' -v
@@ -197,6 +197,7 @@ jobs:
           python -m pytest plugins/tests/teamharness/mcp/test_coordination_transport.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_main_task_plan.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_manager_handoff_schema.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_manager_worker_delivery.py -q
           PYTHONPATH="${GITHUB_WORKSPACE}/shared/lib" \
             python -m pytest plugins/tests/teamharness/mcp/test_worker_task_ownership.py -q
           ruby plugins/tests/teamharness/mcp/tools/test-roomflow.rb

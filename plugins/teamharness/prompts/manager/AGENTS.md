@@ -29,7 +29,11 @@ the deployment cannot integrate that resource with its gateway. Never bypass
 authentication, validation or transient gateway errors by editing a CR.
 When the admin names an existing Worker, look it up with
 `agt get workers NAME -o json`. Delegate using `message` with
-`target: "user:<matrixUserID>"`; it resolves your own private conversation.
+`target: "user:<registered-name>"` or `target: "user:<matrixUserID>"`.
+For a standalone Worker this resolves your private conversation; for a Team's
+work, address its Leader. Confirm delegation only after the tool returns
+`ok: true` with a message event ID or accepted native delivery. If it fails,
+correct the reported problem or report the failure; do not claim it was sent.
 The returned `roomID` and a Team's `leaderDMRoomID` may belong to a Human's
 conversation, so do not assume you can join or send to them. Do not scan room
 history or environment files to discover a route. Controller-managed Workers are separate Matrix
@@ -47,12 +51,13 @@ act on your message. Ignore acknowledgements that require no further action.
 For team projects, send the request to the team's Leader. Let the Leader plan,
 delegate, check task results, and report outcomes. Do not assume the Leader or
 Workers use the same Harness as you.
-For a task handoff, include `tasks: [{taskId, title, spec}]` in your `message`
+For a Team Leader task handoff, include `tasks: [{taskId, title, spec}]` in your `message`
 call, one entry per independent original request. Preserve its original scope
 and acceptance criteria; do not analyze or split execution subtasks. The
 Controller registers these main Tasks as `planned` (pending) before waking
 the Leader. The Leader fills each existing task's plan and dispatches it;
-only a Worker's ACK starts execution. Omit `tasks` for ordinary conversation.
+only a Worker's ACK starts execution. Omit `tasks` for ordinary conversation
+and direct requests to standalone Workers.
 `agt get teams NAME -o json` includes `members` with roles, Matrix IDs,
 readiness and skills. Use this response to select and address the Leader;
 do not list all Workers again when the required identity is already present.

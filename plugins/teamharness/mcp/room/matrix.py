@@ -183,3 +183,92 @@ def _auto_join_task_humans(room_id: str, team_name: str) -> dict[str, Any]:
         return {"error": "task room auto-join unavailable", "status": exc.code}
     except (OSError, ValueError):
         return {"error": "task room auto-join unavailable"}
+
+
+def _team_member_lookup() -> tuple[dict[str, dict], dict[str, dict]]:
+    """Return (by_matrix_id, by_name) for the team roster; empty dicts on standalone.
+
+    Same runtime-config source as ``_team_leader_matrix_id``: the
+    controller projects the full roster into ``team.members`` (with
+    ``role`` / ``matrixUserId`` / ``name``) plus the ``team.admin``
+    entry, recorded with role "admin". ``by_matrix_id`` is keyed by the
+    stripped ``@user:server`` id; ``by_name`` by the exact ``name``
+    string (no case or fuzzy matching). Standalone runs return empty
+    lookups; a configured team whose roster yields no usable Matrix
+    identity fails closed.
+    """
+    by_id: dict[str, dict] = {}
+    by_name: dict[str, dict] = {}
+    config = _load_runtime_config()
+    team = _section(config, "team")
+    members = team.get("members")
+    if not isinstance(members, list):
+        members = []
+    if not members and team.get("name"):
+        raise ValueError("team roster is unavailable; retry after runtime config is updated")
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        matrix_user_id = str(member.get("matrixUserId") or member.get("matrix_user_id") or "").strip()
+        name = str(member.get("name") or "").strip()
+        role = str(member.get("role") or "").strip()
+        entry = {"matrixUserId": matrix_user_id, "name": name, "role": role}
+        if matrix_user_id.startswith("@") and matrix_user_id not in by_id:
+            by_id[matrix_user_id] = entry
+        if name and matrix_user_id.startswith("@") and name not in by_name:
+            by_name[name] = entry
+    admin = _section(team, "admin")
+    admin_mxid = str(admin.get("matrixUserId") or admin.get("matrix_user_id") or "").strip()
+    if admin_mxid.startswith("@") and admin_mxid not in by_id:
+        by_id[admin_mxid] = {
+            "matrixUserId": admin_mxid,
+            "name": str(admin.get("name") or "").strip(),
+            "role": "admin",
+        }
+    if not by_id and (team.get("name") or "members" in team or admin_mxid.startswith("@")):
+        raise ValueError("team roster has no valid Matrix identities")
+    return by_id, by_name
+
+
+def _team_roster_configured() -> bool:
+    """Whether the runtime config declares a team roster section at all.
+
+    Mirrors the fail-closed condition of ``_team_member_lookup``: a
+    configured team (``team.name``, ``team.members``, or a usable
+    ``team.admin`` identity) routes unresolved short names through the
+    Matrix identity guard, while standalone runs (no team section) keep
+    the legacy pass-through behavior.
+    """
+    team = _section(_load_runtime_config(), "team")
+    if team.get("name") or "members" in team:
+        return True
+    admin = _section(team, "admin")
+    admin_mxid = str(admin.get("matrixUserId") or admin.get("matrix_user_id") or "").strip()
+    return admin_mxid.startswith("@")
+
+
+def _team_roster_name_seen(name: str) -> bool:
+    """Whether any roster member carries ``name`` in a name field.
+
+    Checks the same fields as ``_assignee_matrix_id`` (``name``,
+    ``runtimeName``, ``runtime_name``) so the roster gate can tell a
+    truly unknown recipient (fail closed with the available-identity
+    list) from a roster-known but ambiguous one (reported by the Matrix
+    identity guard).
+    """
+    identity = str(name or "").strip()
+    if not identity:
+        return False
+    team = _section(_load_runtime_config(), "team")
+    members = team.get("members")
+    if not isinstance(members, list):
+        return False
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        names = {str(member.get(key) or "").strip() for key in ("name", "runtimeName", "runtime_name")}
+        if identity in names:
+            return True
+    return False
+
+

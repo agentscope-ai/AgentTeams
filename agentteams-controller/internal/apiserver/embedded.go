@@ -128,6 +128,10 @@ func Start(ctx context.Context, cfg Config) (*rest.Config, error) {
 	restCfg := &rest.Config{
 		Host:        fmt.Sprintf("https://%s:%s", cfg.BindAddr, cfg.SecurePort),
 		BearerToken: adminToken,
+		// Runtime ledgers share this local client across all agents. The
+		// client-go default of 5 QPS serializes otherwise independent turns.
+		QPS:   50,
+		Burst: 100,
 		TLSClientConfig: rest.TLSClientConfig{
 			CAFile: caCertFile,
 		},

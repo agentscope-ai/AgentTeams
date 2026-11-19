@@ -141,6 +141,7 @@ type RuntimeConfigHandler struct {
 	// workerLocks serialises the read-check-merge-write flow per worker
 	// (optimistic concurrency, MX-7): name -> *sync.Mutex.
 	workerLocks sync.Map
+	manager     bool
 }
 
 // workerLock returns (creating on demand) the per-worker mutex that makes
@@ -171,6 +172,15 @@ func NewRuntimeConfigHandler(c client.Client, namespace, kubeMode, containerPref
 		matrix:          m,
 	}
 	h.workerBaseURL = h.defaultWorkerBaseURL
+	return h
+}
+
+func NewManagerRuntimeConfigHandler(deps ServerDeps) *RuntimeConfigHandler {
+	h := NewRuntimeConfigHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix, nil)
+	h.manager = true
+	h.workerBaseURL = func(name string, _ map[string]string) string {
+		return fmt.Sprintf("http://%s:18799", authpkg.ResourcePrefix(deps.ResourcePrefix).ManagerPodName(name))
+	}
 	return h
 }
 
@@ -274,6 +284,14 @@ func (h *RuntimeConfigHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 	// Derive the subpath after /workers/{name}/ and validate the whitelist.
 	base := "/api/v1/workers/" + name + "/"
+	if h.manager {
+		base = "/api/v1/managers/" + name + "/"
+		caller := authpkg.CallerFromContext(r.Context())
+		if caller == nil || (caller.Role != authpkg.RoleAdmin && caller.Role != authpkg.RoleManager) {
+			httputil.WriteError(w, http.StatusForbidden, "Manager configuration requires administrator access")
+			return
+		}
+	}
 	if !strings.HasPrefix(r.URL.Path, base) {
 		httputil.WriteError(w, http.StatusBadRequest, "unsupported runtime-config path")
 		return
@@ -312,7 +330,17 @@ func (h *RuntimeConfigHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var worker v1beta1.Worker
-	if err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
+	var teamObj *v1beta1.Team
+	var err error
+	if h.manager {
+		var manager v1beta1.Manager
+		err = h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &manager)
+		worker.ObjectMeta = manager.ObjectMeta
+		worker.Spec.Runtime, worker.Spec.Env = manager.Spec.Runtime, manager.Spec.Env
+	} else {
+		err = h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker)
+	}
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			httputil.WriteError(w, http.StatusNotFound, "worker not found")
 			return
@@ -328,7 +356,9 @@ func (h *RuntimeConfigHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// RBAC: scoped callers (team-leader / L2 human) only see workers in their
 	// teams; everyone else hides as 404 (no existence probe).
-	teamObj, _, _, err := findTeamMember(r.Context(), h.client, h.namespace, name)
+	if !h.manager {
+		teamObj, _, _, err = findTeamMember(r.Context(), h.client, h.namespace, name)
+	}
 	if err != nil {
 		writeK8sError(w, "get worker runtime-config", err)
 		return

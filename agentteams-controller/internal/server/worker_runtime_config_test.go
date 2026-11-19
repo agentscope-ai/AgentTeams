@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -17,6 +18,53 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+func TestManagerRuntimeConfigSharesMergeContractAndRequiresAdmin(t *testing.T) {
+	config := map[string]any{"max_iters": float64(40), "shell_command_timeout": float64(60)}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/workspace/running-config" {
+			t.Errorf("unexpected upstream path: %s", r.URL.Path)
+		}
+		if r.Method == http.MethodPut {
+			if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+				t.Error(err)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(config)
+	}))
+	defer upstream.Close()
+	manager := &v1beta1.Manager{ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "default"}, Spec: v1beta1.ManagerSpec{Runtime: "qwenpaw"}}
+	h := newTestRuntimeConfigHandler(t, "embedded", upstream, nil, manager)
+	h.manager = true
+	h.workerBaseURL = func(name string, _ map[string]string) string {
+		if name != "default" {
+			t.Errorf("Manager config resolved a different instance: %q", name)
+		}
+		return upstream.URL
+	}
+	request := func(method, body string) *http.Request {
+		r := httptest.NewRequest(method, "/api/v1/managers/default/runtime-config", strings.NewReader(body))
+		r.SetPathValue("name", "default")
+		return r
+	}
+	denied := httptest.NewRecorder()
+	h.Handle(denied, rcL2Caller(request(http.MethodGet, "")))
+	if denied.Code != 403 {
+		t.Fatalf("human accessed Manager config: %d", denied.Code)
+	}
+	read := httptest.NewRecorder()
+	h.Handle(read, rcAdminCaller(request(http.MethodGet, "")))
+	if read.Code != 200 || read.Header().Get("ETag") == "" {
+		t.Fatalf("read: %d %s", read.Code, read.Body)
+	}
+	write := request(http.MethodPut, `{"max_iters":45}`)
+	write.Header.Set("If-Match", read.Header().Get("ETag"))
+	saved := httptest.NewRecorder()
+	h.Handle(saved, rcAdminCaller(write))
+	if saved.Code != 200 || config["max_iters"] != float64(45) || config["shell_command_timeout"] != float64(60) {
+		t.Fatalf("Manager patch lost unchanged configuration: %d %v", saved.Code, config)
+	}
+}
 
 // fakeNotifier records the loop-change notifications the handler sends.
 type fakeNotifier struct {

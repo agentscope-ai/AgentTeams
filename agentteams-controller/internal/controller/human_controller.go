@@ -17,6 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -30,7 +31,8 @@ type HumanReconciler struct {
 	client.Client
 	SystemAdminUser string
 
-	Provisioner service.HumanProvisioner
+	Provisioner   service.HumanProvisioner
+	ManagerConfig *service.ManagerConfigStore
 	// Deployer creates the per-human file area (humans/<username>/files,
 	// .trash) idempotently. Optional: nil skips the storage phase (tests).
 	Deployer service.HumanDeployer
@@ -151,6 +153,9 @@ func (r *HumanReconciler) reconcileHumanNormal(ctx context.Context, s *humanScop
 	}
 
 	if !systemAdmin {
+		if err := r.reconcileHumanManagerRooms(ctx, s); err != nil {
+			return reconcile.Result{RequeueAfter: reconcileRetryDelay}, err
+		}
 		r.reconcileHumanRooms(ctx, s)
 	}
 
@@ -190,5 +195,6 @@ func (r *HumanReconciler) resolveHumanScope(s *humanScope) error {
 func (r *HumanReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1beta1.Human{}).
+		Watches(&v1beta1.Manager{}, handler.EnqueueRequestsFromMapFunc(r.managerToHumanRequests)).
 		Complete(r)
 }

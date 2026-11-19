@@ -1750,7 +1750,7 @@ func (h *ResourceHandler) GetManager(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := managerToResponse(&mgr)
+	resp := h.managerResponseForCaller(r, &mgr)
 	if canManageWorkerEnv(r) {
 		resp.Env = mgr.Spec.Env
 		if resp.Env == nil {
@@ -1770,7 +1770,7 @@ func (h *ResourceHandler) ListManagers(w http.ResponseWriter, r *http.Request) {
 
 	managers := make([]ManagerResponse, 0, len(list.Items))
 	for i := range list.Items {
-		managers = append(managers, managerToResponse(&list.Items[i]))
+		managers = append(managers, h.managerResponseForCaller(r, &list.Items[i]))
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, ManagerListResponse{Managers: managers, Total: len(managers)})
@@ -1849,7 +1849,7 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		resp := managerToResponse(&mgr)
+		resp := h.managerResponseForCaller(r, &mgr)
 		if canManageWorkerEnv(r) {
 			resp.Env = mgr.Spec.Env
 			if resp.Env == nil {

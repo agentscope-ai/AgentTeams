@@ -13,7 +13,8 @@ import (
 // a live Matrix homeserver while still letting individual tests assert on
 // which provisioner methods were called and with what arguments.
 type MockHumanProvisioner struct {
-	mu sync.Mutex
+	mu                       sync.Mutex
+	EnsureHumanManagerRoomFn func(context.Context, service.HumanManagerRoomRequest) (string, error)
 
 	// Composite shims (kept for the team-admin path and legacy tests).
 	EnsureHumanUserFn func(ctx context.Context, name string) (*service.HumanCredentials, error)
@@ -60,6 +61,13 @@ type MockHumanProvisioner struct {
 		DeactivateHumanUser    []string
 		EnsureRoomPowerLevel   []EnsureRoomPowerLevelCall
 	}
+}
+
+func (m *MockHumanProvisioner) EnsureHumanManagerRoom(ctx context.Context, req service.HumanManagerRoomRequest) (string, error) {
+	if m.EnsureHumanManagerRoomFn != nil {
+		return m.EnsureHumanManagerRoomFn(ctx, req)
+	}
+	return "!manager-" + req.HumanName + ":localhost", nil
 }
 
 // EnsureRoomPowerLevelCall records the (RoomID, UserID, Level) triple passed

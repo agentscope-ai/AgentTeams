@@ -46,6 +46,12 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 	// Start with currently-observed rooms; we'll prune removals below.
 	next := make([]string, 0, len(h.Status.Rooms)+len(desired))
 	next = append(next, h.Status.Rooms...)
+	// Revoke pending personal-DM invites as well as joined rooms.
+	for _, rid := range h.Status.ManagerRooms {
+		if _, wanted := desired[rid]; !wanted && !containsString(next, rid) {
+			next = append(next, rid)
+		}
+	}
 
 	powerLevel := humanRoomPowerLevel(h.Spec.PermissionLevel)
 
@@ -55,9 +61,11 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 			alreadyMember = true
 		}
 		if !alreadyMember {
-			if err := r.Provisioner.InviteToRoom(ctx, rid, matrixUserID); err != nil {
-				logger.Error(err, "failed to invite human to room", "room", rid)
-				continue
+			if origin.managerName == "" {
+				if err := r.Provisioner.InviteToRoom(ctx, rid, matrixUserID); err != nil {
+					logger.Error(err, "failed to invite human to room", "room", rid)
+					continue
+				}
 			}
 			// Acquire a user token lazily — only on the first new-room
 			// addition of this reconcile. Steady-state passes (desired ==
@@ -74,6 +82,11 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 				continue
 			}
 			next = append(next, rid)
+		}
+		// The Manager created this private DM with both participants at 100.
+		// The homeserver admin is deliberately not a member or state actor.
+		if origin.managerName != "" {
+			continue
 		}
 		// Grant the human their power level in every room they should be
 		// in — new rooms and already-observed ones alike. The existing-room

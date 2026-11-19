@@ -769,4 +769,9 @@ func (m *MockProvisioner) MatrixAppServiceEnabled() bool {
 }
 
 var _ service.WorkerProvisioner = (*MockProvisioner)(nil)
+
+func (m *MockProvisioner) EnsureHumanManagerRoom(_ context.Context, req service.HumanManagerRoomRequest) (string, error) {
+	return "!manager-" + req.HumanName + ":localhost", nil
+}
+
 var _ service.HumanProvisioner = (*MockProvisioner)(nil)

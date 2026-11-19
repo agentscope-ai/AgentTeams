@@ -100,6 +100,7 @@ Controller 是平台层，Worker 是你按需实例化的执行单元；Leader �
 
 - **Leader——按 Team 强制。** 创建或更新 Team 时，controller 校验 `workerMembers` 中恰有一个 `role=team_leader` 的成员，0 个或多个都会被拒绝。它不要求安装中存在 Team，也不限制独立 Worker。
 - **Manager——不强制。** controller 中没有任何机制要求或禁止 Manager；部署缺省即可无 Manager 运行。
+- **L1 的个人助手。** 安装 Manager 后，controller 为每个 L1 Human 创建独立的 Manager 私聊；系统管理员沿用原有 Admin DM。Dashboard「助手」中的 AT 助手指向当前用户自己的房间，其他 L1 不会被加入。降为 L2/L3 时撤销成员关系，再次升为 L1 时恢复该用户原有会话。Manager 未安装或房间尚未就绪时显示不可用提示。
 - **无 Manager 时覆盖的是：** dashboard 与工作台插件覆盖**声明式资源与只读运维面**——创建/编辑资源、查看状态、跟踪团队工作。前提是所装 controller 版本与工作台插件提供这些界面。
 - **未覆盖的：** 对话式运维、部分跨资源流程、升级/迁移编排，仍需 Manager 或直接 controller API/CLI。这些替代路径未在当前文档版本中逐项验证。
 - 如果你移除 Manager，请先复核此前依赖的运维流程，再认为点选式界面足够。

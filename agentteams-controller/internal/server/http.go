@@ -388,6 +388,17 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// non-qwenpaw), L2 team-scoped, 5-tab field whitelist for L2 writes, and
 	// loop-change notification (@leader + @changer) on custom-loop writes.
 	rch := NewRuntimeConfigHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix, deps.MatrixClient)
+	mrch := NewManagerRuntimeConfigHandler(deps)
+	for _, route := range []struct{ method, path string }{
+		{"GET", "runtime-config"}, {"PUT", "runtime-config"}, {"GET", "loops"}, {"GET", "loops/status"},
+		{"GET", "loops/custom"}, {"POST", "loops/custom"}, {"PUT", "loops/custom/{loop}"}, {"DELETE", "loops/custom/{loop}"},
+	} {
+		action := authpkg.ActionGet
+		if isWrite(route.method) {
+			action = authpkg.ActionUpdate
+		}
+		mux.Handle(route.method+" /api/v1/managers/{name}/"+route.path, mw.RequireAuthz(action, "manager", nameFn)(http.HandlerFunc(mrch.Handle)))
+	}
 	mux.Handle("GET /api/v1/workers/{name}/runtime-config", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
 	mux.Handle("PUT /api/v1/workers/{name}/runtime-config", mw.RequireAuthz(authpkg.ActionRuntimeConfig, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
 	mux.Handle("GET /api/v1/workers/{name}/loops", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(rch.Handle)))

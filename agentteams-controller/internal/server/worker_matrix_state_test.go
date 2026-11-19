@@ -15,8 +15,24 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/test/testutil/mocks"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+type countingWorkerReader struct {
+	client.Reader
+	gets, lists int
+}
+
+func (r *countingWorkerReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	r.gets++
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+func (r *countingWorkerReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	r.lists++
+	return r.Reader.List(ctx, list, opts...)
+}
 
 func TestWorkerMatrixHTTPUsesSelfScopeAndActualStart(t *testing.T) {
 	storage := ossfake.NewMemory()
@@ -32,6 +48,8 @@ func TestWorkerMatrixHTTPUsesSelfScopeAndActualStart(t *testing.T) {
 	cached.Spec.WorkerName = "obsolete-storage-name"
 	deps.Client = fake.NewClientBuilder().WithScheme(newProjectTestScheme(t)).WithObjects(cached).Build()
 	deps.APIReader = fake.NewClientBuilder().WithScheme(newProjectTestScheme(t)).WithObjects(worker).Build()
+	reader := &countingWorkerReader{Reader: deps.APIReader}
+	deps.APIReader = reader
 	h := NewWorkerMatrixHandler(deps, NewTaskRecoveryHandler(nil, deps))
 	workerCaller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "worker-cr", WorkerName: "worker-cr"}
 	call := func(caller *authpkg.CallerIdentity, method, body, etag, process string) *httptest.ResponseRecorder {
@@ -61,6 +79,9 @@ func TestWorkerMatrixHTTPUsesSelfScopeAndActualStart(t *testing.T) {
 	}
 	// A standalone Worker has no Team or Project-list permission.
 	r := call(workerCaller, http.MethodGet, "", "", "")
+	if reader.gets != 1 || reader.lists != 0 {
+		t.Fatalf("self-state request repeated authoritative reads: gets=%d lists=%d", reader.gets, reader.lists)
+	}
 	if r.Code != 200 || !strings.Contains(r.Body.String(), `"member_prefix":"agents/storage-worker"`) || !strings.Contains(r.Body.String(), `"runtime":"hermes"`) {
 		t.Fatalf("self discovery used desired runtime or CR name as storage identity: %d %s", r.Code, r.Body)
 	}

@@ -126,6 +126,9 @@ logger = logging.getLogger("qwenpaw.channels.matrix")
 _CONSUME_ERROR_NOTICE = '⚠️ 本轮处理遇到系统错误，已中断。请重新发送你的请求；若问题持续出现，请联系管理员查看日志。'
 
 CHANNEL_KEY = "agentteams_matrix"
+DIRECT_CONTROL_KEY = "com.agentteams.control"
+DIRECT_EXECUTION_KEY = "com.agentteams.execution"
+DM_MEMBERSHIP_TIMEOUT_S = 5.0
 
 # Tunables: sync / typing / DM membership cache TTL
 SYNC_TIMEOUT_MS = 30000
@@ -535,6 +538,120 @@ class AgentTeamsMatrixChannel(BaseChannel):
         # Thread tracking (ported from CoPaw overlay)
         self._active_thread_roots: Dict[str, str] = {}
         self._proactive_send_state: Dict[str, Dict[str, Any]] = {}
+        self._direct_runs: dict[str, tuple[str, str, asyncio.Task, list, list[str]]] = {}
+
+    def set_workspace(self, workspace, command_registry=None) -> None:
+        super().set_workspace(workspace, command_registry)
+        # Overlapping SDK reload generations already share their TaskTracker.
+        # A new channel must still be able to control its captured active run.
+        tracker = workspace.task_tracker
+        if not hasattr(tracker, "_agentteams_direct_runs"):
+            tracker._agentteams_direct_runs = {}
+        self._direct_runs = tracker._agentteams_direct_runs
+
+    async def _publish_direct_execution(
+        self, room_id: str, run_id: str, status: str, message_id: str | None = None,
+    ) -> None:
+        text = {
+            "running": "正在处理，你可以继续补充信息或停止执行。",
+            "stopping": "正在停止当前执行，等待工具清理完成…",
+            "stopped": "当前执行已停止，已完成的操作和对话记录会保留。",
+            "completed": "本轮处理已完成。",
+            "failed": "本轮处理异常，执行已结束。",
+            "unavailable": "目标执行已结束或不可用，未中断其他执行。",
+        }[status]
+        try:
+            await self._room_send_with_retry(room_id, "m.room.message", {
+                "msgtype": "m.notice", "body": text,
+                DIRECT_EXECUTION_KEY: {
+                    "run_id": run_id, "status": status,
+                    "capabilities": ["stop", "steer"],
+                    **({"message_id": message_id} if message_id else {}),
+                },
+            })
+        except Exception:
+            logger.warning("MatrixChannel: direct execution status send failed", exc_info=True)
+
+    async def _handle_direct_control(self, payload: dict, event: Any) -> bool:
+        """Return True when consumed; False keeps the supplementary text queued."""
+        meta = payload["meta"]
+        room_id, sender_id = meta["room_id"], meta["sender_id"]
+        control = (getattr(event, "source", {}).get("content", {}) or {}).get(DIRECT_CONTROL_KEY)
+        if control is None:
+            return False
+        if (
+            not isinstance(control, dict)
+            or control.get("action") not in {"stop", "steer"}
+            or control.get("agent_id") != self._user_id
+            or not isinstance(control.get("run_id"), str) or not control["run_id"]
+        ):
+            return True
+        if not meta.get("is_dm"):
+            await self._send_plain_text(room_id, "执行控制仅支持一对一对话。")
+            return True
+        text = self._extract_query_from_payload(payload).strip()
+        if control["action"] == "steer" and not text:
+            return True
+        run = self._direct_runs.get(room_id)
+        action = control["action"]
+        if not run or run[2].done() or control["run_id"] != run[0]:
+            if not run or run[2].done():
+                await self._publish_direct_execution(room_id, control["run_id"], "unavailable")
+            await self._send_plain_text(room_id, "目标执行已结束或变化。" + (
+                "补充信息将作为下一条消息处理。" if action == "steer" else "未停止其他执行。"
+            ))
+            return action == "stop"
+        if run[1] != sender_id:
+            return True
+        if await self._access_control_gate(payload):
+            return True
+        # Bypass the room-membership cache at the moment of interruption.
+        # A third member joining must turn off direct-chat controls immediately.
+        try:
+            members = await asyncio.wait_for(
+                self._client.joined_members(room_id), timeout=DM_MEMBERSHIP_TIMEOUT_S,
+            )
+            direct = isinstance(members, JoinedMembersResponse) and {
+                member.user_id for member in members.members
+            } == {self._user_id, sender_id}
+        except Exception:
+            direct = False
+        if not direct:
+            await self._send_plain_text(room_id, "无法确认一对一对话成员，未中断执行。")
+            return action == "stop"
+
+        if run[2].done():
+            return action == "stop"
+        if self._managed_sync and self._managed_sync.messages:
+            from worker_matrix_state import matrix_event_key
+            messages = self._managed_sync.messages
+            current = messages.turns.get(matrix_event_key(room_id, run[0]))
+            if current:
+                key = current["identity"]["event_key"]
+                view = await asyncio.to_thread(messages.matrix.message, key)
+                if action == "steer" and view["recovery"] == "verify":
+                    await self._send_plain_text(room_id, "当前工具操作的结果仍待核验，已保留原执行。")
+                    return True
+                await asyncio.to_thread(messages.matrix.message_cancel, current["identity"])
+        if not run[2].cancelling():
+            run[2].cancel("user")
+        await self._publish_direct_execution(room_id, run[0], "stopping")
+        await asyncio.gather(run[2], return_exceptions=True)
+        if action == "steer":
+            inputs = [*run[3], *payload["content_parts"]]
+            payload["meta"]["direct_inputs"] = inputs
+            source_ids = run[4] if len(run) > 4 else [run[0]]
+            meta["session_source_event_ids"] = list(dict.fromkeys(
+                [*source_ids, *(meta.get("session_source_event_ids") or [meta["event_id"]])]
+            ))
+            payload["content_parts"] = [TextContent(
+                type=ContentType.TEXT,
+                text="你在执行中收到了用户补充。请结合已有对话、已完成的操作和工具结果调整后继续，"
+                     "不要重复已完成的操作。以下依次是原请求和执行期间的补充信息：",
+            ), *inputs]
+        # The caller enqueues the original supplementary payload exactly once,
+        # after native cleanup. No /stop command clears the message queue.
+        return action == "stop"
 
     async def _access_control_gate(self, payload: Any) -> bool:
         # Denials are bot notices, not new requests. Keep this metadata local
@@ -577,7 +694,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # Debounce key — serialize by room_id (avoid concurrent session access)
     # ------------------------------------------------------------------
 
-    async def _stream_with_tracker(self, payload):
+    async def _stream_with_tracker(self, payload: Any):
         meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
         if meta.get("message_execution"):
             key = meta["message_execution"]["event_key"]
@@ -585,15 +702,58 @@ class AgentTeamsMatrixChannel(BaseChannel):
             turn = messages.turns[key]
             if turn["identity"] != meta["message_execution"]:
                 raise RuntimeError("Native message turn was replaced")
-            async for item in messages.stream(turn, super()._stream_with_tracker(payload)):
+            async for item in messages.stream(turn, self._stream_matrix_payload(payload)):
                 yield item
             return
+        async for item in self._stream_matrix_payload(payload):
+            yield item
+
+    async def _stream_matrix_payload(self, payload: Any):
+        meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
         if meta.get("task_execution"):
             async for item in self._stream_recovered_task(payload):
                 yield item
             return
-        async for item in super()._stream_with_tracker(payload):
-            yield item
+        room_id, run_id = meta.get("room_id"), meta.get("event_id")
+        if not meta.get("is_dm") or not room_id or not run_id:
+            async for item in super()._stream_with_tracker(payload):
+                yield item
+            return
+
+        # Retain interrupted input even if cancellation precedes the native
+        # runtime's first checkpoint. Carry it only across this continuation.
+        inputs = meta.get("direct_inputs", payload.get("content_parts", []))
+        source_ids = meta.get("session_source_event_ids") or [run_id]
+        run = (run_id, meta.get("sender_id", ""), asyncio.current_task(), inputs, source_ids)
+        self._direct_runs[room_id] = run
+        stream = super()._stream_with_tracker(payload)
+        status = "completed"
+        message_id = None
+        try:
+            await self._publish_direct_execution(room_id, run_id, "running")
+            async for item in stream:
+                yield item
+        except asyncio.CancelledError:
+            status = "stopped"
+            message_id = self._active_thread_roots.get(room_id)
+            raise
+        except Exception:
+            status = "failed"
+            raise
+        finally:
+            # Closing the native stream persists context and cancels its tools.
+            # Publish stopped only after that cleanup, never on cancel request.
+            try:
+                await stream.aclose()
+            finally:
+                if status == "stopped":
+                    # Preserve partial response text; the confirmed execution
+                    # event supplies the stopped badge instead of replacing it.
+                    self._active_thread_roots.pop(room_id, None)
+                    await self._send_typing(room_id, False)
+                if self._direct_runs.get(room_id) is run:
+                    self._direct_runs.pop(room_id, None)
+                await self._publish_direct_execution(room_id, run_id, status, message_id)
 
     async def _stream_recovered_task(self, payload):
         from task_recovery import RecoveryConflict, RecoveryUnavailable
@@ -2983,7 +3143,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                     command_text,
                 )
 
-        intent = "control" if (control_text is not None or cmd in _SLASH_COMMANDS
+        direct = content.get(DIRECT_CONTROL_KEY)
+        stop_control = isinstance(direct, dict) and direct.get("action") == "stop"
+        intent = "control" if (control_text is not None or cmd in _SLASH_COMMANDS or stop_control
             or "org.agentteams.coordination" in content) else "message"
         if prepare:
             return await prepare(room_id, event, intent)
@@ -3056,6 +3218,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
             if self._task_execution:
                 key = input_key or await self._task_execution.accept_input(room_id, event, intent)
                 payload["meta"]["shared_input_keys"] = [key]
+            if await self._handle_direct_control(payload, event):
+                if turn:
+                    await asyncio.to_thread(self._task_execution.matrix.message_cancel, turn["identity"])
+                return
             self._enqueue_matrix_input(payload, turn)
             if not is_dm and not is_thread_event:
                 self._clear_history(room_id)

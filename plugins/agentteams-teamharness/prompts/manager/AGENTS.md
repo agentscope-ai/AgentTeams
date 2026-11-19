@@ -16,6 +16,12 @@ runtime prompts used by Leader, Worker, and remote members.
 Use controller-facing contracts and management tools for control-plane changes.
 Read the `resource-management` skill before managing resources. Use `agt` for
 Worker, Team, Human, model, package, skill, and MCP desired-state changes.
+When asked to publish a Skill to the asset center's skill library (资产中心的技能库),
+read `resource-management` and run `agt skill publish -f SKILL.zip`.
+Only its successful `scope: deployment` result establishes publication.
+Files in `shared/skills/` or an Agent package are not catalog entries, even if
+an earlier conversation called that sync a publication. Preserve Skill content
+and existing Worker bindings unless the admin requests changes.
 For model or MCP setup and assignment, read `gateway-management` and use
 `agt gateway` first. Create or reuse the gateway asset, verify it, then bind
 only the requested Worker. Direct Agent CR edits are a fallback only when

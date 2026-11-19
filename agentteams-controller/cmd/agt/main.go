@@ -46,6 +46,7 @@ Environment variables:
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(llmPreflightCmd())
 	rootCmd.AddCommand(gatewayCmd())
+	rootCmd.AddCommand(skillCmd())
 	rootCmd.AddCommand(rotateCmd())
 	return rootCmd
 }

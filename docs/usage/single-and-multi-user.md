@@ -100,6 +100,7 @@ Practical rules:
 
 - **Leader — enforced per Team.** When a Team is created or updated, the controller validates that `workerMembers` contains exactly one member with role `team_leader` and rejects zero or multiple. It does not require an installation to contain a Team, and it does not restrict standalone Workers.
 - **Manager — not enforced.** Nothing in the controller requires or forbids a Manager; a deployment simply runs without one.
+- **Personal assistants for L1.** When a Manager is installed, the controller provisions a separate Manager DM for each L1 Human; the system administrator keeps the existing Admin DM. The AT assistant in the Dashboard opens the current user's room without adding other L1 users. Demotion to L2/L3 revokes membership; promotion back to L1 restores that user's conversation. An absent Manager or a room that is not ready is shown as unavailable.
 - **Covered without a Manager.** The dashboard and the workbench plugin cover **declarative resources and the read-only operational surface**: creating and editing resources, inspecting state, following team work. This assumes the installed controller version and the workbench plugin provide those surfaces.
 - **Not covered.** Conversational operations, some cross-resource flows, and upgrade/migration orchestration still need a Manager or direct controller API/CLI. These substitute paths have not been verified item by item in this document.
 - If you remove the Manager, review the operational flows you relied on before treating the point-and-click surfaces as sufficient.

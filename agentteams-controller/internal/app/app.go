@@ -628,6 +628,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 		SystemAdminUser: a.cfg.MatrixAdminUser,
 		Client:          a.mgr.GetClient(),
 		Provisioner:     a.provisioner,
+		ManagerConfig:   a.managerConfig,
 		Deployer:        a.deployer,
 	}).SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup HumanReconciler: %w", err)

@@ -52,6 +52,12 @@ if os.environ.get('FAIL_SMOKE') == '1' and sys.argv[1:2] == ['run']: sys.exit(9)
                 self.assertTrue(any(c[:2] == ['docker', 'run'] for c in calls[:-1]))
                 self.assertNotIn('agentteams-manager', json.dumps(calls))
 
+    def test_openclaw_uses_the_matching_release_base(self):
+        code, calls = self.exercise('openclaw')
+        self.assertEqual(code, 0)
+        build = next(call for call in calls if call[0] == 'make')
+        self.assertIn('OPENCLAW_BASE_VERSION=v1.2.7', build)
+
     def test_failed_smoke_never_pushes(self):
         code, calls = self.exercise('qwenpaw', fail_smoke=True)
         self.assertNotEqual(code, 0)

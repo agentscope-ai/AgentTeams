@@ -350,10 +350,10 @@ worker:
       tag: ""
     deepseekHarness:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-deepseek
-      tag: "v1.2.7"           # shared v1.2.7 Harness release; override supported
+      tag: "v1.2.8"           # shared v1.2.8 Harness release; override supported
     codex:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex
-      tag: "v1.2.7"            # shared v1.2.7 Harness release; override supported
+      tag: "v1.2.8"            # shared v1.2.8 Harness release; override supported
   defaultRuntime: "openclaw"
   resources:
     requests:

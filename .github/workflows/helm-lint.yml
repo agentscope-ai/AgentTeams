@@ -76,6 +76,9 @@ on:
       - 'tests/check-docs-zh-parity.sh'
       - 'docs/usage/**'
       - 'docs/zh-cn/usage/**'
+      - 'tests/check-find-skills-trust-boundary.sh'
+      - '**/find-skills/**'
+      - 'README.md'
   workflow_dispatch: ~
 
 jobs:
@@ -250,6 +253,12 @@ jobs:
       - name: Template dry-run
         run: |
           bash tests/check-helm-agentteams.sh
+
+      - name: Check find-skills trust boundary self-test (legacy claims, unrelated/negated/post-install review and README drifts fail)
+        run: bash tests/check-find-skills-trust-boundary.sh --self-test
+
+      - name: Check find-skills trust boundary wording on the repository tree
+        run: bash tests/check-find-skills-trust-boundary.sh
 
   docs-zh-parity:
     runs-on: ubuntu-latest

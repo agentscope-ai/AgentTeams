@@ -128,6 +128,10 @@ jobs:
             docker run --rm --entrypoint /opt/venv/qwenpaw/bin/python \
               -e MESSAGE_SHA -e SERVER_SHA -e PROMPT_SHA "$IMAGE_REF" -c '
           import hashlib, os, zipfile
+          from pathlib import Path
+          from qwenpaw_worker.worker import Worker
+          plugin = Path("/opt/agentteams/qwenpaw-builtin/plugins/teamharness")
+          assert (plugin/".agentteams-builtin-plugin.sha256").read_text().strip() == Worker._plugin_directory_digest(None,plugin), "builtin marker does not match packaged plugin"
           with zipfile.ZipFile("/opt/agentteams/plugins/teamharness-qwenpaw.zip") as archive:
               for suffix, key in [("mcp/message_tool.py", "MESSAGE_SHA"), ("mcp/server.py", "SERVER_SHA"), ("prompts/manager/AGENTS.md", "PROMPT_SHA")]:
                   entries = [name for name in archive.namelist() if name.endswith("/teamharness/" + suffix)]

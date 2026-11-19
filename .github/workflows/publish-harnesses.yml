@@ -1,10 +1,14 @@
-name: Verify final 1.2.8 canonical artifacts on native runners
+name: Verify canonical release artifacts on native runners
 on:
   workflow_dispatch:
     inputs:
       source:
         description: Merged Core release source SHA
         required: true
+        type: string
+      core_version:
+        description: Core and shared Harness tag to verify
+        default: v1.2.8
         type: string
       images:
         description: JSON array of image names; empty verifies all eleven
@@ -36,12 +40,14 @@ jobs:
       - id: plan
         env:
           SOURCE: ${{ inputs.source }}
+          CORE_VERSION: ${{ inputs.core_version }}
           IMAGES: ${{ inputs.images }}
           ARCH: ${{ inputs.arch }}
         run: |
           python3 - <<'PY'
           import json, os, re
           assert re.fullmatch('[a-f0-9]{40}', os.environ['SOURCE'])
+          assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', os.environ['CORE_VERSION'])
           allowed = ['agentteams-controller','openclaw-base','agentteams-embedded'] + [
             'agentteams-harness-'+r for r in ['openclaw','qwenpaw','hermes','deepseek','openhuman','codex']
           ] + ['dashboard','dashboard-unified']
@@ -76,6 +82,7 @@ jobs:
         env:
           IMAGE: ${{ matrix.image }}
           ARCH: ${{ matrix.arch }}
+          CORE_VERSION: ${{ inputs.core_version }}
           DASHBOARD_VERSION: ${{ inputs.dashboard_version }}
           DASHBOARD_TREE: ${{ inputs.dashboard_tree }}
         run: |
@@ -84,7 +91,7 @@ jobs:
             [[ "$IMAGE" != dashboard-unified ]] || ref="$ref-unified"
             expected="$DASHBOARD_TREE"
           else
-            ref="$REGISTRY/agentteams/$IMAGE:v1.2.8"
+            ref="$REGISTRY/agentteams/$IMAGE:$CORE_VERSION"
             expected="$(git rev-parse 'HEAD^{tree}')"
           fi
           docker buildx imagetools inspect "$ref" --raw > /tmp/index.json
@@ -95,6 +102,40 @@ jobs:
           echo "IMAGE_REF=$ref" >> "$GITHUB_ENV"
           timeout 600 docker pull --platform "linux/$ARCH" "$ref"
           test "$(docker image inspect "$ref" --format '{{.Os}}/{{.Architecture}}')" = "linux/$ARCH"
+      - name: Check exact packaged Manager prompt and MCP implementation
+        if: matrix.image != 'openclaw-base' && !startsWith(matrix.image, 'dashboard')
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          export MESSAGE_SHA="$(sha256sum plugins/teamharness/mcp/message_tool.py | cut -d' ' -f1)"
+          export SERVER_SHA="$(sha256sum plugins/teamharness/mcp/server.py | cut -d' ' -f1)"
+          export PROMPT_SHA="$(sha256sum plugins/teamharness/prompts/manager/AGENTS.md | cut -d' ' -f1)"
+          docker run --rm --entrypoint sh -e MESSAGE_SHA -e SERVER_SHA -e PROMPT_SHA "$IMAGE_REF" -ec '
+            files=$(find /opt/agentteams -name message_tool.py -type f)
+            test -n "$files"
+            for file in $files; do
+              echo "$MESSAGE_SHA  $file" | sha256sum -c -
+              echo "$SERVER_SHA  ${file%/*}/server.py" | sha256sum -c -
+              echo "$PROMPT_SHA  ${file%/mcp/message_tool.py}/prompts/manager/AGENTS.md" | sha256sum -c -
+            done
+          '
+          if [[ "$IMAGE" == agentteams-controller || "$IMAGE" == agentteams-embedded ]]; then
+            docker run --rm --entrypoint sh -e PROMPT_SHA "$IMAGE_REF" -ec '
+              echo "$PROMPT_SHA  /opt/agentteams/agent/manager-agent/AGENTS.md" | sha256sum -c -
+            '
+          fi
+          if [[ "$IMAGE" == agentteams-harness-qwenpaw ]]; then
+            docker run --rm --entrypoint /opt/venv/qwenpaw/bin/python \
+              -e MESSAGE_SHA -e SERVER_SHA -e PROMPT_SHA "$IMAGE_REF" -c '
+          import hashlib, os, zipfile
+          with zipfile.ZipFile("/opt/agentteams/plugins/teamharness-qwenpaw.zip") as archive:
+              for suffix, key in [("mcp/message_tool.py", "MESSAGE_SHA"), ("mcp/server.py", "SERVER_SHA"), ("prompts/manager/AGENTS.md", "PROMPT_SHA")]:
+                  entries = [name for name in archive.namelist() if name.endswith("/teamharness/" + suffix)]
+                  assert len(entries) == 1, (suffix, entries)
+                  assert hashlib.sha256(archive.read(entries[0])).hexdigest() == os.environ[key], suffix
+          print("Packaged QwenPaw archive matches the repaired source")
+          '
+          fi
       - name: Smoke exact published native artifact
         env:
           IMAGE: ${{ matrix.image }}

@@ -1,54 +1,141 @@
-name: Recover cached native ARM64 OpenClaw base
+name: Verify final 1.2.8 canonical artifacts on native runners
 on:
   workflow_dispatch:
+    inputs:
+      source:
+        description: Merged Core release source SHA
+        required: true
+        type: string
+      images:
+        description: JSON array of image names; empty verifies all eleven
+        default: ''
+        type: string
+      arch:
+        description: Native architectures
+        type: choice
+        options: [both, amd64, arm64]
+        default: both
 permissions:
   contents: read
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
-  SOURCE: a5ddf6ae0f6d14797bf14924de12452ab69c3f2a
 jobs:
-  recover:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 25
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      images: ${{ steps.plan.outputs.images }}
+      arches: ${{ steps.plan.outputs.arches }}
+    steps:
+      - id: plan
+        env:
+          SOURCE: ${{ inputs.source }}
+          IMAGES: ${{ inputs.images }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          assert re.fullmatch('[a-f0-9]{40}', os.environ['SOURCE'])
+          allowed = ['agentteams-controller','openclaw-base','agentteams-embedded'] + [
+            'agentteams-harness-'+r for r in ['openclaw','qwenpaw','hermes','deepseek','openhuman','codex']
+          ] + ['dashboard','dashboard-unified']
+          images=json.loads(os.environ['IMAGES']) if os.environ['IMAGES'] else allowed
+          assert images and set(images) <= set(allowed)
+          arches=['amd64','arm64'] if os.environ['ARCH']=='both' else [os.environ['ARCH']]
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+            f.write('images='+json.dumps(images)+'\narches='+json.dumps(arches)+'\n')
+          PY
+  verify:
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        image: ${{ fromJSON(needs.plan.outputs.images) }}
+        arch: ${{ fromJSON(needs.plan.outputs.arches) }}
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source }}
+          submodules: recursive
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Restore completed native build from matching source cache
-        uses: docker/build-push-action@v7
-        with:
-          context: ./openclaw-base
-          load: true
-          tags: agentteams/openclaw-base:latest
-          build-args: |
-            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com
-            APT_MIRROR=
-          cache-from: type=gha,scope=openclaw-base-arm64
-      - name: Label and smoke the native artifact
+      - name: Resolve canonical source and immutable native child
+        env:
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          image="$REGISTRY/agentteams/openclaw-base:stage-v1.2.8-7e6f68fdafb1-arm64"
-          docker build --build-arg INPUT_IMAGE=agentteams/openclaw-base:latest \
-            --label "org.opencontainers.image.revision=$SOURCE" --label org.opencontainers.image.version=v1.2.8 \
-            --label "io.agentteams.packaging-revision=$GITHUB_SHA" \
-            -f scripts/release/128-metadata.Dockerfile -t "$image" .
-          test "$(docker image inspect "$image" --format '{{.Os}}/{{.Architecture}}')" = linux/arm64
-          docker run --rm --entrypoint bash "$image" -ec 'node --version; openclaw --version; grep -rFl "com.agentteams.read_audience" /opt/openclaw/dist/extensions/matrix >/dev/null'
-          docker save "$image" | gzip > /tmp/openclaw-base-arm64.tar.gz
-      - uses: actions/upload-artifact@v4
-        with:
-          name: verified-openclaw-base-arm64
-          path: /tmp/openclaw-base-arm64.tar.gz
-          retention-days: 2
-      - name: Push with preserved artifact fallback
+          if [[ "$IMAGE" == dashboard* ]]; then
+            ref="$REGISTRY/agentteams/agentteams-dashboard:v1.4.2"
+            [[ "$IMAGE" != dashboard-unified ]] || ref="$ref-unified"
+            expected=c8c5629aa4499fa2a365f7b1afdb45e1b040cb56
+          else
+            ref="$REGISTRY/agentteams/$IMAGE:v1.2.8"
+            expected="$(git rev-parse 'HEAD^{tree}')"
+          fi
+          docker buildx imagetools inspect "$ref" --raw > /tmp/index.json
+          jq -e --arg tree "$expected" '.annotations["io.agentteams.source-tree"] == $tree' /tmp/index.json
+          jq -e '[.manifests[]|select(.platform.os=="linux")|.platform.architecture]|sort==["amd64","arm64"]' /tmp/index.json
+          digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')"
+          ref="${ref%:*}@$digest"
+          echo "IMAGE_REF=$ref" >> "$GITHUB_ENV"
+          timeout 600 docker pull --platform "linux/$ARCH" "$ref"
+          test "$(docker image inspect "$ref" --format '{{.Os}}/{{.Architecture}}')" = "linux/$ARCH"
+      - name: Smoke exact published native artifact
+        env:
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          image="$REGISTRY/agentteams/openclaw-base:stage-v1.2.8-7e6f68fdafb1-arm64"
-          timeout 600 docker push "$image"
-          digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
-          ref="${image%:*}@$digest"
-          docker pull --platform linux/arm64 "$ref"
-          docker run --rm --entrypoint bash "$ref" -ec 'node --version; openclaw --version; grep -rFl "com.agentteams.read_audience" /opt/openclaw/dist/extensions/matrix >/dev/null'
-          echo "$ref native ARM64 passed" >> "$GITHUB_STEP_SUMMARY"
+          ref="$IMAGE_REF"
+          if [[ "$IMAGE" == dashboard* ]]; then
+            base=''
+            [[ "$IMAGE" != dashboard-unified ]] || base=/dashboard
+            docker run -d --name dashboard-verify -p 127.0.0.1:3000:3000 "$ref"
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent "http://127.0.0.1:3000$base/" >/tmp/home; then break; fi
+              sleep 2
+            done
+            grep -q AgentTeams /tmp/home
+            curl -fsS "http://127.0.0.1:3000$base/api/auth/session/" >/tmp/session.json
+            jq -e 'type=="object"' /tmp/session.json
+            docker exec dashboard-verify sh -ec 'test -w /data/agentteams-dashboard'
+          else
+            if [[ "$IMAGE" != openclaw-base ]]; then docker run --rm --entrypoint agt "$ref" tracing --help; fi
+            case "$IMAGE" in
+              openclaw-base)
+                docker run --rm --entrypoint bash "$ref" -ec '
+                  node -e "const v=process.versions.node.split(\".\").map(Number); if(v[0]!==24 || v[1]<22 || (v[1]===22 && v[2]<1)) process.exit(1)"
+                  openclaw --version
+                  grep -rFl "com.agentteams.read_audience" /opt/openclaw/dist/extensions/matrix >/dev/null
+                  binary=$(find /opt/openclaw/node_modules -name "matrix-sdk-crypto.linux-*.node" -print -quit)
+                  test -n "$binary"
+                  node -e "require(process.argv[1])" "$binary"
+                ' ;;
+              agentteams-harness-openclaw)
+                docker run --rm --entrypoint bash -v "$PWD/worker/tests/image-smoke.sh:/tmp/smoke.sh:ro" "$ref" /tmp/smoke.sh ;;
+              agentteams-harness-qwenpaw)
+                docker run --rm --entrypoint /opt/venv/qwenpaw/bin/python "$ref" -c 'import qwenpaw_worker' ;;
+              agentteams-harness-hermes)
+                docker run --rm --entrypoint /opt/venv/hermes/bin/python "$ref" -c 'import hermes_worker' ;;
+              agentteams-harness-deepseek)
+                docker run --rm --entrypoint python3 -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/smoke.py:ro" "$ref" /tmp/smoke.py ;;
+              agentteams-harness-openhuman)
+                docker run --rm --entrypoint openhuman-core "$ref" --help ;;
+              agentteams-harness-codex)
+                docker run --rm --entrypoint codex "$ref" --version
+                docker run --rm --entrypoint /opt/venv/bin/python "$ref" -c 'import agentteams_codex.bridge' ;;
+              agentteams-embedded)
+                docker run --rm --entrypoint bash "$ref" -ec 'command -v agentteams-controller; command -v tuwunel; command -v minio; test -d /opt/agentteams/config/crd' ;;
+            esac
+          fi
+          echo "$IMAGE linux/$ARCH $ref PASS" >> "$GITHUB_STEP_SUMMARY"

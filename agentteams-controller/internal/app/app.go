@@ -200,6 +200,11 @@ func (a *App) Start(ctx context.Context) error {
 				AIStreamIdleTimeoutSeconds: a.cfg.AIStreamIdleTimeoutSeconds,
 				TuwunelURL:                 a.cfg.MatrixServerURL,
 				ElementWebURL:              a.cfg.ElementWebURL,
+				UnifiedEntryEnabled:        a.cfg.UnifiedEntryEnabled,
+				EntryInternalURL:           a.cfg.EntryInternalURL,
+				EntryExternalURL:           a.cfg.EntryExternalURL,
+				ControllerURL:              a.cfg.ControllerURL,
+				DashboardURL:               a.cfg.DashboardURL,
 				ControllerName:             a.cfg.ControllerName,
 				AppServiceEnabled:          a.cfg.MatrixAppServiceEnabled,
 				AppServiceID:               a.cfg.MatrixAppServiceID,
@@ -213,6 +218,9 @@ func (a *App) Start(ctx context.Context) error {
 		if err := init.Run(ctx); err != nil {
 			logger.Error(err, "cluster initialization failed (non-fatal, continuing)")
 		}
+		// The installer starts Dashboard after the Manager. Don't block either
+		// bootstrap on DNS or route propagation for the unified entry.
+		a.wg.Go(func() { init.ReconcileUnifiedEntryRoutes(ctx) })
 
 		// When switching from AppService mode to managerConfig password mode,
 		// automatically backfill passwords for workers/managers that were

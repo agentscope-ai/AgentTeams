@@ -47,6 +47,22 @@ spec:
               value: {{ ternary .Values.controller.metrics.bindAddress "0" .Values.controller.metrics.enabled | quote }}
             - name: AGENTTEAMS_CONTROLLER_URL
               value: {{ include "agentteams.controller.internalURL" . | quote }}
+            {{- if .Values.unifiedEntry.enabled }}
+            - name: AGENTTEAMS_UNIFIED_ENTRY_ENABLED
+              value: "true"
+            {{- with .Values.unifiedEntry.internalURL }}
+            - name: AGENTTEAMS_ENTRY_INTERNAL_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.unifiedEntry.externalURL }}
+            - name: AGENTTEAMS_ENTRY_EXTERNAL_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.unifiedEntry.dashboardURL }}
+            - name: AGENTTEAMS_DASHBOARD_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             {{- /*
               Controller instance name. Also doubles as the ConfigMap name the
               controller reads at Create() time for the agent PodTemplateSpec

@@ -206,6 +206,18 @@ credentialProvider:
   env: {}                       # additional env vars as key/value map
   envFrom: []                   # raw envFrom[] entries (secretRef / configMapRef)
 
+# Unified single entry: expose only the Higress gateway; the controller
+# registers /api (+ optional /dashboard) behind that single address. Clients
+# then only need one AgentTeams address (internal/external) plus an L1/L2
+# account, and the Controller performs unified authentication.
+unifiedEntry:
+  enabled: false
+  # Addresses shown to operators/clients (informational; routes live on the gateway).
+  internalURL: ""
+  externalURL: ""
+  # Dashboard upstream served at /dashboard when the dashboard is deployed.
+  dashboardURL: ""
+
 # ── Controller (CRD reconciler + worker lifecycle + gateway + credentials) ─
 controller:
   replicaCount: 1               # increase for HA with leader election

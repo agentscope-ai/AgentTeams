@@ -33,6 +33,8 @@ FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 # ============ Final Image: Based on Higress all-in-one ============
 FROM ${HIGRESS_REGISTRY}/higress/all-in-one:2.2.5
 
+LABEL io.agentteams.unified-entry="1"
+
 RUN mkdir -p /var/log/agentteams
 
 # ---- Stable binaries from build stages ----

@@ -34,7 +34,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           case "$TARGET" in
-            openclaw-base|agentteams-controller) image="$TARGET" ;;
+            openclaw-base|agentteams-controller|agentteams-service) image="$TARGET" ;;
             worker) image="agentteams-harness-openclaw" ;;
             qwenpaw-worker) image="agentteams-harness-qwenpaw" ;;
             hermes-worker) image="agentteams-harness-hermes" ;;

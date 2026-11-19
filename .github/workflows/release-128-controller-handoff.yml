@@ -30,6 +30,7 @@ jobs:
         run: |
           source=d390f4eabd7bdfa74bc6bf70638a86febee31e43
           test "$(gh api repos/agentscope-ai/AgentTeams/actions/runs/44544904996 --jq .head_sha)" = "$source"
+          git fetch --no-tags origin 4006d756035c5da3d2b1e5c304b1c16d5d61fe1c "$source"
           git diff --exit-code 4006d756035c5da3d2b1e5c304b1c16d5d61fe1c "$source" -- agentteams-controller manager plugins shared hack/versions.env
           gzip -t /tmp/controller/agentteams-controller.tar.gz
           gzip -dc /tmp/controller/agentteams-controller.tar.gz | docker load

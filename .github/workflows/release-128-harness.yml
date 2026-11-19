@@ -1,0 +1,61 @@
+name: Stage 1.2.8 Harnesses with verified Controller
+on:
+  workflow_dispatch:
+    inputs:
+      controller:
+        description: Verified immutable dual-architecture Controller reference
+        required: true
+        type: string
+permissions:
+  contents: read
+env:
+  REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
+jobs:
+  stage:
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/checkout@v4
+        if: matrix.runtime == 'codex'
+        with:
+          repository: agentteams-group/agentteams-harness-codex
+          ref: 426bfdd7b0d2eade599afcc166baf1771367d937
+          path: codex-harness
+      - uses: ruby/setup-ruby@v1
+        if: matrix.runtime == 'qwenpaw'
+        with:
+          ruby-version: '3.3'
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Build, smoke, push and verify native staging image
+        env:
+          ARCH: ${{ matrix.arch }}
+          RUNTIME: ${{ matrix.runtime }}
+          CONTROLLER: ${{ inputs.controller }}
+          RELEASE_VERSION: v1.2.8
+        run: |
+          [[ "$CONTROLLER" =~ ^higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller@sha256:[a-f0-9]{64}$ ]]
+          candidate="stage-v1.2.8-${GITHUB_SHA:0:12}-${ARCH}"
+          scripts/release/build-harness-platform.sh "$RUNTIME" "$candidate" "linux/$ARCH" "$CONTROLLER"
+          image="${REGISTRY}/agentteams/agentteams-harness-${RUNTIME}:${candidate}"
+          digest="$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')"
+          docker pull --platform "linux/$ARCH" "${image%:*}@${digest}"
+          docker run --rm --platform "linux/$ARCH" --entrypoint agt "${image%:*}@${digest}" tracing --help
+          echo "${image%:*}@${digest}" >> "$GITHUB_STEP_SUMMARY"

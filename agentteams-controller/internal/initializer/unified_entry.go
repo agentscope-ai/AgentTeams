@@ -2,10 +2,12 @@ package initializer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
+	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -15,97 +17,112 @@ import (
 // matches the embedded stack's controller port.
 const unifiedEntryDefaultControllerURL = "http://127.0.0.1:8090"
 
-// initUnifiedEntryRoutes registers the single-entry front door on the
-// gateway so clients only need one AgentTeams address:
-//
-//	/api       -> controller
-//	/dashboard -> dashboard upstream when configured
-//
-// This change keeps /api on the controller, the only HTTP business plane that
-// exists in this tree. Moving /api to agentteams-service later is a follow-up
-// that changes only the selected upstream; it does not change the route,
-// authentication, or the single-entry contract.
-func (i *Initializer) initUnifiedEntryRoutes(ctx context.Context) error {
-	logger := ctrl.Log.WithName("initializer").WithName("unified-entry")
-	cfg := i.Config
-	if !cfg.UnifiedEntryEnabled {
-		return nil
-	}
+const (
+	unifiedAPIRoute       = "unified-entry-api"
+	unifiedDashboardRoute = "unified-entry-dashboard"
+)
 
-	// The gateway resource name must not collide with an existing Kubernetes
-	// Service in the embedded stack, so the source is named after the entry
-	// stage.
-	const apiSource = "unified-entry-api"
+type unifiedEntryRoute struct {
+	name, path, backend string
+}
+
+// ReconcileUnifiedEntryRoutes retries startup registration independently of
+// Manager and Dashboard startup. Only the controller leader should call it.
+func (i *Initializer) ReconcileUnifiedEntryRoutes(ctx context.Context) {
+	i.reconcileUnifiedEntryRoutes(ctx, 5*time.Second)
+}
+
+func (i *Initializer) reconcileUnifiedEntryRoutes(ctx context.Context, interval time.Duration) {
+	if i.Gateway == nil || !i.Config.managesGatewayRoutes() {
+		return
+	}
+	logger := ctrl.Log.WithName("initializer").WithName("unified-entry")
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	pending := i.desiredUnifiedEntryRoutes()
+	for attempts := 0; ctx.Err() == nil; attempts++ {
+		var failures []error
+		remaining := pending[:0]
+		for _, route := range pending {
+			if err := i.reconcileUnifiedEntryRoute(ctx, route); err != nil {
+				failures = append(failures, fmt.Errorf("%s: %w", route.name, err))
+				remaining = append(remaining, route)
+			}
+		}
+		pending = remaining
+		if len(pending) == 0 {
+			if i.Config.UnifiedEntryEnabled {
+				logger.Info("unified entry routes reconciled", "internal", i.Config.EntryInternalURL,
+					"external", i.Config.EntryExternalURL)
+			}
+			return
+		}
+		if ctx.Err() == nil && attempts%6 == 0 {
+			logger.Error(errors.Join(failures...), "unified entry route reconciliation failed; retrying")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// desiredUnifiedEntryRoutes includes only the two routes reserved for this feature.
+func (i *Initializer) desiredUnifiedEntryRoutes() []unifiedEntryRoute {
+	cfg := i.Config
 	apiURL := strings.TrimSpace(cfg.ControllerURL)
 	if apiURL == "" && cfg.IsEmbedded {
 		apiURL = unifiedEntryDefaultControllerURL
 	}
-	if apiURL == "" {
-		logger.Info("unified entry: no /api controller URL configured; skipping stage",
-			"controller_url_set", cfg.ControllerURL != "")
-	} else {
-		host, port, protocol, err := parseEntryURL(apiURL)
-		if err != nil {
-			return fmt.Errorf("/api backend %q: %w", apiURL, err)
-		}
-		host, err = resolveEntryHost(host)
-		if err != nil {
-			return fmt.Errorf("/api backend host: %w", err)
-		}
-		if err := i.ensureCustomServiceSource(ctx, apiSource, host, port, protocol); err != nil {
-			return fmt.Errorf("service source %s: %w", apiSource, err)
-		}
-		if err := i.Gateway.EnsureRoute(ctx, "unified-entry-api", nil, apiSource+"."+i.unifiedEntrySuffix(host), port, "/api"); err != nil {
-			return fmt.Errorf("route unified-entry-api: %w", err)
-		}
-		logger.Info("unified entry /api route ready",
-			"backend", "agentteams-controller", "internal", cfg.EntryInternalURL, "external", cfg.EntryExternalURL)
+	return []unifiedEntryRoute{
+		{name: unifiedAPIRoute, path: "/api", backend: apiURL},
+		{name: unifiedDashboardRoute, path: "/dashboard", backend: strings.TrimSpace(cfg.DashboardURL)},
 	}
-
-	if dashboardURL := strings.TrimSpace(cfg.DashboardURL); dashboardURL != "" {
-		host, port, protocol, err := parseEntryURL(dashboardURL)
-		if err != nil {
-			return fmt.Errorf("/dashboard backend %q: %w", dashboardURL, err)
-		}
-		host, err = resolveEntryHost(host)
-		if err != nil {
-			return fmt.Errorf("/dashboard backend host: %w", err)
-		}
-		if err := i.ensureCustomServiceSource(ctx, "unified-entry-dashboard", host, port, protocol); err != nil {
-			return fmt.Errorf("service source unified-entry-dashboard: %w", err)
-		}
-		if err := i.Gateway.EnsureRoute(ctx, "unified-entry-dashboard", nil, "unified-entry-dashboard."+i.unifiedEntrySuffix(host), port, "/dashboard"); err != nil {
-			return fmt.Errorf("route unified-entry-dashboard: %w", err)
-		}
-		logger.Info("unified entry /dashboard route ready", "url", dashboardURL)
-	}
-
-	return nil
 }
 
-// unifiedEntrySuffix mirrors the embedded/incluster service-source suffix
-// convention: embedded static (IP) sources end in ".static", DNS ones in ".dns".
-func (i *Initializer) unifiedEntrySuffix(host string) string {
-	if i.Config.IsEmbedded || net.ParseIP(host) != nil {
-		return "static"
+func (i *Initializer) reconcileUnifiedEntryRoute(ctx context.Context, route unifiedEntryRoute) error {
+	name, path, backend := route.name, route.path, route.backend
+	if !i.Config.UnifiedEntryEnabled || backend == "" {
+		return i.Gateway.DeleteRoute(ctx, name)
 	}
-	return "dns"
+	managed, ok := i.Gateway.(interface {
+		EnsureManagedRoute(ctx context.Context, name, serviceName string, port int, pathPrefix string) error
+	})
+	if !ok {
+		return fmt.Errorf("gateway does not support managed HTTP routes")
+	}
+	host, port, protocol, err := parseEntryURL(backend)
+	if err != nil {
+		return fmt.Errorf("%s backend URL: %w", path, err)
+	}
+	host, err = resolveEntryHost(ctx, host)
+	if err != nil {
+		return fmt.Errorf("%s backend host: %w", path, err)
+	}
+	if err := i.ensureCustomServiceSource(ctx, name, host, port, protocol); err != nil {
+		return fmt.Errorf("service source %s: %w", name, err)
+	}
+	if err := managed.EnsureManagedRoute(ctx, name, customServiceName(name, host), port, path); err != nil {
+		return fmt.Errorf("route %s: %w", name, err)
+	}
+	return nil
 }
 
 // entryLookupHost resolves single-label hostnames (docker/pod DNS names such
 // as "agentteams-controller"). It is a variable so tests can stub resolution.
-var entryLookupHost = net.LookupHost
+var entryLookupHost = net.DefaultResolver.LookupHost
 
 // resolveEntryHost turns a unified-entry backend host into a form Higress can
 // register: IPs and dotted DNS names are used as-is, while single-label
 // container/pod names are resolved to their first IPv4 address. Higress
 // rejects non-FQDN DNS service sources ("Invalid domain format: <name>"), which
 // is exactly what embedded docker names look like.
-func resolveEntryHost(host string) (string, error) {
+func resolveEntryHost(ctx context.Context, host string) (string, error) {
 	if net.ParseIP(host) != nil || strings.Contains(host, ".") {
 		return host, nil
 	}
-	ips, err := entryLookupHost(host)
+	ips, err := entryLookupHost(ctx, host)
 	if err != nil {
 		return "", fmt.Errorf("resolve %q: %w", host, err)
 	}

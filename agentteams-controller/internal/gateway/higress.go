@@ -485,9 +485,24 @@ func (c *HigressClient) EnsureRoute(ctx context.Context, name string, domains []
 	return c.ensureRoute(ctx, name, domains, serviceName, port, pathPrefix)
 }
 
+// EnsureManagedRoute updates the controller-owned routing fields on conflict.
+// Leave the create-only semantics of EnsureRoute unchanged for other callers.
+func (c *HigressClient) EnsureManagedRoute(ctx context.Context, name, serviceName string, port int, pathPrefix string) error {
+	body := routeBody(name, nil, serviceName, port, pathPrefix)
+	// Host restrictions added by operators aren't part of the managed backend.
+	delete(body, "domains")
+	return c.ensureCustomEndpointResource(ctx, "/v1/routes", name, body)
+}
+
 func (c *HigressClient) DeleteRoute(ctx context.Context, name string) error {
-	c.deleteRoute(ctx, name)
-	return nil
+	_, status, err := c.doJSON(ctx, http.MethodDelete, "/v1/routes/"+url.PathEscape(name), nil)
+	if err != nil {
+		return fmt.Errorf("delete route %s: %w", name, err)
+	}
+	if (status >= 200 && status < 300) || status == http.StatusNotFound {
+		return nil
+	}
+	return fmt.Errorf("delete route %s: HTTP %d", name, status)
 }
 
 func (c *HigressClient) EnsureAIProvider(ctx context.Context, req AIProviderRequest) error {
@@ -847,11 +862,11 @@ func (c *HigressClient) ensureStaticServiceSource(ctx context.Context, name, add
 	return c.ensureCustomEndpointResource(ctx, "/v1/service-sources", name, body)
 }
 
-func (c *HigressClient) ensureRoute(ctx context.Context, name string, domains []string, serviceName string, port int, pathPrefix string) error {
+func routeBody(name string, domains []string, serviceName string, port int, pathPrefix string) map[string]interface{} {
 	if pathPrefix == "" {
 		pathPrefix = "/"
 	}
-	body := map[string]interface{}{
+	return map[string]interface{}{
 		"name":    name,
 		"domains": domains,
 		"path":    map[string]interface{}{"matchType": "PRE", "matchValue": pathPrefix, "caseSensitive": false},
@@ -859,7 +874,10 @@ func (c *HigressClient) ensureRoute(ctx context.Context, name string, domains []
 			{"name": serviceName, "port": port, "weight": 100},
 		},
 	}
-	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/routes", body)
+}
+
+func (c *HigressClient) ensureRoute(ctx context.Context, name string, domains []string, serviceName string, port int, pathPrefix string) error {
+	_, sc, err := c.doJSON(ctx, http.MethodPost, "/v1/routes", routeBody(name, domains, serviceName, port, pathPrefix))
 	if err != nil {
 		return fmt.Errorf("ensure route %s: %w", name, err)
 	}

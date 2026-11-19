@@ -27,6 +27,58 @@ func newGatewayTestClient(handler http.HandlerFunc) *http.Client {
 	}
 }
 
+func TestEnsureManagedRouteRepairsConflict(t *testing.T) {
+	const path = "/v1/routes/unified-entry-dashboard"
+	updated := false
+	c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, newGatewayTestClient(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/routes":
+			w.WriteHeader(http.StatusConflict)
+		case r.Method == http.MethodGet && r.URL.Path == path:
+			_, _ = w.Write([]byte(`{"data":{"name":"unified-entry-dashboard","domains":["at.example.com"],"services":[{"name":"unified-entry-dashboard.static","port":3000}],"annotations":{"keep":"yes"}}}`))
+		case r.Method == http.MethodPut && r.URL.Path == path:
+			var body struct {
+				Services []struct {
+					Name string
+					Port int
+				}
+				Annotations map[string]string
+				Domains     []string
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if len(body.Services) != 1 || body.Services[0].Name != "unified-entry-dashboard.dns" || body.Services[0].Port != 3100 ||
+				body.Annotations["keep"] != "yes" || len(body.Domains) != 1 || body.Domains[0] != "at.example.com" {
+				t.Fatalf("expected updated service and preserved annotations and domains: %+v", body)
+			}
+			updated = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	c.cookies = []*http.Cookie{{Name: "session", Value: "test"}}
+	if err := c.EnsureManagedRoute(context.Background(), "unified-entry-dashboard", "unified-entry-dashboard.dns", 3100, "/dashboard"); err != nil || !updated {
+		t.Fatalf("managed route not updated: updated=%v err=%v", updated, err)
+	}
+}
+
+func TestDeleteRouteOnlyIgnoresNotFound(t *testing.T) {
+	for _, status := range []int{http.StatusNoContent, http.StatusNotFound, http.StatusServiceUnavailable} {
+		c := NewHigressClient(Config{ConsoleURL: "http://higress.test"}, newGatewayTestClient(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodDelete || r.URL.Path != "/v1/routes/unified-entry-api" {
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+			w.WriteHeader(status)
+		}))
+		c.cookies = []*http.Cookie{{Name: "session", Value: "test"}}
+		if err := c.DeleteRoute(context.Background(), "unified-entry-api"); (err != nil) != (status == http.StatusServiceUnavailable) {
+			t.Errorf("HTTP %d: unexpected result %v", status, err)
+		}
+	}
+}
+
 func TestEnsureConsumer_Created(t *testing.T) {
 	client := newGatewayTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -445,14 +445,7 @@ func (i *Initializer) initGatewayRoutes(ctx context.Context) error {
 		}
 	}
 
-	// 5. Unified entry: /api and /dashboard on the single gateway entry.
-	if i.Config.UnifiedEntryEnabled {
-		if err := i.initUnifiedEntryRoutes(ctx); err != nil {
-			logger.Error(err, "failed to initialize unified entry routes (non-fatal)")
-		}
-	}
-
-	// 6. Remove Higress default landing page
+	// 5. Remove Higress default landing page
 	if err := i.Gateway.DeleteRoute(ctx, "default"); err != nil {
 		logger.Error(err, "failed to remove default route (non-fatal)")
 	}

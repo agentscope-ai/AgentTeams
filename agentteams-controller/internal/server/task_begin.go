@@ -15,10 +15,19 @@ import (
 )
 
 type taskInputContext struct {
-	TaskID   string             `json:"taskId"`
-	Summary  string             `json:"summary,omitempty"`
-	ReadOnly bool               `json:"readOnly"`
-	Files    []taskFileResource `json:"files"`
+	TaskID       string             `json:"taskId"`
+	SubmissionID string             `json:"submissionId,omitempty"`
+	Summary      string             `json:"summary,omitempty"`
+	ReadOnly     bool               `json:"readOnly"`
+	Files        []taskFileResource `json:"files"`
+}
+
+// Public recovery context excludes storage keys and Matrix delivery credentials.
+type taskResumeContext struct {
+	Version        uint64         `json:"version"`
+	CompletedSteps []string       `json:"completedSteps"`
+	RemainingSteps []string       `json:"remainingSteps"`
+	Operation      *taskOperation `json:"operation,omitempty"`
 }
 
 func (h *ProjectHandler) ownedTaskExecution(w http.ResponseWriter, r *http.Request, task map[string]json.RawMessage) (taskExecution, bool) {
@@ -107,11 +116,11 @@ func (h *ProjectHandler) taskBeginInputs(r *http.Request, key string, task map[s
 		if coordinationString(upstream, "task_id") != dependency || coordinationString(upstream, "main_task_id") != mainID || coordinationString(upstream, "project_id") != coordinationString(task, "project_id") || coordinationString(upstream, "status") != "completed" {
 			return nil, fmt.Errorf("prerequisite %s is not accepted", dependency)
 		}
-		files, err := h.taskFileResources(r.Context(), upstreamKey, dependency, raw)
+		files, err := h.acceptedTaskFileResources(r, upstreamKey, dependency, raw)
 		if err != nil {
 			return nil, fmt.Errorf("prerequisite %s files unavailable: %w", dependency, err)
 		}
-		inputs = append(inputs, taskInputContext{TaskID: dependency, Summary: coordinationString(upstream, "summary"), ReadOnly: true, Files: files})
+		inputs = append(inputs, taskInputContext{TaskID: dependency, SubmissionID: coordinationString(upstream, "submission_id"), Summary: coordinationString(upstream, "summary"), ReadOnly: true, Files: files})
 	}
 	return inputs, nil
 }
@@ -146,6 +155,10 @@ func (h *ProjectHandler) BeginTask(w http.ResponseWriter, r *http.Request) {
 		}
 		execution, ok := h.ownedTaskExecution(w, r, raw)
 		if !ok {
+			return
+		}
+		if cp := execution.Checkpoint; cp != nil && cp.Result != nil {
+			writeError(w, 409, "saved task result requires delivery recovery, not new business execution")
 			return
 		}
 		spec := coordinationString(task, "spec")
@@ -187,16 +200,58 @@ func (h *ProjectHandler) BeginTask(w http.ResponseWriter, r *http.Request) {
 		view := publicTaskResource(id, team, task)
 		view.Spec = spec
 		version := contentETag(current)
+		var checkpoint *taskResumeContext
+		if cp := execution.Checkpoint; cp != nil {
+			checkpoint = &taskResumeContext{cp.Version, cp.CompletedSteps, cp.RemainingSteps, cp.Operation}
+		}
 		w.Header().Set("ETag", version)
 		httputil.WriteJSON(w, 200, struct {
 			Version    string             `json:"version"`
 			Task       taskResource       `json:"task"`
 			Inputs     []taskInputContext `json:"inputs"`
 			Generation uint64             `json:"generation"`
-		}{version, view, inputs, execution.Generation})
+			Checkpoint *taskResumeContext `json:"checkpoint,omitempty"`
+		}{version, view, inputs, execution.Generation, checkpoint})
 		return
 	}
 	writeError(w, 409, "task changed during acknowledgement; retry begin")
+}
+
+// New submissions freeze output identities. Catalog heads also include published
+// intermediates and may reference a different version, so never use them as the
+// accepted dependency snapshot. Legacy tasks retain their declared-output view.
+func (h *ProjectHandler) acceptedTaskFileResources(r *http.Request, key, id string, raw map[string]json.RawMessage) ([]taskFileResource, error) {
+	if len(raw["task_submission"]) == 0 {
+		return h.taskFileResources(r.Context(), key, id, raw)
+	}
+	var submission taskSubmission
+	var currentID string
+	_ = json.Unmarshal(raw["submission_id"], &currentID)
+	if json.Unmarshal(raw["task_submission"], &submission) != nil || submission.ID == "" || submission.ID != currentID {
+		return nil, errors.New("accepted submission identity unavailable")
+	}
+	var index taskFileIndex
+	if len(submission.Request.Artifacts) > 0 && json.Unmarshal(raw["task_files"], &index) != nil {
+		return nil, errors.New("accepted artifact index unavailable")
+	}
+	heads := map[string]string{}
+	for _, identity := range submission.Request.Artifacts {
+		file, exists := index.Artifacts[identity]
+		if !exists || file.Kind != "output" || heads[file.Name] != "" {
+			return nil, errors.New("accepted artifact reference unavailable or ambiguous")
+		}
+		heads[file.Name] = identity
+	}
+	if index.Artifacts == nil {
+		index.Artifacts = map[string]publishedTaskFile{}
+	}
+	index.Heads = heads
+	projection := make(map[string]json.RawMessage, len(raw))
+	for k, v := range raw {
+		projection[k] = v
+	}
+	projection["task_files"], _ = json.Marshal(index)
+	return h.taskFileResources(r.Context(), key, id, projection)
 }
 
 func appendTaskOperationHistory(task map[string]any, from, to, action, actor string) {

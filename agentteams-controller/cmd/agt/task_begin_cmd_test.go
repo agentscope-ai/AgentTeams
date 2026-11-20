@@ -24,7 +24,7 @@ func TestTaskBeginPreparesAcceptedInputInOneAgentCall(t *testing.T) {
 				t.Errorf("missing native begin identity: %s %v", r.Method, r.Header)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"version": "task-v1", "task": map[string]any{"id": "t1", "team": "alpha", "status": "in_progress", "spec": "Read the accepted input."}, "generation": 1, "inputs": []map[string]any{{"taskId": "upstream", "readOnly": true, "files": []map[string]any{{"artifactId": "a1", "name": "data.csv", "version": "file-v1", "size": len(data), "sha256": hex.EncodeToString(digest[:])}}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"version": "task-v1", "task": map[string]any{"id": "t1", "team": "alpha", "status": "in_progress", "spec": "Read the accepted input."}, "generation": 1, "inputs": []map[string]any{{"taskId": "upstream", "submissionId": "accepted-s1", "readOnly": true, "files": []map[string]any{{"artifactId": "a1", "name": "data.csv", "version": "file-v1", "size": len(data), "sha256": hex.EncodeToString(digest[:])}}}}})
 		case "/api/v1/tasks/upstream/files":
 			if r.URL.Query().Get("artifactId") != "a1" || r.URL.Query().Get("version") != "file-v1" {
 				t.Errorf("input is not version-bound: %s", r.URL)
@@ -55,7 +55,8 @@ func TestTaskBeginPreparesAcceptedInputInOneAgentCall(t *testing.T) {
 		TaskDirectory   string `json:"taskDirectory"`
 		OutputDirectory string `json:"outputDirectory"`
 		Inputs          []struct {
-			Files []struct {
+			SubmissionID string `json:"submissionId"`
+			Files        []struct {
 				LocalPath string `json:"localPath"`
 			} `json:"files"`
 		} `json:"inputs"`
@@ -67,7 +68,7 @@ func TestTaskBeginPreparesAcceptedInputInOneAgentCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests != 2 || response.TaskDirectory != filepath.Join(realShared, "tasks", "t1") || response.OutputDirectory != filepath.Join(response.TaskDirectory, "workspace") || len(response.Inputs) != 1 || len(response.Inputs[0].Files) != 1 {
+	if requests != 2 || response.TaskDirectory != filepath.Join(realShared, "tasks", "t1") || response.OutputDirectory != filepath.Join(response.TaskDirectory, "workspace") || len(response.Inputs) != 1 || len(response.Inputs[0].Files) != 1 || response.Inputs[0].SubmissionID != "accepted-s1" {
 		t.Fatalf("incomplete prepared context: requests=%d %s", requests, output.String())
 	}
 	local := response.Inputs[0].Files[0].LocalPath

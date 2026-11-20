@@ -32,11 +32,12 @@ type taskInputPreview struct {
 }
 
 type taskPreparedInput struct {
-	TaskID    string             `json:"taskId"`
-	Summary   string             `json:"summary,omitempty"`
-	ReadOnly  bool               `json:"readOnly"`
-	Directory string             `json:"directory,omitempty"`
-	Files     []taskPreparedFile `json:"files"`
+	TaskID       string             `json:"taskId"`
+	SubmissionID string             `json:"submissionId,omitempty"`
+	Summary      string             `json:"summary,omitempty"`
+	ReadOnly     bool               `json:"readOnly"`
+	Directory    string             `json:"directory,omitempty"`
+	Files        []taskPreparedFile `json:"files"`
 }
 
 func taskBeginCmd() *cobra.Command {

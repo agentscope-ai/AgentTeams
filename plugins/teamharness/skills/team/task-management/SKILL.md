@@ -33,6 +33,13 @@ paths. Do not ACK again, reconstruct paths, or download supplied inputs again.
 Inputs are read-only. Write deliverables in `outputDirectory` and temporary work
 in `scratchDirectory`. Use an isolated test directory; do not delete upstream files.
 
+When your task requires a self-contained runnable project, publish unchanged
+copies of required accepted input modules alongside your app. Load dependencies
+from the delivered project, not hardcoded runtime, Task or storage paths. Validate
+a clean snapshot containing only the files you will submit.
+When verifying such a project, use only its declared accepted input files; do
+not fetch undeclared producer-workspace files to hide a missing dependency.
+
 Call `submit` with `taskId`, a truthful `summary`, optional detailed `report`,
 and `files` relative to your output directory. Use the actual result `status`;
 do not claim success when validation failed. Submission is a candidate, not
@@ -44,7 +51,9 @@ notifies your Leader; do not send another completion message or poll.
 Use the prepared public candidate or call `get` with the execution Task ID.
 Check the task spec, `candidate.id`, business status, report and exact artifact
 references. Read more only when evidence is truncated, missing or inconsistent.
-A prepared candidate snapshot does not prove business acceptance. Review the
+A prepared candidate snapshot does not prove business acceptance. Check the
+published files of a runnable project for its required dependencies; producer
+workspace files and hardcoded runtime paths are not delivery evidence. Review the
 independent QA evidence; do not repeat execution, edit outputs or rerun accepted
 checks. Call `accept` or `reject` with the exact `submissionId` and your evidence
 in `note`. If the same step needs correction, provide explicit `replacementSpec`

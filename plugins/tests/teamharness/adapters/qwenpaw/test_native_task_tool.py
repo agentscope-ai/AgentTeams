@@ -39,6 +39,9 @@ class NativeTaskToolTest(unittest.TestCase):
     def test_create_injects_native_source_after_schema_validation(self):
         self.run_task("create")
 
+    def test_create_uses_captured_request_without_spec_copy(self):
+        self.run_task("create", no_spec=True)
+
     def test_model_cannot_supply_private_source_fields(self):
         self.run_task("create", invalid_source=True)
 
@@ -89,7 +92,7 @@ class NativeTaskToolTest(unittest.TestCase):
         finally:
             server.shutdown();server.server_close();thread.join()
 
-    def run_task(self, action, invalid_source=False):
+    def run_task(self, action, invalid_source=False, no_spec=False):
         from agentscope.agent import Agent
         from agentscope.model import ChatModelBase, ChatResponse
         from agentscope.message import Msg, ToolCallBlock, TextBlock
@@ -124,6 +127,7 @@ class NativeTaskToolTest(unittest.TestCase):
                     "notification":{"status":"queued","recipient":"manager-a","eventId":"return-one"}}
         else:
             arguments={"action":"create","leader":"leader-a","title":"Original request","spec":"Original acceptance criteria"}
+            if no_spec: arguments.pop("spec")
             if invalid_source:arguments["_nativeSource"]={"eventId":"forged","userId":"@other:test","roomId":"!other:test"}
             result={"sourceEventId":"$source","task":{"id":"main","kind":"main","status":"planned"},
                     "notification":{"status":"queued","recipient":"leader-a","eventId":"handoff"}}
@@ -227,6 +231,7 @@ class NativeTaskToolTest(unittest.TestCase):
                 testcase.assertEqual(path,"/api/v1/tasks")
                 testcase.assertEqual({key.lower():value for key,value in headers.items()}["x-agentteams-origin-event-id"],"$source")
                 testcase.assertEqual(set(body),{"title","spec","leader"})
+                if no_spec: testcase.assertEqual(body["spec"], "")
                 testcase.assertNotIn("_nativeSource",bridge.TASK_SCHEMA["inputSchema"]["properties"])
             else:testcase.assertEqual(path,"/api/v1/tasks/"+("execution-a" if action in {"accept","reject"} else "main")+"/"+action)
         finally:

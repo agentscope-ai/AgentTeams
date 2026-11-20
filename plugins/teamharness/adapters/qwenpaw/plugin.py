@@ -127,7 +127,9 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 if not operation:
                     return
                 action, task_id = operation
-                expected = _execution_task.get() if action == "submit" else _completion_task.get()
+                review_scope = _review_task.get()
+                expected = (_execution_task.get() if action == "submit" else _completion_task.get()
+                            if action == "complete" else review_scope[0] if review_scope else "")
                 if task_id != expected:
                     return
             from agentscope.tool import ToolResponse
@@ -144,6 +146,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             except (TypeError, ValueError):
                 return
             receipt = (receipts.creation_receipt(result, creation_source) if creation_source
+                       else receipts.review_receipt(result, task_id, review_scope[1], action) if action in {"accept", "reject"}
                        else receipts.task_receipt(result, task_id, action))
             seen = getattr(self, "_task_receipt_ids", set())
             if receipt is None or receipt[0] in seen:
@@ -279,7 +282,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 yield ToolResponse(state="error", content=[{"type": "text", "text": _CLEANUP_GUIDANCE}])
                 return
             async for item in next_handler(**input_kwargs):
-                if getattr(call, "name", "") == "execute_shell_command" and (_execution_task.get() or _completion_task.get() or creation_source):
+                if getattr(call, "name", "") == "execute_shell_command" and (_execution_task.get() or _completion_task.get() or _review_task.get() or creation_source):
                     self._inject_task_receipt(item, name, args, creation_source)
                 if name in {"projectflow", "taskflow"} and args.get("action") == "accept_task_result" and _review_task.get():
                     for block in getattr(item, "content", []):

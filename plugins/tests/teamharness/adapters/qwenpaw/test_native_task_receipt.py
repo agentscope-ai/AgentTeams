@@ -27,6 +27,12 @@ class NativeTaskReceiptTest(unittest.TestCase):
     def test_creation_receipt_binds_native_source_without_model_route_arguments(self):
         self._assert_receipt("create")
 
+    def test_acceptance_receipt_reaches_exact_candidate_review_context(self):
+        self._assert_receipt("accept")
+
+    def test_rejection_receipt_reaches_exact_candidate_review_context(self):
+        self._assert_receipt("reject")
+
     def _assert_receipt(self, action):
         from agentscope.agent import Agent
         from agentscope.model import ChatModelBase, ChatResponse
@@ -44,6 +50,7 @@ class NativeTaskReceiptTest(unittest.TestCase):
         calls = []
         command = f"agt task {action} t1 --" + ("summary" if action == "submit" else "report") + " Done"
         if action == "create": command = 'agt task create --leader leader-a --title "Request" --spec "Original criteria"'
+        if action in {"accept", "reject"}: command = f'agt task {action} t1 --submission s1 --note "Business validation evidence"'
         identity_field = "sourceEventId" if action == "create" else ("submissionId" if action == "submit" else "completionId")
 
         class Parameters(BaseModel):
@@ -65,11 +72,15 @@ class NativeTaskReceiptTest(unittest.TestCase):
                 tool_messages = [m for m in messages if m.get("role") == "tool"]
                 text = json.dumps(tool_messages, ensure_ascii=False)
                 testcase.assertIn("[Task system receipt]", text)
-                testcase.assertIn("manager-a" if action == "complete" else "leader-a", text)
+                if action not in {"accept", "reject"}: testcase.assertIn("manager-a" if action == "complete" else "leader-a", text)
                 if action == "complete": testcase.assertIn("original conversation", text)
-                testcase.assertIn("Do not resend" if action == "submit" else "Do not send another", text)
-                if action != "create": testcase.assertIn("not yet confirmed", text)
-                testcase.assertIn(identity_field, text)  # Original result survives.
+                testcase.assertIn("Do not repeat" if action in {"accept", "reject"} else "Do not resend" if action == "submit" else "Do not send another", text)
+                if action in {"accept", "reject"}:
+                    testcase.assertIn("synchronization is pending", text)
+                    testcase.assertIn("operation-one", text)
+                else:
+                    if action != "create": testcase.assertIn("not yet confirmed", text)
+                    testcase.assertIn(identity_field, text)  # Original result survives.
                 for message in messages:
                     if message.get("role") == "assistant":
                         testcase.assertNotIn("[Task system receipt]", str(message.get("content")))
@@ -79,6 +90,11 @@ class NativeTaskReceiptTest(unittest.TestCase):
             calls.append(command)
             if action == "create":
                 return {"sourceEventId":"$request", "task":{"id":"t1","kind":"main","status":"planned"},"notification":{"status":"queued","eventId":"handoff","recipient":"leader-a"}}
+            if action in {"accept", "reject"}:
+                state = "completed" if action == "accept" else "revision"
+                return {"task":{"id":"t1","submissionId":"s1","status":state},
+                        "review":{"id":"operation-one","submissionId":"s1","accepted":action == "accept","status":state},
+                        "mainProjection":"pending"}
             return {"task":{"id":"t1","status":"submitted" if action == "submit" else "completed",identity_field:"operation-one"},
                     "notification":{"status":"queued","eventId":"e1","recipient":"manager-a" if action == "complete" else "leader-a"}}
 
@@ -87,8 +103,9 @@ class NativeTaskReceiptTest(unittest.TestCase):
             await toolkit.add_tool(FunctionTool(execute, name="execute_shell_command", permission=PermissionDecision(behavior=PermissionBehavior.ALLOW, message="In-memory fixture; no shell or network access")))
             model = Model()
             agent = Agent("Worker", "Execute assigned work.", model, toolkit=toolkit, middlewares=[plugin._sanitizer_factory(None,None)])
-            context = plugin._source_event if action == "create" else (plugin._execution_task if action == "submit" else plugin._completion_task)
-            token = context.set("$request" if action == "create" else "t1")
+            context = (plugin._source_event if action == "create" else plugin._execution_task if action == "submit"
+                       else plugin._review_task if action in {"accept", "reject"} else plugin._completion_task)
+            token = context.set("$request" if action == "create" else ("t1","s1") if action in {"accept", "reject"} else "t1")
             route_token = plugin._requester_route.set({"target_user":"@human:test","target_session":"!source:test"}) if action == "create" else None
             try:
                 await agent.reply(Msg(name="Leader", role="user", content=[TextBlock(text="Submit the result.")]))

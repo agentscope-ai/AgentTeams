@@ -24,6 +24,8 @@ type taskResource struct {
 	Summary       string                            `json:"summary,omitempty"`
 	SubmissionID  string                            `json:"submissionId,omitempty"`
 	CompletionID  string                            `json:"completionId,omitempty"`
+	Review        *taskReview                       `json:"review,omitempty"`
+	ResultStatus  string                            `json:"resultStatus,omitempty"`
 	Artifacts     []taskFinalArtifact               `json:"artifacts,omitempty"`
 	OriginEventID string                            `json:"originEventId,omitempty"`
 	Notifications map[string]taskNotificationStatus `json:"notifications,omitempty"`
@@ -60,6 +62,11 @@ func (h *ProjectHandler) GetTaskResource(w http.ResponseWriter, r *http.Request)
 }
 
 func publicTaskResource(id, team string, record map[string]any) taskResource {
+	var review *taskReview
+	if record["task_review"] != nil {
+		data, _ := json.Marshal(record["task_review"])
+		_ = json.Unmarshal(data, &review)
+	}
 	var completion taskCompletion
 	data, _ := json.Marshal(record["task_completion"])
 	_ = json.Unmarshal(data, &completion)
@@ -79,6 +86,7 @@ func publicTaskResource(id, team string, record map[string]any) taskResource {
 		}
 	}
 	return taskResource{
+		Review: review, ResultStatus: coordinationString(record, "result_status"),
 		OriginEventID: origin.EventID, Notifications: notices,
 		CompletionID: completion.ID, Artifacts: completion.Artifacts,
 		ID: id, Team: team,

@@ -2,12 +2,14 @@
 
 状态：设计与实施计划。目标版本：1.2.9；不修改 1.2.8 发布标签。
 基线：main `2a4fb0a35e974074820e66f408ed94887c9f3d4f`。
-完整协议尚未实现。当前分支已实现 task create/get、task files list/read/get/put、稳定产物
+完整协议尚未实现。当前分支已实现 task create/get/accept/reject、task files list/read/get/put、稳定产物
 引用与历史版本读取、begin 接单/输入准备，以及 submit 的 API/CLI、候选提交和持久化
 通知恢复接口与测试。complete 已增加主任务完成、不可变报告和原会话回告队列的首批
 API/CLI，并固定最终产物清单、以原派单 Manager 身份发送原生 Matrix 附件，逐文件
 记录回执。派单 Agent 已发送事实的公共读取和 QwenPaw 原生上下文补齐已实现并进行隔离测试；
-原会话真实客户端展示、其余生命周期命令、公共提示词接入与实际 Harness 认证均待完成。
+accept/reject 已接通候选决定、主任务投影与最终验收后的关闭通知；中间节点验收后的
+自动派发需与 plan 一起完成。原会话真实客户端展示、plan、公共提示词接入与实际 Harness
+认证均待完成，当前不能把分支当作完整可用的新协议。
 
 ## 一、问题与验收目标
 
@@ -90,6 +92,22 @@ begin 获取实际本地目录进行业务工作。不得上传整个工作区�
 提交事件携带摘要、检查证据、精确提交身份及产物引用，减少 Leader 重复查询。
 accept 执行权限、当前版本和文件完整性检查，但不替代 Leader 的业务正确性判断。
 不能通过减少工具调用来省掉独立验收。
+
+accept/reject 使用 `POST /api/v1/tasks/{id}/accept` 或 `/reject`，仅接收
+`submissionId` 和 `note`；主任务、所属 Team、可选 Project 与通知目标从任务系统解析。
+note 是 Leader 对业务正确性的检查证据或退回原因，机械校验不能替代该判断。
+accept 合并记录业务验收和原有 passing review，校验不可变候选的摘要、报告指针、
+产物内容、成功状态、独立 Leader 身份与 r1 的可信人类批准，不能靠 display 字段伪造批准。
+reject 不受尚未完成的人类批准或执行冻结阻拦；成功候选退回到 revision，BLOCKED/
+INTERRUPTED 候选按已有规则落到 blocked，均保持终态，不重开旧执行。
+
+决定先在执行任务内与终态一起 CAS 保存，使用不透明 review ID；同一决定重试复用
+收据，改变候选、接受/拒绝或 note 会被拒绝。主任务只合并该节点的确定候选决定，
+使用 CAS 保留其他节点的并发进度。父任务写入中断时返回 `mainProjection=pending`，
+现有恢复扫描从已保存决定继续，正向推进仍检查主任务/Project 的冻结与活动状态。
+全部节点验收完成后，主任务投影与 `main_task_ready` 待通知意图一起保存，沿用原有
+公共通知队列。当前公共 get 返回 resultStatus 和 review；QwenPaw 对精确当前候选的
+最终 CLI 工具回执生成上下文事实，不把状态同步 pending 写成已通知或已交付。
 
 ### 2. 文件与产物
 

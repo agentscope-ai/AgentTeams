@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -277,27 +278,31 @@ func appendTaskOperationHistory(task map[string]any, from, to, action, actor str
 
 // taskExecutionAdmission shares decision and Project gates across public execution actions.
 func (h *ProjectHandler) taskExecutionAdmission(w http.ResponseWriter, r *http.Request, key string, task map[string]any) bool {
-	if decision := coordinationString(task, "decision_status"); decision != "" && decision != "open" {
-		writeError(w, 409, "task requires a decision before execution")
+	if status, message := h.taskExecutionAdmissionFailure(r.Context(), key, task); status != 0 {
+		writeError(w, status, message)
 		return false
+	}
+	return true
+}
+
+func (h *ProjectHandler) taskExecutionAdmissionFailure(ctx context.Context, key string, task map[string]any) (int, string) {
+	if decision := coordinationString(task, "decision_status"); decision != "" && decision != "open" {
+		return 409, "task requires a decision before execution"
 	}
 	if projectID := coordinationString(task, "project_id"); projectID != "" {
 		if !isSafeTaskID(projectID) {
-			writeError(w, 409, "invalid project membership")
-			return false
+			return 409, "invalid project membership"
 		}
 		projectKey := path.Join(path.Dir(path.Dir(path.Dir(key))), "projects", projectID, "meta.json")
-		body, err := h.oss.GetObject(r.Context(), projectKey)
+		body, err := h.oss.GetObject(ctx, projectKey)
 		var project map[string]any
 		if err != nil || json.Unmarshal(body, &project) != nil {
-			writeError(w, 503, "project membership unavailable")
-			return false
+			return 503, "project membership unavailable"
 		}
 		if coordinationString(project, "project_id") != projectID || coordinationString(project, "status") != "active" {
-			writeError(w, 409, "project membership is not active")
-			return false
+			return 409, "project membership is not active"
 		}
 	}
 
-	return true
+	return 0, ""
 }

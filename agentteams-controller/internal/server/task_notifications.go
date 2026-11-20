@@ -104,7 +104,17 @@ func (h *ProjectHandler) recoverTaskNotifications(ctx context.Context) {
 				}
 				var task map[string]json.RawMessage
 				var intents map[string]taskNotificationIntent
-				if json.Unmarshal(body, &task) != nil || json.Unmarshal(task["task_notifications"], &intents) != nil {
+				if json.Unmarshal(body, &task) != nil {
+					continue
+				}
+				var review taskReview
+				if json.Unmarshal(task["task_review"], &review) == nil && review.ID != "" {
+					var child map[string]any
+					if json.Unmarshal(body, &child) == nil {
+						_, _ = h.projectTaskReview(ctx, key, child, review)
+					}
+				}
+				if json.Unmarshal(task["task_notifications"], &intents) != nil {
 					continue
 				}
 				for kind, intent := range intents {

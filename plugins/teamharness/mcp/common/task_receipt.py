@@ -30,9 +30,12 @@ def _task_flags(tail: list[str], flags: set[str]) -> bool:
 def task_operation_command(command: str) -> tuple[str, str] | None:
     # Only a single CLI operation has an unambiguous result-to-call binding.
     words = _task_command_words(command)
-    if not words or len(words) < 4 or words[2] not in {"submit", "complete"} or not _ID.fullmatch(words[3]):
+    if not words or len(words) < 4 or words[2] not in {"submit", "complete", "accept", "reject"} or not _ID.fullmatch(words[3]):
         return None
-    flags = {"--summary", "--report", "--status", "--file", "--team"} if words[2] == "submit" else {"--report", "--team", "--artifact"}
+    flags = {"submit": {"--summary", "--report", "--status", "--file", "--team"},
+             "complete": {"--report", "--team", "--artifact"},
+             "accept": {"--submission", "--note", "--team"},
+             "reject": {"--submission", "--note", "--team"}}[words[2]]
     return (words[2], words[3]) if _task_flags(words[4:], flags) else None
 
 
@@ -98,6 +101,41 @@ def task_receipt(result: object, task_id: str, action: str) -> tuple[str, str] |
     next_action = ("Do not resend the notification; wait for acceptance or revision." if action == "submit"
                    else "Do not send another completion message.")
     return identity, f"[Task system receipt]\nTask {task_id} {state}. {fact} {next_action}"
+
+
+def review_receipt(result: object, task_id: str, submission_id: str, action: str) -> tuple[str, str] | None:
+    if not isinstance(result, dict) or result.get("ok") is False or action not in {"accept", "reject"} or not submission_id:
+        return None
+    task, review = result.get("task"), result.get("review")
+    if not isinstance(task, dict) or not isinstance(review, dict):
+        return None
+    accepted = action == "accept"
+    state = task.get("status")
+    projection = result.get("mainProjection")
+    if (task.get("id") != task_id or task.get("submissionId") != submission_id
+            or review.get("submissionId") != submission_id or review.get("accepted") is not accepted
+            or review.get("status") != state or not isinstance(review.get("id"), str) or not review["id"]
+            or (state != "completed" if accepted else state not in {"revision", "blocked"})
+            or projection not in {"applied", "pending"}):
+        return None
+    fact = "Main-task state is synchronized." if projection == "applied" else "Main-task synchronization is pending; task system will retry."
+    notice = result.get("notification")
+    notice_key = None
+    if notice is not None:
+        if not isinstance(notice, dict) or notice.get("status") not in {"pending", "queued"}:
+            return None
+        status, recipient, event = notice["status"], notice.get("recipient"), notice.get("eventId")
+        if status == "queued":
+            if not isinstance(recipient, str) or not _ID.fullmatch(recipient) or not isinstance(event, str) or not event:
+                return None
+            fact += f' Main-task closure notification is queued for "{recipient}"; delivery is not yet confirmed.'
+        else:
+            fact += " Main-task closure notification is pending."
+        notice_key = [status, recipient, event]
+    identity = json.dumps([action, task_id, submission_id, review["id"], projection, notice_key], separators=(",", ":"))
+    return identity, (f"[Task system receipt]\nTask system saved your {'acceptance' if accepted else 'rejection'} of "
+                      f"candidate {submission_id} for task {task_id}; execution is {state}. {fact} "
+                      "Do not repeat this decision or reopen this terminal execution.")
 
 
 _DELIVERY_SEEN = "teamharness.sent_deliveries"

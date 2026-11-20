@@ -28,6 +28,10 @@ _review_task: ContextVar[tuple[str, str] | None] = ContextVar("teamharness_revie
 _ack_scope: ContextVar[tuple | None] = ContextVar("teamharness_ack_scope", default=None)
 _delivery_ack: ContextVar[dict | None] = ContextVar("teamharness_delivery_ack", default=None)
 _approval_status_records: dict[str, dict[str, Any]] = {}
+
+
+def _is_task_tool(name: str) -> bool:
+    return name in {"mcp__teamharness__task", "teamharness__task"}
 ASSET_DIR = PLUGIN_DIR / "teamharness"
 if not (ASSET_DIR / "plugin.yaml").exists():
     ASSET_DIR = PLUGIN_DIR.parent.parent
@@ -121,10 +125,12 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         _task_scope = None
 
         def _inject_task_receipt(self, item: Any, tool_name: str, args: Any, creation_source: str = "") -> None:
-            if tool_name != "execute_shell_command" or not isinstance(args, dict):
+            if tool_name not in {"execute_shell_command", "task"} or not isinstance(args, dict):
                 return
             if not creation_source:
-                operation = receipts.task_operation_command(args.get("command"))
+                operation = ((args.get("action"), args.get("taskId")) if tool_name == "task"
+                             and isinstance(args.get("action"), str) and args.get("action") in {"plan", "submit", "accept", "reject", "complete"}
+                             and isinstance(args.get("taskId"), str) else receipts.task_operation_command(args.get("command")))
                 if not operation:
                     return
                 action, task_id = operation
@@ -211,6 +217,9 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         async def on_check_permission(self, agent: Any, input_kwargs: dict[str, Any], next_handler: Callable[..., Any]) -> Any:
             self._task_scope = self._task_scope or _ack_scope.get()
             call = input_kwargs.get("tool_call")
+            if _is_task_tool(str(getattr(call, "name", ""))):
+                from agentscope.permission import PermissionBehavior, PermissionDecision
+                return PermissionDecision(behavior=PermissionBehavior.ALLOW, message="Task system authenticates and authorizes this fixed Task operation; no arbitrary shell is available.")
             command = str((input_kwargs.get("tool_input") or {}).get("command") or "")
             if getattr(call, "name", "") == "execute_shell_command" and (_compound_private_cleanup(command) or self._task_scope and _compound_output_change(command)):
                 from agentscope.permission import PermissionBehavior, PermissionDecision
@@ -247,6 +256,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             self._task_scope = self._task_scope or _ack_scope.get()
             call = input_kwargs.get("tool_call")
             args = getattr(call, "input", {})
+            original_input = dict(args) if isinstance(args, dict) else args
             json_input = isinstance(args, str)
             if json_input:
                 try:
@@ -273,6 +283,14 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 if json_input:
                     call.input = json.dumps(args, ensure_ascii=False)
             creation_source = ""
+            task_tool = _is_task_tool(str(getattr(call, "name", "")))
+            if task_tool and isinstance(args, dict):
+                args.pop("_nativeSource", None)
+                if args.get("action") == "create" and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and route and _source_event.get():
+                    creation_source = _source_event.get()
+                    args["_nativeSource"] = {"eventId": creation_source, "userId": str(route.get("target_user") or ""), "roomId": str(route.get("target_session") or "")}
+                if json_input:
+                    call.input = json.dumps(args, ensure_ascii=False)
             if name == "execute_shell_command" and isinstance(args, dict) and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and route:
                 bound = receipts.creation_command_env(args.get("command"), _source_event.get(), str(route.get("target_user") or ""), str(route.get("target_session") or ""))
                 if bound:
@@ -290,6 +308,8 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 yield ToolResponse(state="error", content=[{"type": "text", "text": _CLEANUP_GUIDANCE}])
                 return
             async for item in next_handler(**input_kwargs):
+                if task_tool:
+                    self._inject_task_receipt(item, "task", args, creation_source)
                 if getattr(call, "name", "") == "execute_shell_command" and (_execution_task.get() or _completion_task.get() or _planning_tasks.get() or _review_task.get() or creation_source):
                     self._inject_task_receipt(item, name, args, creation_source)
                 if name in {"projectflow", "taskflow"} and args.get("action") == "accept_task_result" and _review_task.get():
@@ -328,6 +348,10 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                                 and (result.get("task") or {}).get("status") == "submitted"):
                             self._submitted_task = _execution_task.get()
                 _sanitize(item)
+                if creation_source and getattr(item, "state", None) in {"success", "error"}:
+                    # Keep per-call native routing out of the model's saved
+                    # invocation, while retaining the actual returned receipt.
+                    call.input = original_input
                 yield item
 
     return TeamHarnessSanitizer()

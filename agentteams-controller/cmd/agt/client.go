@@ -106,6 +106,12 @@ func (c *APIClient) doWithHeadersContext(ctx context.Context, method, path strin
 			req.Header.Add(k, value)
 		}
 	}
+	// Preserve the current Task tool's W3C context across the CLI subprocess.
+	for _, name := range []string{"traceparent", "tracestate", "baggage"} {
+		if value := os.Getenv("AT_OTEL_" + strings.ToUpper(name)); value != "" && req.Header.Get(name) == "" {
+			req.Header.Set(name, value)
+		}
+	}
 	if body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}

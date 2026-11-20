@@ -119,6 +119,17 @@ class StagePacketTest(unittest.TestCase):
         self.assertTrue(content["org.agentteams.progress_only"])
         self.assertTrue(content["m.new_content"]["org.agentteams.progress_only"])
 
+    def test_internal_lifecycle_and_placeholder_notices_cannot_wake_peers(self):
+        channel = self.channel_type(process=lambda *args, **kwargs: None)
+        channel._room_send_with_retry = AsyncMock()
+        asyncio.run(channel._publish_direct_execution("!room:test", "$run", "completed"))
+        self.assertTrue(channel._room_send_with_retry.call_args.args[2]["org.agentteams.progress_only"])
+        channel._edit_matrix_event = AsyncMock()
+        asyncio.run(channel._edit_thread_root("!room:test", {}, "已处理"))
+        self.assertTrue(channel._edit_matrix_event.call_args.kwargs["progress_only"])
+        asyncio.run(channel._edit_thread_root("!room:test", {}, "Requested result", msgtype="m.text"))
+        self.assertFalse(channel._edit_matrix_event.call_args.kwargs["progress_only"])
+
     def test_full_handoff_and_verified_event_metadata_reach_request(self):
         full = "\n".join(f"acceptance {n}" for n in range(8))
         packet = self.receive(full, "\n".join(full.splitlines()[:5]) + "\n…preview")

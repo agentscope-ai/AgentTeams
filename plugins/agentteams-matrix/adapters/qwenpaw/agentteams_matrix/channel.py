@@ -562,7 +562,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         }[status]
         try:
             await self._room_send_with_retry(room_id, "m.room.message", {
-                "msgtype": "m.notice", "body": text,
+                "msgtype": "m.notice", "body": text, "org.agentteams.progress_only": True,
                 DIRECT_EXECUTION_KEY: {
                     "run_id": run_id, "status": status,
                     "capabilities": ["stop", "steer"],
@@ -4505,7 +4505,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             text,
             msgtype=msgtype,
             html=html,
-            progress_only=bool(send_meta.get("teamharness_matrix_coordination")),
+            progress_only=msgtype == "m.notice" or bool(send_meta.get("teamharness_matrix_coordination")),
         )
 
     # ------------------------------------------------------------------

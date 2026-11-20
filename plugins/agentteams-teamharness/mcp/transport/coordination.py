@@ -43,7 +43,7 @@ def deliver_event(kind: str, **event: Any) -> dict[str, Any] | None:
     actor = _matrix_user_id()
     endpoint = os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip().rstrip("/")
     if not endpoint and ((kind == "handoff" and event.get("tasks")) or
-                         (kind in {"task_assigned", "task_submitted"} and actor and
+                         (kind in {"task_assigned", "task_submitted", "main_task_completed"} and actor and
                           (event.get("main_task_id") or event.get("recipient") == actor))):
         controller = os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip().rstrip("/")
         if controller:

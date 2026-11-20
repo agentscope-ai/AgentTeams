@@ -95,7 +95,7 @@ def notification(content, room, sender, own, *, fetch=controller_json):
             if (plan.get("status") not in ({"in_progress", "submitted"} if main else {"active"})
                     or (main and plan.get("task_kind") != "main")
                     or not leaves or any(n.get("status") != "completed" for n in leaves)
-                    or os.getenv("AGENTTEAMS_AGENT_ROLE") not in {"leader", "team_leader"}):
+                    or sender != own):
                 raise IgnoredNotification("plan is not ready to close")
         elif kind in {"main_task_completed", "project_completed"}:
             main = canonical.get("main_task_id")

@@ -110,3 +110,12 @@ def test_only_completed_plan_admits_the_verified_final_report(packet):
     packet[3]["status"] = "in_progress"
     with pytest.raises(protocol.IgnoredNotification):
         receive(packet)
+
+
+def test_verified_closure_uses_registered_receipt_instead_of_stale_boot_role(packet, monkeypatch):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "standalone")
+    for event in (packet[0]["org.agentteams.coordination"]["channel_meta"]["teamharness_coordination"], packet[1]["control"]["channel_meta"]["teamharness_coordination"]):
+        event.update(kind="main_task_ready", task_id="", delivery_id="")
+    packet[0]["org.agentteams.coordination"]["channel_meta"]["sender_id"] = "@worker:test"
+    packet[1]["actor"] = "@worker:test"
+    assert receive(packet, sender="@worker:test")

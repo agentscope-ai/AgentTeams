@@ -156,7 +156,7 @@ def _send_delegate_notification(
     ``txn`` is omitted, a fresh id is generated for this send only.
     Returns the Matrix ``eventId`` on success.
     """
-    if os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip() or (os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip() and assignee == _matrix_user_id()):
+    if os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip() or os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip():
         task = _read_json(_task_state_path(arguments, task_id), {})
         api_delivery = deliver_event("task_assigned", project_id=task.get("project_id"), main_task_id=task.get("main_task_id", ""), task_id=task_id,
             recipient=assignee, delivery_id=txn, room_id=_canonical_room_id(room_id), text=spec)

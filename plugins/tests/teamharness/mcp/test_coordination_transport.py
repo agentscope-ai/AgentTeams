@@ -99,3 +99,17 @@ def test_missing_identities_do_not_enable_self_execution_transport(monkeypatch, 
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller:8090")
     monkeypatch.setattr(coordination, "_matrix_user_id", lambda: "")
     assert coordination.deliver_event(kind, recipient="", task_id="t") is None
+
+@pytest.mark.parametrize("kind", ["task_assigned", "task_submitted"])
+def test_main_task_peer_events_use_controller_without_opt_in(tmp_path, monkeypatch, kind):
+    monkeypatch.delenv("TEAMHARNESS_COORDINATION_URL", raising=False)
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller:8090")
+    token = tmp_path / "token"
+    token.write_text("scoped-token")
+    monkeypatch.setenv("AGENTTEAMS_AUTH_TOKEN_FILE", str(token))
+    monkeypatch.setattr(coordination, "_matrix_user_id", lambda: "@actor:test")
+    receive = Mock(return_value=io.BytesIO(b'{"accepted":true,"event_id":"peer-1"}'))
+    monkeypatch.setattr(coordination.urllib.request, "urlopen", receive)
+    result = coordination.deliver_event(kind, main_task_id="main", recipient="@peer:test", task_id="child")
+    assert result["sent"]
+    assert json.loads(receive.call_args.args[0].data)["main_task_id"] == "main"

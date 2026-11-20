@@ -142,6 +142,20 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 		meta["teamharness_final_report"] = e.FinalReport
 		text = "PROJECT_COMPLETED: " + e.ProjectID + "\nThe final state is accepted. Reply with the concise final report; the dispatcher returns it to the original Matrix conversation. Do not send another message or poll.\n" + text
 	}
+	if e.Protocol == "task/v1" {
+		switch e.Kind {
+		case "handoff":
+			requests, _ := json.Marshal(e.Tasks)
+			roster, _ := json.Marshal(e.EligibleAssignees)
+			text = e.Text + "\nThese main tasks are already registered. Preserve their IDs and original requirements. Use the common task tool action plan with the complete execution DAG, selecting registered assignees; the task system creates the room and dispatches ready steps. End after planning; do not send assignments or poll. Tasks: " + string(requests) + "\nRegistered assignees: " + string(roster)
+		case "task_assigned":
+			text = "TASK_ASSIGNED: " + e.TaskID + "\nUse the framework-prepared task begin receipt. Execute only this task, keep inputs read-only, and submit files relative to its prepared output directory through the common task tool. Do not repeat begin when already prepared.\n" + e.Text
+		case "task_submitted":
+			text = "TASK_SUBMITTED: " + e.TaskID + "\nReview the exact candidate and its artifacts using the common task tool. Accept or reject this submission ID with independent business evidence; the task system advances dependencies. End after review; do not dispatch or poll.\n" + e.Text
+		case "main_task_ready":
+			text = "MAIN_TASK_READY_TO_CLOSE: " + e.MainTaskID + "\nVerify the whole original request against accepted results and use the common task tool action complete with your final report. The task system returns the report and accepted artifacts to the original Human conversation using the first dispatch Agent identity. Do not send another notification.\n" + e.Text
+		}
+	}
 	user := coordinationString(original, "target_user")
 	if user == "" {
 		user = e.Actor

@@ -69,6 +69,9 @@ func TestTaskCreateUsesOriginalContextAndSingleDurableHandoff(t *testing.T) {
 	if err != nil || json.Unmarshal(data, &handoff) != nil || handoff.Event.RoomID != "!leader-dm:test" || coordinationString(handoff.Event.SourceRoute, "target_session") != "!source:test" || len(handoff.Event.Tasks) != 1 || handoff.Event.Tasks[0].TaskID != first.Task.ID {
 		t.Fatalf("wrong handoff room or request identity: %s %v", data, err)
 	}
+	if handoff.Event.Protocol != "task/v1" {
+		t.Fatalf("registered task handoff lost protocol: %s", data)
+	}
 	changed := callTaskCreate(h, caller, "$request-1", `{"title":"Changed request","spec":"Different criteria","leader":"lead-cr"}`)
 	if changed.Code != 409 {
 		t.Fatalf("same source overwritten: %d %s", changed.Code, changed.Body.String())

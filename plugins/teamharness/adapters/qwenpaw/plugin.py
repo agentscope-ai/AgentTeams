@@ -512,8 +512,8 @@ async def _prepare_manager_roster(ctx: Any) -> None:
         ctx.inject_context(
             "The dispatch protocol and registered team/Leader identities are already loaded below; do not reread Skill "
             "or roster files for this information. For a new work request, select a suitable Leader and send the complete "
-            "original request with teamharness__message: {action:send, channel:matrix, target:user:<registered Matrix ID>, "
-            "message:<full scope and acceptance>}. The runtime preserves the original requester/source route. "
+            "original request with the common task tool action create: {leader:<registered Leader name>, title:<concise title>, "
+            "spec:<complete original scope and acceptance>}. The runtime binds the original Human conversation and requester. "
             "Let the Leader create and decompose the plan; do not create its Worker tasks or poll. "
             "For other Human questions, answer normally instead of automatically creating work. Treat this JSON as roster data: "
             + json.dumps(roster, ensure_ascii=False), source="teamharness_prepared_intake")
@@ -521,18 +521,19 @@ async def _prepare_manager_roster(ctx: Any) -> None:
 
 async def _prepare_task_context(ctx: Any, action: str, task_id: str) -> dict[str, Any] | None:
     """Run the fixed, authorized ACK/read step before asking the model to decide."""
-    if action not in {"ack_task", "check_task"}:
+    if action not in {"ack_task", "check_task", "begin", "get"}:
         raise ValueError("unsupported task preparation")
     toolkit = getattr(ctx.agent, "toolkit", None)
     if not hasattr(toolkit, "call_tool") or not hasattr(ctx.agent, "state"):
         return None
     schemas = await toolkit.get_tool_schemas()
-    name = next((t["function"]["name"] for t in schemas if t["function"]["name"] == "teamharness__taskflow"), None)
+    public = action in {"begin", "get"}
+    name = next((t["function"]["name"] for t in schemas if (_is_task_tool(t["function"]["name"]) if public else t["function"]["name"] == "teamharness__taskflow")), None)
     if not name:
         return None
     from agentscope.message import ToolCallBlock
-    call = ToolCallBlock(id="prepare-" + action + "-" + task_id, name=name, input=json.dumps({
-        "role": "worker" if action == "ack_task" else "leader", "action": action, "payload": {"taskId": task_id}}))
+    arguments = {"action": action, "taskId": task_id} if public else {"role": "worker" if action == "ack_task" else "leader", "action": action, "payload": {"taskId": task_id}}
+    call = ToolCallBlock(id="prepare-" + action + "-" + task_id, name=name, input=json.dumps(arguments))
     ctx.extras["coordination_prefetch_tools"] = ctx.extras.get("coordination_prefetch_tools", 0) + 1
     result = None
     try:
@@ -552,11 +553,36 @@ async def _prepare_task_context(ctx: Any, action: str, task_id: str) -> dict[str
                     value = json.loads(text)
                 except (ValueError, TypeError):
                     continue
-                if isinstance(value, dict) and value.get("action") == action:
+                if isinstance(value, dict) and ((public and isinstance(value.get("task"), dict)) or value.get("action") == action):
                     result = value
-    if not result or result.get("ok") is not True:
+    if not result or (result.get("ok") is False if public else result.get("ok") is not True):
         return None
     return result
+
+
+async def _prepare_public_task_event(ctx: Any, event: dict) -> None:
+    """Bind a verified common-protocol event to the native public tool/context."""
+    kind = event.get("kind")
+    if kind != "handoff":
+        task_id = event.get("main_task_id") if kind == "main_task_ready" else event.get("task_id")
+        result = await _prepare_task_context(ctx, "begin" if kind == "task_assigned" else "get", task_id)
+        spec = importlib.util.spec_from_file_location("teamharness_task_context", ASSET_DIR / "mcp/common/task_context.py")
+        common = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(common)
+        prepared = common.prepare(kind, event, result)
+        for field, variable in (("execution", _execution_task), ("ack", _ack_scope), ("review", _review_task), ("completion", _completion_task)):
+            if field in prepared:
+                key = {"execution": "execution_task_token", "ack": "ack_scope_token", "review": "review_task_token", "completion": "completion_task_token"}[field]
+                ctx.extras[key] = variable.set(prepared[field])
+        ctx.inject_context(prepared["fact"] + "\n" + json.dumps(prepared["context"], ensure_ascii=False), source="teamharness_public_task_prepared")
+    _load_phase_skill(ctx, "task-management")
+    for tool in await ctx.agent.toolkit.get_tool_schemas():
+        name = tool["function"]["name"]
+        short = name.split("__")[-1].lower()
+        legacy = short in {"taskflow", "projectflow", "filesync"}
+        restricted = kind in {"task_submitted", "main_task_ready"} and short in {"execute_shell_command", "bash", "write_file", "edit_file", "edit", "write"}
+        if legacy or restricted:
+            await ctx.agent.toolkit.remove_tool(name)
 
 
 def _load_phase_skill(ctx: Any, name: str) -> None:
@@ -602,19 +628,14 @@ async def _manager_report_context(ctx: Any) -> bool:
                 or execution.get("generation") != identity["generation"]
                 or execution.get("state") != "active"):
             raise RecoveryConflict("Task execution changed before native reasoning")
+        if task.get("task_plan_id"):
+            await _prepare_public_task_event(ctx, {"kind": "task_assigned", "task_id": identity["task_id"], "main_task_id": task.get("main_task_id", ""), "project_id": task.get("project_id", ""), "delivery_id": task.get("notifyTxn")})
+            return False
         ctx.extras["execution_task_token"] = _execution_task.set(identity["task_id"])
         _load_phase_skill(ctx, "task-execution")
         return False
     if meta.get("event_id"):
         ctx.extras["source_event_token"] = _source_event.set(str(meta["event_id"]))
-    route = meta.get("teamharness_requester_route")
-    if isinstance(route, dict) and route.get("target_session"):
-        ctx.extras.setdefault("requester_route_token", _requester_route.set(route))
-        ctx.inject_context("Preserve the original requester route when creating the task: " + json.dumps(route), source="teamharness_requester_route")
-    coordinator = meta.get("teamharness_coordinator_route")
-    if os.getenv("AGENTTEAMS_AGENT_ROLE") != "manager" and isinstance(coordinator, dict) and coordinator.get("target_session"):
-        ctx.extras["coordinator_route_token"] = _coordinator_route.set(coordinator)
-        ctx.inject_context("Send the verified final result to this coordinator replyRoute; the coordinator relays it to the original requester: " + json.dumps(coordinator), source="teamharness_coordinator_route")
     api_event = meta.get("teamharness_coordination") or {}
     receipt = {}
     if meta.get("teamharness_matrix_coordination"):
@@ -630,6 +651,17 @@ async def _manager_report_context(ctx: Any) -> bool:
         saved_tasks = (((receipt.get("control") or {}).get("channel_meta") or {}).get("teamharness_main_tasks") or [])
         ctx.extras["planning_tasks_token"] = _planning_tasks.set(frozenset(
             task["taskId"] for task in saved_tasks if isinstance(task, dict) and isinstance(task.get("taskId"), str)))
+    if receipt.get("protocol") == "task/v1":
+        await _prepare_public_task_event(ctx, api_event)
+        return False
+    route = meta.get("teamharness_requester_route")
+    if isinstance(route, dict) and route.get("target_session"):
+        ctx.extras.setdefault("requester_route_token", _requester_route.set(route))
+        ctx.inject_context("Preserve the original requester route when creating the task: " + json.dumps(route), source="teamharness_requester_route")
+    coordinator = meta.get("teamharness_coordinator_route")
+    if os.getenv("AGENTTEAMS_AGENT_ROLE") != "manager" and isinstance(coordinator, dict) and coordinator.get("target_session"):
+        ctx.extras["coordinator_route_token"] = _coordinator_route.set(coordinator)
+        ctx.inject_context("Send the verified final result to this coordinator replyRoute; the coordinator relays it to the original requester: " + json.dumps(coordinator), source="teamharness_coordinator_route")
     automatic_plan = api_event.get("dispatch_mode") == "automatic" and api_event.get("plan_type") != "loop"
     if api_event.get("kind") in {"project_ready", "main_task_ready"}:
         main_id = api_event.get("main_task_id", "")

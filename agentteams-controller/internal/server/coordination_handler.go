@@ -35,6 +35,7 @@ type CoordinationHandler struct {
 }
 
 type coordinationEvent struct {
+	Protocol          string              `json:"protocol,omitempty"`
 	Artifacts         []taskFinalArtifact `json:"artifacts,omitempty"`
 	Tasks             []mainTaskRequest   `json:"tasks,omitempty"`
 	Kind              string              `json:"kind"`
@@ -185,6 +186,7 @@ func (h *CoordinationHandler) targetWorker(e *coordinationEvent, w *v1beta1.Work
 }
 
 func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, caller *authpkg.CallerIdentity) (coordinationEvent, error) {
+	e.Protocol = ""   // Rebuild protocol authority from registered tasks, never caller input.
 	e.Artifacts = nil // Final file authority is rebuilt from the completed Task snapshot.
 	reject := func() (coordinationEvent, error) { return e, errCoordinationRejected }
 	if caller == nil || (caller.Role != authpkg.RoleManager && caller.Role != authpkg.RoleTeamLeader && caller.Role != authpkg.RoleWorker) {
@@ -194,6 +196,9 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 	e.ActorRole = caller.Role
 	var fence string
 	if e.Kind == "handoff" {
+		if len(e.Tasks) > 0 {
+			e.Protocol = "task/v1"
+		}
 		if caller.Role != authpkg.RoleManager || e.OriginEventID == "" || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_session"), "!") || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_user"), "@") {
 			return reject()
 		}
@@ -279,6 +284,9 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		}
 		if !identityMatches || (coordinationString(project, "team_id") != tm.Name && coordinationString(project, "team_id") != e.StorageTeam) {
 			return reject()
+		}
+		if e.MainTaskID != "" && project["task_plan"] != nil {
+			e.Protocol = "task/v1"
 		}
 		e.RoomID = coordinationString(project, "room_id")
 		e.PlanType = coordinationString(project, "plan_type")

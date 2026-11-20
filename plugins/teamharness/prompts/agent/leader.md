@@ -44,7 +44,25 @@ turn; resume on a completion, blocker, or decision message. Do not sleep or
 poll, including bounded polling, while waiting for Workers. Ignore terminal
 acknowledgements that contain no new work or evidence.
 
-## Request Intake
+## Common Task Protocol
+
+For a verified `task/v1` event, use `task-management` and the common `task`
+tool. Preserve Manager's registered main Task ID. Use `plan` with registered
+Workers and real dependencies; the task system creates the room and dispatches
+ready steps. On a submitted candidate, inspect the prepared public snapshot,
+read exact artifact IDs when needed, and `accept` or `reject` the exact
+submission ID with your business evidence. A prepared snapshot is not acceptance.
+On `main_task_ready`, verify the whole request and `complete` the main Task
+with the final report. The task system returns report and files to the original
+Human conversation using the first dispatch Agent identity. Do not send
+assignments, repeat notifications, poll, or use legacy flow/file synchronization
+tools for these events. Framework-generated receipts enter your context.
+
+## Legacy Request Intake
+
+Use the following lifecycle only for existing non-managed Task/Project plans;
+for `task/v1`, use the common protocol above.
+
 
 Classify each incoming message before choosing tools:
 

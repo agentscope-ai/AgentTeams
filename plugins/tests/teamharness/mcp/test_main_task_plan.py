@@ -414,3 +414,48 @@ def test_main_completion_uses_shared_submit_then_accept_lifecycle(plan, monkeypa
     monkeypatch.setattr(sync, "_commit_task_meta", commit)
     assert _sync_main_plan(args, "main-a", completing=True)
     assert states == ["submitted", "completed"]
+
+
+@pytest.mark.parametrize("saved_plan", [False, True])
+def test_start_retry_inherits_manager_route_and_accepts_saved_assignment_specs(plan, monkeypatch, saved_plan):
+    args, rooms = plan
+    root = Path(args["workspaceDir"]) / "shared/tasks/main-a"
+    root.mkdir(parents=True)
+    route = args["payload"].pop("replyRoute")
+    (root / "meta.json").write_text(json.dumps({
+        "task_id": "main-a", "task_kind": "main", "status": "planned",
+        "spec": args["payload"]["spec"], "tasks": [],
+        "source_room_id": "!source:test", "requester": "@human:test", "reply_route": route,
+    }))
+    original_sync = server._sync_task
+    failed = False
+    def sync_once(arguments, task_id, **kwargs):
+        nonlocal failed
+        if task_id == "main-a" and not failed:
+            failed = True
+            return False
+        return original_sync(arguments, task_id, **kwargs)
+    monkeypatch.setattr(server, "_sync_task", sync_once)
+    first = invoke(args)
+    assert not first["ok"] and first["retryable"]
+    saved = json.loads((root / "meta.json").read_text())
+    if saved_plan:
+        args["payload"]["tasks"] = saved["tasks"]
+    result = invoke(args)
+    assert result["ok"] and result["reused"], result
+    after = json.loads((root / "meta.json").read_text())
+    assert after["reply_route"] == route
+    assert after["requester"] == "@human:test" and after["source_room_id"] == "!source:test"
+    assert after["tasks"][0]["spec"].count("# Original request") == 1
+    assert len(rooms) == 1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("requester", "@other:test"), ("sourceRoomId", "!other:test"),
+    ("replyRoute", {"channel": "matrix", "target_session": "!other:test"}),
+])
+def test_start_retry_still_rejects_changed_requester_route(plan, field, value):
+    args, _ = plan
+    assert invoke(args)["ok"]
+    args["payload"][field] = value
+    assert not invoke(args)["ok"]

@@ -215,12 +215,9 @@ def _start_task(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str,
     for node in nodes:
         node["parent_task_id"] = main_id
         node["task_kind"] = "execution"
-        node["spec"] = (
-            "# Original request\n"
-            + spec.strip()
-            + "\n\n# Your assignment\n"
-            + node["spec"]
-        )
+        prefix = "# Original request\n" + spec.strip() + "\n\n# Your assignment\n"
+        if not node["spec"].startswith(prefix):
+            node["spec"] = prefix + node["spec"]
     if os.getenv("TEAMHARNESS_COORDINATION_URL"):
         from mcp.transport.coordination import native_team_members
 
@@ -266,9 +263,9 @@ def _start_task(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str,
             existing.get("task_kind") != "main"
             or shape(existing.get("tasks", [])) != shape(nodes)
             or existing.get("project_id", "") != project_id
-            or existing.get("requester", "") != payload.get("requester", "")
-            or existing.get("source_room_id", "") != payload.get("sourceRoomId", "")
-            or existing.get("reply_route", {}) != payload.get("replyRoute", {})
+            or existing.get("requester", "") != payload.get("requester", existing.get("requester", ""))
+            or existing.get("source_room_id", "") != payload.get("sourceRoomId", existing.get("source_room_id", ""))
+            or existing.get("reply_route", {}) != payload.get("replyRoute", existing.get("reply_route", {}))
         ):
             raise ValueError(
                 "start_task retry must preserve the original plan, membership and requester"

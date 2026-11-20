@@ -130,6 +130,22 @@ class StagePacketTest(unittest.TestCase):
         asyncio.run(channel._edit_thread_root("!room:test", {}, "Requested result", msgtype="m.text"))
         self.assertFalse(channel._edit_matrix_event.call_args.kwargs["progress_only"])
 
+    def test_canonical_completion_preserves_verified_workflow_and_final_report(self):
+        control = self.assignment()
+        control["session_id"] = "coordination-result:m"
+        meta = control["channel_meta"]
+        meta["main_task_id"] = "m"
+        meta["teamharness_coordination"].update(kind="main_task_completed", main_task_id="m")
+        meta["teamharness_workflow"] = {"type": "MAIN_TASK_COMPLETED", "task_id": "m"}
+        meta["teamharness_final_report"] = {"text": "Accepted result"}
+        packet = self.receive("", "Task completed", {
+            "org.agentteams.coordination": control, "org.agentteams.workflow": {},
+        })
+        self.assertEqual(packet["meta"]["teamharness_workflow"], meta["teamharness_workflow"])
+        self.assertEqual(packet["meta"]["teamharness_final_report"], meta["teamharness_final_report"])
+        request = self.channel_type(process=lambda *args, **kwargs: None).build_agent_request_from_native(packet)
+        self.assertEqual(request.channel_meta["teamharness_requester_route"]["target_session"], "!human:test")
+
     def test_full_handoff_and_verified_event_metadata_reach_request(self):
         full = "\n".join(f"acceptance {n}" for n in range(8))
         packet = self.receive(full, "\n".join(full.splitlines()[:5]) + "\n…preview")

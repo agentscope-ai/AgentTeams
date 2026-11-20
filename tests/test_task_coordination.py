@@ -100,3 +100,13 @@ def test_receipt_read_failure_keeps_unverified_input_retryable(packet, error, ex
         raise error
     with pytest.raises(expected):
         receive((*packet[:-1], fail))
+
+
+def test_only_completed_plan_admits_the_verified_final_report(packet):
+    for event in (packet[0]["org.agentteams.coordination"]["channel_meta"]["teamharness_coordination"], packet[1]["control"]["channel_meta"]["teamharness_coordination"]):
+        event.update(kind="main_task_completed", task_id="", delivery_id="")
+    packet[3]["status"] = "completed"
+    assert receive(packet)
+    packet[3]["status"] = "in_progress"
+    with pytest.raises(protocol.IgnoredNotification):
+        receive(packet)

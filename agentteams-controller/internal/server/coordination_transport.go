@@ -210,7 +210,14 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 					return
 				}
 				if d.UserEventID == "" {
-					id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", e.FinalReport)
+					if d.ReportSnapshot == "" {
+						d.ReportSnapshot = e.FinalReport
+						if persist() != nil {
+							return
+						}
+					}
+
+					id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", d.ReportSnapshot)
 					if sendErr != nil {
 						d.Error = "final user projection unavailable"
 						return
@@ -365,7 +372,13 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 			d.Error = "no final user report"
 			return
 		}
-		id, err := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", text)
+		if d.ReportSnapshot == "" {
+			d.ReportSnapshot = text
+			if persist() != nil {
+				return
+			}
+		}
+		id, err := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", d.ReportSnapshot)
 		if err != nil {
 			d.Error = "final user projection unavailable"
 			return

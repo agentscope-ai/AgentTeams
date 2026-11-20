@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import asyncio
 import json
+from functools import lru_cache
 from contextvars import ContextVar
 from contextlib import nullcontext
 import os
@@ -24,6 +25,7 @@ _execution_task: ContextVar[str] = ContextVar("teamharness_execution_task", defa
 _completion_task: ContextVar[str] = ContextVar("teamharness_completion_task", default="")
 _review_task: ContextVar[tuple[str, str] | None] = ContextVar("teamharness_review_task", default=None)
 _ack_scope: ContextVar[tuple | None] = ContextVar("teamharness_ack_scope", default=None)
+_delivery_ack: ContextVar[dict | None] = ContextVar("teamharness_delivery_ack", default=None)
 _approval_status_records: dict[str, dict[str, Any]] = {}
 ASSET_DIR = PLUGIN_DIR / "teamharness"
 if not (ASSET_DIR / "plugin.yaml").exists():
@@ -95,16 +97,22 @@ def _sanitize(value: Any) -> None:
                 _sanitize(item)
 
 
+@lru_cache(maxsize=1)
+def _receipt_module():
+    receipt_spec = importlib.util.spec_from_file_location(
+        "teamharness_task_receipt", ASSET_DIR / "mcp/common/task_receipt.py")
+    receipts = importlib.util.module_from_spec(receipt_spec)
+    receipt_spec.loader.exec_module(receipts)
+    return receipts
+
+
 def _sanitizer_factory(_ctx: Any, _agent_config: Any):
     try:
         from agentscope.middleware import MiddlewareBase
     except ImportError:
         return None
 
-    receipt_spec = importlib.util.spec_from_file_location(
-        "teamharness_task_receipt", ASSET_DIR / "mcp/common/task_receipt.py")
-    receipts = importlib.util.module_from_spec(receipt_spec)
-    receipt_spec.loader.exec_module(receipts)
+    receipts = _receipt_module()
 
     class TeamHarnessSanitizer(MiddlewareBase):
         _submitted_task = ""
@@ -202,6 +210,11 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             return await next_handler(**input_kwargs)
 
         async def on_reasoning(self, agent: Any, input_kwargs: dict[str, Any], next_handler: Callable[..., AsyncGenerator[Any, None]]) -> AsyncGenerator[Any, None]:
+            acknowledgements = _delivery_ack.get()
+            middle = getattr(getattr(agent, "state", None), "middle_context", None)
+            if acknowledgements and isinstance(middle, dict):
+                receipts.ack_delivery_context(middle, acknowledgements)
+                _delivery_ack.set(None)
             if self._submitted_task or self._accepted_task:
                 from agentscope.message import Msg
                 message = Msg(name=agent.name, role="assistant", content=[{
@@ -521,6 +534,21 @@ def _load_phase_skill(ctx: Any, name: str) -> None:
         ctx.inject_context("The builtin " + name + " phase instructions are already loaded for this turn; do not reread them.\n" + text, source="teamharness_preloaded_skill")
 
 
+async def _prepare_delivery_context(ctx: Any) -> None:
+    if os.getenv("AGENTTEAMS_AGENT_ROLE") != "manager" or ctx.extras.get("delivery_context_prepared"):
+        return
+    middle = getattr(getattr(ctx.agent, "state", None), "middle_context", None)
+    if not isinstance(middle, dict):
+        return
+    ctx.extras["delivery_context_prepared"] = True
+    facts, acknowledgements = await asyncio.to_thread(
+        _receipt_module().delivery_context, middle, _room_id(ctx.request), _controller_json)
+    for fact in facts:
+        ctx.inject_context(fact, source="teamharness_sent_delivery")
+    if acknowledgements:
+        ctx.extras["delivery_ack_token"] = _delivery_ack.set(acknowledgements)
+
+
 async def _manager_report_context(ctx: Any) -> bool:
     if ctx.agent is None:
         return False
@@ -672,6 +700,7 @@ async def _manager_report_context(ctx: Any) -> bool:
         humans = await asyncio.to_thread(_controller_json, "humans")
         if sender in {str(h.get("matrixUserID") or h.get("matrixUserId") or "") for h in humans.get("humans", [])}:
             ctx.extras.setdefault("requester_route_token", _requester_route.set({"channel": "matrix", "target_session": _room_id(ctx.request), "target_user": sender}))
+            await _prepare_delivery_context(ctx)
             await _prepare_manager_roster(ctx)
             return False
         event = meta.get("teamharness_workflow") or {}
@@ -746,6 +775,9 @@ def _register_coordination_hook(api: Any) -> None:
         priority = 190
 
         async def run(self, ctx: Any) -> Any:
+            token = ctx.extras.pop("delivery_ack_token", None)
+            if token is not None:
+                _delivery_ack.reset(token)
             token = ctx.extras.pop("ack_scope_token", None)
             if token is not None:
                 _ack_scope.reset(token)

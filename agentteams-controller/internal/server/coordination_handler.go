@@ -386,6 +386,7 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			e.Text = string(details)
 			fence = coordinationScopeID(e)
 		case "project_completed", "main_task_completed":
+			e.OriginEventID = coordinationString(coordinationMap(project, "task_origin"), "event_id")
 			if caller.Role != authpkg.RoleTeamLeader || coordinationString(project, "status") != "completed" || (e.Kind == "main_task_completed") != (e.MainTaskID != "") {
 				return reject()
 			}

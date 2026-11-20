@@ -87,16 +87,17 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := path.Join("teams", resolved.StorageTeam, "shared/tasks", id, "meta.json")
+	notification := taskNotificationStatus{Status: "queued", Recipient: admission.Recipient, EventID: admission.EventID}
+	if saved := h.flushTaskNotification(r.Context(), key, "handoff"); saved.Status == "queued" {
+		notification = saved
+	}
 	data, err := h.oss.GetObject(r.Context(), key)
 	var task map[string]any
 	if err != nil || json.Unmarshal(data, &task) != nil {
 		writeError(w, 503, "task registered; retry the unchanged creation request to obtain its receipt")
 		return
 	}
-	notification := taskNotificationStatus{Status: "queued", Recipient: admission.Recipient, EventID: admission.EventID}
-	if saved := h.flushTaskNotification(r.Context(), key, "handoff"); saved.Status == "queued" {
-		notification = saved
-	}
+
 	status := 201
 	if admission.Reused {
 		status = 200

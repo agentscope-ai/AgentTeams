@@ -10,21 +10,23 @@ import (
 // taskResource is the public task view. Storage records and notification routes
 // stay behind the API; callers use task/submission identities rather than keys.
 type taskResource struct {
-	ID           string              `json:"id"`
-	Team         string              `json:"team"`
-	Kind         string              `json:"kind,omitempty"`
-	Title        string              `json:"title,omitempty"`
-	Status       string              `json:"status"`
-	AssignedTo   string              `json:"assignedTo,omitempty"`
-	AssignmentID string              `json:"assignmentId,omitempty"`
-	ParentTaskID string              `json:"parentTaskId,omitempty"`
-	MainTaskID   string              `json:"mainTaskId,omitempty"`
-	ProjectID    string              `json:"projectId,omitempty"`
-	Spec         string              `json:"spec,omitempty"`
-	Summary      string              `json:"summary,omitempty"`
-	SubmissionID string              `json:"submissionId,omitempty"`
-	CompletionID string              `json:"completionId,omitempty"`
-	Artifacts    []taskFinalArtifact `json:"artifacts,omitempty"`
+	ID            string                            `json:"id"`
+	Team          string                            `json:"team"`
+	Kind          string                            `json:"kind,omitempty"`
+	Title         string                            `json:"title,omitempty"`
+	Status        string                            `json:"status"`
+	AssignedTo    string                            `json:"assignedTo,omitempty"`
+	AssignmentID  string                            `json:"assignmentId,omitempty"`
+	ParentTaskID  string                            `json:"parentTaskId,omitempty"`
+	MainTaskID    string                            `json:"mainTaskId,omitempty"`
+	ProjectID     string                            `json:"projectId,omitempty"`
+	Spec          string                            `json:"spec,omitempty"`
+	Summary       string                            `json:"summary,omitempty"`
+	SubmissionID  string                            `json:"submissionId,omitempty"`
+	CompletionID  string                            `json:"completionId,omitempty"`
+	Artifacts     []taskFinalArtifact               `json:"artifacts,omitempty"`
+	OriginEventID string                            `json:"originEventId,omitempty"`
+	Notifications map[string]taskNotificationStatus `json:"notifications,omitempty"`
 }
 
 // GetTaskResource returns the storage-independent view used by `agt task get`.
@@ -61,7 +63,23 @@ func publicTaskResource(id, team string, record map[string]any) taskResource {
 	var completion taskCompletion
 	data, _ := json.Marshal(record["task_completion"])
 	_ = json.Unmarshal(data, &completion)
+	var origin struct {
+		EventID string `json:"event_id"`
+	}
+	data, _ = json.Marshal(record["task_origin"])
+	_ = json.Unmarshal(data, &origin)
+	var intents map[string]taskNotificationIntent
+	data, _ = json.Marshal(record["task_notifications"])
+	_ = json.Unmarshal(data, &intents)
+	var notices map[string]taskNotificationStatus
+	if len(intents) > 0 {
+		notices = map[string]taskNotificationStatus{}
+		for kind, intent := range intents {
+			notices[kind] = taskNotificationStatus{Status: intent.Status, EventID: intent.EventID, Recipient: intent.Recipient}
+		}
+	}
 	return taskResource{
+		OriginEventID: origin.EventID, Notifications: notices,
 		CompletionID: completion.ID, Artifacts: completion.Artifacts,
 		ID: id, Team: team,
 		Kind: coordinationString(record, "task_kind"), Title: coordinationString(record, "title"),

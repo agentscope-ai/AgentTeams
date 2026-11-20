@@ -19,6 +19,8 @@ const coordinationPending = "control/coordination/pending/"
 const coordinationDone = "control/coordination/completed/"
 
 type coordinationDelivery struct {
+	DeliveredAt    time.Time         `json:"delivered_at,omitempty"`
+	ReportSnapshot string            `json:"report_snapshot,omitempty"`
 	ArtifactEvents map[string]string `json:"artifact_events,omitempty"`
 	Transport      string            `json:"transport,omitempty"`
 	Approvals      map[string]string `json:"approvals,omitempty"`
@@ -174,6 +176,9 @@ func (h *CoordinationHandler) step(ctx context.Context, key string) {
 			claim = next
 			return nil
 		})
+	}
+	if d.Status == "completed" && d.DeliveredAt.IsZero() {
+		d.DeliveredAt = time.Now().UTC()
 	}
 	d.LeaseUntil = time.Time{}
 	if d.Status == "failed" && d.FailureEventID == "" {

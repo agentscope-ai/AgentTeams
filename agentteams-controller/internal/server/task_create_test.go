@@ -153,3 +153,28 @@ func TestTaskCreateProtectsOriginalSourceBeforePlanning(t *testing.T) {
 		}
 	}
 }
+
+func TestCreatedTaskPublicViewExposesSourceIdentityAndNotificationReferences(t *testing.T) {
+	h, _ := taskCreateFixture(t)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}
+	w := callTaskCreate(h, caller, "$origin", `{"title":"T","spec":"Original request","leader":"lead-cr"}`)
+	var created struct {
+		Task taskResource `json:"task"`
+	}
+	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &created) != nil {
+		t.Fatal(w.Body.String())
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+created.Task.ID+"?team=alpha", nil)
+	r.SetPathValue("id", created.Task.ID)
+	result := httptest.NewRecorder()
+	h.GetTaskResource(result, withCaller(r, caller))
+	var view struct {
+		Task taskResource `json:"task"`
+	}
+	if result.Code != 200 || json.Unmarshal(result.Body.Bytes(), &view) != nil || view.Task.OriginEventID != "$origin" || view.Task.Notifications["handoff"].EventID == "" || view.Task.Notifications["handoff"].Status != "queued" {
+		t.Fatalf("missing framework-readable public origin/receipt: %d %s", result.Code, result.Body.String())
+	}
+	if strings.Contains(result.Body.String(), "!source:test") || strings.Contains(result.Body.String(), "task_notifications") || strings.Contains(result.Body.String(), "shared/tasks") {
+		t.Fatalf("public resource exposed internal notification storage: %s", result.Body.String())
+	}
+}

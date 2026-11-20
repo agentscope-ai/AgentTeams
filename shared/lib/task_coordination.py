@@ -97,12 +97,6 @@ def notification(content, room, sender, own, *, fetch=controller_json):
                     or not leaves or any(n.get("status") != "completed" for n in leaves)
                     or sender != own):
                 raise IgnoredNotification("plan is not ready to close")
-        elif kind in {"main_task_completed", "project_completed"}:
-            main = canonical.get("main_task_id")
-            path = ("tasks/" + urllib.parse.quote(main, safe="") if main else "projects/" + urllib.parse.quote(canonical["project_id"], safe="")) + "/meta"
-            plan = verified_get(path)
-            if plan.get("status") != "completed" or (main and plan.get("task_kind") != "main"):
-                raise IgnoredNotification("final report is not accepted")
         elif kind != "handoff":
             raise IgnoredNotification("unsupported notification kind")
         text = packet["input"][0]["content"][0]["text"]

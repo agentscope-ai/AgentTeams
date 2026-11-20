@@ -2970,10 +2970,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "task_submitted": "coordination-review:" + str(assignment.get("task_id", "")) + ":" + str(assignment.get("submission_id", "")),
                 "project_ready": "coordination-close:" + str(assignment.get("project_id", "")),
                 "main_task_ready": "coordination-close-task:" + str(assignment.get("main_task_id", "")),
-                "main_task_completed": "coordination-result:" + str(assignment.get("main_task_id", "")),
-                "project_completed": "coordination-result:" + str(assignment.get("project_id", "")),
             }.get(assignment.get("kind"))
-            if expected_session and assignment.get("kind") not in {"main_task_completed", "project_completed"} and assignment.get("main_task_id") and assignment.get("id"):
+            if expected_session and assignment.get("main_task_id") and assignment.get("id"):
                 expected_session += ":" + str(assignment["id"])
             if (expected_session is None
                     or control_meta.get("sender_id") != event.sender
@@ -3204,7 +3202,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             # attachment/progress batch, whose first item owns merged meta.
             payload["meta"]["teamharness_completion_session"] = f"coordination-report:{room_id}:{event.event_id}"
         if control is not None:
-            for key in ("task_id", "main_task_id", "project_id", "teamharness_coordination", "teamharness_requester_route", "teamharness_coordinator_route", "teamharness_workflow", "teamharness_final_report"):
+            for key in ("task_id", "main_task_id", "project_id", "teamharness_coordination", "teamharness_requester_route", "teamharness_coordinator_route"):
                 if key in control_meta:
                     payload["meta"][key] = control_meta[key]
             payload["meta"]["teamharness_matrix_coordination"] = True

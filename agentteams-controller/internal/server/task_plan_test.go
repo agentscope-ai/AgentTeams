@@ -161,6 +161,11 @@ func TestTaskPlanStoresWholeDAGAndDispatchesOnlyReadyNodes(t *testing.T) {
 	if retry.Code != 200 || mx.creates != 1 {
 		t.Fatalf("retry duplicated room or plan: %d %s rooms=%d", retry.Code, retry.Body.String(), mx.creates)
 	}
+	for _, room := range mx.rooms {
+		if room.Name != "TASK：main" {
+			t.Fatalf("task room lost its visible task identity: %s", room.Name)
+		}
+	}
 	entries, _, _ := store.ListObjectsRecursive(t.Context(), coordinationPending, "", 100)
 	if len(entries) != 2 {
 		t.Fatalf("assignment retries duplicated events: %+v", entries)

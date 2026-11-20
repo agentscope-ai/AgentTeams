@@ -92,7 +92,7 @@ func (h *CoordinationHandler) ensureTaskPlanRoom(ctx context.Context, main map[s
 	}
 	sort.Strings(invite)
 	identity := sha256.Sum256([]byte(h.deps.Namespace + "\x00" + team.Name + "\x00" + coordinationString(main, "task_id")))
-	room, err := h.deps.MatrixClient.CreateRoom(ctx, matrix.CreateRoomRequest{Name: "TASK：" + coordinationString(main, "title"), Topic: "Task " + coordinationString(main, "task_id"), CreatorToken: token,
+	room, err := h.deps.MatrixClient.CreateRoom(ctx, matrix.CreateRoomRequest{Name: "TASK：" + coordinationString(main, "task_id"), Topic: "Task " + coordinationString(main, "task_id"), CreatorToken: token,
 		Invite: invite, PowerLevels: powers, RoomAliasName: "at-task-" + hex.EncodeToString(identity[:16]), InitialState: []matrix.StateEvent{{Type: "room.meta", Content: meta}}})
 	if err != nil || room == nil || !strings.HasPrefix(room.RoomID, "!") {
 		return "", fmt.Errorf("task room creation unavailable")

@@ -101,7 +101,10 @@ jobs:
             docker pull --platform "linux/$ARCH" "$REUSE_CONTROLLER"
             revision=$(docker inspect "$REUSE_CONTROLLER" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
             [[ "$revision" =~ ^[a-f0-9]{40}$ ]]
-            git diff --exit-code "$revision" HEAD -- agentteams-controller manager/agent
+            if ! git cat-file -e "$revision^{commit}" 2>/dev/null; then
+              git fetch --no-tags origin "$revision"
+            fi
+            git diff --exit-code "$revision" HEAD -- agentteams-controller manager/agent plugins
             docker tag "$REUSE_CONTROLLER" "$image"
           else
             make build-agentteams-controller LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \

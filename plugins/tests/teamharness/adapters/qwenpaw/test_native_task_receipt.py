@@ -16,6 +16,12 @@ def native_available():
 @unittest.skipUnless(native_available(), "native QwenPaw SDK required")
 class NativeTaskReceiptTest(unittest.TestCase):
     def test_successful_task_cli_receipt_reaches_model_as_tool_context(self):
+        self._assert_receipt("submit")
+
+    def test_completion_receipt_reaches_leader_context_without_a_send_tool(self):
+        self._assert_receipt("complete")
+
+    def _assert_receipt(self, action):
         from agentscope.agent import Agent
         from agentscope.model import ChatModelBase, ChatResponse
         from agentscope.message import Msg, ToolCallBlock, TextBlock
@@ -30,6 +36,8 @@ class NativeTaskReceiptTest(unittest.TestCase):
         spec.loader.exec_module(plugin)
         testcase = self
         calls = []
+        command = f"agt task {action} t1 --" + ("summary" if action == "submit" else "report") + " Done"
+        identity_field = "submissionId" if action == "submit" else "completionId"
 
         class Parameters(BaseModel):
             pass
@@ -43,17 +51,18 @@ class NativeTaskReceiptTest(unittest.TestCase):
             async def __call__(self, *args, **kwargs):
                 self.calls += 1
                 if self.calls == 1:
-                    return ChatResponse(content=[ToolCallBlock(id="call-one", name="execute_shell_command", input=json.dumps({"command":"agt task submit t1 --summary Done"}))], is_last=True)
+                    return ChatResponse(content=[ToolCallBlock(id="call-one", name="execute_shell_command", input=json.dumps({"command":command}))], is_last=True)
                 testcase.assertEqual(self.calls, 2, "receipt triggered an extra model cycle")
                 messages = kwargs.get("messages") or (args[0] if args else [])
                 messages = await self.formatter.format(messages)
                 tool_messages = [m for m in messages if m.get("role") == "tool"]
                 text = json.dumps(tool_messages, ensure_ascii=False)
                 testcase.assertIn("[Task system receipt]", text)
-                testcase.assertIn("leader-a", text)
-                testcase.assertIn("Do not resend", text)
+                testcase.assertIn("leader-a" if action == "submit" else "manager-a", text)
+                if action == "complete": testcase.assertIn("original conversation", text)
+                testcase.assertIn("Do not resend" if action == "submit" else "Do not send another", text)
                 testcase.assertIn("not yet confirmed", text)
-                testcase.assertIn("submissionId", text)  # Original result survives.
+                testcase.assertIn(identity_field, text)  # Original result survives.
                 for message in messages:
                     if message.get("role") == "assistant":
                         testcase.assertNotIn("[Task system receipt]", str(message.get("content")))
@@ -61,21 +70,22 @@ class NativeTaskReceiptTest(unittest.TestCase):
 
         async def execute(command: str):
             calls.append(command)
-            return {"task":{"id":"t1","status":"submitted","submissionId":"s1"},
-                    "notification":{"status":"queued","eventId":"e1","recipient":"leader-a"}}
+            return {"task":{"id":"t1","status":"submitted" if action == "submit" else "completed",identity_field:"operation-one"},
+                    "notification":{"status":"queued","eventId":"e1","recipient":"leader-a" if action == "submit" else "manager-a"}}
 
         async def run():
             toolkit = Toolkit()
             await toolkit.add_tool(FunctionTool(execute, name="execute_shell_command", permission=PermissionDecision(behavior=PermissionBehavior.ALLOW, message="In-memory fixture; no shell or network access")))
             model = Model()
             agent = Agent("Worker", "Execute assigned work.", model, toolkit=toolkit, middlewares=[plugin._sanitizer_factory(None,None)])
-            token = plugin._execution_task.set("t1")
+            context = plugin._execution_task if action == "submit" else plugin._completion_task
+            token = context.set("t1")
             try:
                 await agent.reply(Msg(name="Leader", role="user", content=[TextBlock(text="Submit the result.")]))
                 testcase.assertEqual(model.calls, 2)
-                testcase.assertEqual(calls, ["agt task submit t1 --summary Done"])
+                testcase.assertEqual(calls, [command])
             finally:
-                plugin._execution_task.reset(token)
+                context.reset(token)
         asyncio.run(run())
 
 

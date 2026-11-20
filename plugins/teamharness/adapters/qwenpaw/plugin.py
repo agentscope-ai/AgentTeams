@@ -21,6 +21,7 @@ _requester_route: ContextVar[dict[str, Any] | None] = ContextVar("teamharness_re
 _coordinator_route: ContextVar[dict[str, Any] | None] = ContextVar("teamharness_coordinator_route", default=None)
 _source_event: ContextVar[str] = ContextVar("teamharness_source_event", default="")
 _execution_task: ContextVar[str] = ContextVar("teamharness_execution_task", default="")
+_completion_task: ContextVar[str] = ContextVar("teamharness_completion_task", default="")
 _review_task: ContextVar[tuple[str, str] | None] = ContextVar("teamharness_review_task", default=None)
 _ack_scope: ContextVar[tuple | None] = ContextVar("teamharness_ack_scope", default=None)
 _approval_status_records: dict[str, dict[str, Any]] = {}
@@ -113,8 +114,12 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         def _inject_task_receipt(self, item: Any, tool_name: str, args: Any) -> None:
             if tool_name != "execute_shell_command" or not isinstance(args, dict):
                 return
-            task_id = receipts.task_submit_command(args.get("command"))
-            if not task_id or task_id != _execution_task.get():
+            operation = receipts.task_operation_command(args.get("command"))
+            if not operation:
+                return
+            action, task_id = operation
+            expected = _execution_task.get() if action == "submit" else _completion_task.get()
+            if task_id != expected:
                 return
             from agentscope.tool import ToolResponse
             from agentscope.message import TextBlock
@@ -129,7 +134,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 result = json.loads(text)
             except (TypeError, ValueError):
                 return
-            receipt = receipts.submission_receipt(result, task_id)
+            receipt = receipts.task_receipt(result, task_id, action)
             seen = getattr(self, "_task_receipt_ids", set())
             if receipt is None or receipt[0] in seen:
                 return
@@ -251,7 +256,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 yield ToolResponse(state="error", content=[{"type": "text", "text": _CLEANUP_GUIDANCE}])
                 return
             async for item in next_handler(**input_kwargs):
-                if getattr(call, "name", "") == "execute_shell_command" and _execution_task.get():
+                if getattr(call, "name", "") == "execute_shell_command" and (_execution_task.get() or _completion_task.get()):
                     self._inject_task_receipt(item, name, args)
                 if name in {"projectflow", "taskflow"} and args.get("action") == "accept_task_result" and _review_task.get():
                     for block in getattr(item, "content", []):
@@ -559,6 +564,8 @@ async def _manager_report_context(ctx: Any) -> bool:
                 or project.get("status") not in ({"in_progress", "submitted"} if main_id else {"active"}) or project.get("plan_type") == "loop"
                 or not leaves or any(node.get("status") != "completed" for node in leaves)):
             return True
+    if api_event.get("kind") == "main_task_ready":
+        ctx.extras["completion_task_token"] = _completion_task.set(api_event["main_task_id"])
     if api_event.get("kind") in {"task_assigned", "task_submitted"}:
         task = await asyncio.to_thread(_controller_json, "tasks/" + urllib.parse.quote(api_event["task_id"], safe="") + "/meta")
         if (task.get("project_id", "") != api_event.get("project_id", "")
@@ -735,6 +742,9 @@ def _register_coordination_hook(api: Any) -> None:
             token = ctx.extras.pop("review_task_token", None)
             if token is not None:
                 _review_task.reset(token)
+            token = ctx.extras.pop("completion_task_token", None)
+            if token is not None:
+                _completion_task.reset(token)
             token = ctx.extras.pop("execution_task_token", None)
             if token is not None:
                 _execution_task.reset(token)

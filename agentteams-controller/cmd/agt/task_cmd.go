@@ -36,6 +36,7 @@ func taskCmd() *cobra.Command {
 	cmd.AddCommand(get)
 	cmd.AddCommand(taskBeginCmd())
 	cmd.AddCommand(taskSubmitCmd())
+	cmd.AddCommand(taskCompleteCmd())
 	cmd.AddCommand(taskFilesCmd())
 	return cmd
 }

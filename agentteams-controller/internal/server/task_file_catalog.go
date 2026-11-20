@@ -28,7 +28,7 @@ func resolveTaskFileCatalog(metaKey, id string, record map[string]json.RawMessag
 	var deliverables []string
 	// New submissions resolve names through their immutable registry. Their
 	// legacy deliverables projection contains blob keys, not extra file names.
-	if len(record["task_submission"]) == 0 {
+	if len(record["task_submission"]) == 0 && len(record["task_completion"]) == 0 {
 		if raw := record["deliverables"]; len(raw) > 0 && json.Unmarshal(raw, &deliverables) != nil {
 			return taskFileCatalog{}, errors.New("invalid task files")
 		}

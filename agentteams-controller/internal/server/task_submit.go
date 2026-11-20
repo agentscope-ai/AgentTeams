@@ -140,12 +140,11 @@ func (h *ProjectHandler) SubmitTask(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			names[file.Name] = true
-			data, err := h.oss.GetObject(r.Context(), path.Dir(key)+"/artifacts/"+file.SHA256)
-			actual := sha256.Sum256(data)
-			if err != nil || int64(len(data)) != file.Size || hex.EncodeToString(actual[:]) != file.SHA256 {
+			if err := h.verifyTaskFileContent(r.Context(), key, file); err != nil {
 				writeError(w, 503, "submission artifact verification failed")
 				return
 			}
+
 			deliverables = append(deliverables, "shared/tasks/"+id+"/artifacts/"+file.SHA256)
 		}
 		strict, supported := h.oss.(conditionalWriter)

@@ -385,11 +385,29 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			if caller.Role != authpkg.RoleTeamLeader || coordinationString(project, "status") != "completed" || (e.Kind == "main_task_completed") != (e.MainTaskID != "") {
 				return reject()
 			}
-			report, readErr := h.deps.OSS.GetObject(ctx, coordinationPlanPath(e, "result.md"))
+			reportKey := coordinationPlanPath(e, "result.md")
+			var reportDigest string
+			if saved, exists := project["task_completion"]; exists {
+				data, _ := json.Marshal(saved)
+				var completion taskCompletion
+				if json.Unmarshal(data, &completion) != nil || !validArtifactDigest(completion.ReportSHA256) {
+					return reject()
+				}
+				reportDigest = completion.ReportSHA256
+				reportKey = coordinationPlanPath(e, "artifacts/"+reportDigest)
+			}
+			report, readErr := h.deps.OSS.GetObject(ctx, reportKey)
+			if reportDigest != "" {
+				sum := sha256.Sum256(report)
+				if readErr != nil || hex.EncodeToString(sum[:]) != reportDigest {
+					return e, errors.New("saved final report unavailable or changed")
+				}
+			}
 			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 				return e, readErr
 			}
 			e.FinalReport = strings.TrimSpace(string(report))
+
 			route := coordinationMap(project, "reply_route")
 			target := coordinationString(route, "target_user")
 			var managers v1beta1.ManagerList

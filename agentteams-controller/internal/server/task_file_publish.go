@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -221,4 +222,16 @@ func validateTaskFileIndexCommit(w http.ResponseWriter, current, next []byte) bo
 		return false
 	}
 	return true
+}
+
+func (h *ProjectHandler) verifyTaskFileContent(ctx context.Context, key string, file publishedTaskFile) error {
+	if !validTaskFileName(file.Name) || !validArtifactDigest(file.SHA256) || file.Version != file.SHA256 {
+		return errors.New("invalid artifact reference")
+	}
+	data, err := h.oss.GetObject(ctx, path.Dir(key)+"/artifacts/"+file.SHA256)
+	sum := sha256.Sum256(data)
+	if err != nil || int64(len(data)) != file.Size || hex.EncodeToString(sum[:]) != file.SHA256 {
+		return errors.New("artifact content unavailable or changed")
+	}
+	return nil
 }

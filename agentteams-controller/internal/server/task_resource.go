@@ -23,6 +23,7 @@ type taskResource struct {
 	Spec         string `json:"spec,omitempty"`
 	Summary      string `json:"summary,omitempty"`
 	SubmissionID string `json:"submissionId,omitempty"`
+	CompletionID string `json:"completionId,omitempty"`
 }
 
 // GetTaskResource returns the storage-independent view used by `agt task get`.
@@ -56,8 +57,12 @@ func (h *ProjectHandler) GetTaskResource(w http.ResponseWriter, r *http.Request)
 }
 
 func publicTaskResource(id, team string, record map[string]any) taskResource {
+	var completion taskCompletion
+	data, _ := json.Marshal(record["task_completion"])
+	_ = json.Unmarshal(data, &completion)
 	return taskResource{
-		ID: id, Team: team,
+		CompletionID: completion.ID,
+		ID:           id, Team: team,
 		Kind: coordinationString(record, "task_kind"), Title: coordinationString(record, "title"),
 		Status: coordinationString(record, "status"), AssignedTo: coordinationString(record, "assigned_to"),
 		AssignmentID: coordinationString(record, "notifyTxn"), ParentTaskID: coordinationString(record, "parent_task_id"),

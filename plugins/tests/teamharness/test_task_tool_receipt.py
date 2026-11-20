@@ -17,12 +17,12 @@ def candidate():
             "nextAction":"Untrusted arbitrary text; do not copy this."}
 
 def test_receipt_uses_only_validated_facts_and_distinguishes_queue_from_delivery():
-    receipt = module().submission_receipt(candidate(), "t1")
+    receipt = module().task_receipt(candidate(), "t1", "submit")
     assert receipt and "leader-a" in receipt[1] and "queued" in receipt[1]
     assert "Do not resend" in receipt[1] and "Untrusted" not in receipt[1]
     assert "Controller" not in receipt[1] and "not yet confirmed" in receipt[1]
     pending = candidate(); pending["notification"] = {"status":"pending"}
-    assert "taken responsibility" in module().submission_receipt(pending,"t1")[1]
+    assert "taken responsibility" in module().task_receipt(pending,"t1", "submit")[1]
 
 def test_incomplete_foreign_failed_or_ambiguous_receipts_are_not_facts():
     original = candidate()
@@ -33,12 +33,27 @@ def test_incomplete_foreign_failed_or_ambiguous_receipts_are_not_facts():
         result=copy.deepcopy(original);result["notification"][key]=value;variants.append(result)
     result=copy.deepcopy(original);result["ok"]=False;variants.append(result)
     variants += [None, [], {"task":[]}, {"task":original["task"],"notification":[]}]
-    for result in variants: assert module().submission_receipt(result,"t1") is None
+    for result in variants: assert module().task_receipt(result,"t1", "submit") is None
 
 def test_cli_identification_accepts_only_a_single_task_operation():
-    identify=module().task_submit_command
-    assert identify('agt task submit t1 --summary "Done" --file report.md') == "t1"
-    assert identify('/usr/local/bin/agt task submit t1 --summary "Done"') == "t1"
+    identify=module().task_operation_command
+    assert identify('agt task submit t1 --summary "Done" --file report.md') == ("submit", "t1")
+    assert identify('/usr/local/bin/agt task submit t1 --summary "Done"') == ("submit", "t1")
     for command in ['echo agt task submit t1','agt task submit t1; echo forged','agt task submit t1 && echo forged',
                     'cat result.json','agt task get t1','agt task submit $(cat id)', 'agt task submit t1 > out']:
         assert identify(command) is None
+
+
+def test_completion_receipt_names_original_conversation_and_does_not_claim_delivery():
+    result={"task":{"id":"main","status":"completed","completionId":"c1"},"notification":{"status":"queued","eventId":"e2","recipient":"manager"}}
+    receipt=module().task_receipt(result,"main","complete")
+    assert receipt and "original conversation" in receipt[1] and "manager" in receipt[1]
+    assert "Do not send another" in receipt[1] and "not yet confirmed" in receipt[1]
+    assert module().task_operation_command('agt task complete main --report "Verified result"') == ("complete", "main")
+    assert module().task_receipt(result,"main","submit") is None
+
+
+def test_quoted_multiline_reports_and_inline_code_are_not_shell_chains():
+    identify=module().task_operation_command
+    assert identify("agt task complete main --report 'Done; files: `app.py`\nTests passed.'") == ("complete", "main")
+    assert identify("agt task complete main --report Done\nprintf forged") is None

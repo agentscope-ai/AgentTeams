@@ -30,38 +30,40 @@ type CoordinationHandler struct {
 	workerURL         func(string, map[string]string) string
 	managerURL        func(string) string
 	projectEvent      func(context.Context, coordinationEvent, string, string, string, string, string) (string, error)
+	projectArtifact   func(context.Context, coordinationEvent, taskFinalArtifact, string, string) (string, error)
 	taskNotifications *ProjectHandler
 }
 
 type coordinationEvent struct {
-	Tasks             []mainTaskRequest `json:"tasks,omitempty"`
-	Kind              string            `json:"kind"`
-	Actor             string            `json:"actor"`
-	Recipient         string            `json:"recipient"`
-	MainTaskID        string            `json:"main_task_id,omitempty"`
-	ProjectID         string            `json:"project_id,omitempty"`
-	TaskID            string            `json:"task_id,omitempty"`
-	DeliveryID        string            `json:"delivery_id,omitempty"`
-	SubmissionID      string            `json:"submission_id,omitempty"`
-	OriginEventID     string            `json:"origin_event_id,omitempty"`
-	RoomID            string            `json:"room_id,omitempty"`
-	Text              string            `json:"text"`
-	SourceRoute       map[string]any    `json:"source_route,omitempty"`
-	RequesterRoute    map[string]any    `json:"requester_route,omitempty"`
-	ID                string            `json:"id"`
-	Team              string            `json:"team"`
-	StorageTeam       string            `json:"storage_team"`
-	ActorName         string            `json:"actor_name"`
-	ActorRole         string            `json:"actor_role"`
-	RecipientName     string            `json:"recipient_name"`
-	RecipientKind     string            `json:"recipient_kind"`
-	TargetURL         string            `json:"-"`
-	RecipientRuntime  string            `json:"-"`
-	External          bool              `json:"external,omitempty"`
-	EligibleAssignees []string          `json:"eligible_assignees,omitempty"`
-	FinalReport       string            `json:"final_report,omitempty"`
-	PlanType          string            `json:"-"`
-	DispatchMode      string            `json:"-"`
+	Artifacts         []taskFinalArtifact `json:"artifacts,omitempty"`
+	Tasks             []mainTaskRequest   `json:"tasks,omitempty"`
+	Kind              string              `json:"kind"`
+	Actor             string              `json:"actor"`
+	Recipient         string              `json:"recipient"`
+	MainTaskID        string              `json:"main_task_id,omitempty"`
+	ProjectID         string              `json:"project_id,omitempty"`
+	TaskID            string              `json:"task_id,omitempty"`
+	DeliveryID        string              `json:"delivery_id,omitempty"`
+	SubmissionID      string              `json:"submission_id,omitempty"`
+	OriginEventID     string              `json:"origin_event_id,omitempty"`
+	RoomID            string              `json:"room_id,omitempty"`
+	Text              string              `json:"text"`
+	SourceRoute       map[string]any      `json:"source_route,omitempty"`
+	RequesterRoute    map[string]any      `json:"requester_route,omitempty"`
+	ID                string              `json:"id"`
+	Team              string              `json:"team"`
+	StorageTeam       string              `json:"storage_team"`
+	ActorName         string              `json:"actor_name"`
+	ActorRole         string              `json:"actor_role"`
+	RecipientName     string              `json:"recipient_name"`
+	RecipientKind     string              `json:"recipient_kind"`
+	TargetURL         string              `json:"-"`
+	RecipientRuntime  string              `json:"-"`
+	External          bool                `json:"external,omitempty"`
+	EligibleAssignees []string            `json:"eligible_assignees,omitempty"`
+	FinalReport       string              `json:"final_report,omitempty"`
+	PlanType          string              `json:"-"`
+	DispatchMode      string              `json:"-"`
 }
 
 var coordinationSafeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -81,6 +83,7 @@ func NewCoordinationHandler(deps ServerDeps) *CoordinationHandler {
 		return fmt.Sprintf("http://%s:18799", authpkg.ResourcePrefix(deps.ResourcePrefix).ManagerPodName(name))
 	}
 	h.projectEvent = h.project
+	h.projectArtifact = h.projectTaskArtifact
 	return h
 }
 
@@ -182,6 +185,7 @@ func (h *CoordinationHandler) targetWorker(e *coordinationEvent, w *v1beta1.Work
 }
 
 func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, caller *authpkg.CallerIdentity) (coordinationEvent, error) {
+	e.Artifacts = nil // Final file authority is rebuilt from the completed Task snapshot.
 	reject := func() (coordinationEvent, error) { return e, errCoordinationRejected }
 	if caller == nil || (caller.Role != authpkg.RoleManager && caller.Role != authpkg.RoleTeamLeader && caller.Role != authpkg.RoleWorker) {
 		return reject()
@@ -393,6 +397,7 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 				if json.Unmarshal(data, &completion) != nil || !validArtifactDigest(completion.ReportSHA256) {
 					return reject()
 				}
+				e.Artifacts = completion.Artifacts
 				reportDigest = completion.ReportSHA256
 				reportKey = coordinationPlanPath(e, "artifacts/"+reportDigest)
 			}

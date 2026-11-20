@@ -5,7 +5,8 @@
 完整协议尚未实现。当前分支已实现 task get、task files list/read/get/put、稳定产物
 引用与历史版本读取、begin 接单/输入准备，以及 submit 的 API/CLI、候选提交和持久化
 通知恢复接口与测试。complete 已增加主任务完成、不可变报告和原会话回告队列的首批
-API/CLI；产物在原会话的展示、派单 Agent 的已发送上下文补齐、其余生命周期命令、
+API/CLI，并固定最终产物清单、以原派单 Manager 身份发送原生 Matrix 附件，逐文件
+记录回执。原会话真实客户端展示、派单 Agent 的已发送上下文补齐、其余生命周期命令、
 公共提示词接入与实际 Harness 认证均待完成。
 
 ## 一、问题与验收目标
@@ -79,6 +80,7 @@ generation 等身份事实供运行时校验，Agent 不需要手工复制这些
 agt task begin T1
 agt task submit T1 --summary "已完成分析并通过指定检查" --file report.md --file tests.log
 agt task accept T1 --submission S1 --note "结果满足原始验收标准"
+agt task complete MAIN --report "最终报告" --artifact A1 --artifact A2
 ```
 
 submit 的 --file 相对于该 Task 的输出目录解析，不依赖当前 shell 目录。Agent 从
@@ -182,8 +184,10 @@ QwenPaw、OpenClaw 的完整任务认证执行。
 Human 在会话 A 请求 Manager，Manager 派给 Leader 的场景：Leader 在任务房间验收
 全部执行结果后，调用 `agt task complete MAIN --report "最终报告"`。任务系统以该
 Manager 的身份把最终报告和确定版本的交付产物投回会话 A，不要求 Manager 再判断、
-重新总结或调用消息工具。原始报告、产物引用、投递身份、目标会话、操作身份固定后
-再入队；投递失败保留原操作重试，不重复生成主任务或更换接收者。
+重新总结或调用消息工具。最终清单默认汇总全部已验收提交中明确声明的 output 文件，Leader 可用重复的
+`--artifact` 指定需要交付的产物 ID。清单记录来源 Task、名称、大小、版本和摘要，
+不会使用未验收的同名当前引用或 intermediate 文件。原始报告、产物引用、投递身份、
+目标会话、操作身份固定后再入队；投递失败保留原操作重试，不重复生成主任务或更换接收者。
 
 回告区分报告消息、文件展示和派单 Agent 上下文补齐的完成证据；报告发出但附件
 失败，不能算完整交付成功。消息中应展示产物名称、来源、摘要/大小与实际可访问的
@@ -198,7 +202,13 @@ Leader 当前会话通过完成操作的工具回执获知“已完成，任务�
 
 当前实现已验证：主任务门禁、已验收产物内容检查、报告不可变、完成与待回告意图
 一起保存、原会话报告投递的去重与中断恢复，以及 QwenPaw 原生工具上下文回执。
-实际产物消息展示和派单 Agent 原会话的异步上下文同步仍待实现/验证；这些完成之前
+原生 `m.file` 附件通过 `com.agentteams.attachment` 关联实际报告消息；上传与发送均
+使用原派单 Manager 身份。报告及每个附件有稳定的 Matrix transaction ID 和独立
+投递回执；部分文件失败不重复已成功项，也不把报告已发误判为完整交付。仍保留
+原有产物发布检查，并在完成冻结前校验，避免完成后才发现文件不能交付。
+
+HTTP 协议测试已验证媒体上传字节、发送身份、原始房间、附件关联及部分失败恢复；
+真实 Matrix/客户端显示和派单 Agent 原会话的异步上下文同步仍待验证/补齐；这些完成之前
 不能把完整交付链路或 Harness 认证标记为通过。
 
 ### 5. 存储与兼容

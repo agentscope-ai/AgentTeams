@@ -49,7 +49,7 @@ def test_completion_receipt_names_original_conversation_and_does_not_claim_deliv
     receipt=module().task_receipt(result,"main","complete")
     assert receipt and "original conversation" in receipt[1] and "manager" in receipt[1]
     assert "Do not send another" in receipt[1] and "not yet confirmed" in receipt[1]
-    assert module().task_operation_command('agt task complete main --report "Verified result"') == ("complete", "main")
+    assert module().task_operation_command('agt task complete main --report "Verified result" --artifact A1') == ("complete", "main")
     assert module().task_receipt(result,"main","submit") is None
 
 

@@ -19,6 +19,7 @@ const coordinationPending = "control/coordination/pending/"
 const coordinationDone = "control/coordination/completed/"
 
 type coordinationDelivery struct {
+	ArtifactEvents map[string]string `json:"artifact_events,omitempty"`
 	Transport      string            `json:"transport,omitempty"`
 	Approvals      map[string]string `json:"approvals,omitempty"`
 	Event          coordinationEvent `json:"event"`
@@ -239,11 +240,15 @@ func (h *CoordinationHandler) GetEvent(w http.ResponseWriter, r *http.Request) {
 			worker, lookupErr := h.worker(r.Context(), caller.Username)
 			recipient = lookupErr == nil && worker.Name == d.Event.RecipientName && worker.Status.MatrixUserID == d.Event.Recipient
 		}
+		if d.Event.RecipientKind == "manager" && caller.Role == authpkg.RoleManager {
+			manager, lookupErr := h.manager(r.Context(), caller.Username)
+			recipient = lookupErr == nil && manager.Name == d.Event.RecipientName && manager.Status.MatrixUserID == d.Event.Recipient
+		}
 		if caller.Role != authpkg.RoleAdmin && (caller.Username != d.Event.ActorName || caller.Role != d.Event.ActorRole) && !recipient {
 			writeError(w, 404, "coordination receipt not found")
 			return
 		}
-		httputil.WriteJSON(w, 200, map[string]any{"event_id": id, "kind": d.Event.Kind, "project_id": d.Event.ProjectID, "main_task_id": d.Event.MainTaskID, "task_id": d.Event.TaskID, "status": d.Status, "created": d.Created, "error": d.Error, "native_id": d.NativeID, "user_event_id": d.UserEventID, "failure_event_id": d.FailureEventID, "actor": d.Event.Actor, "recipient": d.Event.Recipient, "delivery_id": d.Event.DeliveryID, "submission_id": d.Event.SubmissionID, "room_id": d.Event.RoomID, "transport": d.Transport, "control": coordinationPayload(d.Event)})
+		httputil.WriteJSON(w, 200, map[string]any{"event_id": id, "kind": d.Event.Kind, "project_id": d.Event.ProjectID, "main_task_id": d.Event.MainTaskID, "task_id": d.Event.TaskID, "status": d.Status, "created": d.Created, "error": d.Error, "native_id": d.NativeID, "user_event_id": d.UserEventID, "artifact_events": d.ArtifactEvents, "artifacts": d.Event.Artifacts, "requester_room_id": coordinationString(d.Event.RequesterRoute, "target_session"), "failure_event_id": d.FailureEventID, "actor": d.Event.Actor, "recipient": d.Event.Recipient, "delivery_id": d.Event.DeliveryID, "submission_id": d.Event.SubmissionID, "room_id": d.Event.RoomID, "transport": d.Transport, "control": coordinationPayload(d.Event)})
 		return
 	}
 	writeError(w, 404, "coordination receipt not found")

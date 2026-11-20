@@ -21,7 +21,7 @@ def task_operation_command(command: str) -> tuple[str, str] | None:
     if (len(words) < 4 or words[0] not in {"agt", "/usr/local/bin/agt"}
             or (words[1] != "task" or words[2] not in {"submit", "complete"}) or not _ID.fullmatch(words[3])):
         return None
-    flags = {"--summary", "--report", "--status", "--file", "--team"} if words[2] == "submit" else {"--report", "--team"}
+    flags = {"--summary", "--report", "--status", "--file", "--team"} if words[2] == "submit" else {"--report", "--team", "--artifact"}
     tail = words[4:]
     if len(tail) % 2 or any(tail[i] not in flags for i in range(0, len(tail), 2)):
         return None

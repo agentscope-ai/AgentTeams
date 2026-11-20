@@ -39,3 +39,27 @@ func TestTaskCompleteUsesTaskIdentityAndPreservesAutomaticReplyReceipt(t *testin
 		t.Fatalf("reply receipt lost or extra call: %d %s", calls, output.String())
 	}
 }
+
+func TestTaskCompleteSelectsFinalOutputsByOpaqueArtifactID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Report    string   `json:"report"`
+			Artifacts []string `json:"artifacts"`
+		}
+		if json.NewDecoder(r.Body).Decode(&input) != nil || len(input.Artifacts) != 2 || input.Artifacts[0] != "artifact-one" || input.Artifacts[1] != "artifact-two" {
+			t.Errorf("missing final selection: %+v", input)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"task":{"id":"main","status":"completed","completionId":"c1"},"notification":{"status":"queued"}}`))
+	}))
+	defer server.Close()
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "test-token")
+	cmd := newRootCommand("agt")
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"task", "complete", "main", "--report", "Verified report", "--artifact", "artifact-one", "--artifact", "artifact-two"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+}

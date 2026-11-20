@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,9 +17,16 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
 
+type taskFinalArtifact struct {
+	TaskID string `json:"taskId"`
+	publishedTaskFile
+}
+
 type taskCompletion struct {
-	ID           string `json:"id"`
-	ReportSHA256 string `json:"report_sha256"`
+	RequestDigest string              `json:"request_digest"`
+	Artifacts     []taskFinalArtifact `json:"artifacts,omitempty"`
+	ID            string              `json:"id"`
+	ReportSHA256  string              `json:"report_sha256"`
 }
 
 func (h *ProjectHandler) ownsMainTask(w http.ResponseWriter, r *http.Request, task map[string]any) bool {
@@ -55,7 +63,8 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Report string `json:"report"`
+		Report    string   `json:"report"`
+		Artifacts []string `json:"artifacts,omitempty"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, taskMetaCommitMaxBytes))
 	decoder.DisallowUnknownFields()
@@ -73,6 +82,19 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "verified final report required")
 		return
 	}
+	sort.Strings(input.Artifacts)
+	for i, ref := range input.Artifacts {
+		if ref == "" || (i > 0 && ref == input.Artifacts[i-1]) {
+			writeError(w, 400, "invalid or duplicate final artifact reference")
+			return
+		}
+	}
+	if input.Artifacts == nil {
+		input.Artifacts = []string{}
+	}
+	request, _ := json.Marshal(input)
+	requestSum := sha256.Sum256(request)
+	requestDigest := hex.EncodeToString(requestSum[:])
 	key, team, ok := h.resolveTaskMetaCommitKey(w, r, id)
 	if !ok {
 		return
@@ -100,7 +122,7 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 503, "completion receipt unavailable")
 				return
 			}
-			if receipt.ReportSHA256 != digest {
+			if receipt.ReportSHA256 != digest || receipt.RequestDigest != requestDigest {
 				writeError(w, 409, "completed task report is immutable")
 				return
 			}
@@ -114,6 +136,7 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		if !h.taskExecutionAdmission(w, r, key, task) {
 			return
 		}
+		available := map[string]taskFinalArtifact{}
 		nodes, _ := task["tasks"].([]any)
 		for _, item := range nodes {
 			node, _ := item.(map[string]any)
@@ -142,6 +165,7 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 			var index taskFileIndex
 			_ = json.Unmarshal(childRaw["task_files"], &index)
 			for _, file := range files {
+				available[file.ArtifactID] = taskFinalArtifact{TaskID: childID, publishedTaskFile: index.Artifacts[file.ArtifactID]}
 				if err := h.verifyTaskFileContent(r.Context(), childKey, index.Artifacts[file.ArtifactID]); err != nil {
 					writeError(w, 409, "accepted child artifact unavailable or changed")
 					return
@@ -158,6 +182,38 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 			actual := sha256.Sum256(report)
 			if err != nil || len(report) == 0 || hex.EncodeToString(actual[:]) != reportDigest {
 				writeError(w, 409, "accepted child report unavailable or changed")
+				return
+			}
+		}
+		finalFiles := []taskFinalArtifact{}
+		if len(input.Artifacts) == 0 {
+			for _, file := range available {
+				finalFiles = append(finalFiles, file)
+			}
+		} else {
+			for _, ref := range input.Artifacts {
+				file, exists := available[ref]
+				if !exists {
+					writeError(w, 404, "final artifact is not part of an accepted submission of this main task")
+					return
+				}
+				finalFiles = append(finalFiles, file)
+			}
+		}
+		sort.Slice(finalFiles, func(i, j int) bool {
+			if finalFiles[i].TaskID != finalFiles[j].TaskID {
+				return finalFiles[i].TaskID < finalFiles[j].TaskID
+			}
+			return finalFiles[i].Name < finalFiles[j].Name
+		})
+		for _, file := range finalFiles {
+			data, err := h.oss.GetObject(r.Context(), path.Join(path.Dir(path.Dir(key)), file.TaskID, "artifacts", file.SHA256))
+			if err != nil {
+				writeError(w, 503, "final artifact publication check unavailable")
+				return
+			}
+			if artifactSensitive("shared/tasks/"+file.TaskID+"/"+file.Name, artifactMediaType(file.Name), data) {
+				writeError(w, 409, "final artifact did not pass publication checks; select appropriate outputs before completing")
 				return
 			}
 		}
@@ -190,7 +246,9 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		index.Artifacts[artifactID] = publishedTaskFile{ArtifactID: artifactID, Name: "result.md", Kind: "output", Version: digest, SHA256: digest, Size: int64(len(input.Report))}
 		index.Heads["result.md"] = artifactID
 		task["task_files"] = index
-		task["task_completion"] = taskCompletion{ID: artifactID, ReportSHA256: digest}
+		completionIdentity, _ := json.Marshal([]string{team, id, requestDigest})
+		completionHash := sha256.Sum256(completionIdentity)
+		task["task_completion"] = taskCompletion{ID: hex.EncodeToString(completionHash[:]), ReportSHA256: digest, RequestDigest: requestDigest, Artifacts: finalFiles}
 		task["status"], task["summary"], task["result_status"] = "completed", input.Report, "SUCCESS"
 		task["result_path"] = "shared/tasks/" + id + "/artifacts/" + digest
 		task["deliverables"] = []string{"shared/tasks/" + id + "/artifacts/" + digest}

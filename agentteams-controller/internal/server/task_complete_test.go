@@ -63,7 +63,7 @@ func TestTaskCompleteSavesImmutableReportAndQueuesOriginalConversation(t *testin
 	if err != nil || json.Unmarshal(data, &delivery) != nil || delivery.Event.FinalReport != "Verified final result." || coordinationString(delivery.Event.RequesterRoute, "target_session") != "!source:test" {
 		t.Fatalf("missing original-conversation report: %s %v", data, err)
 	}
-	sends := 0
+	sends, fileSends := 0, 0
 	h.coordination.projectEvent = func(_ context.Context, event coordinationEvent, role, name, room, txn, text string) (string, error) {
 		sends++
 		if role != "manager" || name != "default" || room != "!source:test" || text != "Verified final result." {
@@ -71,10 +71,17 @@ func TestTaskCompleteSavesImmutableReportAndQueuesOriginalConversation(t *testin
 		}
 		return "$final", nil
 	}
+	h.coordination.projectArtifact = func(_ context.Context, event coordinationEvent, file taskFinalArtifact, parent, txn string) (string, error) {
+		fileSends++
+		if event.RecipientName != "default" || coordinationString(event.RequesterRoute, "target_session") != "!source:test" || file.TaskID != "t1" || file.Name != "report.md" || parent != "$final" {
+			t.Errorf("wrong final artifact route: %+v %+v %s", event, file, parent)
+		}
+		return "$file", nil
+	}
 	h.coordination.step(t.Context(), coordinationPending+first.Notification.EventID+".json")
 	h.coordination.step(t.Context(), coordinationPending+first.Notification.EventID+".json")
-	if sends != 1 {
-		t.Fatalf("duplicate final projection: %d", sends)
+	if sends != 1 || fileSends != 1 {
+		t.Fatalf("duplicate or missing final projection: reports=%d files=%d", sends, fileSends)
 	}
 	if changed := callTaskComplete(h, leader, "Changed report"); changed.Code != 409 {
 		t.Fatalf("completed report mutated: %d %s", changed.Code, changed.Body.String())
@@ -162,5 +169,62 @@ func TestTaskCompleteRecoversOriginalReplyIntentAfterInterruption(t *testing.T) 
 	h.PutTaskMeta(ww, withCaller(r, leader))
 	if ww.Code != 403 {
 		t.Fatalf("completed task original conversation changed: %d %s", ww.Code, ww.Body.String())
+	}
+}
+
+func TestTaskCompleteFreezesOnlyAcceptedArtifactReferences(t *testing.T) {
+	h, store, leader := taskCompleteFixture(t)
+	w := callTaskComplete(h, leader, "Final report")
+	if w.Code != 200 {
+		t.Fatalf("complete: %d %s", w.Code, w.Body.String())
+	}
+	data, _ := store.GetObject(t.Context(), "teams/alpha/shared/tasks/main/meta.json")
+	var main struct {
+		Completion taskCompletion `json:"task_completion"`
+	}
+	_ = json.Unmarshal(data, &main)
+	if len(main.Completion.Artifacts) != 1 || main.Completion.Artifacts[0].TaskID != "t1" || main.Completion.Artifacts[0].Name != "report.md" || main.Completion.Artifacts[0].ArtifactID == "" {
+		t.Fatalf("missing source-bound final artifact manifest: %s", data)
+	}
+	event, err := h.coordination.resolve(t.Context(), coordinationEvent{Kind: "main_task_completed", MainTaskID: "main", Artifacts: []taskFinalArtifact{{TaskID: "foreign"}}}, leader)
+	if err != nil || len(event.Artifacts) != 1 || event.Artifacts[0].TaskID != "t1" {
+		t.Fatalf("untrusted event supplied final files: %+v %v", event, err)
+	}
+}
+
+func TestTaskCompleteRefusesUnacceptedFinalArtifactSelection(t *testing.T) {
+	h, _, leader := taskCompleteFixture(t)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/main/complete", strings.NewReader(`{"report":"Final report","artifacts":["foreign-artifact"]}`))
+	r.SetPathValue("id", "main")
+	w := httptest.NewRecorder()
+	h.CompleteTask(w, withCaller(r, leader))
+	if w.Code != 404 {
+		t.Fatalf("unaccepted artifact selected: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTaskCompleteChecksPublicationBeforeFreezingFinalDelivery(t *testing.T) {
+	h, store, leader := taskCompleteFixture(t)
+	key := "teams/alpha/shared/tasks/t1/meta.json"
+	data, _ := store.GetObject(t.Context(), key)
+	var child map[string]any
+	_ = json.Unmarshal(data, &child)
+	var index taskFileIndex
+	raw, _ := json.Marshal(child["task_files"])
+	_ = json.Unmarshal(raw, &index)
+	for identity, file := range index.Artifacts {
+		file.Name = "credentials.json"
+		index.Artifacts[identity] = file
+		index.Heads = map[string]string{file.Name: identity}
+	}
+	child["task_files"] = index
+	putTask(store, key, child)
+	w := callTaskComplete(h, leader, "Final report")
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "publication checks") {
+		t.Fatalf("final delivery froze before publication checks: %d %s", w.Code, w.Body.String())
+	}
+	data, _ = store.GetObject(t.Context(), "teams/alpha/shared/tasks/main/meta.json")
+	if strings.Contains(string(data), `"task_completion"`) {
+		t.Fatalf("failed publication irreversibly completed task: %s", data)
 	}
 }

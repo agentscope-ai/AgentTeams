@@ -209,12 +209,22 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 					d.Error = "no saved final user report"
 					return
 				}
-				id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", e.FinalReport)
-				if sendErr != nil {
-					d.Error = "final user projection unavailable"
+				if d.UserEventID == "" {
+					id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", e.FinalReport)
+					if sendErr != nil {
+						d.Error = "final user projection unavailable"
+						return
+					}
+					d.UserEventID, d.MatrixEventID = id, id
+					if persist() != nil {
+						return
+					}
+				}
+				if err := h.projectFinalArtifacts(ctx, e, d, persist); err != nil {
+					d.Error = err.Error()
 					return
 				}
-				d.UserEventID, d.MatrixEventID = id, id
+
 				d.Status, d.Error = "completed", ""
 				return
 			}
@@ -362,6 +372,12 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 		}
 		d.UserEventID = id
 	}
+	if coordinationCompleted(e.Kind) {
+		if err := h.projectFinalArtifacts(ctx, e, d, persist); err != nil {
+			d.Error = err.Error()
+			return
+		}
+	}
 	if d.MatrixEventID == "" || (e.Kind == "task_assigned" && d.AckEventID == "") {
 		d.Error = "progress projection unavailable"
 		return
@@ -503,7 +519,13 @@ func coordinationAssistantText(result map[string]any) string {
 	return strings.TrimSpace(strings.Join(texts, "\n"))
 }
 func (h *CoordinationHandler) project(ctx context.Context, e coordinationEvent, kind, name, room, txn, text string) (string, error) {
-	return h.projectContent(ctx, kind, name, room, txn, map[string]any{"msgtype": "m.text", "body": text})
+	content := map[string]any{"msgtype": "m.text", "body": text}
+	if coordinationCompleted(e.Kind) {
+		if user := coordinationString(e.RequesterRoute, "target_user"); strings.HasPrefix(user, "@") {
+			content["m.mentions"] = map[string]any{"user_ids": []string{user}}
+		}
+	}
+	return h.projectContent(ctx, kind, name, room, txn, content)
 }
 func (h *CoordinationHandler) projectContent(ctx context.Context, kind, name, room, txn string, content map[string]any) (string, error) {
 	return h.sendMatrixContent(ctx, kind, name, room, txn, content, true)

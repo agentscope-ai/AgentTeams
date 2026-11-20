@@ -4800,6 +4800,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         *,
         msgtype: str = "m.notice",
         html: Optional[str] = None,
+        progress_only: bool = False,
     ) -> None:
         if not event_id or not self._client:
             return
@@ -4816,6 +4817,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
             "m.new_content": new_content,
             "m.relates_to": {"rel_type": "m.replace", "event_id": event_id},
         }
+        if progress_only:
+            content["org.agentteams.progress_only"] = True
+            new_content["org.agentteams.progress_only"] = True
         # Propagate m.mentions to the outer event — MSC3952 requires it on
         # the replacement event for notification delivery.
         if "m.mentions" in new_content:

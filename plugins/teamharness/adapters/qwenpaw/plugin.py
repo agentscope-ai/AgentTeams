@@ -100,10 +100,44 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
     except ImportError:
         return None
 
+    receipt_spec = importlib.util.spec_from_file_location(
+        "teamharness_task_receipt", ASSET_DIR / "mcp/common/task_receipt.py")
+    receipts = importlib.util.module_from_spec(receipt_spec)
+    receipt_spec.loader.exec_module(receipts)
+
     class TeamHarnessSanitizer(MiddlewareBase):
         _submitted_task = ""
         _accepted_task = ""
         _task_scope = None
+
+        def _inject_task_receipt(self, item: Any, tool_name: str, args: Any) -> None:
+            if tool_name != "execute_shell_command" or not isinstance(args, dict):
+                return
+            task_id = receipts.task_submit_command(args.get("command"))
+            if not task_id or task_id != _execution_task.get():
+                return
+            from agentscope.tool import ToolResponse
+            from agentscope.message import TextBlock
+
+            if not isinstance(item, ToolResponse) or item.state != "success":
+                return
+            # One complete CLI JSON result is required. Errors, stderr-prefixed
+            # output and streaming chunks are never interpreted as receipts.
+            text = "".join(block.get("text", "") if isinstance(block, dict)
+                           else getattr(block, "text", "") for block in item.content)
+            try:
+                result = json.loads(text)
+            except (TypeError, ValueError):
+                return
+            receipt = receipts.submission_receipt(result, task_id)
+            seen = getattr(self, "_task_receipt_ids", set())
+            if receipt is None or receipt[0] in seen:
+                return
+            # Native Agent orchestration saves this final ToolResponse in the
+            # current tool context after on_acting. Keep the fact before any
+            # truncation while preserving the original result blocks.
+            item.content.insert(0, TextBlock(text=receipt[1] + "\n"))
+            self._task_receipt_ids = seen | {receipt[0]}
 
         async def _allow_task_output_change(self, command: str, cwd: str | None) -> bool:
             if not self._task_scope:
@@ -217,6 +251,8 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 yield ToolResponse(state="error", content=[{"type": "text", "text": _CLEANUP_GUIDANCE}])
                 return
             async for item in next_handler(**input_kwargs):
+                if getattr(call, "name", "") == "execute_shell_command" and _execution_task.get():
+                    self._inject_task_receipt(item, name, args)
                 if name in {"projectflow", "taskflow"} and args.get("action") == "accept_task_result" and _review_task.get():
                     for block in getattr(item, "content", []):
                         text = block.get("text", "") if isinstance(block, dict) else getattr(block, "text", "")

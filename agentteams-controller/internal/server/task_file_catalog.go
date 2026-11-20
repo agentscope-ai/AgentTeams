@@ -26,8 +26,12 @@ func resolveTaskFileCatalog(metaKey, id string, record map[string]json.RawMessag
 	names := []string{}
 	prefix := "shared/tasks/" + id + "/"
 	var deliverables []string
-	if raw := record["deliverables"]; len(raw) > 0 && json.Unmarshal(raw, &deliverables) != nil {
-		return taskFileCatalog{}, errors.New("invalid task files")
+	// New submissions resolve names through their immutable registry. Their
+	// legacy deliverables projection contains blob keys, not extra file names.
+	if len(record["task_submission"]) == 0 {
+		if raw := record["deliverables"]; len(raw) > 0 && json.Unmarshal(raw, &deliverables) != nil {
+			return taskFileCatalog{}, errors.New("invalid task files")
+		}
 	}
 	for _, declared := range deliverables {
 		rel := strings.TrimPrefix(declared, prefix)

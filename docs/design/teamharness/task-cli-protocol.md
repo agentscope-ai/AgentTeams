@@ -3,8 +3,8 @@
 状态：设计与实施计划。目标版本：1.2.9；不修改 1.2.8 发布标签。
 基线：main `2a4fb0a35e974074820e66f408ed94887c9f3d4f`。
 完整协议尚未实现。当前分支已实现 task get、task files list/read/get/put、稳定产物
-引用与历史版本读取，以及 begin 的接单/输入准备首批接口与测试。submit 等其余
-生命周期命令、公共提示词接入与实际 Harness 认证均待完成。
+引用与历史版本读取、begin 接单/输入准备，以及 submit 的 API/CLI、候选提交和持久化
+通知恢复首批接口与测试。其余生命周期命令、公共提示词接入与实际 Harness 认证均待完成。
 
 ## 一、问题与验收目标
 
@@ -118,6 +118,40 @@ org.agentteams.progress_only=true；不允许针对某种 Harness 推断缺失�
 一个 CLI 调用可以执行多个内部请求；合并调用不等于文件与元数据具有跨系统事务。
 先验证并持久化产物，再提交状态；失败返回可恢复的原操作身份。禁止文件上传失败
 仍报提交成功。通知待送达需如实返回 queued，由公共通知机制重试。
+
+#### 发送方如何知道任务系统已自动通知下一节点
+
+直接复用任务操作的同步工具返回，不新增 Harness 回执 HTTP 接口，也不增加成功通知
+回流模型的机制。CLI/MCP 必须保留任务系统的返回内容，使其作为本次工具调用结果
+进入发送 Agent 的会话上下文。Agent 面向任务系统工作，不需要感知 Controller 或其他部署组件；
+返回使用“任务系统已接管通知/已自动通知下一节点 xxx/xxx 已确认接单”等业务表述，
+并以权威收据证明相应状态。所有 Harness 遵循同一工具结果契约；禁止把自己发出的
+Matrix 消息重新伪装为用户指令来补上下文。
+
+提交返回示例（ID 为示意）：
+
+```json
+{
+  "task": {"id": "T1", "status": "submitted", "submissionId": "S1"},
+  "notification": {"status": "queued", "eventId": "E1", "recipient": "leader-a"},
+  "nextAction": "Task system has queued an automatic notification to \"leader-a\" for review. Do not resend the notification; wait for acceptance or revision."
+}
+```
+
+- submitted 只表示候选结果已保存，不能宣称已完成业务验收。
+- pending 表示待通知意图已和提交一起持久化，但尚未确认进入通知队列。
+- queued 表示持久化队列已接管，不能宣称 Matrix 已接收或对方已接单。
+- 实际投递及接单状态以公共协作收据和任务状态为准；必要时经公共查询获取。
+- Agent 不因 pending/queued 手工补发；Controller 恢复未完成的通知入队并负责重试。
+
+提交和通知意图在同一任务条件提交中保存；入队后再登记通知 ID。进程在两步之间退出，
+恢复扫描沿用相同提交/通知身份补齐入队，不重复生成业务提交。工具响应丢失时，原调用
+可重试：相同内容返回原 submissionId；已提交后的同内容文件重传只返回原产物引用，
+不能改变文件当前引用或候选结果。变更提交内容必须经过明确的返工生命周期。
+
+认证必须检查原生工具返回确实进入发送方上下文，且 Agent 不重复通知；单独验证 HTTP
+返回或 CLI 标准输出不等于这项 Harness 行为已通过。目前仅公共接口/CLI 测试通过，
+原生上下文验证仍随 QwenPaw、OpenClaw 的任务认证执行。
 
 请求身份来自可信上下文。相同逻辑操作重试使用相同幂等身份；两个独立但文本相同的
 请求不能被误去重。旧 assignment/execution/submission 不得影响新一轮任务。

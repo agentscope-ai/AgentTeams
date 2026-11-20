@@ -72,7 +72,8 @@
     "leader_accepted",
     "artifacts_verified",
     "original_room_report_verified",
-    "trace_coverage_verified"
+    "trace_coverage_verified",
+    "sender_tool_notification_receipt_verified"
   ],
   "measurementNotes": [
     "Fresh request/Task IDs for repeated identical specs; retain terminal tasks.",

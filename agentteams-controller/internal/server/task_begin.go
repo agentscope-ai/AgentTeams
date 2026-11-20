@@ -141,26 +141,8 @@ func (h *ProjectHandler) BeginTask(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 409, "task is not an assigned execution")
 			return
 		}
-		if decision := coordinationString(task, "decision_status"); decision != "" && decision != "open" {
-			writeError(w, 409, "task requires a decision before execution")
+		if !h.taskExecutionAdmission(w, r, key, task) {
 			return
-		}
-		if projectID := coordinationString(task, "project_id"); projectID != "" {
-			if !isSafeTaskID(projectID) {
-				writeError(w, 409, "invalid project membership")
-				return
-			}
-			projectKey := path.Join(path.Dir(path.Dir(path.Dir(key))), "projects", projectID, "meta.json")
-			body, err := h.oss.GetObject(r.Context(), projectKey)
-			var project map[string]any
-			if err != nil || json.Unmarshal(body, &project) != nil {
-				writeError(w, 503, "project membership unavailable")
-				return
-			}
-			if coordinationString(project, "project_id") != projectID || coordinationString(project, "status") != "active" {
-				writeError(w, 409, "project membership is not active")
-				return
-			}
 		}
 		execution, ok := h.ownedTaskExecution(w, r, raw)
 		if !ok {
@@ -236,4 +218,31 @@ func appendTaskOperationHistory(task map[string]any, from, to, action, actor str
 		history = history[len(history)-50:]
 	}
 	task["history_seq"], task["history"] = seq, history
+}
+
+// taskExecutionAdmission shares decision and Project gates across public execution actions.
+func (h *ProjectHandler) taskExecutionAdmission(w http.ResponseWriter, r *http.Request, key string, task map[string]any) bool {
+	if decision := coordinationString(task, "decision_status"); decision != "" && decision != "open" {
+		writeError(w, 409, "task requires a decision before execution")
+		return false
+	}
+	if projectID := coordinationString(task, "project_id"); projectID != "" {
+		if !isSafeTaskID(projectID) {
+			writeError(w, 409, "invalid project membership")
+			return false
+		}
+		projectKey := path.Join(path.Dir(path.Dir(path.Dir(key))), "projects", projectID, "meta.json")
+		body, err := h.oss.GetObject(r.Context(), projectKey)
+		var project map[string]any
+		if err != nil || json.Unmarshal(body, &project) != nil {
+			writeError(w, 503, "project membership unavailable")
+			return false
+		}
+		if coordinationString(project, "project_id") != projectID || coordinationString(project, "status") != "active" {
+			writeError(w, 409, "project membership is not active")
+			return false
+		}
+	}
+
+	return true
 }

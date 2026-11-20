@@ -35,6 +35,7 @@ func taskCmd() *cobra.Command {
 	get.Flags().StringVar(&team, "team", "", "Task's owning Team when its ID is ambiguous")
 	cmd.AddCommand(get)
 	cmd.AddCommand(taskBeginCmd())
+	cmd.AddCommand(taskSubmitCmd())
 	cmd.AddCommand(taskFilesCmd())
 	return cmd
 }

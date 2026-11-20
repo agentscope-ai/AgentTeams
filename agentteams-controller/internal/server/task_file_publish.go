@@ -96,7 +96,7 @@ func (h *ProjectHandler) PublishTaskFile(w http.ResponseWriter, r *http.Request)
 		var status, taskID string
 		_ = json.Unmarshal(task["status"], &status)
 		_ = json.Unmarshal(task["task_id"], &taskID)
-		if taskID != id || status != "in_progress" {
+		if taskID != id || (status != "in_progress" && status != "submitted") {
 			writeError(w, 409, "task is not executing")
 			return
 		}
@@ -154,6 +154,17 @@ func (h *ProjectHandler) PublishTaskFile(w http.ResponseWriter, r *http.Request)
 			index.Receipts[receiptKey] = fingerprint
 		} else if exists {
 			// Preserve content-only retries from older clients; they cannot promote old content.
+			httputil.WriteJSON(w, 200, previous)
+			return
+		}
+
+		// A CLI submit retry may repeat uploads after its first candidate was
+		// committed. Return the exact registered content without changing heads.
+		if status == "submitted" {
+			if !exists {
+				writeError(w, 409, "submitted task files are immutable")
+				return
+			}
 			httputil.WriteJSON(w, 200, previous)
 			return
 		}

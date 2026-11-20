@@ -365,6 +365,9 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ifNoneMatch == "*" {
+		if !validateTaskNotificationsCommit(w, nil, body) || !validateTaskSubmissionCommit(w, nil, body) {
+			return
+		}
 		if !validateTaskFileIndexCommit(w, nil, body) {
 			return
 		}
@@ -398,6 +401,9 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	currentStatus, currentStatusPresent, _ := exactTaskStatus(current)
+	if !validateTaskNotificationsCommit(w, current, body) || !validateTaskSubmissionCommit(w, current, body) {
+		return
+	}
 	if !validateTaskFileIndexCommit(w, current, body) {
 		return
 	}

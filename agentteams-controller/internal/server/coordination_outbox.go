@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -48,76 +47,22 @@ func (h *CoordinationHandler) PostEvent(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, "invalid coordination event")
 		return
 	}
-	// Authority facts are rebuilt from authenticated identity and canonical state.
-	event.ActorName = ""
-	event.ActorRole = ""
-	event.Team = ""
-	event.StorageTeam = ""
-	event.ID = ""
-	event.External = false
-	event.EligibleAssignees = nil
-	resolved, err := h.resolve(r.Context(), event, authpkg.CallerFromContext(r.Context()))
+	admission, err := h.enqueue(r.Context(), event, authpkg.CallerFromContext(r.Context()))
 	if err != nil {
-		if errors.Is(err, errCoordinationRejected) {
-			writeError(w, 403, "coordination event rejected")
+		var failure *coordinationAdmissionError
+		if errors.As(err, &failure) {
+			writeError(w, failure.Status, failure.Message)
 		} else {
-			writeError(w, 503, "coordination routing unavailable")
+			writeError(w, 503, "coordination admission unavailable")
 		}
 		return
 	}
-	if resolved.External {
-		httputil.WriteJSON(w, 200, map[string]any{"external": true})
-		return
+	status := 202
+	if admission.External {
+		status = 200
 	}
-	for _, prefix := range []string{coordinationDone, coordinationPending} {
-		data, err := h.deps.OSS.GetObject(r.Context(), prefix+resolved.ID+".json")
-		if err == nil {
-			var old coordinationDelivery
-			if json.Unmarshal(data, &old) != nil {
-				writeError(w, 503, "invalid coordination record")
-				return
-			}
-			// A retry cannot replace the payload associated with this execution fence.
-			previous, _ := json.Marshal(old.Event)
-			current, _ := json.Marshal(resolved)
-			if !bytes.Equal(previous, current) {
-				writeError(w, 409, "coordination identity already has a different payload")
-				return
-			}
-			if prefix == coordinationPending {
-				h.wakeRunner()
-			}
-			httputil.WriteJSON(w, 202, map[string]any{"accepted": true, "event_id": resolved.ID, "reused": true})
-			return
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			writeError(w, 503, "coordination storage unavailable")
-			return
-		}
-	}
-	if err := h.registerHandoffTasks(r.Context(), resolved); err != nil {
-		if errors.Is(err, errCoordinationRejected) {
-			writeError(w, 400, "invalid main task requests")
-		} else if errors.Is(err, oss.ErrPreconditionFailed) {
-			writeError(w, 409, "main task ID already belongs to another request")
-		} else {
-			writeError(w, 503, "main task registration unavailable")
-		}
-		return
-	}
-	delivery := coordinationDelivery{Event: resolved, Status: "queued", Created: time.Now().UTC()}
-	delivery.Transport = coordinationTransport(resolved.Kind, resolved.RecipientRuntime)
-	data, _ := json.Marshal(delivery)
-	if err := h.deps.OSS.PutObjectIfAbsent(r.Context(), coordinationPending+resolved.ID+".json", data); err != nil {
-		if errors.Is(err, oss.ErrPreconditionFailed) {
-			writeError(w, 409, "coordination admission raced; retry unchanged event")
-			return
-		}
-		writeError(w, 503, "coordination queue unavailable")
-		return
-	}
-	h.wakeRunner()
-	httputil.WriteJSON(w, 202, map[string]any{"accepted": true, "event_id": resolved.ID})
+	httputil.WriteJSON(w, status, admission)
+
 }
 
 // The durable queue remains authoritative; this local hint only avoids waiting
@@ -134,7 +79,12 @@ func (h *CoordinationHandler) wakeRunner() {
 func (h *CoordinationHandler) Run(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	var nextTaskScan time.Time
 	for {
+		if h.taskNotifications != nil && time.Now().After(nextTaskScan) {
+			h.taskNotifications.recoverTaskNotifications(ctx)
+			nextTaskScan = time.Now().Add(15 * time.Second)
+		}
 		h.drain(ctx)
 		select {
 		case <-ctx.Done():

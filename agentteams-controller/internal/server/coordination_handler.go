@@ -24,12 +24,13 @@ import (
 // Coordination delivers control events; the project/task documents remain the
 // only business state machine. Callers never supply an Agent network address.
 type CoordinationHandler struct {
-	deps         ServerDeps
-	wake         chan struct{}
-	http         *http.Client
-	workerURL    func(string, map[string]string) string
-	managerURL   func(string) string
-	projectEvent func(context.Context, coordinationEvent, string, string, string, string, string) (string, error)
+	deps              ServerDeps
+	wake              chan struct{}
+	http              *http.Client
+	workerURL         func(string, map[string]string) string
+	managerURL        func(string) string
+	projectEvent      func(context.Context, coordinationEvent, string, string, string, string, string) (string, error)
+	taskNotifications *ProjectHandler
 }
 
 type coordinationEvent struct {

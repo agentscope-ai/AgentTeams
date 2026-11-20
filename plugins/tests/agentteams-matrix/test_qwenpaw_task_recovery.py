@@ -1146,7 +1146,7 @@ def test_ordinary_message_cache_requires_native_bytes_and_latest_shared_version(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("phase", ["closed", "active", "stale", "lost_descriptor_ack"])
+@pytest.mark.parametrize("phase", ["closed", "active", "active_started", "active_unknown", "stale", "lost_descriptor_ack"])
 def test_late_assignment_is_observed_in_existing_task_session(adapter, native_channel, tmp_path, monkeypatch, phase):
     import nio
     from unittest.mock import Mock
@@ -1183,7 +1183,7 @@ def test_late_assignment_is_observed_in_existing_task_session(adapter, native_ch
     order = []
     def commit(source_key, _, native_ref, native_digest):
         assert source_key == key and native_ref == session
-        assert phase == "active" or authority.cache["native_digest"] == native_digest
+        assert phase.startswith("active") or authority.cache["native_digest"] == native_digest
         record["native_commit"] = {"native_ref": native_ref, "native_digest": native_digest,
                                    "start": {"process_id": authority.process}}
         order.append("native fact")
@@ -1205,8 +1205,15 @@ def test_late_assignment_is_observed_in_existing_task_session(adapter, native_ch
         original = await store.get_session_state_dict(**address)
         view = execution.sessions.load(work)
         execution.sessions.remember(work, view, identity, session, Recovery.digest(original), int(time.time()) + 1800)
-        if phase == "active":
+        if phase.startswith("active"):
             execution.native_active.add(admission)
+            if phase != "active":
+                task["execution"]["state"] = "needs_verification"
+                task["execution"]["checkpoint"]["operation"] = {
+                    "id": "op-before-late-assignment", "state": "started" if phase == "active_started" else "unknown"}
+                # A new execution still cannot enter on an unresolved effect.
+                with pytest.raises(RecoveryConflict):
+                    execution.verify(identity)
         elif phase == "stale":
             authority.cache["native_digest"] = "wrong"
         elif phase == "lost_descriptor_ack":
@@ -1219,9 +1226,19 @@ def test_late_assignment_is_observed_in_existing_task_session(adapter, native_ch
                 return remember(*args)
             execution.sessions.remember = reject_first
         await runner.dispatch(snapshot)  # empty process-local waiting cache, no new Matrix event
-        if phase == "active":
+        if phase.startswith("active"):
             assert not order
             ctx = SimpleNamespace(session_id=session, request=SimpleNamespace(channel_meta={"task_execution": identity}), mode_state={})
+            if phase == "active_unknown":
+                with pytest.raises(RecoveryConflict):
+                    await execution.assignments.before_reasoning(ctx, agent)
+                assert not order
+                assert await store.get_session_state_dict(**address) == original
+                channel.enqueue_recovered_task.assert_not_awaited()
+                authority.claim.assert_not_called()
+                model.assert_not_called()
+                await client.close()
+                return
             await execution.assignments.before_reasoning(ctx, agent)
         elif phase == "lost_descriptor_ack":
             assert not order

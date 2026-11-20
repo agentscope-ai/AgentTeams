@@ -923,6 +923,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 return meta["task_session_id"]
             if meta.get("teamharness_matrix_coordination"):
                 return meta["teamharness_coordination_session"]
+            if meta.get("teamharness_completion_session"):
+                return meta["teamharness_completion_session"]
             room_id = meta.get("room_id")
             if room_id:
                 return f"matrix:{room_id}"
@@ -3194,6 +3196,11 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "is_thread_event": is_thread_event,
             },
         }
+        workflow = payload["meta"]["teamharness_workflow"]
+        if control is None and isinstance(workflow, dict) and workflow.get("type") in {"MAIN_TASK_COMPLETED", "PROJECT_COMPLETED"}:
+            # Keep the completion's verified routing metadata out of the
+            # attachment/progress batch, whose first item owns merged meta.
+            payload["meta"]["teamharness_completion_session"] = f"coordination-report:{room_id}:{event.event_id}"
         if control is not None:
             for key in ("task_id", "main_task_id", "project_id", "teamharness_coordination", "teamharness_requester_route", "teamharness_coordinator_route"):
                 if key in control_meta:
@@ -3596,7 +3603,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         meta = native_payload.get("meta", {})
         sender_id = native_payload.get("sender_id", "")
         room_id = meta.get("room_id", sender_id)
-        session_id = meta.get("message_session_id") or meta.get("task_session_id") or (meta.get("teamharness_coordination_session", f"matrix:{room_id}") if meta.get("teamharness_matrix_coordination") else f"matrix:{room_id}")
+        session_id = meta.get("message_session_id") or meta.get("task_session_id") or meta.get("teamharness_completion_session") or (meta.get("teamharness_coordination_session", f"matrix:{room_id}") if meta.get("teamharness_matrix_coordination") else f"matrix:{room_id}")
 
         # content_parts are already ContentType objects (from both
         # _on_room_event and _on_room_media_event); filter out None.

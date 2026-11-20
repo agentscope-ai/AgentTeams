@@ -39,6 +39,14 @@ def test_canonical_receipt_prevents_replacing_the_task_input(packet):
     assert receive(packet)["text"] == "Canonical assignment"
 
 
+def test_completed_transport_receipt_still_allows_current_unconsumed_assignment(packet):
+    packet[1]["status"] = "completed"  # Matrix send completed, not native consumption.
+    assert receive(packet)["text"] == "Canonical assignment"
+    packet[2]["status"] = "completed"
+    with pytest.raises(protocol.IgnoredNotification):
+        receive(packet)
+
+
 @pytest.mark.parametrize("field,value", [("main_task_id", "other"), ("delivery_id", "other"), ("task_id", "other"), ("kind", "main_task_ready")])
 def test_foreign_execution_packet_is_rejected(packet, field, value):
     packet[0]["org.agentteams.coordination"]["channel_meta"]["teamharness_coordination"][field] = value

@@ -35,7 +35,12 @@ def _team_prompt(_agent: Any) -> str:
         return ""
     path = ASSET_DIR / "prompts" / "team" / "TEAMS.md"
     try:
-        return path.read_text(encoding="utf-8").strip()
+        text = path.read_text(encoding="utf-8").strip()
+        if os.getenv("AGENTTEAMS_AGENT_ROLE") in {"leader", "team_leader"}:
+            text += "\n\n" + (ASSET_DIR / "prompts/agent/leader.md").read_text(encoding="utf-8").strip()
+        elif os.getenv("AGENTTEAMS_AGENT_ROLE") in {"worker", "standalone"}:
+            text += "\n\n" + (ASSET_DIR / "prompts/agent/worker.md").read_text(encoding="utf-8").strip()
+        return text
     except OSError:
         return ""
 

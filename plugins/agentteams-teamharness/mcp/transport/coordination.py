@@ -30,6 +30,16 @@ def native_team_members(team_id: str) -> list[dict[str, Any]]:
 
 
 def deliver_event(kind: str, **event: Any) -> dict[str, Any] | None:
+    if kind == "handoff" and event.get("tasks") is not None:
+        tasks = event["tasks"]
+        if isinstance(tasks, str):
+            try:
+                tasks = json.loads(tasks)
+            except ValueError:
+                return {"sent": False, "error": "tasks must be an array of task objects, not invalid JSON"}
+        if not isinstance(tasks, list) or any(not isinstance(task, dict) for task in tasks):
+            return {"sent": False, "error": "tasks must be an array of task objects"}
+        event["tasks"] = tasks
     actor = _matrix_user_id()
     endpoint = os.getenv("TEAMHARNESS_COORDINATION_URL", "").strip().rstrip("/")
     if not endpoint and ((kind == "handoff" and event.get("tasks")) or
@@ -58,5 +68,8 @@ def deliver_event(kind: str, **event: Any) -> dict[str, Any] | None:
         return {"sent": True, "accepted": True, "transport": "agent-api",
                 "eventId": data.get("matrix_event_id") or "api-" + data["event_id"],
                 "deliveryId": data["event_id"], "reused": bool(data.get("reused"))}
+    except urllib.error.HTTPError as exc:
+        return {"sent": False, "transport": "agent-api", "httpStatus": exc.code,
+                "error": f"coordination delivery failed: HTTP {exc.code}"}
     except (OSError, ValueError, KeyError, urllib.error.URLError) as exc:
         return {"sent": False, "transport": "agent-api", "error": f"coordination delivery failed: {type(exc).__name__}"}

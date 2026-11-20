@@ -31,6 +31,11 @@ the requester before dispatching work.
 
 ## Choose Execution Mode
 
+For ordinary finite team work, use one main Task and executable Worker subtasks
+through taskflow start_task. Reuse a main Task already registered by Manager.
+Project is optional and must be explicitly requested. The Project-specific DAG
+and Loop guidance below applies only to that requested or existing Project work.
+
 TeamHarness Project Work supports DAG and Loop execution modes.
 
 Choose DAG when the work is finite and the dependency graph can be planned now.
@@ -91,7 +96,7 @@ Only accepted results should unblock downstream dependencies.
 
 Do not:
 
-- delegate tasks that were not returned by ready-node resolution
+- manually delegate tasks that start_task already dispatched, or delegate existing Project nodes that were not returned by ready-node resolution
 - ask Workers to edit project-level state
 - accept a task just because it says `SUCCESS`
 - hide task assignment in a DM when the Team Room is the shared coordination room

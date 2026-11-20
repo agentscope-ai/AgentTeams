@@ -142,13 +142,26 @@ OPENCLAW_BASE_VERSION ?= $(shell sed -n 's/^OPENCLAW_BASE_TAG=//p' hack/versions
 OPENCLAW_BASE_BUILD_ARG = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 
-build-agentteams-controller: ## Build agentteams-controller image (prerequisite for Manager)
-	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
+.PHONY: stage-agent-assets
+stage-agent-assets: ## Assemble shared role prompts and skills for Controller images
 	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -r ./plugins ./agentteams-controller/plugins
 	@mkdir -p ./agentteams-controller/agent/manager-agent
 	@cp ./plugins/teamharness/prompts/manager/*.md ./agentteams-controller/agent/manager-agent/
 	@cp -r ./plugins/teamharness/skills/manager ./agentteams-controller/agent/manager-agent/skills
 	@cp -r ./plugins/teamharness/skills/agent/task-diagnosis ./agentteams-controller/agent/manager-agent/skills/
+	@mkdir -p ./agentteams-controller/agent/team-leader-agent/skills
+	@cp ./plugins/teamharness/prompts/agent/leader.md ./agentteams-controller/agent/team-leader-agent/AGENTS.md
+	@cp ./plugins/teamharness/prompts/agent/leader-heartbeat.md ./agentteams-controller/agent/team-leader-agent/HEARTBEAT.md
+	@for skill in communication file-sharing roomflow team-coordination project-management task-delegation task-management organization; do cp -r ./plugins/teamharness/skills/team/$$skill ./agentteams-controller/agent/team-leader-agent/skills/; done
+	@for skill in task-diagnosis mcporter find-skills; do cp -r ./plugins/teamharness/skills/agent/$$skill ./agentteams-controller/agent/team-leader-agent/skills/; done
+	@for template in worker-agent hermes-worker-agent copaw-worker-agent; do \
+		cp ./plugins/teamharness/prompts/agent/worker.md ./agentteams-controller/agent/$$template/AGENTS.md; \
+		for skill in communication file-sharing task-execution; do cp -r ./plugins/teamharness/skills/team/$$skill ./agentteams-controller/agent/$$template/skills/; done; \
+		for skill in mcporter find-skills; do cp -r ./plugins/teamharness/skills/agent/$$skill ./agentteams-controller/agent/$$template/skills/; done; \
+	done
+
+build-agentteams-controller: stage-agent-assets ## Build agentteams-controller image (prerequisite for Manager)
+	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
 		./agentteams-controller/
@@ -299,13 +312,8 @@ push-openclaw-base-manifest: ## Publish the completed OpenClaw base architecture
 		$(if $(PUSH_LATEST),-t $(OPENCLAW_BASE_IMAGE):latest) \
 		$(OPENCLAW_BASE_TAG)-amd64 $(OPENCLAW_BASE_TAG)-arm64
 
-push-agentteams-controller: buildx-setup ## Build + push multi-arch agentteams-controller image
+push-agentteams-controller: buildx-setup stage-agent-assets ## Build + push multi-arch agentteams-controller image
 	@echo "==> Building + pushing multi-arch agentteams-controller: $(CONTROLLER_TAG) [$(MULTIARCH_PLATFORMS)]"
-	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -r ./plugins ./agentteams-controller/plugins
-	@mkdir -p ./agentteams-controller/agent/manager-agent
-	@cp ./plugins/teamharness/prompts/manager/*.md ./agentteams-controller/agent/manager-agent/
-	@cp -r ./plugins/teamharness/skills/manager ./agentteams-controller/agent/manager-agent/skills
-	@cp -r ./plugins/teamharness/skills/agent/task-diagnosis ./agentteams-controller/agent/manager-agent/skills/
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(CONTROLLER_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \

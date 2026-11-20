@@ -5,7 +5,7 @@ description: "Use when you act as Leader to turn ready Quick Task or Project Wor
 
 # Task Delegation
 
-Use this skill when acting as Leader to create Project Work task specs, send
+Use this skill when acting as Leader to create main-Task execution specs or explicit Project task specs, send
 assignment messages, and check submitted Worker results.
 
 Each delegated task should have a task id, owner, scope, expected deliverables,

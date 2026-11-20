@@ -93,16 +93,19 @@ def test_raw_worker_consumes_only_its_device_cursor_and_preserves_initial_timeli
     matrix.input.return_value = None
     matrix.prepare_input.return_value = {"room_id": room, "event_id": "$assignment"}
     client = Mock()
+    observed = []
     def respond(method, path, body=None, **kwargs):
         if path.endswith("/state/m.room.encryption/"):
             raise HTTPError(path, 404, "missing", {}, io.BytesIO(b'{"errcode":"M_NOT_FOUND"}'))
         if path.endswith("/whoami"):
             return {"user_id": "@w:hs", "device_id": "current"}
+        if "since" not in parse_qs(urlsplit(path).query):
+            return {"next_batch": "discovery-only", "rooms": {"invite": {"!old-invite:hs": {}}}}
         assert parse_qs(urlsplit(path).query) == {"timeout": ["0"], "full_state": ["true"], "since": ["my_cursor"]}
         return {"next_batch": "new", "rooms": {"join": {room: {"timeline": {"events": [raw], "limited": True, "prev_batch": "back"}}}}}
     client.request.side_effect = respond
     classify = Mock(return_value=("task_notification", "T"))
-    consumer = RawWorkerSync(matrix, client, "@w:hs", classify, lambda _: {room})
+    consumer = RawWorkerSync(matrix, client, "@w:hs", classify, lambda payload: observed.append(payload) or {room})
     assert consumer.poll() == (state, {})
     matrix.consumer.assert_called_once_with(state, account="@w:hs", device="current", format="matrix-raw/sync-v3")
     classify.assert_called_once_with(room, raw)
@@ -110,6 +113,8 @@ def test_raw_worker_consumes_only_its_device_cursor_and_preserves_initial_timeli
     matrix.prepare_input.assert_called_once_with(room, "$assignment", expected, "task_notification", task_id="T")
     matrix.sync.assert_called_once_with(state, matrix.consumer.return_value, "new",
         [{"room_id": room, "inputs": [matrix.prepare_input.return_value], "limited": True, "prev_batch": "back"}])
+    assert "!old-invite:hs" in observed[0]["rooms"]["invite"]
+    assert len(observed) == 2
 
 
 def test_raw_worker_retains_source_classification_and_stops_on_undecryptable_input():

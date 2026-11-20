@@ -62,7 +62,9 @@ def notification(content, room, sender, own, *, fetch=controller_json):
         receipt = verified_get("coordination/events/" + identity)
         packet = receipt["control"]
         canonical = packet["channel_meta"]["teamharness_coordination"]
-        if (receipt.get("status") not in ({"queued", "dispatching", "running", "completed"} if event.get("kind") == "handoff" else {"queued", "dispatching", "running"})
+        # Completed transport means Matrix accepted the notification; native
+        # consumption is fenced separately by the input ledger and Task state.
+        if (receipt.get("status") not in {"queued", "dispatching", "running", "completed"}
                 or receipt["actor"] != sender or receipt["recipient"] != own
                 or receipt["room_id"] != room
                 or meta.get("sender_id") != sender or meta.get("agent_matrix_user_id") != own

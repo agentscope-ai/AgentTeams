@@ -91,6 +91,12 @@ def invoke(args):
     return json.loads(server.call_tool("taskflow", args)["content"][0]["text"])
 
 
+def test_native_completion_schema_advertises_the_required_report():
+    properties = server._tool_schema("taskflow")["inputSchema"]["properties"]
+    assert properties["report"]["type"] == "string"
+    assert "complete_task" in properties["report"]["description"]
+
+
 def test_main_task_starts_without_any_project(plan):
     args, rooms = plan
     result = invoke(args)

@@ -156,6 +156,13 @@ class RawWorkerSync:
         if account.get("user_id") != self.sender or not account.get("device_id"):
             raise RecoveryConflict("Raw Matrix consumer requires the Worker's account and device")
         consumer = self.matrix.consumer(snapshot, account=self.sender, device=account["device_id"], format="matrix-raw/sync-v3")
+        if not self.ready and consumer["token"]:
+            # Invites ignored by an older consumer are absent from incremental
+            # sync. Discover them without replacing the durable device cursor
+            # or dispatching the discovery response's historical timeline.
+            discovery = self.client.request("GET", "/_matrix/client/v3/sync?" + urlencode({
+                "timeout": 0, "filter": json.dumps({"room": {"timeline": {"limit": 0}}})}))
+            self.observe_rooms({"rooms": {"invite": discovery.get("rooms", {}).get("invite", {})}})
         query = {"timeout": timeout_ms if self.ready else 0}
         if consumer["token"]:
             query["since"] = consumer["token"]

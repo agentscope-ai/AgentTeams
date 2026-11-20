@@ -131,6 +131,19 @@ class StagePacketTest(unittest.TestCase):
         packet = self.receive("different request", "visible request")
         self.assertEqual(packet["content_parts"][0].text, "visible request")
 
+    def test_completion_is_not_merged_with_its_report_attachment(self):
+        channel = self.channel_type(process=lambda *args, **kwargs: None)
+        for kind, field in (("MAIN_TASK_COMPLETED", "task_id"), ("PROJECT_COMPLETED", "project_id")):
+            packet = self.receive("Accepted report", "Accepted report", {
+                "org.agentteams.workflow": {"type": kind, field: "p"},
+            })
+            attachment = {**packet, "meta": {**packet["meta"], "event_id": "$file", "teamharness_workflow": {}}}
+            attachment["meta"].pop("teamharness_completion_session", None)
+            self.assertNotEqual(channel.get_debounce_key(attachment), channel.get_debounce_key(packet))
+            request = channel.build_agent_request_from_native(packet)
+            self.assertEqual(request.session_id, channel.get_debounce_key(packet))
+            self.assertEqual(channel.get_to_handle_from_request(request), "!room:test")
+
     def test_api_progress_projection_never_starts_another_agent_turn(self):
         channel = self.channel_type(process=lambda *args, **kwargs: None)
         channel._is_dm_room = AsyncMock(side_effect=AssertionError("projection reached routing"))

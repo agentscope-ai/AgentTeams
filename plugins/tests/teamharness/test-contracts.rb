@@ -54,8 +54,7 @@ end
 assert_file(runtime_design_doc)
 
 # Builtin Leader guidance must agree with Controller resource authorization.
-leader_root = repo_root / "manager/agent/team-leader-agent"
-leader_guidance = [leader_root / "AGENTS.md", leader_root / "HEARTBEAT.md", leader_root / "skills/organization/SKILL.md"].map { |path| read(path) }.join("\n")
+leader_guidance = [plugin_root / "prompts/agent/leader.md", plugin_root / "prompts/agent/leader-heartbeat.md", plugin_root / "skills/team/organization/SKILL.md"].map { |path| read(path) }.join("\n")
 assert(!leader_guidance.match?(/^\s*agt worker (wake|sleep|ensure-ready)\b/), "Leader guidance must not prescribe resource lifecycle writes")
 assert(leader_guidance.include?("Manager or platform Admin"), "Leader runtime blockers must name the resource authority")
 
@@ -196,6 +195,7 @@ expected_skills = {
     "team-coordination" => %w[leader],
     "project-management" => %w[leader],
     "task-delegation" => %w[leader],
+    "task-management" => %w[leader],
     "task-execution" => %w[worker remote-member]
   }
 }

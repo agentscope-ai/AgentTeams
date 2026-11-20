@@ -101,8 +101,7 @@ jobs:
           CANDIDATE: ${{ needs.prepare.outputs.candidate }}
         run: |
           image="${REGISTRY}/agentteams/agentteams-controller:${CANDIDATE}"
-          docker buildx imagetools create --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
-            -t "$image" "${image}-amd64" "${image}-arm64"
+          docker buildx imagetools create -t "$image" "${image}-amd64" "${image}-arm64"
 
   harness-platform:
     needs: [prepare, controller-index]

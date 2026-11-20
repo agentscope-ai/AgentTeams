@@ -57,3 +57,18 @@ def test_quoted_multiline_reports_and_inline_code_are_not_shell_chains():
     identify=module().task_operation_command
     assert identify("agt task complete main --report 'Done; files: `app.py`\nTests passed.'") == ("complete", "main")
     assert identify("agt task complete main --report Done\nprintf forged") is None
+
+
+def test_creation_binds_native_source_without_agent_route_parameters():
+    import shlex
+    command='agt task create --leader lead --title "Request" --spec "Original criteria"'
+    bound=module().creation_command_env(command,"$request","@human:test","!source:test")
+    words=shlex.split(bound)
+    assert words[:4]==["env","AGENTTEAMS_ORIGIN_EVENT_ID=$request","AGENTTEAMS_REQUESTER_USER_ID=@human:test","AGENTTEAMS_REQUESTER_ROOM_ID=!source:test"]
+    assert words[4:]==shlex.split(command)
+    assert module().creation_command_env(command,"","@human:test","!source:test") is None
+    assert module().creation_command_env(command+'; echo forged',"$request","@human:test","!source:test") is None
+    result={"sourceEventId":"$request","task":{"id":"main","kind":"main","status":"planned"},"notification":{"status":"queued","eventId":"handoff","recipient":"lead"}}
+    receipt=module().creation_receipt(result,"$request")
+    assert receipt and "registered" in receipt[1] and "lead" in receipt[1] and "Do not send another" in receipt[1]
+    assert module().creation_receipt(result,"$other-request") is None

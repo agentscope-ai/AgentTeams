@@ -39,9 +39,11 @@ func (h *CoordinationHandler) registerHandoffTasks(ctx context.Context, e coordi
 			"task_id": request.TaskID, "task_kind": "main", "team_id": e.StorageTeam,
 			"title": request.Title, "spec": request.Spec, "status": "planned", "assigned_to": e.Recipient,
 			"source_room_id": coordinationString(e.SourceRoute, "target_session"), "requester": coordinationString(e.SourceRoute, "target_user"),
+			"task_origin":           map[string]any{"event_id": e.OriginEventID, "room_id": coordinationString(e.SourceRoute, "target_session"), "requester": coordinationString(e.SourceRoute, "target_user"), "dispatch_agent": e.ActorName, "dispatch_agent_role": e.ActorRole, "dispatch_agent_matrix_id": e.Actor},
 			"reply_route":           map[string]any{"channel": "matrix", "target_user": e.Actor, "target_session": e.RoomID},
 			"requester_reply_route": e.SourceRoute, "tasks": []any{}, "handoff_id": e.ID,
-			"created_at": time.Now().UTC().Format(time.RFC3339),
+			"created_at":         time.Now().UTC().Format(time.RFC3339),
+			"task_notifications": map[string]taskNotificationIntent{"handoff": {Event: e, ActorRole: e.ActorRole, ActorName: e.ActorName, Team: e.Team, Status: "pending"}},
 		}
 		body, _ := json.Marshal(task)
 		err := h.deps.OSS.PutObjectIfAbsent(ctx, key, body)
@@ -50,7 +52,7 @@ func (h *CoordinationHandler) registerHandoffTasks(ctx context.Context, e coordi
 			if readErr != nil {
 				return readErr
 			}
-			if existing["handoff_id"] != e.ID || existing["spec"] != request.Spec || existing["title"] != request.Title || existing["assigned_to"] != e.Recipient {
+			if existing["handoff_id"] != e.ID || existing["spec"] != request.Spec || existing["title"] != request.Title || existing["assigned_to"] != e.Recipient || existing["source_room_id"] != coordinationString(e.SourceRoute, "target_session") || existing["requester"] != coordinationString(e.SourceRoute, "target_user") {
 				return oss.ErrPreconditionFailed
 			}
 		} else if err != nil {

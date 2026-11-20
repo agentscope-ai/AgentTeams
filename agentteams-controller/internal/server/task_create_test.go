@@ -1,0 +1,155 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+func taskCreateFixture(t *testing.T) (*ProjectHandler, *ossfake.Memory) {
+	t.Helper()
+	coordination, store := coordinationFixture(t)
+	var team v1beta1.Team
+	if err := coordination.deps.Client.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "alpha"}, &team); err != nil {
+		t.Fatal(err)
+	}
+	team.Status.LeaderDMRoomID = "!leader-dm:test"
+	if err := coordination.deps.Client.Update(t.Context(), &team); err != nil {
+		t.Fatal(err)
+	}
+	h := NewProjectHandler(coordination.deps.Client, "default", store)
+	h.coordination = coordination
+	return h, store
+}
+
+func callTaskCreate(h *ProjectHandler, caller *authpkg.CallerIdentity, source, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
+	r.Header.Set("X-AgentTeams-Origin-Event-ID", source)
+	r.Header.Set("X-AgentTeams-Requester-User-ID", "@human:test")
+	r.Header.Set("X-AgentTeams-Requester-Room-ID", "!source:test")
+	w := httptest.NewRecorder()
+	h.CreateTask(w, withCaller(r, caller))
+	return w
+}
+
+func TestTaskCreateUsesOriginalContextAndSingleDurableHandoff(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}
+	body := `{"title":"CSV analysis","spec":"Original acceptance criteria","leader":"lead-cr"}`
+	a, b, c := callTaskCreate(h, caller, "$request-1", body), callTaskCreate(h, caller, "$request-1", body), callTaskCreate(h, caller, "$request-2", body)
+	if a.Code != 201 || b.Code != 200 || c.Code != 201 {
+		t.Fatalf("create/retry/fresh request: %d %s / %d %s / %d %s", a.Code, a.Body.String(), b.Code, b.Body.String(), c.Code, c.Body.String())
+	}
+	var first, retry, fresh struct {
+		Task         taskResource           `json:"task"`
+		Notification taskNotificationStatus `json:"notification"`
+	}
+	_ = json.Unmarshal(a.Body.Bytes(), &first)
+	_ = json.Unmarshal(b.Body.Bytes(), &retry)
+	_ = json.Unmarshal(c.Body.Bytes(), &fresh)
+	if first.Task.ID == "" || first.Task.Kind != "main" || first.Task.Status != "planned" || first.Task.ID != retry.Task.ID || first.Task.ID == fresh.Task.ID || first.Notification.EventID != retry.Notification.EventID || first.Notification.Recipient != "lead-cr" {
+		t.Fatalf("invalid main request receipt: %s / %s / %s", a.Body.String(), b.Body.String(), c.Body.String())
+	}
+	data, err := store.GetObject(t.Context(), "teams/alpha/shared/tasks/"+first.Task.ID+"/meta.json")
+	var main map[string]any
+	if err != nil || json.Unmarshal(data, &main) != nil || coordinationString(main, "source_room_id") != "!source:test" || coordinationString(coordinationMap(main, "reply_route"), "target_user") != "@manager:test" {
+		t.Fatalf("lost original source/dispatch identity: %s %v", data, err)
+	}
+	data, err = store.GetObject(t.Context(), coordinationPending+first.Notification.EventID+".json")
+	var handoff coordinationDelivery
+	if err != nil || json.Unmarshal(data, &handoff) != nil || handoff.Event.RoomID != "!leader-dm:test" || coordinationString(handoff.Event.SourceRoute, "target_session") != "!source:test" || len(handoff.Event.Tasks) != 1 || handoff.Event.Tasks[0].TaskID != first.Task.ID {
+		t.Fatalf("wrong handoff room or request identity: %s %v", data, err)
+	}
+	changed := callTaskCreate(h, caller, "$request-1", `{"title":"Changed request","spec":"Different criteria","leader":"lead-cr"}`)
+	if changed.Code != 409 {
+		t.Fatalf("same source overwritten: %d %s", changed.Code, changed.Body.String())
+	}
+}
+
+func TestTaskCreateRejectsWorkerMissingSourceAndAgentSuppliedRoutes(t *testing.T) {
+	h, _ := taskCreateFixture(t)
+	for _, tc := range []struct {
+		role, source, body string
+		want               int
+	}{
+		{authpkg.RoleWorker, "$event", `{"title":"T","spec":"S","leader":"lead-cr"}`, 403},
+		{authpkg.RoleManager, "", `{"title":"T","spec":"S","leader":"lead-cr"}`, 400},
+		{authpkg.RoleManager, "$event", `{"title":"T","spec":"S","leader":"lead-cr","sourceRoom":"!forged:test"}`, 400},
+	} {
+		w := callTaskCreate(h, &authpkg.CallerIdentity{Role: tc.role, Username: "default"}, tc.source, tc.body)
+		if w.Code != tc.want {
+			t.Fatalf("invalid creation admitted: %d want %d %s", w.Code, tc.want, w.Body.String())
+		}
+	}
+}
+
+type taskCreateQueueFailure struct {
+	*ossfake.Memory
+	fail bool
+}
+
+func (s *taskCreateQueueFailure) PutObjectIfAbsent(ctx context.Context, key string, data []byte) error {
+	if s.fail && strings.HasPrefix(key, coordinationPending) {
+		return errors.New("fixture queue outage")
+	}
+	return s.Memory.PutObjectIfAbsent(ctx, key, data)
+}
+
+func TestTaskCreateRecoversHandoffAfterRegistrationQueueGap(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	fault := &taskCreateQueueFailure{Memory: store, fail: true}
+	h.oss = fault
+	h.coordination.deps.OSS = fault
+	body := `{"title":"T","spec":"Original request","leader":"lead-cr"}`
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}
+	first := callTaskCreate(h, caller, "$gap", body)
+	if first.Code != 503 {
+		t.Fatalf("queue outage not reported: %d %s", first.Code, first.Body.String())
+	}
+	fault.fail = false
+	h.recoverTaskNotifications(t.Context())
+	retried := callTaskCreate(h, caller, "$gap", body)
+	if retried.Code != 200 {
+		t.Fatalf("handoff recovery failed: %d %s", retried.Code, retried.Body.String())
+	}
+	entries, _, err := store.ListObjectsRecursive(t.Context(), coordinationPending, "", 100)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("duplicate or missing recovered handoff: %v %v", entries, err)
+	}
+}
+
+func TestTaskCreateProtectsOriginalSourceBeforePlanning(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$source", `{"title":"T","spec":"Original request","leader":"lead-cr"}`)
+	var result struct {
+		Task taskResource `json:"task"`
+	}
+	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &result) != nil {
+		t.Fatal(w.Body.String())
+	}
+	key := "teams/alpha/shared/tasks/" + result.Task.ID + "/meta.json"
+	data, _ := store.GetObject(t.Context(), key)
+	for _, field := range []string{"task_origin", "requester_reply_route", "source_room_id", "spec"} {
+		var task map[string]any
+		_ = json.Unmarshal(data, &task)
+		delete(task, field)
+		body, _ := json.Marshal(task)
+		r := httptest.NewRequest(http.MethodPut, "/api/v1/tasks/"+result.Task.ID+"/meta", strings.NewReader(string(body)))
+		r.SetPathValue("id", result.Task.ID)
+		r.Header.Set("If-Match", contentETag(data))
+		response := httptest.NewRecorder()
+		h.PutTaskMeta(response, withCaller(r, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"}))
+		if response.Code != 403 {
+			t.Fatalf("original %s replaced before planning: %d %s", field, response.Code, response.Body.String())
+		}
+	}
+}

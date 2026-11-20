@@ -307,6 +307,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	s.coordination.taskNotifications = projh
 	recovery := NewTaskRecoveryHandler(projh, deps)
 	projh.recovery = recovery
+	mux.Handle("POST /api/v1/tasks", mw.Authenticate(http.HandlerFunc(projh.CreateTask)))
 	mux.Handle("GET /api/v1/tasks/recoverable", mw.Authenticate(http.HandlerFunc(recovery.ListRecoverableTasks)))
 	mux.Handle("POST /api/v1/tasks/{id}/execution", mw.Authenticate(http.HandlerFunc(recovery.UpdateExecution)))
 	workerMatrix := NewWorkerMatrixHandler(deps, recovery)

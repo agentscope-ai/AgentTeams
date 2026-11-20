@@ -111,16 +111,17 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         _accepted_task = ""
         _task_scope = None
 
-        def _inject_task_receipt(self, item: Any, tool_name: str, args: Any) -> None:
+        def _inject_task_receipt(self, item: Any, tool_name: str, args: Any, creation_source: str = "") -> None:
             if tool_name != "execute_shell_command" or not isinstance(args, dict):
                 return
-            operation = receipts.task_operation_command(args.get("command"))
-            if not operation:
-                return
-            action, task_id = operation
-            expected = _execution_task.get() if action == "submit" else _completion_task.get()
-            if task_id != expected:
-                return
+            if not creation_source:
+                operation = receipts.task_operation_command(args.get("command"))
+                if not operation:
+                    return
+                action, task_id = operation
+                expected = _execution_task.get() if action == "submit" else _completion_task.get()
+                if task_id != expected:
+                    return
             from agentscope.tool import ToolResponse
             from agentscope.message import TextBlock
 
@@ -134,7 +135,8 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 result = json.loads(text)
             except (TypeError, ValueError):
                 return
-            receipt = receipts.task_receipt(result, task_id, action)
+            receipt = (receipts.creation_receipt(result, creation_source) if creation_source
+                       else receipts.task_receipt(result, task_id, action))
             seen = getattr(self, "_task_receipt_ids", set())
             if receipt is None or receipt[0] in seen:
                 return
@@ -246,6 +248,14 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                             args["payload"]["replyRoute"] = coordinator
                 if json_input:
                     call.input = json.dumps(args, ensure_ascii=False)
+            creation_source = ""
+            if name == "execute_shell_command" and isinstance(args, dict) and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and route:
+                bound = receipts.creation_command_env(args.get("command"), _source_event.get(), str(route.get("target_user") or ""), str(route.get("target_session") or ""))
+                if bound:
+                    creation_source = _source_event.get()
+                    args["command"] = bound
+                    if json_input:
+                        call.input = json.dumps(args, ensure_ascii=False)
             command = str(args.get("command") or "") if isinstance(args, dict) else ""
             if (
                 getattr(call, "name", "") == "execute_shell_command"
@@ -256,8 +266,8 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 yield ToolResponse(state="error", content=[{"type": "text", "text": _CLEANUP_GUIDANCE}])
                 return
             async for item in next_handler(**input_kwargs):
-                if getattr(call, "name", "") == "execute_shell_command" and (_execution_task.get() or _completion_task.get()):
-                    self._inject_task_receipt(item, name, args)
+                if getattr(call, "name", "") == "execute_shell_command" and (_execution_task.get() or _completion_task.get() or creation_source):
+                    self._inject_task_receipt(item, name, args, creation_source)
                 if name in {"projectflow", "taskflow"} and args.get("action") == "accept_task_result" and _review_task.get():
                     for block in getattr(item, "content", []):
                         text = block.get("text", "") if isinstance(block, dict) else getattr(block, "text", "")

@@ -13,7 +13,7 @@ import subprocess
 # Required fields, optional fields, and repeated flags. No caller-supplied
 # executable, shell, environment, storage path, recipient or Project routing.
 _ACTIONS = {
-    "create": (("leader", "title", "spec"), (), {}),
+    "create": (("leader", "title"), ("spec",), {}),
     "plan": (("nodes",), ("team",), {}),
     "get": ((), ("team",), {}),
     "begin": ((), ("team",), {}),
@@ -46,7 +46,7 @@ TASK_SCHEMA = {
             "taskId": {"type": "string", "description": "Required except create. Use the task-system ID, not a local step alias."},
             "leader": {"type": "string", "description": "For create: registered Leader name."},
             "title": {"type": "string", "description": "For create: concise original request title."},
-            "spec": {"type": "string", "description": "For create: complete original request and acceptance criteria."},
+            "spec": {"type": "string", "description": "For create: optional supplementary context. The task system captures the original Human message automatically; do not copy or summarize it here."},
             "nodes": {"type": "array", "description": "For plan: complete execution DAG; no source routes or execution Task IDs.",
                       "items": {"type": "object", "additionalProperties": False, "required": ["id", "assignedTo", "spec"],
                                 "properties": {"id": {"type": "string"}, "title": {"type": "string"},

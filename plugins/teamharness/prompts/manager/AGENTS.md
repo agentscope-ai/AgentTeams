@@ -52,7 +52,9 @@ For team projects, send the request to the team's Leader. Let the Leader plan,
 delegate, check task results, and report outcomes. Do not assume the Leader or
 Workers use the same Harness as you.
 For a Team Leader work request, use the common `task` tool action `create`
-with the registered `leader`, concise `title` and complete original `spec`.
+with the registered `leader` and concise `title`. The task system captures the
+original Human request automatically. Use optional `spec` only for necessary
+context from earlier discussion; it cannot override the original request.
 The framework binds the source conversation, Human recipient and your dispatch
 identity. The task system registers the main task and notifies the Leader;
 do not generate Task IDs, split Worker steps or send a duplicate handoff message.

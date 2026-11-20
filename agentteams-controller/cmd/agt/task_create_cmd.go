@@ -13,8 +13,8 @@ import (
 func taskCreateCmd() *cobra.Command {
 	var title, spec, leader string
 	cmd := &cobra.Command{Use: "create", Short: "Register the original request and hand it to a Team Leader", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if strings.TrimSpace(title) == "" || strings.TrimSpace(spec) == "" || leader == "" {
-			return fmt.Errorf("title, original spec and registered Leader required")
+		if strings.TrimSpace(title) == "" || leader == "" {
+			return fmt.Errorf("title and registered Leader required")
 		}
 		source, user, room := os.Getenv("AGENTTEAMS_ORIGIN_EVENT_ID"), os.Getenv("AGENTTEAMS_REQUESTER_USER_ID"), os.Getenv("AGENTTEAMS_REQUESTER_ROOM_ID")
 		if source == "" || !strings.HasPrefix(user, "@") || !strings.HasPrefix(room, "!") {
@@ -31,9 +31,9 @@ func taskCreateCmd() *cobra.Command {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 	}}
 	cmd.Flags().StringVar(&title, "title", "", "Original request title")
-	cmd.Flags().StringVar(&spec, "spec", "", "Complete original request and acceptance criteria")
+	cmd.Flags().StringVar(&spec, "spec", "", "Optional supplementary context; the task system preserves the original request")
 	cmd.Flags().StringVar(&leader, "leader", "", "Registered Team Leader")
-	for _, name := range []string{"title", "spec", "leader"} {
+	for _, name := range []string{"title", "leader"} {
 		_ = cmd.MarkFlagRequired(name)
 	}
 	return cmd

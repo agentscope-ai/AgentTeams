@@ -19,6 +19,14 @@ def load(monkeypatch):
     return module
 
 
+def test_create_does_not_require_model_to_copy_original_message(monkeypatch):
+    tool = load(monkeypatch)
+    argv, env = tool.command({"action": "create", "leader": "lead", "title": "Request",
+        "_nativeSource": {"eventId": "$actual", "userId": "@human:test", "roomId": "!source:test"}})
+    assert argv == ["/usr/local/bin/agt", "task", "create", "--leader", "lead", "--title", "Request"]
+    assert env["AGENTTEAMS_ORIGIN_EVENT_ID"] == "$actual"
+
+
 def test_rejection_can_request_explicit_replacement_without_shell(monkeypatch):
     tool = load(monkeypatch)
     argv, _ = tool.command({"action":"reject", "taskId":"t1", "submissionId":"s1", "note":"QA failed", "replacementSpec":"Fix cents; literal $(text)"})

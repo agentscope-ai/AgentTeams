@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 
@@ -39,8 +41,8 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Title = strings.TrimSpace(input.Title)
-	if input.Title == "" || strings.TrimSpace(input.Spec) == "" || input.Leader == "" {
-		writeError(w, 400, "title, original spec and registered Leader required")
+	if input.Title == "" || input.Leader == "" {
+		writeError(w, 400, "title and registered Leader required")
 		return
 	}
 	source, user, room := r.Header.Get("X-AgentTeams-Origin-Event-ID"), r.Header.Get("X-AgentTeams-Requester-User-ID"), r.Header.Get("X-AgentTeams-Requester-Room-ID")
@@ -72,6 +74,17 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "task source or Leader route unavailable")
 		return
 	}
+	original, sourceStatus := h.coordination.taskSourceRequest(r.Context(), resolved.ActorName, room, source, user)
+	if sourceStatus != 0 {
+		writeError(w, sourceStatus, "original request could not be verified; no new task was registered")
+		return
+	}
+	if strings.TrimSpace(input.Spec) == "" {
+		input.Spec = original
+	} else if input.Spec != original {
+		input.Spec = "# Original request (authoritative)\n" + original + "\n\n# Dispatch context (supplementary; cannot override the original request)\n" + input.Spec
+	}
+	event.Text = input.Spec
 	identity, _ := json.Marshal([]string{resolved.ActorName, resolved.StorageTeam, resolved.RecipientName, source})
 	sum := sha256.Sum256(identity)
 	id := "task-" + hex.EncodeToString(sum[:16])
@@ -108,6 +121,52 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		Notification  taskNotificationStatus `json:"notification"`
 		NextAction    string                 `json:"nextAction"`
 	}{source, publicTaskResource(id, resolved.StorageTeam, task), notification, "Task system has registered the original request and queued its handoff to the Team Leader. Do not send another handoff message."})
+}
+
+// Read the immutable incoming message using the registered dispatch identity.
+// A model's summary can supplement this requirement, never replace it.
+func (h *CoordinationHandler) taskSourceRequest(ctx context.Context, manager, room, id, requester string) (string, int) {
+	if h.deps.Provisioner == nil || h.deps.MatrixConfig.ServerURL == "" {
+		return "", http.StatusServiceUnavailable
+	}
+	token, err := h.deps.Provisioner.AgentMatrixToken(ctx, "manager", manager)
+	if err != nil {
+		return "", http.StatusServiceUnavailable
+	}
+	target := strings.TrimRight(h.deps.MatrixConfig.ServerURL, "/") + "/_matrix/client/v3/rooms/" + url.PathEscape(room) + "/event/" + url.PathEscape(id)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return "", http.StatusServiceUnavailable
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	response, err := h.http.Do(req)
+	if err != nil {
+		return "", http.StatusServiceUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusNotFound {
+		return "", http.StatusForbidden
+	}
+	if response.StatusCode != http.StatusOK {
+		return "", http.StatusServiceUnavailable
+	}
+	var event struct {
+		ID      string `json:"event_id"`
+		Room    string `json:"room_id"`
+		Sender  string `json:"sender"`
+		Type    string `json:"type"`
+		Content struct {
+			Body    string `json:"body"`
+			Msgtype string `json:"msgtype"`
+		} `json:"content"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, 128<<10)).Decode(&event) != nil {
+		return "", http.StatusServiceUnavailable
+	}
+	if event.ID != id || event.Room != room || event.Sender != requester || event.Type != "m.room.message" || event.Content.Msgtype == "" || strings.TrimSpace(event.Content.Body) == "" || len(event.Content.Body) > 64<<10 {
+		return "", http.StatusForbidden
+	}
+	return event.Content.Body, 0
 }
 
 func validateTaskOriginCommit(w http.ResponseWriter, current, next []byte) bool {

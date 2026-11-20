@@ -10,6 +10,12 @@ and permissions come from your runtime. Do not supply a different role, Project,
 source room, recipient or storage path. The task system preserves the original
 request, Human conversation and first dispatch Agent identity.
 
+As Manager, call `create` with the registered `leader` and a concise `title`.
+You do not need to copy the current request: the task system verifies its
+original Matrix message and preserves the complete text. Use optional `spec`
+only to supplement necessary earlier context. Original Human requirements take
+precedence over supplementary context and execution assignments.
+
 ## Plan as Leader
 
 Preserve the main task already registered by Manager. Call `plan` once with

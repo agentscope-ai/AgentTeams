@@ -11,7 +11,9 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -28,6 +30,9 @@ func taskCreateFixture(t *testing.T) (*ProjectHandler, *ossfake.Memory) {
 	}
 	h := NewProjectHandler(coordination.deps.Client, "default", store)
 	h.coordination = coordination
+	taskCreateSourceServer(t, h, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"event_id": r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:], "room_id": "!source:test", "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": "Original acceptance criteria"}})
+	})
 	return h, store
 }
 
@@ -39,6 +44,97 @@ func callTaskCreate(h *ProjectHandler, caller *authpkg.CallerIdentity, source, b
 	w := httptest.NewRecorder()
 	h.CreateTask(w, withCaller(r, caller))
 	return w
+}
+
+func taskCreateSourceServer(t *testing.T, h *ProjectHandler, handler http.HandlerFunc) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	creds := &service.FileCredentialStore{Dir: t.TempDir()}
+	if err := creds.Save(t.Context(), "default", &service.WorkerCredentials{MatrixToken: "dispatch-manager-token"}); err != nil {
+		t.Fatal(err)
+	}
+	h.coordination.deps.Provisioner = service.NewProvisioner(service.ProvisionerConfig{Creds: creds})
+	h.coordination.deps.MatrixConfig = matrix.Config{ServerURL: server.URL}
+}
+
+func TestTaskCreatePreservesHumanRequirementOmittedByDispatchSummary(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	original := "Implement CSV summary. Empty input succeeds; output amounts have two decimal places and zero is 0.00."
+	taskCreateSourceServer(t, h, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/_matrix/client/v3/rooms/!source:test/event/$original" || r.Header.Get("Authorization") != "Bearer dispatch-manager-token" {
+			t.Errorf("wrong source request: %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"event_id": "$original", "room_id": "!source:test", "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": original}})
+	})
+	w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$original", `{"title":"CSV","spec":"Implement CSV summary using Python standard library.","leader":"lead-cr"}`)
+	var result struct {
+		Task         taskResource           `json:"task"`
+		Notification taskNotificationStatus `json:"notification"`
+	}
+	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &result) != nil || !strings.Contains(result.Task.Spec, original) || !strings.Contains(result.Task.Spec, "Python standard library") {
+		t.Fatalf("lost source requirements or useful dispatch context: %d %s", w.Code, w.Body.String())
+	}
+	data, _ := store.GetObject(t.Context(), coordinationPending+result.Notification.EventID+".json")
+	var delivery coordinationDelivery
+	if json.Unmarshal(data, &delivery) != nil || len(delivery.Event.Tasks) != 1 || delivery.Event.Tasks[0].Spec != result.Task.Spec || delivery.Event.Text != result.Task.Spec {
+		t.Fatalf("source snapshot not included in actual handoff: %s", data)
+	}
+}
+
+func TestTaskCreateNeedsNoModelCopyOfCapturedRequest(t *testing.T) {
+	h, _ := taskCreateFixture(t)
+	w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$original", `{"title":"CSV","leader":"lead-cr"}`)
+	var result struct {
+		Task taskResource `json:"task"`
+	}
+	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Task.Spec != "Original acceptance criteria" {
+		t.Fatalf("captured request still requires a model copy: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTaskCreateRejectsUnverifiedSourceBeforeRegistration(t *testing.T) {
+	for _, kind := range []string{"unavailable", "wrong_sender", "wrong_event", "wrong_room", "redacted", "not_message"} {
+		t.Run(kind, func(t *testing.T) {
+			h, store := taskCreateFixture(t)
+			taskCreateSourceServer(t, h, func(w http.ResponseWriter, r *http.Request) {
+				if kind == "unavailable" {
+					w.WriteHeader(503)
+					return
+				}
+				e := map[string]any{"event_id": "$original", "room_id": "!source:test", "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": "Original requirement"}}
+				switch kind {
+				case "wrong_sender":
+					e["sender"] = "@other:test"
+				case "wrong_event":
+					e["event_id"] = "$other"
+				case "wrong_room":
+					e["room_id"] = "!other:test"
+				case "redacted":
+					e["content"] = map[string]any{}
+				case "not_message":
+					e["type"] = "m.room.member"
+				}
+				_ = json.NewEncoder(w).Encode(e)
+			})
+			w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$original", `{"title":"CSV","spec":"Agent summary","leader":"lead-cr"}`)
+			want := 403
+			if kind == "unavailable" {
+				want = 503
+			}
+			if w.Code != want {
+				t.Fatalf("unverified source admitted: %d %s", w.Code, w.Body.String())
+			}
+			entries, _, err := store.ListObjectsRecursive(t.Context(), coordinationPending, "", 100)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("unverified source dispatched: %v %v", entries, err)
+			}
+			tasks, _, err := store.ListObjectsRecursive(t.Context(), "teams/alpha/shared/tasks/", "", 100)
+			if err != nil || len(tasks) != 1 { // Only the fixture's pre-existing t1.
+				t.Fatalf("unverified source registered a task: %v %v", tasks, err)
+			}
+		})
+	}
 }
 
 func TestTaskCreateUsesOriginalContextAndSingleDurableHandoff(t *testing.T) {
@@ -56,7 +152,7 @@ func TestTaskCreateUsesOriginalContextAndSingleDurableHandoff(t *testing.T) {
 	_ = json.Unmarshal(a.Body.Bytes(), &first)
 	_ = json.Unmarshal(b.Body.Bytes(), &retry)
 	_ = json.Unmarshal(c.Body.Bytes(), &fresh)
-	if first.Task.ID == "" || first.Task.Kind != "main" || first.Task.Status != "planned" || first.Task.ID != retry.Task.ID || first.Task.ID == fresh.Task.ID || first.Notification.EventID != retry.Notification.EventID || first.Notification.Recipient != "lead-cr" {
+	if first.Task.ID == "" || first.Task.Kind != "main" || first.Task.Status != "planned" || first.Task.Spec != "Original acceptance criteria" || first.Task.ID != retry.Task.ID || first.Task.ID == fresh.Task.ID || first.Notification.EventID != retry.Notification.EventID || first.Notification.Recipient != "lead-cr" {
 		t.Fatalf("invalid main request receipt: %s / %s / %s", a.Body.String(), b.Body.String(), c.Body.String())
 	}
 	data, err := store.GetObject(t.Context(), "teams/alpha/shared/tasks/"+first.Task.ID+"/meta.json")

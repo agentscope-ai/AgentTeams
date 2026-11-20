@@ -40,3 +40,29 @@ func TestTaskCreateGetsOriginalRouteFromNativeContext(t *testing.T) {
 		t.Fatalf("invalid creation receipt: %d %s", calls, output.String())
 	}
 }
+
+func TestTaskCreateCanCaptureOriginalRequestWithoutSpecFlag(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var input map[string]string
+		if json.NewDecoder(r.Body).Decode(&input) != nil || input["title"] != "Request" || input["leader"] != "lead" || input["spec"] != "" || r.Header.Get("X-AgentTeams-Origin-Event-ID") != "$request" {
+			t.Errorf("source capture request changed: %+v", input)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"task":{"id":"main","spec":"Server captured original request"}}`))
+	}))
+	defer server.Close()
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "test-token")
+	t.Setenv("AGENTTEAMS_ORIGIN_EVENT_ID", "$request")
+	t.Setenv("AGENTTEAMS_REQUESTER_USER_ID", "@human:test")
+	t.Setenv("AGENTTEAMS_REQUESTER_ROOM_ID", "!source:test")
+	cmd := newRootCommand("agt")
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"task", "create", "--leader", "lead", "--title", "Request"})
+	if err := cmd.Execute(); err != nil || calls != 1 || !json.Valid(output.Bytes()) {
+		t.Fatalf("no-spec creation failed: calls=%d err=%v output=%s", calls, err, output.String())
+	}
+}

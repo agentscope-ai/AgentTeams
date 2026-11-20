@@ -12,8 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -23,7 +21,7 @@ func taskFilePutCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "put <task-id>", Short: "Publish a task file and return its immutable artifact reference", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !taskIdentifier.MatchString(args[0]) || name == "" || name == "." || name == ".." || path.Clean(name) != name || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "../") || strings.ContainsAny(name, "\\\x00") {
+			if !taskIdentifier.MatchString(args[0]) || !validTaskLocalName(name) {
 				return fmt.Errorf("invalid task or task-local file name")
 			}
 			if kind != "intermediate" && kind != "output" {

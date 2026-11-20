@@ -77,3 +77,20 @@ func TestTaskResourceKeepsTeamAuthorizationAndRejectsInvalidID(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskResourceInfersWorkerTeamForRepeatedTaskIDs(t *testing.T) {
+	store := ossfake.NewMemory()
+	for _, teamName := range []string{"alpha-team", "beta-team"} {
+		if err := store.PutObject(t.Context(), "teams/"+teamName+"/shared/tasks/t1/meta.json", []byte(`{"task_id":"t1","status":"assigned"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := newProjectTestHandler(t, store, team("alpha-team"), team("beta-team"))
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/t1", nil)
+	r.SetPathValue("id", "t1")
+	w := httptest.NewRecorder()
+	h.GetTaskResource(w, withCaller(r, &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "dev", Team: "alpha-team"}))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"team":"alpha-team"`) {
+		t.Fatalf("own scope not inferred: %d %s", w.Code, w.Body.String())
+	}
+}

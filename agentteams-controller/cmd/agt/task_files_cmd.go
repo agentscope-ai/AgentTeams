@@ -80,53 +80,72 @@ func taskFilesCmd() *cobra.Command {
 	return cmd
 }
 
+type taskDownload struct {
+	ArtifactID string `json:"artifactId,omitempty"`
+	TaskID     string `json:"taskId"`
+	Name       string `json:"name"`
+	Version    string `json:"version"`
+	LocalPath  string `json:"localPath"`
+	Size       int    `json:"size"`
+	SHA256     string `json:"sha256"`
+	content    []byte
+}
+
 func downloadTaskFile(cmd *cobra.Command, endpoint, taskID, name, expectedVersion, output string) error {
-	response, err := NewAPIClient().Do(http.MethodGet, endpoint, nil)
+	result, err := fetchTaskFile(endpoint, taskID, name, expectedVersion, output)
 	if err != nil {
 		return err
+	}
+	return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+}
+
+func fetchTaskFile(endpoint, taskID, name, expectedVersion, output string) (taskDownload, error) {
+	response, err := NewAPIClient().Do(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return taskDownload{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		if err := decodeJSONResponse(response, nil); err != nil {
-			return err
+			return taskDownload{}, err
 		}
-		return fmt.Errorf("unexpected task download status %d", response.StatusCode)
+		return taskDownload{}, fmt.Errorf("unexpected task download status %d", response.StatusCode)
 	}
 	const maximum = 64 << 20
 	data, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
 	if err != nil {
-		return err
+		return taskDownload{}, err
 	}
 	if len(data) > maximum {
-		return fmt.Errorf("task file exceeds download limit")
+		return taskDownload{}, fmt.Errorf("task file exceeds download limit")
 	}
 	digest := sha256.Sum256(data)
 	checksum := hex.EncodeToString(digest[:])
 	if response.Header.Get("X-Content-SHA256") != checksum {
-		return fmt.Errorf("task file checksum mismatch; no local file published")
+		return taskDownload{}, fmt.Errorf("task file checksum mismatch; no local file published")
 	}
 	if response.Header.Get("ETag") == "" {
-		return fmt.Errorf("task file version missing; no local file published")
+		return taskDownload{}, fmt.Errorf("task file version missing; no local file published")
 	}
 	version := strings.Trim(response.Header.Get("ETag"), `"`)
 	if expectedVersion != "" && version != expectedVersion {
-		return fmt.Errorf("task file version mismatch; no local file published")
+		return taskDownload{}, fmt.Errorf("task file version mismatch; no local file published")
 	}
 	if name == "" {
 		_, parameters, err := mime.ParseMediaType(response.Header.Get("Content-Disposition"))
 		if err != nil {
-			return fmt.Errorf("task file name unavailable")
+			return taskDownload{}, fmt.Errorf("task file name unavailable")
 		}
 		name = parameters["filename"]
 		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
-			return fmt.Errorf("invalid task download name")
+			return taskDownload{}, fmt.Errorf("invalid task download name")
 		}
 	}
 	var temporaryDir string
 	if output == "" {
 		temporaryDir, err = os.MkdirTemp("", "agentteams-task-input-")
 		if err != nil {
-			return err
+			return taskDownload{}, err
 		}
 		output = filepath.Join(temporaryDir, filepath.Base(name))
 	}
@@ -138,29 +157,21 @@ func downloadTaskFile(cmd *cobra.Command, endpoint, taskID, name, expectedVersio
 	}()
 	output, err = filepath.Abs(output)
 	if err != nil {
-		return err
+		return taskDownload{}, err
 	}
 	file, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
-		return err
+		return taskDownload{}, err
 	}
 	if _, err = file.Write(data); err != nil {
 		_ = file.Close()
 		_ = os.Remove(output)
-		return err
+		return taskDownload{}, err
 	}
 	if err = file.Close(); err != nil {
 		_ = os.Remove(output)
-		return err
+		return taskDownload{}, err
 	}
 	complete = true
-	return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
-		ArtifactID string `json:"artifactId,omitempty"`
-		TaskID     string `json:"taskId"`
-		Name       string `json:"name"`
-		Version    string `json:"version"`
-		LocalPath  string `json:"localPath"`
-		Size       int    `json:"size"`
-		SHA256     string `json:"sha256"`
-	}{response.Header.Get("X-AgentTeams-Artifact-ID"), taskID, name, version, output, len(data), checksum})
+	return taskDownload{response.Header.Get("X-AgentTeams-Artifact-ID"), taskID, name, version, output, len(data), checksum, data}, nil
 }

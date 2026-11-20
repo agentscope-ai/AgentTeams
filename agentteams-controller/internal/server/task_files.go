@@ -11,9 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"sort"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
@@ -50,53 +48,14 @@ func (h *ProjectHandler) GetTaskFiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "task files unavailable")
 		return
 	}
-	keys := map[string]string{}
-	published := map[string]publishedTaskFile{}
-	names := []string{}
-	prefix := "shared/tasks/" + id + "/"
-	var deliverables []string
-	if raw := record["deliverables"]; len(raw) > 0 && json.Unmarshal(raw, &deliverables) != nil {
-		writeError(w, 503, "invalid task files")
+	catalog, catalogErr := resolveTaskFileCatalog(metaKey, id, record)
+	if catalogErr != nil {
+		writeError(w, 503, catalogErr.Error())
 		return
-	}
-	for _, declared := range deliverables {
-		rel := strings.TrimPrefix(declared, prefix)
-		if rel == declared || rel == "." || path.Clean(rel) != rel || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "../") || strings.ContainsAny(rel, "\\\x00") {
-			writeError(w, http.StatusServiceUnavailable, "invalid task file reference")
-			return
-		}
-		name := strings.TrimPrefix(rel, "workspace/")
-		key := path.Dir(metaKey) + "/" + rel
-		if previous, exists := keys[name]; exists {
-			if previous != key {
-				writeError(w, http.StatusServiceUnavailable, "ambiguous task file name")
-				return
-			}
-			continue
-		}
-		keys[name], names = key, append(names, name)
-	}
-	var index taskFileIndex
-	if raw := record["task_files"]; len(raw) > 0 {
-		if json.Unmarshal(raw, &index) != nil || index.Artifacts == nil || index.Heads == nil {
-			writeError(w, 503, "invalid task file index")
-			return
-		}
-		for name, identity := range index.Heads {
-			artifact, exists := index.Artifacts[identity]
-			if !exists || artifact.ArtifactID != identity || artifact.Name != name || !validTaskFileName(name) || !validArtifactDigest(artifact.SHA256) || artifact.Version != artifact.SHA256 {
-				writeError(w, 503, "invalid task file reference")
-				return
-			}
-			if _, exists := keys[name]; !exists {
-				names = append(names, name)
-			}
-			keys[name], published[name] = path.Dir(metaKey)+"/artifacts/"+artifact.SHA256, artifact
-		}
 	}
 	name := r.URL.Query().Get("name")
 	if identity := r.URL.Query().Get("artifactId"); identity != "" {
-		artifact, exists := index.Artifacts[identity]
+		artifact, exists := catalog.index.Artifacts[identity]
 		if !exists || (name != "" && name != artifact.Name) {
 			writeError(w, 404, "task artifact not found")
 			return
@@ -106,34 +65,22 @@ func (h *ProjectHandler) GetTaskFiles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		name = artifact.Name
-		keys[name], published[name] = path.Dir(metaKey)+"/artifacts/"+artifact.SHA256, artifact
+		catalog.keys[name], catalog.published[name] = path.Dir(metaKey)+"/artifacts/"+artifact.SHA256, artifact
 	}
 	if name == "" {
-		sort.Strings(names)
-		files := make([]taskFileResource, 0, len(names))
-		for _, name := range names {
-			meta, err := h.oss.StatMeta(r.Context(), keys[name])
-			if err != nil || meta.ETag == "" {
-				writeError(w, http.StatusServiceUnavailable, "declared task file unavailable")
-				return
-			}
-			file := taskFileResource{Name: name, Version: httputil.BareETag(meta.ETag), Size: meta.Size}
-			if artifact, exists := published[name]; exists {
-				if artifact.Size != meta.Size {
-					writeError(w, 503, "artifact size verification failed")
-					return
-				}
-				file.ArtifactID, file.Kind, file.Version, file.SHA256 = artifact.ArtifactID, artifact.Kind, artifact.Version, artifact.SHA256
-			}
-			files = append(files, file)
+		files, err := h.taskFileResources(r.Context(), metaKey, id, record)
+		if err != nil {
+			writeError(w, 503, err.Error())
+			return
 		}
+
 		httputil.WriteJSON(w, http.StatusOK, struct {
 			TaskID string             `json:"taskId"`
 			Files  []taskFileResource `json:"files"`
 		}{TaskID: id, Files: files})
 		return
 	}
-	key, exists := keys[name]
+	key, exists := catalog.keys[name]
 	if !exists {
 		writeError(w, http.StatusNotFound, "task file not found")
 		return
@@ -149,7 +96,7 @@ func (h *ProjectHandler) GetTaskFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	storageVersion := httputil.BareETag(meta.ETag)
 	version := storageVersion
-	if artifact, exists := published[name]; exists {
+	if artifact, exists := catalog.published[name]; exists {
 		if artifact.Size != meta.Size {
 			writeError(w, 503, "artifact size verification failed")
 			return
@@ -248,11 +195,11 @@ func (h *ProjectHandler) GetTaskFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	digest := sha256.Sum256(data)
-	if artifact, exists := published[name]; exists && hex.EncodeToString(digest[:]) != artifact.SHA256 {
+	if artifact, exists := catalog.published[name]; exists && hex.EncodeToString(digest[:]) != artifact.SHA256 {
 		writeError(w, 503, "artifact content verification failed")
 		return
 	}
-	if artifact, exists := published[name]; exists {
+	if artifact, exists := catalog.published[name]; exists {
 		w.Header().Set("X-AgentTeams-Artifact-ID", artifact.ArtifactID)
 	}
 	w.Header().Set("ETag", httputil.EtagQuoted(version))

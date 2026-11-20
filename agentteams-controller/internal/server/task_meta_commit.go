@@ -191,6 +191,18 @@ func (h *ProjectHandler) resolveTaskMetaCommitKey(
 			}
 		}
 		hits = filtered
+	} else if caller != nil && (caller.Role == authpkg.RoleWorker || caller.Role == authpkg.RoleTeamLeader) && caller.Team != "" {
+		// A managed member already has one trusted Team scope. Repeated IDs in
+		// other Teams must not force the Agent to reconstruct deployment facts.
+		filtered := hits[:0]
+		for _, candidate := range hits {
+			if callerMatchesStorageTeam(caller, candidate.team, crToEffective) {
+				filtered = append(filtered, candidate)
+			}
+		}
+		if len(filtered) > 0 {
+			hits = filtered
+		}
 	}
 	switch len(hits) {
 	case 0:

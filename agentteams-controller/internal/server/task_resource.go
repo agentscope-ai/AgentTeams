@@ -16,6 +16,8 @@ type taskResource struct {
 	Title        string `json:"title,omitempty"`
 	Status       string `json:"status"`
 	AssignedTo   string `json:"assignedTo,omitempty"`
+	AssignmentID string `json:"assignmentId,omitempty"`
+	ParentTaskID string `json:"parentTaskId,omitempty"`
 	MainTaskID   string `json:"mainTaskId,omitempty"`
 	ProjectID    string `json:"projectId,omitempty"`
 	Spec         string `json:"spec,omitempty"`
@@ -50,12 +52,17 @@ func (h *ProjectHandler) GetTaskResource(w http.ResponseWriter, r *http.Request)
 	httputil.WriteJSON(w, http.StatusOK, struct {
 		Version string       `json:"version"`
 		Task    taskResource `json:"task"`
-	}{Version: version, Task: taskResource{
+	}{Version: version, Task: publicTaskResource(id, team, record)})
+}
+
+func publicTaskResource(id, team string, record map[string]any) taskResource {
+	return taskResource{
 		ID: id, Team: team,
 		Kind: coordinationString(record, "task_kind"), Title: coordinationString(record, "title"),
 		Status: coordinationString(record, "status"), AssignedTo: coordinationString(record, "assigned_to"),
+		AssignmentID: coordinationString(record, "notifyTxn"), ParentTaskID: coordinationString(record, "parent_task_id"),
 		MainTaskID: coordinationString(record, "main_task_id"), ProjectID: coordinationString(record, "project_id"),
 		Spec: coordinationString(record, "spec"), Summary: coordinationString(record, "summary"),
 		SubmissionID: coordinationString(record, "submission_id"),
-	}})
+	}
 }

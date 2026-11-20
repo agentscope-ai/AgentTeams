@@ -100,22 +100,7 @@ func (h *ProjectHandler) PublishTaskFile(w http.ResponseWriter, r *http.Request)
 			writeError(w, 409, "task is not executing")
 			return
 		}
-		if h.recovery == nil || !h.recovery.owns(r.Context(), caller, task) {
-			writeError(w, 403, "task is not assigned to you")
-			return
-		}
-		var execution taskExecution
-		if json.Unmarshal(task["execution"], &execution) != nil || execution.Generation == 0 || execution.State != "active" || execution.ProcessID == "" || execution.ProcessID != r.Header.Get("X-AgentTeams-Process-ID") {
-			writeError(w, 409, "task execution changed")
-			return
-		}
-		instance, _, err := h.recovery.resolveInstance(r.Context(), caller, nil)
-		if err != nil {
-			writeError(w, 503, "execution identity unavailable")
-			return
-		}
-		if instance != execution.InstanceID {
-			writeError(w, 409, "task execution instance changed")
+		if _, ok := h.ownedTaskExecution(w, r, task); !ok {
 			return
 		}
 		if data == nil {

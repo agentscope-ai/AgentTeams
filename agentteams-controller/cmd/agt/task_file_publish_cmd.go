@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,14 +50,24 @@ func taskFilePutCmd() *cobra.Command {
 			if team != "" {
 				query.Set("team", team)
 			}
-			response, err := NewAPIClient().doWithHeaders(http.MethodPost,
-				"/api/v1/tasks/"+url.PathEscape(args[0])+"/files?"+query.Encode(),
-				io.LimitReader(file, maximum+1), http.Header{"Content-Type": {"application/octet-stream"}, "X-Agentteams-Process-Id": {process}})
+			data, err := io.ReadAll(io.LimitReader(file, maximum+1))
 			if err != nil {
 				return err
 			}
+			if len(data) > maximum {
+				return fmt.Errorf("source must be a regular file of at most 64 MiB")
+			}
+			var operation [16]byte
+			if _, err := rand.Read(operation[:]); err != nil {
+				return fmt.Errorf("generate publication identity: %w", err)
+			}
+			headers := http.Header{
+				"Content-Type":            {"application/octet-stream"},
+				"Idempotency-Key":         {hex.EncodeToString(operation[:])},
+				"X-Agentteams-Process-Id": {process},
+			}
 			var result json.RawMessage
-			if err := decodeJSONResponse(response, &result); err != nil {
+			if err := publishTaskFile(cmd.Context(), NewAPIClient(), "/api/v1/tasks/"+url.PathEscape(args[0])+"/files?"+query.Encode(), data, headers, &result); err != nil {
 				return err
 			}
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
@@ -65,4 +80,32 @@ func taskFilePutCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("source")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
+}
+
+// publishTaskFile retries once after an ambiguous or transient failure.
+// Both attempts use the same identity and the same snapshot of the source.
+func publishTaskFile(ctx context.Context, c *APIClient, endpoint string, data []byte, headers http.Header, result *json.RawMessage) error {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var response *http.Response
+		response, err = c.doWithHeadersContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data), headers)
+		if err == nil {
+			err = decodeJSONResponse(response, result)
+			if err == nil {
+				return nil
+			}
+			var apiErr *APIError
+			if errors.As(err, &apiErr) {
+				switch apiErr.StatusCode {
+				case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+				default:
+					return err
+				}
+			}
+		}
+	}
+	return err
 }

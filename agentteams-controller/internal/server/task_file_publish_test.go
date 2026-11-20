@@ -87,6 +87,67 @@ func TestTaskFilePublishIsIdempotentAndPreservesTaskState(t *testing.T) {
 	}
 }
 
+func TestTaskFilePublicationOperationAndContentIdentity(t *testing.T) {
+	for _, replay := range []bool{true, false} {
+		name, key, want := "new_operation_promotes_previous_content", "op-a-new", "A"
+		if replay {
+			name, key, want = "late_retry_preserves_latest_content", "op-a", "B"
+		}
+		t.Run(name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			putTask(store, taskMetaKey, taskMeta(map[string]any{
+				"assigned_to": "dev",
+				"execution":   map[string]any{"generation": 1, "instance_id": "instance-1", "process_id": "process-1", "state": "active"},
+			}))
+			h := newProjectTestHandler(t, store, team("alpha-team"))
+			h.recovery = NewTaskRecoveryHandler(h, ServerDeps{})
+			h.recovery.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
+				return "instance-1", "qwenpaw", nil
+			}
+			caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "dev", Team: "alpha-team"}
+			publish := func(key, content string, wantStatus int) publishedTaskFile {
+				t.Helper()
+				r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/t1/files?name=result.md&kind=output", strings.NewReader(content))
+				r.SetPathValue("id", "t1")
+				r.Header.Set("X-AgentTeams-Process-ID", "process-1")
+				r.Header.Set("Idempotency-Key", key)
+				w := httptest.NewRecorder()
+				h.PublishTaskFile(w, withCaller(r, caller))
+				if w.Code != wantStatus {
+					t.Fatalf("publish status %d, want %d: %s", w.Code, wantStatus, w.Body.String())
+				}
+				var result publishedTaskFile
+				if wantStatus == http.StatusOK {
+					if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return result
+			}
+			read := func(query, want string) {
+				t.Helper()
+				r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/t1/files?team=alpha-team&"+query, nil)
+				r.SetPathValue("id", "t1")
+				w := httptest.NewRecorder()
+				h.GetTaskFiles(w, withCaller(r, caller))
+				if w.Code != http.StatusOK || w.Body.String() != want {
+					t.Fatalf("artifact read: status=%d body=%q, want %q", w.Code, w.Body.String(), want)
+				}
+			}
+			a := publish("op-a", "A", http.StatusOK)
+			b := publish("op-b", "B", http.StatusOK)
+			publish("op-a", "different payload", http.StatusConflict)
+			publish("bad key", "A", http.StatusBadRequest)
+			if result := publish(key, "A", http.StatusOK); result != a {
+				t.Fatalf("identical bytes should retain the immutable reference: got %+v, want %+v", result, a)
+			}
+			read("name=result.md", want)
+			read("artifactId="+a.ArtifactID, "A")
+			read("artifactId="+b.ArtifactID, "B")
+		})
+	}
+}
+
 type cancelDuringTaskFileCommit struct {
 	*ossfake.Memory
 	cancelled bool

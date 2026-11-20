@@ -29,6 +29,7 @@ type publishedTaskFile struct {
 type taskFileIndex struct {
 	Artifacts map[string]publishedTaskFile `json:"artifacts"`
 	Heads     map[string]string            `json:"heads"`
+	Receipts  map[string]string            `json:"publication_receipts,omitempty"`
 }
 
 func validTaskFileName(name string) bool {
@@ -41,6 +42,21 @@ func validArtifactDigest(value string) bool {
 	return err == nil && len(decoded) == sha256.Size && value == strings.ToLower(value)
 }
 
+func validPublicationKey(key string) bool {
+	if len(key) == 0 || len(key) > 128 {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func (h *ProjectHandler) PublishTaskFile(w http.ResponseWriter, r *http.Request) {
 	id, name := r.PathValue("id"), r.URL.Query().Get("name")
 	kind := r.URL.Query().Get("kind")
@@ -50,6 +66,15 @@ func (h *ProjectHandler) PublishTaskFile(w http.ResponseWriter, r *http.Request)
 	if !isSafeTaskID(id) || !validTaskFileName(name) || (kind != "intermediate" && kind != "output") {
 		writeError(w, 400, "invalid task file identity or kind")
 		return
+	}
+	var receiptKey string
+	if keys := r.Header.Values("Idempotency-Key"); len(keys) != 0 {
+		if len(keys) != 1 || !validPublicationKey(keys[0]) {
+			writeError(w, 400, "invalid publication idempotency key")
+			return
+		}
+		sum := sha256.Sum256([]byte(keys[0]))
+		receiptKey = hex.EncodeToString(sum[:])
 	}
 	caller := authpkg.CallerFromContext(r.Context())
 	if !recoveryCaller(caller) {
@@ -114,30 +139,61 @@ func (h *ProjectHandler) PublishTaskFile(w http.ResponseWriter, r *http.Request)
 			writeError(w, 503, "invalid task file index")
 			return
 		}
-		if previous, exists := index.Artifacts[artifact.ArtifactID]; exists {
-			if previous != artifact {
-				writeError(w, 409, "artifact identity conflict")
-				return
-			}
-			httputil.WriteJSON(w, 200, artifact)
+		previous, exists := index.Artifacts[artifact.ArtifactID]
+		if exists && previous != artifact {
+			writeError(w, 409, "artifact identity conflict")
 			return
 		}
-		create, createOK := h.oss.(createIfAbsentWriter)
+		if receiptKey != "" {
+			// Bind the operation to the authenticated execution and immutable file identity.
+			// Receipt and head are committed in the same Task CAS below.
+			input, _ := json.Marshal([]any{caller.Role, caller.Username, execution.Generation, execution.ProcessID, execution.InstanceID, artifact.ArtifactID})
+			hash := sha256.Sum256(input)
+			fingerprint := hex.EncodeToString(hash[:])
+			if recorded, ok := index.Receipts[receiptKey]; ok {
+				if recorded != fingerprint {
+					writeError(w, 409, "publication key already used for different inputs")
+					return
+				}
+				if !exists {
+					writeError(w, 503, "publication receipt has no artifact")
+					return
+				}
+				httputil.WriteJSON(w, 200, previous)
+				return
+			}
+			if index.Receipts == nil {
+				index.Receipts = make(map[string]string)
+			}
+			index.Receipts[receiptKey] = fingerprint
+		} else if exists {
+			// Preserve content-only retries from older clients; they cannot promote old content.
+			httputil.WriteJSON(w, 200, previous)
+			return
+		}
+
 		commit, commitOK := h.oss.(conditionalWriter)
-		if !createOK || !commitOK {
+		if !commitOK {
 			writeError(w, 503, "conditional artifact storage required")
 			return
 		}
-		blob := path.Dir(key) + "/artifacts/" + digest
-		if err := create.PutObjectIfNoneMatchStrict(r.Context(), blob, data); err != nil {
-			if !errors.Is(err, oss.ErrPreconditionFailed) {
-				writeError(w, 503, "artifact upload unavailable")
+		if !exists {
+			create, createOK := h.oss.(createIfAbsentWriter)
+			if !createOK {
+				writeError(w, 503, "conditional artifact storage required")
 				return
 			}
-			saved, readErr := h.oss.GetObject(r.Context(), blob)
-			if readErr != nil || sha256.Sum256(saved) != sum {
-				writeError(w, 503, "artifact content verification failed")
-				return
+			blob := path.Dir(key) + "/artifacts/" + digest
+			if err := create.PutObjectIfNoneMatchStrict(r.Context(), blob, data); err != nil {
+				if !errors.Is(err, oss.ErrPreconditionFailed) {
+					writeError(w, 503, "artifact upload unavailable")
+					return
+				}
+				saved, readErr := h.oss.GetObject(r.Context(), blob)
+				if readErr != nil || sha256.Sum256(saved) != sum {
+					writeError(w, 503, "artifact content verification failed")
+					return
+				}
 			}
 		}
 		index.Artifacts[artifact.ArtifactID], index.Heads[name] = artifact, artifact.ArtifactID

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -76,6 +77,10 @@ func (c *APIClient) Do(method, path string, body interface{}) (*http.Response, e
 }
 
 func (c *APIClient) doWithHeaders(method, path string, body interface{}, headers http.Header) (*http.Response, error) {
+	return c.doWithHeadersContext(context.Background(), method, path, body, headers)
+}
+
+func (c *APIClient) doWithHeadersContext(ctx context.Context, method, path string, body interface{}, headers http.Header) (*http.Response, error) {
 	url := c.BaseURL + path
 
 	var bodyReader io.Reader
@@ -91,7 +96,7 @@ func (c *APIClient) doWithHeaders(method, path string, body interface{}, headers
 		}
 	}
 
-	req, err := http.NewRequest(method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

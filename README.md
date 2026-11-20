@@ -61,7 +61,7 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 - **One Command Setup**: `curl | bash` and you're done — AI gateway, Matrix server, file storage, web client, and Manager Agent.
 
-- **Skills Ecosystem**: Workers pull from [skills.sh](https://skills.sh) (80,000+ community skills) on demand. Safe because Workers can't access real credentials.
+- **Skills Ecosystem**: Workers pull from [skills.sh](https://skills.sh) (80,000+ community skills) on demand. Worker isolation only limits the blast radius — installed skills are unvetted instructions and code that run inside the Worker, so prefer trusted publishers and review a skill's files and commands before installing it.
 
 ## Quick Start
 

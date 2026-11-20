@@ -1,6 +1,6 @@
 module github.com/agentscope-ai/AgentTeams/agentteams-controller
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/alibabacloud-go/apig-20240327/v6 v6.0.6
@@ -9,6 +9,7 @@ require (
 	github.com/aliyun/credentials-go v1.4.12
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-logr/logr v1.4.4
+	github.com/go-sql-driver/mysql v1.8.1
 	github.com/google/uuid v1.6.0
 	github.com/k3s-io/kine v0.13.5
 	github.com/minio/minio-go/v7 v7.2.1
@@ -53,7 +54,6 @@ require (
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
-	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect

@@ -81,5 +81,12 @@
     "Timeouts, failed attempts and manual recoveries remain in the denominator.",
     "Timeout budgets are preliminary and must be frozen before both baseline and candidate runs; they are not latency targets.",
     "Protocol conformance and recovery tests must also pass before the next Harness is modified."
-  ]
+  ],
+  "businessOracle": {
+    "runner": "run_oracle.py",
+    "checks": "business_oracle.py",
+    "freezeStatus": "not_frozen",
+    "isolation": "networkless disposable Docker container",
+    "verifierSelftestOnly": true
+  }
 }

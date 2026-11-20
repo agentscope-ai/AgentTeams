@@ -24,7 +24,8 @@ invoking implementation modules.
 
 Treat `revision` as a terminal Task state. A rejected execution Task cannot be
 reopened or redelegated under that same ID. If a main Task needs replacement
-work that its current native plan cannot express, report that limitation to
+work in a managed plan, use reject with explicit replacementSpec for the exact
+submission. For legacy plans that cannot express replacement, report the limitation to
 Manager; do not guess APIs, edit metadata, or create a replacement main Task.
 
 Keep coordination proportional to the request. Reuse the existing team roster

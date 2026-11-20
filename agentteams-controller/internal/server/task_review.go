@@ -19,17 +19,19 @@ import (
 )
 
 type taskReviewRequest struct {
-	SubmissionID string `json:"submissionId"`
-	Note         string `json:"note"`
+	ReplacementSpec string `json:"replacementSpec,omitempty"`
+	SubmissionID    string `json:"submissionId"`
+	Note            string `json:"note"`
 }
 
 type taskReview struct {
-	ID           string `json:"id"`
-	SubmissionID string `json:"submissionId"`
-	Note         string `json:"note"`
-	Accepted     bool   `json:"accepted"`
-	Status       string `json:"status"`
-	Actor        string `json:"actor"`
+	ReplacementSpec string `json:"replacementSpec,omitempty"`
+	ID              string `json:"id"`
+	SubmissionID    string `json:"submissionId"`
+	Note            string `json:"note"`
+	Accepted        bool   `json:"accepted"`
+	Status          string `json:"status"`
+	Actor           string `json:"actor"`
 }
 
 // ReviewTask commits the Leader's business decision against an exact immutable
@@ -50,6 +52,11 @@ func (h *ProjectHandler) ReviewTask(accepted bool) http.HandlerFunc {
 			return
 		}
 		input.Note = strings.TrimSpace(input.Note)
+		input.ReplacementSpec = strings.TrimSpace(input.ReplacementSpec)
+		if accepted && input.ReplacementSpec != "" {
+			writeError(w, 400, "acceptance cannot request replacement work")
+			return
+		}
 		if input.SubmissionID == "" || input.Note == "" {
 			writeError(w, 400, "exact submission identity and business review note required")
 			return
@@ -81,7 +88,7 @@ func (h *ProjectHandler) ReviewTask(accepted bool) http.HandlerFunc {
 			if !h.ownsMainTask(w, r, main) {
 				return
 			}
-			if !taskReviewMembership(main, task) {
+			if !taskReviewMembership(main, task) && !taskReviewArchived(main, task) {
 				writeError(w, 409, "candidate does not match the main task plan")
 				return
 			}
@@ -93,7 +100,7 @@ func (h *ProjectHandler) ReviewTask(accepted bool) http.HandlerFunc {
 					writeError(w, 503, "review receipt unavailable")
 					return
 				}
-				if saved.SubmissionID != input.SubmissionID || saved.Note != input.Note || saved.Accepted != accepted || saved.Actor != actor {
+				if saved.SubmissionID != input.SubmissionID || saved.Note != input.Note || saved.Accepted != accepted || saved.Actor != actor || saved.ReplacementSpec != input.ReplacementSpec {
 					writeError(w, 409, "candidate already has a different review decision")
 					return
 				}
@@ -103,6 +110,15 @@ func (h *ProjectHandler) ReviewTask(accepted bool) http.HandlerFunc {
 			if coordinationString(task, "status") != "submitted" || coordinationString(task, "submission_id") != input.SubmissionID || coordinationString(main, "status") != "in_progress" {
 				writeError(w, 409, "review requires the current submitted candidate and active main task")
 				return
+			}
+			if input.ReplacementSpec != "" {
+				if !h.taskExecutionAdmission(w, r, mainKey, main) || !h.taskExecutionAdmission(w, r, key, task) {
+					return
+				}
+				if err := validateTaskReplacement(main, task); err != nil {
+					writeError(w, 409, err.Error())
+					return
+				}
 			}
 			// Rejection remains possible while a decision/approval is outstanding.
 			if accepted {
@@ -137,7 +153,20 @@ func (h *ProjectHandler) ReviewTask(accepted bool) http.HandlerFunc {
 			}
 			identity, _ := json.Marshal([]any{team, id, input, accepted, actor})
 			sum := sha256.Sum256(identity)
-			review := taskReview{ID: hex.EncodeToString(sum[:]), SubmissionID: input.SubmissionID, Note: input.Note, Accepted: accepted, Status: status, Actor: actor}
+			review := taskReview{ReplacementSpec: input.ReplacementSpec, ID: hex.EncodeToString(sum[:]), SubmissionID: input.SubmissionID, Note: input.Note, Accepted: accepted, Status: status, Actor: actor}
+			if review.ReplacementSpec != "" {
+				var preview map[string]any
+				_ = json.Unmarshal(mainBody, &preview)
+				if err := applyTaskReplacement(preview, task, review); err != nil {
+					writeError(w, 409, err.Error())
+					return
+				}
+				encoded, _ := json.Marshal(preview)
+				if len(encoded) > taskMetaCommitMaxBytes {
+					writeError(w, 413, "replacement exceeds main task record limit")
+					return
+				}
+			}
 			task["task_review"], task["status"] = review, status
 			verdict := "fail"
 			if accepted {
@@ -274,10 +303,13 @@ func (h *ProjectHandler) projectTaskReview(ctx context.Context, key string, chil
 		if err != nil || json.Unmarshal(body, &main) != nil {
 			return nil, fmt.Errorf("main task snapshot unavailable")
 		}
+		if main["task_id"] == mainID && main["task_kind"] == "main" && taskReviewArchived(main, child) {
+			return main, nil
+		}
 		if main["task_id"] != mainID || main["task_kind"] != "main" || !taskReviewMembership(main, child) {
 			return nil, fmt.Errorf("main task plan changed")
 		}
-		if review.Accepted {
+		if review.Accepted || review.ReplacementSpec != "" {
 			if status, message := h.taskExecutionAdmissionFailure(ctx, mainKey, main); status != 0 {
 				return nil, fmt.Errorf("%s", message)
 			}
@@ -295,6 +327,11 @@ func (h *ProjectHandler) projectTaskReview(ctx context.Context, key string, chil
 				return nil, fmt.Errorf("main task or node cannot accept this decision")
 			}
 			node["status"], node["review_id"], node["submission_id"] = review.Status, review.ID, review.SubmissionID
+		}
+		if review.ReplacementSpec != "" {
+			if err := applyTaskReplacement(main, child, review); err != nil {
+				return nil, err
+			}
 		}
 		if coordinationReady(main) {
 			var notices map[string]taskNotificationIntent
@@ -330,7 +367,7 @@ func (h *ProjectHandler) writeTaskReview(w http.ResponseWriter, r *http.Request,
 	}
 	dispatch := ""
 	var assignments []taskPlanAssignment
-	if err == nil && review.Accepted && main["task_plan"] != nil {
+	if err == nil && (review.Accepted || review.ReplacementSpec != "") && main["task_plan"] != nil {
 		mainKey := path.Join(path.Dir(path.Dir(key)), coordinationString(child, "main_task_id"), "meta.json")
 		dispatch = "ready"
 		if dispatchErr := h.reconcileTaskPlan(r.Context(), mainKey); dispatchErr != nil {
@@ -351,15 +388,20 @@ func (h *ProjectHandler) writeTaskReview(w http.ResponseWriter, r *http.Request,
 		notice := h.flushTaskNotification(r.Context(), path.Join(path.Dir(path.Dir(key)), coordinationString(child, "main_task_id"), "meta.json"), "ready")
 		notification = &notice
 	}
+	replacementID := ""
+	if review.ReplacementSpec != "" {
+		replacementID = taskReplacementID(child, review)
+	}
 	httputil.WriteJSON(w, 200, struct {
-		Task           taskResource            `json:"task"`
-		Review         taskReview              `json:"review"`
-		MainProjection string                  `json:"mainProjection"`
-		Notification   *taskNotificationStatus `json:"notification,omitempty"`
-		NextAction     string                  `json:"nextAction"`
-		DispatchStatus string                  `json:"dispatchStatus,omitempty"`
-		Assignments    []taskPlanAssignment    `json:"assignments,omitempty"`
-	}{publicTaskResource(id, team, child), review, projection, notification, "Task system saved your exact submission decision. Do not repeat the review or reopen this execution; main-task synchronization is retriable.", dispatch, assignments})
+		Task              taskResource            `json:"task"`
+		Review            taskReview              `json:"review"`
+		MainProjection    string                  `json:"mainProjection"`
+		Notification      *taskNotificationStatus `json:"notification,omitempty"`
+		NextAction        string                  `json:"nextAction"`
+		ReplacementTaskID string                  `json:"replacementTaskId,omitempty"`
+		DispatchStatus    string                  `json:"dispatchStatus,omitempty"`
+		Assignments       []taskPlanAssignment    `json:"assignments,omitempty"`
+	}{publicTaskResource(id, team, child), review, projection, notification, "Task system saved your exact submission decision. Do not repeat the review or reopen this execution; main-task synchronization is retriable.", replacementID, dispatch, assignments})
 }
 
 func validateTaskReviewCommit(w http.ResponseWriter, current, next []byte) bool {

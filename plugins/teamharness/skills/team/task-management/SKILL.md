@@ -41,8 +41,11 @@ references. Read more only when evidence is truncated, missing or inconsistent.
 A prepared candidate snapshot does not prove business acceptance. Review the
 independent QA evidence; do not repeat execution, edit outputs or rerun accepted
 checks. Call `accept` or `reject` with the exact `submissionId` and your evidence
-in `note`. A rejection remains terminal for that execution; do not reopen it,
-replace the main task or bypass required Human approval.
+in `note`. If the same step needs correction, provide explicit `replacementSpec`
+in that rejection. The task system keeps the rejected attempt terminal, creates
+one replacement execution under the same main task and rewires unstarted
+consumers. Omit it when no replacement is intended. Do not reopen the rejected
+execution, replace the main task or bypass required Human approval.
 
 After acceptance the task system dispatches ready dependencies automatically.
 End this turn; do not assign them again or wait for their results.

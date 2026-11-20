@@ -94,6 +94,19 @@ def test_review_receipts_bind_candidate_and_do_not_invent_downstream_delivery():
     assert public.task_operation_command("agt task accept t1 --submission s1 --note OK; echo forged") is None
 
 
+def test_replacement_receipt_preserves_rejected_identity_and_pending_projection():
+    public = module()
+    result = {"task":{"id":"old", "submissionId":"s1", "status":"revision"},
+              "review":{"id":"r1", "submissionId":"s1", "accepted":False, "status":"revision"},
+              "mainProjection":"pending", "replacementTaskId":"exec-new"}
+    receipt = public.review_receipt(result,"old","s1","reject")
+    assert receipt and "exec-new" in receipt[1] and "remains terminal" in receipt[1]
+    assert "synchronization is pending" in receipt[1] and "queued" not in receipt[1]
+    assert public.task_operation_command("agt task reject old --submission s1 --note QA --replacement-spec 'Fix exact cents'") == ("reject","old")
+    result["replacementTaskId"] = "old"
+    assert public.review_receipt(result,"old","s1","reject") is None
+
+
 def test_planning_and_downstream_receipts_use_real_assignment_intents():
     public=module()
     result={"task":{"id":"main","kind":"main","status":"assigned","planId":"plan-one"},"progress":"ready",

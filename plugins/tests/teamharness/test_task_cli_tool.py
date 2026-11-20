@@ -19,6 +19,14 @@ def load(monkeypatch):
     return module
 
 
+def test_rejection_can_request_explicit_replacement_without_shell(monkeypatch):
+    tool = load(monkeypatch)
+    argv, _ = tool.command({"action":"reject", "taskId":"t1", "submissionId":"s1", "note":"QA failed", "replacementSpec":"Fix cents; literal $(text)"})
+    assert argv == ["/usr/local/bin/agt", "task", "reject", "t1", "--submission", "s1", "--note", "QA failed", "--replacement-spec", "Fix cents; literal $(text)"]
+    with pytest.raises(ValueError):
+        tool.command({"action":"accept", "taskId":"t1", "submissionId":"s1", "note":"OK", "replacementSpec":"Fix"})
+
+
 def test_create_uses_native_source_in_private_process_environment(monkeypatch):
     tool=load(monkeypatch)
     monkeypatch.setenv("AGENTTEAMS_ORIGIN_EVENT_ID","other-conversation")

@@ -30,6 +30,9 @@ class NativeTaskToolTest(unittest.TestCase):
     def test_accept_works_after_shell_pruning_without_tool_authorization(self):
         self.run_task("accept")
 
+    def test_reject_dispatches_explicit_replacement_and_injects_receipt(self):
+        self.run_task("reject")
+
     def test_complete_works_after_shell_pruning_without_tool_authorization(self):
         self.run_task("complete")
 
@@ -104,12 +107,17 @@ class NativeTaskToolTest(unittest.TestCase):
         plugin=load("native_task_tool_plugin",root/"plugins/teamharness/adapters/qwenpaw/plugin.py")
         bridge=load("native_task_bridge",root/"plugins/teamharness/mcp/common/task_cli.py")
         testcase=self;requests=[];tool_calls=[]
-        if action=="accept":
-            arguments={"action":"accept","taskId":"execution-a","submissionId":"s1","note":"Independent business checks passed"}
+        if action in {"accept", "reject"}:
+            arguments={"action":action,"taskId":"execution-a","submissionId":"s1","note":"Independent business checks passed"}
             result={"task":{"id":"execution-a","status":"completed","submissionId":"s1"},
                     "review":{"id":"review-one","submissionId":"s1","accepted":True,"status":"completed"},
                     "mainProjection":"applied","dispatchStatus":"ready",
                     "assignments":[{"taskId":"execution-c","status":"queued","recipient":"worker-c","eventId":"dispatch-c"}]}
+            if action == "reject":
+                arguments["replacementSpec"] = "Fix exact cents"
+                result["task"]["status"] = result["review"]["status"] = "revision"
+                result["review"]["accepted"] = False
+                result["replacementTaskId"] = "execution-c"
         elif action=="complete":
             arguments={"action":"complete","taskId":"main","report":"Accepted results attached."}
             result={"task":{"id":"main","status":"completed","completionId":"completion-one"},
@@ -152,7 +160,8 @@ class NativeTaskToolTest(unittest.TestCase):
                     return ChatResponse(content=[TextBlock(text="Use the native task source context.")],is_last=True)
                 testcase.assertIn("[Task system receipt]",text)
                 testcase.assertIn("queued",text)
-                if action=="accept":testcase.assertIn("worker-c",text)
+                if action in {"accept","reject"}:testcase.assertIn("worker-c",text)
+                if action=="reject":testcase.assertIn("remains terminal",text)
                 if action=="complete":testcase.assertIn("original conversation",text)
                 if action=="create":testcase.assertIn("registered",text)
                 if action=="create":testcase.assertNotIn("_nativeSource",json.dumps(messages))
@@ -174,10 +183,10 @@ class NativeTaskToolTest(unittest.TestCase):
                             (plugin._requester_route,plugin._requester_route.set({"target_user":"@human:test","target_session":"!source:test"}))]
                     inputs=[Msg(name="Human",role="user",content=[TextBlock(text="Delegate this request.")])]
                 else:
-                    kind="task_submitted" if action=="accept" else "main_task_ready"
+                    kind="task_submitted" if action in {"accept","reject"} else "main_task_ready"
                     event={"kind":kind,"id":"receipt","main_task_id":"main","project_id":"","plan_type":"dag","dispatch_mode":"automatic"}
-                    if action=="accept":event.update(task_id="execution-a",submission_id="s1")
-                    sender="@worker:test" if action=="accept" else "@leader:test"
+                    if action in {"accept","reject"}:event.update(task_id="execution-a",submission_id="s1")
+                    sender="@worker:test" if action in {"accept","reject"} else "@leader:test"
                     meta={"agent_matrix_user_id":"@leader:test","sender_id":sender,"room_id":"!task:test",
                           "teamharness_matrix_coordination":True,"teamharness_coordination":event}
                     ctx=HookContext(request=SimpleNamespace(channel_meta=meta),session_id="review",agent_id="leader",root_session_id="review",root_agent_id="leader",workspace_dir=None,workspace=None,app_services=None,agent=agent,input_msgs=[Msg(name="Task system",role="user",content=[TextBlock(text="Review the current task result.")])])
@@ -213,12 +222,13 @@ class NativeTaskToolTest(unittest.TestCase):
             path,body,headers=requests[0]
             testcase.assertEqual(headers.get("Authorization"),"Bearer fixture-token")
             testcase.assertEqual({key.lower():value for key,value in headers.items()}["traceparent"],env["AT_OTEL_TRACEPARENT"])
+            if action=="reject": testcase.assertEqual(body["replacementSpec"],"Fix exact cents")
             if action=="create":
                 testcase.assertEqual(path,"/api/v1/tasks")
                 testcase.assertEqual({key.lower():value for key,value in headers.items()}["x-agentteams-origin-event-id"],"$source")
                 testcase.assertEqual(set(body),{"title","spec","leader"})
                 testcase.assertNotIn("_nativeSource",bridge.TASK_SCHEMA["inputSchema"]["properties"])
-            else:testcase.assertEqual(path,"/api/v1/tasks/"+("execution-a" if action=="accept" else "main")+"/"+action)
+            else:testcase.assertEqual(path,"/api/v1/tasks/"+("execution-a" if action in {"accept","reject"} else "main")+"/"+action)
         finally:
             server.shutdown();server.server_close();thread.join()
 

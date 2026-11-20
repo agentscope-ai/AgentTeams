@@ -15,7 +15,7 @@ func taskReviewCmd(accepted bool) *cobra.Command {
 	if accepted {
 		action = "accept"
 	}
-	var submission, note, team string
+	var submission, note, team, replacement string
 	cmd := &cobra.Command{Use: action + " <task-id>", Short: "Record your business review of an exact submitted candidate", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if !taskIdentifier.MatchString(args[0]) || strings.TrimSpace(submission) == "" || strings.TrimSpace(note) == "" {
 			return fmt.Errorf("valid task id, exact submission identity and business review note required")
@@ -25,6 +25,12 @@ func taskReviewCmd(accepted bool) *cobra.Command {
 			query.Set("team", team)
 		}
 		body := map[string]string{"submissionId": submission, "note": note}
+		if replacement != "" {
+			if strings.TrimSpace(replacement) == "" {
+				return fmt.Errorf("replacement spec must not be blank")
+			}
+			body["replacementSpec"] = replacement
+		}
 		response, err := NewAPIClient().doWithHeadersContext(cmd.Context(), http.MethodPost,
 			"/api/v1/tasks/"+url.PathEscape(args[0])+"/"+action+"?"+query.Encode(), body, nil)
 		if err != nil {
@@ -38,6 +44,9 @@ func taskReviewCmd(accepted bool) *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&submission, "submission", "", "Exact candidate submission ID from the task-system notification")
 	cmd.Flags().StringVar(&note, "note", "", "Your business validation evidence or rejection reason")
+	if !accepted {
+		cmd.Flags().StringVar(&replacement, "replacement-spec", "", "Explicit correction requirements for a new execution in the same main task")
+	}
 	cmd.Flags().StringVar(&team, "team", "", "Task's owning Team when its ID is ambiguous")
 	_ = cmd.MarkFlagRequired("submission")
 	_ = cmd.MarkFlagRequired("note")

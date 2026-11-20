@@ -306,7 +306,7 @@ func validateTaskPlanCommit(w http.ResponseWriter, current, next []byte) bool {
 		}
 	}
 	if _, had := rawJSONField(current, "task_plan"); had {
-		for _, field := range []string{"tasks", "room_id", "plan_type", "dispatch_mode", "status"} {
+		for _, field := range []string{"tasks", "task_attempts", "room_id", "plan_type", "dispatch_mode", "status"} {
 			a, had := rawJSONField(current, field)
 			b, has := rawJSONField(next, field)
 			if had != has || (had && !sameJSONValue(a, b)) {
@@ -316,7 +316,7 @@ func validateTaskPlanCommit(w http.ResponseWriter, current, next []byte) bool {
 		}
 	}
 	if _, had := rawJSONField(current, "task_plan_id"); had {
-		for _, field := range []string{"task_id", "task_kind", "main_task_id", "parent_task_id", "team_id", "project_id", "assigned_to", "notifyTxn", "room_id", "spec", "spec_path", "decision_class"} {
+		for _, field := range []string{"task_id", "task_kind", "main_task_id", "parent_task_id", "team_id", "project_id", "assigned_to", "notifyTxn", "room_id", "spec", "spec_path", "decision_class", "revision_of"} {
 			a, had := rawJSONField(current, field)
 			b, has := rawJSONField(next, field)
 			if had != has || (had && !sameJSONValue(a, b)) {

@@ -35,7 +35,7 @@ def task_operation_command(command: str) -> tuple[str, str] | None:
     flags = {"submit": {"--summary", "--report", "--status", "--file", "--team"},
              "complete": {"--report", "--team", "--artifact"},
              "accept": {"--submission", "--note", "--team"},
-             "reject": {"--submission", "--note", "--team"},
+             "reject": {"--submission", "--note", "--team", "--replacement-spec"},
              "plan": {"--file", "--json", "--team"}}[words[2]]
     return (words[2], words[3]) if _task_flags(words[4:], flags) else None
 
@@ -145,7 +145,12 @@ def review_receipt(result: object, task_id: str, submission_id: str, action: str
         fact += " " + dispatch_fact
         if result["dispatchStatus"] == "pending":
             fact += " Automatic downstream dispatch is still pending; task system will retry."
-    identity = json.dumps([action, task_id, submission_id, review["id"], projection, notice_key, dispatch_key], separators=(",", ":"))
+    replacement = result.get("replacementTaskId")
+    if replacement is not None:
+        if accepted or not isinstance(replacement, str) or not _ID.fullmatch(replacement) or replacement == task_id:
+            return None
+        fact += f" Task system saved correction requirements for replacement execution {replacement}; the rejected attempt remains terminal."
+    identity = json.dumps([action, task_id, submission_id, review["id"], projection, notice_key, dispatch_key, replacement], separators=(",", ":"))
     return identity, (f"[Task system receipt]\nTask system saved your {'acceptance' if accepted else 'rejection'} of "
                       f"candidate {submission_id} for task {task_id}; execution is {state}. {fact} "
                       "Do not repeat this decision or reopen this terminal execution.")

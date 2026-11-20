@@ -168,6 +168,12 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 		"project_id": coordinationString(main, "project_id"), "team_id": coordinationString(main, "team_id"), "assigned_to": node["assigned_to"], "title": node["title"],
 		"spec": node["spec"], "spec_path": "shared/tasks/" + id + "/spec.md", "room_id": main["room_id"], "status": "prepared", "notifyTxn": delivery, "decision_class": "r3",
 		"task_notifications": map[string]taskNotificationIntent{"assigned": {Event: coordinationEvent{Kind: "task_assigned", TaskID: id, MainTaskID: mainID, ProjectID: coordinationString(main, "project_id"), DeliveryID: delivery}, ActorRole: authpkg.RoleTeamLeader, ActorName: plan.ActorName, Team: coordinationString(main, "team_id"), Status: "pending"}}}
+	if class := coordinationString(node, "decision_class"); class != "" {
+		child["decision_class"] = class
+	}
+	if previous := coordinationString(node, "revision_of"); previous != "" {
+		child["revision_of"] = previous
+	}
 	appendTaskOperationHistory(child, "planned", "prepared", "prepare_task", "task-system")
 	encoded, _ := json.Marshal(child)
 	if len(encoded) > taskMetaCommitMaxBytes {

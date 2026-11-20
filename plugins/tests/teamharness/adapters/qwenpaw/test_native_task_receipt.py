@@ -36,7 +36,10 @@ class NativeTaskReceiptTest(unittest.TestCase):
     def test_plan_receipt_reaches_assigned_main_context(self):
         self._assert_receipt("plan")
 
-    def _assert_receipt(self, action):
+    def test_replacement_receipt_injects_new_identity_without_reopening_old_task(self):
+        self._assert_receipt("reject", replacement=True)
+
+    def _assert_receipt(self, action, replacement=False):
         from agentscope.agent import Agent
         from agentscope.model import ChatModelBase, ChatResponse
         from agentscope.message import Msg, ToolCallBlock, TextBlock
@@ -54,6 +57,7 @@ class NativeTaskReceiptTest(unittest.TestCase):
         command = f"agt task {action} t1 --" + ("summary" if action == "submit" else "report") + " Done"
         if action == "create": command = 'agt task create --leader leader-a --title "Request" --spec "Original criteria"'
         if action in {"accept", "reject"}: command = f'agt task {action} t1 --submission s1 --note "Business validation evidence"'
+        if replacement: command += ' --replacement-spec "Fix exact cents"'
         if action == "plan": command = 'agt task plan t1 --json \'{"nodes":[{"id":"A","assignedTo":"worker-a","spec":"Implement"}]}\''
         identity_field = "sourceEventId" if action == "create" else ("submissionId" if action == "submit" else "completionId")
 
@@ -82,6 +86,9 @@ class NativeTaskReceiptTest(unittest.TestCase):
                 if action in {"accept", "reject"}:
                     testcase.assertIn("synchronization is pending", text)
                     testcase.assertIn("operation-one", text)
+                    if replacement:
+                        testcase.assertIn("exec-new", text)
+                        testcase.assertIn("remains terminal", text)
                 else:
                     if action != "create": testcase.assertIn("not yet confirmed", text)
                     testcase.assertIn("planId" if action == "plan" else identity_field, text)  # Original result survives.
@@ -96,7 +103,7 @@ class NativeTaskReceiptTest(unittest.TestCase):
                 return {"sourceEventId":"$request", "task":{"id":"t1","kind":"main","status":"planned"},"notification":{"status":"queued","eventId":"handoff","recipient":"leader-a"}}
             if action in {"accept", "reject"}:
                 state = "completed" if action == "accept" else "revision"
-                return {"task":{"id":"t1","submissionId":"s1","status":state},
+                return {**({"replacementTaskId":"exec-new"} if replacement else {}), "task":{"id":"t1","submissionId":"s1","status":state},
                         "review":{"id":"operation-one","submissionId":"s1","accepted":action == "accept","status":state},
                         "mainProjection":"pending"}
             if action == "plan":

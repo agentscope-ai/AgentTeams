@@ -19,14 +19,14 @@ _ACTIONS = {
     "begin": ((), ("team",), {}),
     "submit": (("summary",), ("report", "status", "team"), {"files": "file"}),
     "accept": (("submissionId", "note"), ("team",), {}),
-    "reject": (("submissionId", "note"), ("team",), {}),
+    "reject": (("submissionId", "note"), ("team", "replacementSpec"), {}),
     "complete": (("report",), ("team",), {"artifacts": "artifact"}),
     "files_list": ((), ("team",), {}),
     "files_read": ((), ("team", "name", "artifactId", "version", "offset", "limit"), {}),
     "files_get": ((), ("team", "name", "artifactId", "version"), {}),
     "files_put": (("source", "name"), ("kind", "team"), {}),
 }
-_FLAGS = {"submissionId": "submission", "artifactId": "artifact"}
+_FLAGS = {"submissionId": "submission", "artifactId": "artifact", "replacementSpec": "replacement-spec"}
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 TASK_SCHEMA = {
@@ -58,6 +58,7 @@ TASK_SCHEMA = {
             "files": {"type": "array", "items": {"type": "string"}, "description": "For submit: files relative to this task's prepared output directory."},
             "artifacts": {"type": "array", "items": {"type": "string"}, "description": "For complete: optional exact accepted artifact IDs; default all accepted outputs."},
             "submissionId": {"type": "string", "description": "For accept/reject: exact candidate ID from the task system."},
+            "replacementSpec": {"type": "string", "description": "For reject only: optional explicit corrections to dispatch a new execution of the same step, preserving the rejected attempt."},
             "note": {"type": "string", "description": "For accept/reject: your independent business validation evidence or rejection reason."},
             "team": {"type": "string", "description": "Only when the task system reports an ambiguous task ID."},
             "name": {"type": "string", "description": "Declared task-local file name; use artifactId for immutable outputs."},

@@ -57,3 +57,27 @@ func TestTaskReviewCommandsRejectIncompleteDecisionsBeforeNetwork(t *testing.T) 
 		}
 	}
 }
+
+func TestTaskRejectCommandIncludesExplicitReplacementSpec(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input map[string]string
+		if json.NewDecoder(r.Body).Decode(&input) != nil || r.URL.Path != "/api/v1/tasks/t1/reject" || input["replacementSpec"] != "Fix exact cents" {
+			t.Errorf("wrong replacement request: %+v", input)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"replacementTaskId":"exec-new"}`))
+	}))
+	defer server.Close()
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "fixture")
+	cmd := newRootCommand("agt")
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"task", "reject", "t1", "--submission", "s1", "--note", "QA failed", "--replacement-spec", "Fix exact cents"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("exec-new")) {
+		t.Fatal("replacement receipt lost")
+	}
+}

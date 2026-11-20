@@ -104,7 +104,7 @@ jobs:
             if ! git cat-file -e "$revision^{commit}" 2>/dev/null; then
               git fetch --no-tags origin "$revision"
             fi
-            git diff --exit-code "$revision" HEAD -- agentteams-controller manager/agent
+            git diff --exit-code "$revision" HEAD -- agentteams-controller manager/agent plugins
             docker tag "$REUSE_CONTROLLER" "$image"
           else
             make build-agentteams-controller LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \

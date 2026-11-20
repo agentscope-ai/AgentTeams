@@ -30,8 +30,9 @@ def test_actual_workflow_selection(tmp_path, runtime, architecture, publish, suc
         assert "include" not in WORKFLOW["jobs"]["harness-platform"]["strategy"]["matrix"]
 
 
-@pytest.mark.parametrize("runtime_changed", [False, True])
-def test_controller_reuse_fetches_source_and_rejects_runtime_drift(tmp_path, runtime_changed):
+@pytest.mark.parametrize("changed_path", [None, "agentteams-controller/main.go",
+    "plugins/teamharness/prompts/agent/worker.md"])
+def test_controller_reuse_fetches_source_and_rejects_runtime_drift(tmp_path, changed_path):
     def git(cwd, *args):
         return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
 
@@ -54,8 +55,10 @@ def test_controller_reuse_fetches_source_and_rejects_runtime_drift(tmp_path, run
     git(source, "push", str(remote), "HEAD:refs/heads/build-source")
     git(source, "checkout", "--detach", base)
     (source / "main-marker").write_text("release")
-    if runtime_changed:
-        (source / "agentteams-controller/main.go").write_text("changed runtime")
+    if changed_path:
+        changed = source / changed_path
+        changed.parent.mkdir(parents=True, exist_ok=True)
+        changed.write_text("changed runtime")
     git(source, "add", ".")
     git(source, "commit", "-m", "release source")
     git(source, "push", str(remote), "HEAD:refs/heads/main")
@@ -76,4 +79,4 @@ def test_controller_reuse_fetches_source_and_rejects_runtime_drift(tmp_path, run
             "TEST_REVISION": revision, "REGISTRY": "higress-registry.cn-hangzhou.cr.aliyuncs.com",
             "CANDIDATE": "test", "ARCH": "arm64", "REUSE_CONTROLLER":
             "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller@sha256:"+"a"*64})
-    assert (result.returncode == 0) == (not runtime_changed), result.stderr
+    assert (result.returncode == 0) == (changed_path is None), result.stderr

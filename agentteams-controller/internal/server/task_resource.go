@@ -1,8 +1,11 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"unicode/utf8"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 )
@@ -25,12 +28,54 @@ type taskResource struct {
 	Spec          string                            `json:"spec,omitempty"`
 	Summary       string                            `json:"summary,omitempty"`
 	SubmissionID  string                            `json:"submissionId,omitempty"`
+	Candidate     *taskCandidateResource            `json:"candidate,omitempty"`
 	CompletionID  string                            `json:"completionId,omitempty"`
 	Review        *taskReview                       `json:"review,omitempty"`
 	ResultStatus  string                            `json:"resultStatus,omitempty"`
 	Artifacts     []taskFinalArtifact               `json:"artifacts,omitempty"`
 	OriginEventID string                            `json:"originEventId,omitempty"`
 	Notifications map[string]taskNotificationStatus `json:"notifications,omitempty"`
+}
+
+type taskCandidateResource struct {
+	ID              string             `json:"id"`
+	Summary         string             `json:"summary"`
+	Status          string             `json:"status"`
+	Report          string             `json:"report"`
+	ReportTruncated bool               `json:"reportTruncated"`
+	ReportFile      taskFileResource   `json:"reportFile"`
+	Artifacts       []taskFileResource `json:"artifacts"`
+}
+
+func taskSubmissionReport(submission taskSubmission) (taskFileResource, string) {
+	report := submission.Request.Report
+	if report == "" {
+		report = submission.Request.Summary
+	}
+	sum := sha256.Sum256([]byte(report))
+	digest := hex.EncodeToString(sum[:])
+	return taskFileResource{ArtifactID: "report-" + submission.ID, Name: "submission-report.md", Kind: "report", Version: digest, SHA256: digest, Size: int64(len(report))}, report
+}
+
+func publicTaskCandidate(record map[string]any) *taskCandidateResource {
+	var submission taskSubmission
+	data, _ := json.Marshal(record["task_submission"])
+	if json.Unmarshal(data, &submission) != nil || submission.ID == "" || submission.ID != coordinationString(record, "submission_id") {
+		return nil
+	}
+	var index taskFileIndex
+	data, _ = json.Marshal(record["task_files"])
+	_ = json.Unmarshal(data, &index)
+	reportFile, report := taskSubmissionReport(submission)
+	candidate := &taskCandidateResource{ID: submission.ID, Summary: submission.Request.Summary, Status: submission.Request.Status, Report: coordinationClip(report, 4096), ReportTruncated: utf8.RuneCountInString(report) > 4096, ReportFile: reportFile, Artifacts: []taskFileResource{}}
+	for _, id := range submission.Request.Artifacts {
+		file, exists := index.Artifacts[id]
+		if !exists || file.ArtifactID != id || file.Kind != "output" || !validTaskFileName(file.Name) || !validArtifactDigest(file.SHA256) || file.Version != file.SHA256 {
+			return nil
+		}
+		candidate.Artifacts = append(candidate.Artifacts, taskFileResource{ArtifactID: id, Name: file.Name, Kind: file.Kind, Version: file.Version, SHA256: file.SHA256, Size: file.Size})
+	}
+	return candidate
 }
 
 type taskPlanNodeResource struct {
@@ -117,7 +162,8 @@ func publicTaskResource(id, team string, record map[string]any) taskResource {
 		}
 	}
 	return taskResource{
-		PlanID: plan.ID, Nodes: nodes,
+		Candidate: publicTaskCandidate(record),
+		PlanID:    plan.ID, Nodes: nodes,
 		Review: review, ResultStatus: coordinationString(record, "result_status"),
 		OriginEventID: origin.EventID, Notifications: notices,
 		CompletionID: completion.ID, Artifacts: completion.Artifacts,

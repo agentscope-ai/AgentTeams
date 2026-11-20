@@ -64,6 +64,20 @@ func resolveTaskFileCatalog(metaKey, id string, record map[string]json.RawMessag
 			keys[name], published[name] = path.Dir(metaKey)+"/artifacts/"+artifact.SHA256, artifact
 		}
 	}
+	// The candidate report is addressable by an immutable ID without appearing
+	// as another output/head or exposing its private object key.
+	var submission taskSubmission
+	if raw := record["task_submission"]; len(raw) > 0 {
+		var submissionID string
+		if json.Unmarshal(raw, &submission) != nil || json.Unmarshal(record["submission_id"], &submissionID) != nil || submission.ID == "" || submission.ID != submissionID {
+			return taskFileCatalog{}, errors.New("invalid task submission reference")
+		}
+		file, _ := taskSubmissionReport(submission)
+		if index.Artifacts == nil {
+			index.Artifacts = map[string]publishedTaskFile{}
+		}
+		index.Artifacts[file.ArtifactID] = publishedTaskFile{ArtifactID: file.ArtifactID, Name: file.Name, Kind: file.Kind, Version: file.Version, SHA256: file.SHA256, Size: file.Size}
+	}
 	return taskFileCatalog{keys: keys, published: published, names: names, index: index}, nil
 }
 

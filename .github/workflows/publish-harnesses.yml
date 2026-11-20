@@ -15,12 +15,22 @@ on:
         description: 'Optional immutable shared CLI image; reuse requires identical Controller source'
         type: string
         default: ''
+      runtime:
+        description: 'Build only one runtime when recovering a failed platform'
+        type: choice
+        default: all
+        options: [all, openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
+      architecture:
+        description: 'Build only one architecture; partial builds require publish=false'
+        type: choice
+        default: all
+        options: [all, amd64, arm64]
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-harnesses-${{ inputs.version }}
+  group: publish-harnesses-${{ inputs.version }}-${{ inputs.runtime || 'all' }}-${{ inputs.architecture || 'all' }}
   cancel-in-progress: false
 
 env:
@@ -33,13 +43,27 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       candidate: ${{ steps.meta.outputs.candidate }}
+      runtimes: ${{ steps.meta.outputs.runtimes }}
+      architectures: ${{ steps.meta.outputs.architectures }}
     steps:
       - name: Freeze publication identity
         id: meta
         env:
           VERSION: ${{ inputs.version }}
+          RUNTIME: ${{ inputs.runtime || 'all' }}
+          ARCHITECTURE: ${{ inputs.architecture || 'all' }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          [[ "$RUNTIME" =~ ^(all|openclaw|qwenpaw|hermes|deepseek|openhuman|codex)$ ]]
+          [[ "$ARCHITECTURE" =~ ^(all|amd64|arm64)$ ]]
+          [[ "$PUBLISH" != true || "$ARCHITECTURE" == all ]]
+          runtimes='["openclaw","qwenpaw","hermes","deepseek","openhuman","codex"]'
+          architectures='["amd64","arm64"]'
+          if [[ "$RUNTIME" != all ]]; then runtimes="[\"$RUNTIME\"]"; fi
+          if [[ "$ARCHITECTURE" != all ]]; then architectures="[\"$ARCHITECTURE\"]"; fi
+          echo "runtimes=$runtimes" >> "$GITHUB_OUTPUT"
+          echo "architectures=$architectures" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "candidate=harness-${VERSION}-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
 
@@ -108,14 +132,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
-        arch: [amd64, arm64]
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+        runtime: ${{ fromJSON(needs.prepare.outputs.runtimes) }}
+        arch: ${{ fromJSON(needs.prepare.outputs.architectures) }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
@@ -153,7 +172,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
+        runtime: ${{ fromJSON(needs.prepare.outputs.runtimes) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

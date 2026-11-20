@@ -100,7 +100,8 @@ func (h *ProjectHandler) PublishTaskFile(w http.ResponseWriter, r *http.Request)
 			writeError(w, 409, "task is not executing")
 			return
 		}
-		if _, ok := h.ownedTaskExecution(w, r, task); !ok {
+		execution, ok := h.ownedTaskExecution(w, r, task)
+		if !ok {
 			return
 		}
 		if data == nil {

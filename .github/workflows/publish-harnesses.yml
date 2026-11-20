@@ -55,9 +55,9 @@ jobs:
           PUBLISH: ${{ inputs.publish }}
         run: |
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          [[ "$RUNTIME" =~ ^(all|openclaw|qwenpaw|hermes|deepseek|openhuman|codex)$ ]]
-          [[ "$ARCHITECTURE" =~ ^(all|amd64|arm64)$ ]]
-          [[ "$PUBLISH" != true || "$ARCHITECTURE" == all ]]
+          [[ "$RUNTIME" =~ ^(all|openclaw|qwenpaw|hermes|deepseek|openhuman|codex)$ ]] || exit 1
+          [[ "$ARCHITECTURE" =~ ^(all|amd64|arm64)$ ]] || exit 1
+          [[ "$PUBLISH" != true || "$ARCHITECTURE" == all ]] || exit 1
           runtimes='["openclaw","qwenpaw","hermes","deepseek","openhuman","codex"]'
           architectures='["amd64","arm64"]'
           if [[ "$RUNTIME" != all ]]; then runtimes="[\"$RUNTIME\"]"; fi

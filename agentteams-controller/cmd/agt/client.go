@@ -80,11 +80,15 @@ func (c *APIClient) doWithHeaders(method, path string, body interface{}, headers
 
 	var bodyReader io.Reader
 	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request body: %w", err)
+		if stream, ok := body.(io.Reader); ok {
+			bodyReader = stream
+		} else {
+			data, err := json.Marshal(body)
+			if err != nil {
+				return nil, fmt.Errorf("marshal request body: %w", err)
+			}
+			bodyReader = bytes.NewReader(data)
 		}
-		bodyReader = bytes.NewReader(data)
 	}
 
 	req, err := http.NewRequest(method, url, bodyReader)
@@ -97,7 +101,7 @@ func (c *APIClient) doWithHeaders(method, path string, body interface{}, headers
 			req.Header.Add(k, value)
 		}
 	}
-	if body != nil {
+	if body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.Token != "" {

@@ -353,6 +353,9 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ifNoneMatch == "*" {
+		if !validateTaskFileIndexCommit(w, nil, body) {
+			return
+		}
 		h.putTaskMetaCreateIfAbsent(w, r, taskID, body)
 		return
 	}
@@ -383,6 +386,9 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	currentStatus, currentStatusPresent, _ := exactTaskStatus(current)
+	if !validateTaskFileIndexCommit(w, current, body) {
+		return
+	}
 	if !h.validateExecutionCommit(w, r, current, body) {
 		return
 	}

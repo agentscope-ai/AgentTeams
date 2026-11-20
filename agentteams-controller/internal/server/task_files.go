@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -22,9 +23,12 @@ import (
 const taskDownloadMaxBytes = 64 << 20
 
 type taskFileResource struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Size    int64  `json:"size"`
+	ArtifactID string `json:"artifactId,omitempty"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind,omitempty"`
+	Version    string `json:"version"`
+	Size       int64  `json:"size"`
+	SHA256     string `json:"sha256,omitempty"`
 }
 
 // GetTaskFiles exposes declared task outputs by task-local name. Legacy storage
@@ -40,18 +44,22 @@ func (h *ProjectHandler) GetTaskFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := h.oss.GetObject(r.Context(), metaKey)
-	var record struct {
-		ID           string   `json:"task_id"`
-		Deliverables []string `json:"deliverables"`
-	}
-	if err != nil || json.Unmarshal(body, &record) != nil || record.ID != id {
+	var record map[string]json.RawMessage
+	var taskID string
+	if err != nil || json.Unmarshal(body, &record) != nil || json.Unmarshal(record["task_id"], &taskID) != nil || taskID != id {
 		writeError(w, http.StatusServiceUnavailable, "task files unavailable")
 		return
 	}
 	keys := map[string]string{}
+	published := map[string]publishedTaskFile{}
 	names := []string{}
 	prefix := "shared/tasks/" + id + "/"
-	for _, declared := range record.Deliverables {
+	var deliverables []string
+	if raw := record["deliverables"]; len(raw) > 0 && json.Unmarshal(raw, &deliverables) != nil {
+		writeError(w, 503, "invalid task files")
+		return
+	}
+	for _, declared := range deliverables {
 		rel := strings.TrimPrefix(declared, prefix)
 		if rel == declared || rel == "." || path.Clean(rel) != rel || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "../") || strings.ContainsAny(rel, "\\\x00") {
 			writeError(w, http.StatusServiceUnavailable, "invalid task file reference")
@@ -68,8 +76,40 @@ func (h *ProjectHandler) GetTaskFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		keys[name], names = key, append(names, name)
 	}
+	var index taskFileIndex
+	if raw := record["task_files"]; len(raw) > 0 {
+		if json.Unmarshal(raw, &index) != nil || index.Artifacts == nil || index.Heads == nil {
+			writeError(w, 503, "invalid task file index")
+			return
+		}
+		for name, identity := range index.Heads {
+			artifact, exists := index.Artifacts[identity]
+			if !exists || artifact.ArtifactID != identity || artifact.Name != name || !validTaskFileName(name) || !validArtifactDigest(artifact.SHA256) || artifact.Version != artifact.SHA256 {
+				writeError(w, 503, "invalid task file reference")
+				return
+			}
+			if _, exists := keys[name]; !exists {
+				names = append(names, name)
+			}
+			keys[name], published[name] = path.Dir(metaKey)+"/artifacts/"+artifact.SHA256, artifact
+		}
+	}
 	name := r.URL.Query().Get("name")
+	if identity := r.URL.Query().Get("artifactId"); identity != "" {
+		artifact, exists := index.Artifacts[identity]
+		if !exists || (name != "" && name != artifact.Name) {
+			writeError(w, 404, "task artifact not found")
+			return
+		}
+		if artifact.ArtifactID != identity || !validTaskFileName(artifact.Name) || !validArtifactDigest(artifact.SHA256) || artifact.Version != artifact.SHA256 {
+			writeError(w, 503, "invalid task file reference")
+			return
+		}
+		name = artifact.Name
+		keys[name], published[name] = path.Dir(metaKey)+"/artifacts/"+artifact.SHA256, artifact
+	}
 	if name == "" {
+		sort.Strings(names)
 		files := make([]taskFileResource, 0, len(names))
 		for _, name := range names {
 			meta, err := h.oss.StatMeta(r.Context(), keys[name])
@@ -77,7 +117,15 @@ func (h *ProjectHandler) GetTaskFiles(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusServiceUnavailable, "declared task file unavailable")
 				return
 			}
-			files = append(files, taskFileResource{Name: name, Version: httputil.BareETag(meta.ETag), Size: meta.Size})
+			file := taskFileResource{Name: name, Version: httputil.BareETag(meta.ETag), Size: meta.Size}
+			if artifact, exists := published[name]; exists {
+				if artifact.Size != meta.Size {
+					writeError(w, 503, "artifact size verification failed")
+					return
+				}
+				file.ArtifactID, file.Kind, file.Version, file.SHA256 = artifact.ArtifactID, artifact.Kind, artifact.Version, artifact.SHA256
+			}
+			files = append(files, file)
 		}
 		httputil.WriteJSON(w, http.StatusOK, struct {
 			TaskID string             `json:"taskId"`
@@ -99,7 +147,15 @@ func (h *ProjectHandler) GetTaskFiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "task file version unavailable")
 		return
 	}
-	version := httputil.BareETag(meta.ETag)
+	storageVersion := httputil.BareETag(meta.ETag)
+	version := storageVersion
+	if artifact, exists := published[name]; exists {
+		if artifact.Size != meta.Size {
+			writeError(w, 503, "artifact size verification failed")
+			return
+		}
+		version = artifact.Version
+	}
 	if expected := r.URL.Query().Get("version"); expected != "" && expected != version {
 		writeError(w, http.StatusConflict, "task file version changed")
 		return
@@ -144,7 +200,7 @@ func (h *ProjectHandler) GetTaskFiles(w http.ResponseWriter, r *http.Request) {
 	if start == meta.Size {
 		stream = io.NopCloser(bytes.NewReader(nil))
 	} else {
-		stream, err = reader.OpenRange(r.Context(), key, start, length, version)
+		stream, err = reader.OpenRange(r.Context(), key, start, length, storageVersion)
 	}
 	if errors.Is(err, oss.ErrPreconditionFailed) {
 		writeError(w, http.StatusConflict, "task file version changed")
@@ -192,6 +248,13 @@ func (h *ProjectHandler) GetTaskFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	digest := sha256.Sum256(data)
+	if artifact, exists := published[name]; exists && hex.EncodeToString(digest[:]) != artifact.SHA256 {
+		writeError(w, 503, "artifact content verification failed")
+		return
+	}
+	if artifact, exists := published[name]; exists {
+		w.Header().Set("X-AgentTeams-Artifact-ID", artifact.ArtifactID)
+	}
 	w.Header().Set("ETag", httputil.EtagQuoted(version))
 	w.Header().Set("X-Content-SHA256", hex.EncodeToString(digest[:]))
 	w.Header().Set("Content-Type", "application/octet-stream")

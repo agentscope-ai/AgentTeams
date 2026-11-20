@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,8 +18,9 @@ import (
 
 func taskFilesCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "files", Short: "Read declared task files without storage paths"}
+	cmd.AddCommand(taskFilePutCmd())
 	for _, action := range []string{"list", "read", "get"} {
-		var team, name, version, output string
+		var team, name, artifact, version, output string
 		var offset int64
 		var limit int
 		child := &cobra.Command{
@@ -27,11 +29,11 @@ func taskFilesCmd() *cobra.Command {
 				if !taskIdentifier.MatchString(args[0]) {
 					return fmt.Errorf("invalid task id")
 				}
-				if action != "list" && name == "" {
-					return fmt.Errorf("--name must not be empty")
+				if action != "list" && name == "" && artifact == "" {
+					return fmt.Errorf("--name or --artifact must not be empty")
 				}
 				query := url.Values{}
-				for key, value := range map[string]string{"team": team, "name": name, "version": version} {
+				for key, value := range map[string]string{"team": team, "name": name, "artifactId": artifact, "version": version} {
 					if value != "" {
 						query.Set(key, value)
 					}
@@ -61,7 +63,9 @@ func taskFilesCmd() *cobra.Command {
 		child.Flags().StringVar(&team, "team", "", "Task's owning Team when its ID is ambiguous")
 		if action != "list" {
 			child.Flags().StringVar(&name, "name", "", "Declared task-local file name")
-			_ = child.MarkFlagRequired("name")
+			child.Flags().StringVar(&artifact, "artifact", "", "Immutable task artifact ID")
+			child.MarkFlagsOneRequired("name", "artifact")
+			child.MarkFlagsMutuallyExclusive("name", "artifact")
 			child.Flags().StringVar(&version, "version", "", "Exact file version; refuse a changed file")
 		}
 		if action == "read" {
@@ -108,6 +112,16 @@ func downloadTaskFile(cmd *cobra.Command, endpoint, taskID, name, expectedVersio
 	if expectedVersion != "" && version != expectedVersion {
 		return fmt.Errorf("task file version mismatch; no local file published")
 	}
+	if name == "" {
+		_, parameters, err := mime.ParseMediaType(response.Header.Get("Content-Disposition"))
+		if err != nil {
+			return fmt.Errorf("task file name unavailable")
+		}
+		name = parameters["filename"]
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
+			return fmt.Errorf("invalid task download name")
+		}
+	}
 	var temporaryDir string
 	if output == "" {
 		temporaryDir, err = os.MkdirTemp("", "agentteams-task-input-")
@@ -141,11 +155,12 @@ func downloadTaskFile(cmd *cobra.Command, endpoint, taskID, name, expectedVersio
 	}
 	complete = true
 	return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
-		TaskID    string `json:"taskId"`
-		Name      string `json:"name"`
-		Version   string `json:"version"`
-		LocalPath string `json:"localPath"`
-		Size      int    `json:"size"`
-		SHA256    string `json:"sha256"`
-	}{taskID, name, version, output, len(data), checksum})
+		ArtifactID string `json:"artifactId,omitempty"`
+		TaskID     string `json:"taskId"`
+		Name       string `json:"name"`
+		Version    string `json:"version"`
+		LocalPath  string `json:"localPath"`
+		Size       int    `json:"size"`
+		SHA256     string `json:"sha256"`
+	}{response.Header.Get("X-AgentTeams-Artifact-ID"), taskID, name, version, output, len(data), checksum})
 }

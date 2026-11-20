@@ -2,8 +2,8 @@
 
 状态：设计与实施计划。目标版本：1.2.9；不修改 1.2.8 发布标签。
 基线：main `2a4fb0a35e974074820e66f408ed94887c9f3d4f`。
-完整协议尚未实现。当前分支已实现 task get 和 task files list/read/get 的首批接口与
-测试；其余命令、稳定产物 ID、写入操作及 Harness 认证均待完成。
+完整协议尚未实现。当前分支已实现 task get、task files list/read/get/put、稳定产物
+引用与历史版本读取的首批接口及测试；生命周期命令与 Harness 认证均待完成。
 
 ## 一、问题与验收目标
 

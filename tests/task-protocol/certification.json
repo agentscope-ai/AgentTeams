@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "status": "not_started",
+  "firstHarness": "qwenpaw",
+  "secondHarness": "openclaw",
+  "conditions": {
+    "model": "qwen3.6-plus",
+    "cpuPerMember": 2,
+    "memoryGiBPerMember": 4,
+    "leaderCount": 1,
+    "workerCount": 2,
+    "entry": "original-human-manager-room",
+    "contentCapture": false
+  },
+  "cases": [
+    {
+      "id": "simple-csv",
+      "spec": "cases/simple-csv.md",
+      "repetitions": 10,
+      "timeoutSeconds": 300
+    },
+    {
+      "id": "complex-settlement",
+      "spec": "cases/complex-settlement.md",
+      "repetitions": 10,
+      "timeoutSeconds": 900
+    }
+  ],
+  "stages": [
+    {
+      "id": "baseline-qwenpaw",
+      "leader": "qwenpaw",
+      "worker": "qwenpaw",
+      "requires": []
+    },
+    {
+      "id": "candidate-qwenpaw",
+      "leader": "qwenpaw",
+      "worker": "qwenpaw",
+      "requires": [
+        "baseline-qwenpaw"
+      ]
+    },
+    {
+      "id": "candidate-openclaw",
+      "leader": "openclaw",
+      "worker": "openclaw",
+      "requires": [
+        "candidate-qwenpaw"
+      ]
+    },
+    {
+      "id": "cross-qwenpaw-openclaw",
+      "leader": "qwenpaw",
+      "worker": "openclaw",
+      "requires": [
+        "candidate-openclaw"
+      ]
+    },
+    {
+      "id": "cross-openclaw-qwenpaw",
+      "leader": "openclaw",
+      "worker": "qwenpaw",
+      "requires": [
+        "candidate-openclaw"
+      ]
+    }
+  ],
+  "successRequires": [
+    "no_manual_intervention",
+    "business_oracle_passed",
+    "leader_accepted",
+    "artifacts_verified",
+    "original_room_report_verified",
+    "trace_coverage_verified"
+  ],
+  "measurementNotes": [
+    "Fresh request/Task IDs for repeated identical specs; retain terminal tasks.",
+    "Duplicate delivery tests reuse the same operation identity and are separate from repeated task execution.",
+    "Timeouts, failed attempts and manual recoveries remain in the denominator.",
+    "Timeout budgets are preliminary and must be frozen before both baseline and candidate runs; they are not latency targets.",
+    "Protocol conformance and recovery tests must also pass before the next Harness is modified."
+  ]
+}

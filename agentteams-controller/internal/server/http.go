@@ -540,6 +540,8 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// enforces the team boundary (the middleware cannot resolve task -> team)
 	// and refuses to release the Controller's cancellation.
 	taskNameFn := func(r *http.Request) string { return r.PathValue("id") }
+	mux.Handle("GET /api/v1/tasks/{id}", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskResource)))
+	mux.Handle("GET /api/v1/tasks/{id}/files", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskFiles)))
 	mux.Handle("GET /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskMeta)))
 	mux.Handle("PUT /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PutTaskMeta)))
 

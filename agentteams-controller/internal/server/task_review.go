@@ -328,6 +328,24 @@ func (h *ProjectHandler) writeTaskReview(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		projection = "pending"
 	}
+	dispatch := ""
+	var assignments []taskPlanAssignment
+	if err == nil && review.Accepted && main["task_plan"] != nil {
+		mainKey := path.Join(path.Dir(path.Dir(key)), coordinationString(child, "main_task_id"), "meta.json")
+		dispatch = "ready"
+		if dispatchErr := h.reconcileTaskPlan(r.Context(), mainKey); dispatchErr != nil {
+			dispatch = "pending"
+		}
+		if latest, _, _, readErr := h.readTaskPlan(r.Context(), mainKey, ""); readErr == nil {
+			var receiptErr error
+			assignments, receiptErr = h.taskPlanAssignments(r.Context(), mainKey, latest)
+			if receiptErr != nil {
+				dispatch = "pending"
+			}
+		} else {
+			dispatch = "pending"
+		}
+	}
 	var notification *taskNotificationStatus
 	if err == nil && coordinationReady(main) {
 		notice := h.flushTaskNotification(r.Context(), path.Join(path.Dir(path.Dir(key)), coordinationString(child, "main_task_id"), "meta.json"), "ready")
@@ -339,7 +357,9 @@ func (h *ProjectHandler) writeTaskReview(w http.ResponseWriter, r *http.Request,
 		MainProjection string                  `json:"mainProjection"`
 		Notification   *taskNotificationStatus `json:"notification,omitempty"`
 		NextAction     string                  `json:"nextAction"`
-	}{publicTaskResource(id, team, child), review, projection, notification, "Task system saved your exact submission decision. Do not repeat the review or reopen this execution; main-task synchronization is retriable."})
+		DispatchStatus string                  `json:"dispatchStatus,omitempty"`
+		Assignments    []taskPlanAssignment    `json:"assignments,omitempty"`
+	}{publicTaskResource(id, team, child), review, projection, notification, "Task system saved your exact submission decision. Do not repeat the review or reopen this execution; main-task synchronization is retriable.", dispatch, assignments})
 }
 
 func validateTaskReviewCommit(w http.ResponseWriter, current, next []byte) bool {

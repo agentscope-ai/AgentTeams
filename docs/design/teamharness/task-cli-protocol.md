@@ -2,14 +2,15 @@
 
 状态：设计与实施计划。目标版本：1.2.9；不修改 1.2.8 发布标签。
 基线：main `2a4fb0a35e974074820e66f408ed94887c9f3d4f`。
-完整协议尚未实现。当前分支已实现 task create/get/accept/reject、task files list/read/get/put、稳定产物
+完整协议尚未完成接入与认证。当前分支已实现 task create/get/plan/accept/reject、task files list/read/get/put、稳定产物
 引用与历史版本读取、begin 接单/输入准备，以及 submit 的 API/CLI、候选提交和持久化
 通知恢复接口与测试。complete 已增加主任务完成、不可变报告和原会话回告队列的首批
 API/CLI，并固定最终产物清单、以原派单 Manager 身份发送原生 Matrix 附件，逐文件
 记录回执。派单 Agent 已发送事实的公共读取和 QwenPaw 原生上下文补齐已实现并进行隔离测试；
-accept/reject 已接通候选决定、主任务投影与最终验收后的关闭通知；中间节点验收后的
-自动派发需与 plan 一起完成。原会话真实客户端展示、plan、公共提示词接入与实际 Harness
-认证均待完成，当前不能把分支当作完整可用的新协议。
+accept/reject 已接通候选决定、主任务投影与最终验收后的关闭通知；plan 保存完整 DAG，
+准备幂等任务房间并自动派发就绪节点，中间节点验收后继续派发依赖节点。
+公共 MCP/提示词接入、终态返工后的显式替代执行、原会话真实客户端展示与实际 Harness
+认证仍待完成，当前不能把分支当作完整可用的新协议。
 
 ## 一、问题与验收目标
 
@@ -92,6 +93,42 @@ begin 获取实际本地目录进行业务工作。不得上传整个工作区�
 提交事件携带摘要、检查证据、精确提交身份及产物引用，减少 Leader 重复查询。
 accept 执行权限、当前版本和文件完整性检查，但不替代 Leader 的业务正确性判断。
 不能通过减少工具调用来省掉独立验收。
+
+plan 使用 `POST /api/v1/tasks/{id}/plan`，CLI 支持 `--file plan.json` 或 `--json JSON`，
+两种输入共享同一请求结构；每次调用仅请求一次公共任务操作。例如：
+
+```json
+{"nodes":[
+  {"id":"A","title":"读取账单","assignedTo":"worker-one","spec":"实现账单解析模块","dependsOn":[]},
+  {"id":"B","title":"读取退款","assignedTo":"worker-two","spec":"实现退款解析模块","dependsOn":[]},
+  {"id":"C","title":"集成验证","assignedTo":"worker-one","spec":"使用已验收的两个模块完成集成","dependsOn":["A","B"]}
+]}
+```
+
+node 的 id 是主任务内的局部步骤名，最多 50 个节点；执行 Task ID 由任务系统生成，
+从返回的 nodes 中读取，不手工拼接。依赖只引用本计划局部步骤名，循环、缺失、重复
+依赖及同名步骤均在任何房间/派发操作前拒绝。assignee 必须解析到同 Team 的注册
+Worker，不能将 Leader 分配为自己的执行者。原始需求、Project 归属、路由、房间和
+派单身份从已登记主任务继承，不作为 Agent 输入参数。
+
+完整计划和全部节点说明先写入主任务；相同计划重试复用 planId，重排节点/依赖和同一
+成员的注册别名不改变身份，改变工作内容不会覆盖既有计划。任务房间使用既有 Matrix
+别名幂等机制，并核对 task/plan/Team/Leader 的所有权；创建响应丢失后解析同一房间。
+保留 Team 管理员（包括仅提供名字的管理员及全局管理员回退）、合资格 Human 邀请及
+接受邀请的现有机制，不把无权限 Human 加入执行房间。
+
+派发先保存 prepared 执行记录和通知意图，再使用现有公共队列入队；主任务节点和
+整体 assigned 状态保存后才允许执行记录变为 assigned。中间任一步骤退出，由现有
+恢复扫描沿同一 Task/plan/delivery 身份继续，不生成第二次业务执行。Worker ACK
+同步主任务阶段及该节点的 in_progress 状态。只有依赖节点及其实际候选均验收通过，
+才准备后继执行。每次投递前重新检查执行冻结与可选 Project 活动状态。
+
+plan 和 accept 返回实际记录的 assignments 收据，pending/queued 与执行、验收、
+交付成功分别表达。公共回执代码生成通知事实，QwenPaw 原生工具上下文绑定任务系统
+确认的主任务或精确候选；handoff 消息自行声明的 Task ID 不能扩展操作范围。
+协议测试已覆盖从计划、并行根节点、精确候选验收到依赖推进和最终完成的接口链路，
+以及房间创建丢响应、队列中断、入队后激活失败、冻结恢复及非法所有权。
+这些接口/SDK 替身测试不是实际 Harness 认证。
 
 accept/reject 使用 `POST /api/v1/tasks/{id}/accept` 或 `/reject`，仅接收
 `submissionId` 和 `note`；主任务、所属 Team、可选 Project 与通知目标从任务系统解析。

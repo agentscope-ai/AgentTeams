@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -85,10 +86,22 @@ func (h *CoordinationHandler) JoinTaskRoomHumans(w http.ResponseWriter, r *http.
 			invited[m.UserID] = true
 		}
 	}
-	var humans v1beta1.HumanList
-	if h.deps.Client.List(r.Context(), &humans, client.InNamespace(h.deps.Namespace)) != nil {
+	joined, failed, err := h.acceptTaskRoomHumanInvites(r.Context(), team, room, invited)
+	if err != nil {
 		writeError(w, 503, "team Humans unavailable")
 		return
+	}
+	httputil.WriteJSON(w, 200, map[string]any{"joined": joined, "failed": failed})
+}
+
+func (h *CoordinationHandler) acceptTaskRoomHumanInvites(ctx context.Context, team *v1beta1.Team, room string, invited map[string]bool) ([]string, []string, error) {
+	var humans v1beta1.HumanList
+	var reader client.Reader = h.deps.Client
+	if h.deps.APIReader != nil {
+		reader = h.deps.APIReader
+	}
+	if err := reader.List(ctx, &humans, client.InNamespace(h.deps.Namespace)); err != nil {
+		return nil, nil, err
 	}
 	joined, failed := []string{}, []string{}
 	for _, human := range humans.Items {
@@ -96,18 +109,7 @@ func (h *CoordinationHandler) JoinTaskRoomHumans(w http.ResponseWriter, r *http.
 		if !invited[id] || !human.DeletionTimestamp.IsZero() {
 			continue
 		}
-		allowed := team.Spec.Admin != nil && team.Spec.Admin.Name == human.Name && (team.Spec.Admin.MatrixUserID == "" || team.Spec.Admin.MatrixUserID == id)
-		for _, m := range team.Spec.HumanMembers {
-			if m.Name == human.Name && (m.MatrixUserID == "" || m.MatrixUserID == id) {
-				allowed = true
-			}
-		}
-		for _, t := range human.Spec.AccessibleTeams {
-			if t == team.Name || t == team.Spec.EffectiveTeamName(team.Name) {
-				allowed = true
-			}
-		}
-		if !allowed {
+		if !taskRoomHumanAllowed(team, &human) {
 			continue
 		}
 		localpart := strings.SplitN(strings.TrimPrefix(id, "@"), ":", 2)[0]
@@ -119,16 +121,34 @@ func (h *CoordinationHandler) JoinTaskRoomHumans(w http.ResponseWriter, r *http.
 		if localpart == h.deps.MatrixConfig.AdminUser {
 			password = h.deps.MatrixConfig.AdminPassword
 		}
-		userToken, loginErr := h.deps.Provisioner.LoginAsHuman(r.Context(), localpart, password)
+		userToken, loginErr := h.deps.Provisioner.LoginAsHuman(ctx, localpart, password)
 		if loginErr != nil || userToken == "" {
 			failed = append(failed, id)
 			continue
 		}
-		if h.deps.Provisioner.JoinRoomAs(r.Context(), room, userToken) != nil {
+		if h.deps.Provisioner.JoinRoomAs(ctx, room, userToken) != nil {
 			failed = append(failed, id)
 			continue
 		}
 		joined = append(joined, id)
 	}
-	httputil.WriteJSON(w, 200, map[string]any{"joined": joined, "failed": failed})
+	return joined, failed, nil
+}
+
+func taskRoomHumanAllowed(team *v1beta1.Team, human *v1beta1.Human) bool {
+	id := human.Status.MatrixUserID
+	if team.Spec.Admin != nil && team.Spec.Admin.Name == human.Name && (team.Spec.Admin.MatrixUserID == "" || team.Spec.Admin.MatrixUserID == id) {
+		return true
+	}
+	for _, member := range team.Spec.HumanMembers {
+		if member.Name == human.Name && (member.MatrixUserID == "" || member.MatrixUserID == id) {
+			return true
+		}
+	}
+	for _, name := range human.Spec.AccessibleTeams {
+		if name == team.Name || name == team.Spec.EffectiveTeamName(team.Name) {
+			return true
+		}
+	}
+	return false
 }

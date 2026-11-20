@@ -107,11 +107,17 @@ func (h *ProjectHandler) recoverTaskNotifications(ctx context.Context) {
 				if json.Unmarshal(body, &task) != nil {
 					continue
 				}
+				if len(task["task_plan"]) > 0 {
+					_ = h.reconcileTaskPlan(ctx, key)
+				}
 				var review taskReview
 				if json.Unmarshal(task["task_review"], &review) == nil && review.ID != "" {
 					var child map[string]any
 					if json.Unmarshal(body, &child) == nil {
-						_, _ = h.projectTaskReview(ctx, key, child, review)
+						main, err := h.projectTaskReview(ctx, key, child, review)
+						if err == nil && main["task_plan"] != nil {
+							_ = h.reconcileTaskPlan(ctx, path.Join(path.Dir(path.Dir(key)), coordinationString(child, "main_task_id"), "meta.json"))
+						}
 					}
 				}
 				if json.Unmarshal(task["task_notifications"], &intents) != nil {

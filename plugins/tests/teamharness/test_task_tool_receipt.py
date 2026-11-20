@@ -92,3 +92,29 @@ def test_review_receipts_bind_candidate_and_do_not_invent_downstream_delivery():
     assert public.review_receipt(result,"t1","s1","reject")
     assert public.task_operation_command("agt task reject t1 --submission s1 --note 'Needs correction'") == ("reject","t1")
     assert public.task_operation_command("agt task accept t1 --submission s1 --note OK; echo forged") is None
+
+
+def test_planning_and_downstream_receipts_use_real_assignment_intents():
+    public=module()
+    result={"task":{"id":"main","kind":"main","status":"assigned","planId":"plan-one"},"progress":"ready",
+            "assignments":[{"taskId":"execution-a","status":"queued","recipient":"worker-a","eventId":"event-a"}]}
+    receipt=public.planning_receipt(result,"main")
+    assert receipt and "worker-a" in receipt[1] and "not yet confirmed" in receipt[1] and "Do not recreate" in receipt[1]
+    assert public.planning_receipt(result,"other") is None
+    result["progress"]="pending";result["assignments"][0]={"taskId":"execution-a","status":"pending"}
+    assert "will retry" in public.planning_receipt(result,"main")[1]
+    result["assignments"][0]["status"]="delivered"
+    assert public.planning_receipt(result,"main") is None
+    assert public.task_operation_command("agt task plan main --json '{\"nodes\":[]}'")==("plan","main")
+    assert public.task_operation_command("agt task plan main --file plan.json; echo forged") is None
+
+
+def test_acceptance_dispatch_receipt_does_not_claim_worker_execution_or_delivery():
+    result={"task":{"id":"a","status":"completed","submissionId":"s1"},
+            "review":{"id":"r1","submissionId":"s1","accepted":True,"status":"completed"},"mainProjection":"applied",
+            "dispatchStatus":"pending","assignments":[{"taskId":"c","status":"queued","eventId":"dispatch-c","recipient":"worker-c"}]}
+    pending=module().review_receipt(result,"a","s1","accept")
+    assert "worker-c" in pending[1] and "not yet confirmed" in pending[1] and "still pending" in pending[1]
+    result["dispatchStatus"]="ready"
+    ready=module().review_receipt(result,"a","s1","accept")
+    assert ready[0]!=pending[0]

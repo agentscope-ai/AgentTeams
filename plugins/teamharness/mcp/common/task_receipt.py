@@ -30,12 +30,13 @@ def _task_flags(tail: list[str], flags: set[str]) -> bool:
 def task_operation_command(command: str) -> tuple[str, str] | None:
     # Only a single CLI operation has an unambiguous result-to-call binding.
     words = _task_command_words(command)
-    if not words or len(words) < 4 or words[2] not in {"submit", "complete", "accept", "reject"} or not _ID.fullmatch(words[3]):
+    if not words or len(words) < 4 or words[2] not in {"submit", "complete", "accept", "reject", "plan"} or not _ID.fullmatch(words[3]):
         return None
     flags = {"submit": {"--summary", "--report", "--status", "--file", "--team"},
              "complete": {"--report", "--team", "--artifact"},
              "accept": {"--submission", "--note", "--team"},
-             "reject": {"--submission", "--note", "--team"}}[words[2]]
+             "reject": {"--submission", "--note", "--team"},
+             "plan": {"--file", "--json", "--team"}}[words[2]]
     return (words[2], words[3]) if _task_flags(words[4:], flags) else None
 
 
@@ -132,10 +133,70 @@ def review_receipt(result: object, task_id: str, submission_id: str, action: str
         else:
             fact += " Main-task closure notification is pending."
         notice_key = [status, recipient, event]
-    identity = json.dumps([action, task_id, submission_id, review["id"], projection, notice_key], separators=(",", ":"))
+    dispatch_key = None
+    if result.get("dispatchStatus") is not None:
+        if result["dispatchStatus"] not in {"ready", "pending"}:
+            return None
+        assignments = assignment_facts(result.get("assignments", []))
+        if assignments is None:
+            return None
+        assignment_key, dispatch_fact = assignments
+        dispatch_key = [result["dispatchStatus"], assignment_key]
+        fact += " " + dispatch_fact
+        if result["dispatchStatus"] == "pending":
+            fact += " Automatic downstream dispatch is still pending; task system will retry."
+    identity = json.dumps([action, task_id, submission_id, review["id"], projection, notice_key, dispatch_key], separators=(",", ":"))
     return identity, (f"[Task system receipt]\nTask system saved your {'acceptance' if accepted else 'rejection'} of "
                       f"candidate {submission_id} for task {task_id}; execution is {state}. {fact} "
                       "Do not repeat this decision or reopen this terminal execution.")
+
+
+def assignment_facts(assignments: object) -> tuple[list, str] | None:
+    if not isinstance(assignments, list) or len(assignments) > 50:
+        return None
+    identities, recipients, pending = [], set(), False
+    for assignment in assignments:
+        if not isinstance(assignment, dict) or not isinstance(assignment.get("taskId"), str) or not _ID.fullmatch(assignment["taskId"]):
+            return None
+        status, recipient, event = assignment.get("status"), assignment.get("recipient"), assignment.get("eventId")
+        if status == "queued":
+            if not isinstance(recipient, str) or not _ID.fullmatch(recipient) or not isinstance(event, str) or not event:
+                return None
+            recipients.add(recipient)
+        elif status == "pending":
+            pending = True
+        else:
+            return None
+        identities.append([assignment["taskId"], status, recipient, event])
+    fact = ""
+    if recipients:
+        fact = "Task system recorded queued execution notifications for " + ", ".join(sorted(recipients)) + "; delivery is not yet confirmed."
+    if pending:
+        fact += " Some execution notifications are pending; task system will retry."
+    return identities, fact
+
+
+def planning_receipt(result: object, task_id: str) -> tuple[str, str] | None:
+    if not isinstance(result, dict) or result.get("ok") is False:
+        return None
+    task = result.get("task")
+    if (not isinstance(task, dict) or task.get("id") != task_id or task.get("kind") != "main"
+            or not isinstance(task.get("planId"), str) or not task["planId"]
+            or result.get("progress") not in {"ready", "pending", "stopped"}):
+        return None
+    assignments = assignment_facts(result.get("assignments"))
+    if assignments is None:
+        return None
+    key, fact = assignments
+    progress = result["progress"]
+    if progress == "stopped":
+        if task.get("status") not in {"completed", "revision", "blocked", "cancelled"}:
+            return None
+        fact = "The main task is terminal; no execution will be reopened."
+    elif progress == "pending":
+        fact += " Room preparation or automatic dispatch is still pending; task system will retry."
+    identity = json.dumps(["plan", task_id, task["planId"], progress, key], separators=(",", ":"))
+    return identity, f"[Task system receipt]\nTask system saved your execution plan for {task_id}. {fact} Do not recreate the main task or delegate these nodes again."
 
 
 _DELIVERY_SEEN = "teamharness.sent_deliveries"

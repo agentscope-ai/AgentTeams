@@ -10,6 +10,8 @@ import (
 // taskResource is the public task view. Storage records and notification routes
 // stay behind the API; callers use task/submission identities rather than keys.
 type taskResource struct {
+	PlanID        string                            `json:"planId,omitempty"`
+	Nodes         []taskPlanNodeResource            `json:"nodes,omitempty"`
 	ID            string                            `json:"id"`
 	Team          string                            `json:"team"`
 	Kind          string                            `json:"kind,omitempty"`
@@ -29,6 +31,16 @@ type taskResource struct {
 	Artifacts     []taskFinalArtifact               `json:"artifacts,omitempty"`
 	OriginEventID string                            `json:"originEventId,omitempty"`
 	Notifications map[string]taskNotificationStatus `json:"notifications,omitempty"`
+}
+
+type taskPlanNodeResource struct {
+	ID         string   `json:"id"`
+	TaskID     string   `json:"taskId"`
+	Title      string   `json:"title"`
+	AssignedTo string   `json:"assignedTo"`
+	Status     string   `json:"status"`
+	Spec       string   `json:"spec,omitempty"`
+	DependsOn  []string `json:"dependsOn"`
 }
 
 // GetTaskResource returns the storage-independent view used by `agt task get`.
@@ -62,6 +74,25 @@ func (h *ProjectHandler) GetTaskResource(w http.ResponseWriter, r *http.Request)
 }
 
 func publicTaskResource(id, team string, record map[string]any) taskResource {
+	var plan taskPlan
+	encodedPlan, _ := json.Marshal(record["task_plan"])
+	_ = json.Unmarshal(encodedPlan, &plan)
+	var nodes []taskPlanNodeResource
+	if plan.ID != "" {
+		byStep := map[string]string{}
+		for _, node := range plan.Request.Nodes {
+			byStep[node.ID] = node.Spec
+		}
+		items, _ := record["tasks"].([]any)
+		for _, item := range items {
+			node, _ := item.(map[string]any)
+			var dependencies []string
+			data, _ := json.Marshal(node["depends_on"])
+			_ = json.Unmarshal(data, &dependencies)
+			step := coordinationString(node, "step_id")
+			nodes = append(nodes, taskPlanNodeResource{ID: step, TaskID: coordinationString(node, "task_id"), Title: coordinationString(node, "title"), AssignedTo: coordinationString(node, "assigned_to"), Status: coordinationString(node, "status"), Spec: byStep[step], DependsOn: dependencies})
+		}
+	}
 	var review *taskReview
 	if record["task_review"] != nil {
 		data, _ := json.Marshal(record["task_review"])
@@ -86,6 +117,7 @@ func publicTaskResource(id, team string, record map[string]any) taskResource {
 		}
 	}
 	return taskResource{
+		PlanID: plan.ID, Nodes: nodes,
 		Review: review, ResultStatus: coordinationString(record, "result_status"),
 		OriginEventID: origin.EventID, Notifications: notices,
 		CompletionID: completion.ID, Artifacts: completion.Artifacts,

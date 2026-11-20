@@ -195,6 +195,18 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 				d.Status = "ignored"
 				return
 			}
+			if h.taskNotifications != nil {
+				mainKey := coordinationPlanPath(e, "meta.json")
+				childKey := path.Join("teams", e.StorageTeam, "shared/tasks", e.TaskID, "meta.json")
+				if code, _ := h.taskNotifications.taskExecutionAdmissionFailure(ctx, mainKey, p); code != 0 {
+					d.Error = "main task execution is gated"
+					return
+				}
+				if code, _ := h.taskNotifications.taskExecutionAdmissionFailure(ctx, childKey, t); code != 0 {
+					d.Error = "task execution is gated"
+					return
+				}
+			}
 		}
 		if e.Kind == "task_submitted" && taskStatus != "submitted" {
 			d.Status = "ignored"

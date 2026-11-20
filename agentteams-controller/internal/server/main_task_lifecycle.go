@@ -91,31 +91,51 @@ func (h *ProjectHandler) advanceMainTaskExecution(ctx context.Context, childKey 
 			return err
 		}
 		current := coordinationString(main, "status")
-		if main["task_kind"] != "main" || (current != "planned" && current != "assigned") || current == status {
+		managedPlan := main["task_plan"] != nil
+		if main["task_kind"] != "main" || (current != "planned" && current != "assigned" && !(managedPlan && current == "in_progress")) || (!managedPlan && current == status) {
 			return nil
 		}
 		nodes, _ := main["tasks"].([]any)
 		matched := false
+		nodeChanged := false
 		for _, item := range nodes {
 			node, _ := item.(map[string]any)
 			if node["task_id"] == child["task_id"] && node["assigned_to"] == child["assigned_to"] {
 				matched = true
+				if managedPlan {
+					nodeStatus := coordinationString(node, "status")
+					if nodeStatus != "planned" && nodeStatus != "assigned" && nodeStatus != "in_progress" {
+						return fmt.Errorf("execution node is no longer active")
+					}
+					if nodeStatus != status && !(nodeStatus == "in_progress" && status == "assigned") {
+						node["status"], nodeChanged = status, true
+					}
+				}
 				break
 			}
 		}
 		if !matched {
 			return fmt.Errorf("execution task does not match its main plan")
 		}
-		main["status"] = status
-		history, _ := main["history"].([]any)
-		seq, _ := main["history_seq"].(float64)
-		if seq < float64(len(history)) {
-			seq = float64(len(history))
+		nextStatus := status
+		if managedPlan && current == "in_progress" {
+			nextStatus = current
 		}
-		seq++
-		main["history_seq"] = seq
-		main["history"] = append(history, map[string]any{"seq": seq, "from": current, "to": status,
-			"action": "execution_" + status, "actor": "controller", "ts": time.Now().UTC().Format(time.RFC3339)})
+		if current == nextStatus && !nodeChanged {
+			return nil
+		}
+		if current != nextStatus {
+			main["status"] = nextStatus
+			history, _ := main["history"].([]any)
+			seq, _ := main["history_seq"].(float64)
+			if seq < float64(len(history)) {
+				seq = float64(len(history))
+			}
+			seq++
+			main["history_seq"] = seq
+			main["history"] = append(history, map[string]any{"seq": seq, "from": current, "to": nextStatus,
+				"action": "execution_" + nextStatus, "actor": "controller", "ts": time.Now().UTC().Format(time.RFC3339)})
+		}
 		updated, _ := json.Marshal(main)
 		strict, ok := h.oss.(conditionalWriter)
 		if !ok {

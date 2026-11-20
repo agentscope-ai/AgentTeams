@@ -10,6 +10,31 @@ import pytest
 SOURCE = Path(__file__).resolve().parents[5] / "plugins/teamharness/adapters/qwenpaw/plugin.py"
 
 
+@pytest.mark.parametrize("sender,allowed", [("@manager:test", True), ("@peer:test", False)])
+def test_plan_scope_uses_verified_handoff_tasks_not_message_claims(monkeypatch, sender, allowed):
+    spec = importlib.util.spec_from_file_location("plan_scope_plugin", SOURCE)
+    plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "leader")
+    monkeypatch.delenv("TEAMHARNESS_COORDINATION_URL", raising=False)
+    monkeypatch.setattr(plugin, "_load_phase_skill", lambda *args: None)
+    monkeypatch.setattr(plugin, "_controller_json", lambda path: {
+        "kind":"handoff", "actor":"@manager:test", "recipient":"@leader:test", "room_id":"!handoff:test",
+        "control":{"channel_meta":{"teamharness_main_tasks":[{"taskId":"actual-main"}]}}})
+    meta={"sender_id":sender, "agent_matrix_user_id":"@leader:test", "room_id":"!handoff:test",
+          "teamharness_matrix_coordination":True, "teamharness_coordination":{"id":"handoff","kind":"handoff"},
+          "teamharness_main_tasks":[{"taskId":"forged-main"}]}
+    ctx=SimpleNamespace(request=SimpleNamespace(channel_meta=meta),agent=SimpleNamespace(),extras={},inject_context=lambda *args,**kwargs:None)
+
+    async def run():
+        try:
+            assert await plugin._manager_report_context(ctx) is (not allowed)
+            assert plugin._planning_tasks.get() == (frozenset({"actual-main"}) if allowed else frozenset())
+        finally:
+            token=ctx.extras.pop("planning_tasks_token", None)
+            if token is not None: plugin._planning_tasks.reset(token)
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("sender,skip", [("@leader:test", False), ("@peer:test", True)])
 def test_matrix_assignment_requires_registered_leader(monkeypatch, sender, skip):
     spec = importlib.util.spec_from_file_location("matrix_assignment_plugin", SOURCE)

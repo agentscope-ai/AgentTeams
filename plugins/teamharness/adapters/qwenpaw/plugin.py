@@ -23,6 +23,7 @@ _coordinator_route: ContextVar[dict[str, Any] | None] = ContextVar("teamharness_
 _source_event: ContextVar[str] = ContextVar("teamharness_source_event", default="")
 _execution_task: ContextVar[str] = ContextVar("teamharness_execution_task", default="")
 _completion_task: ContextVar[str] = ContextVar("teamharness_completion_task", default="")
+_planning_tasks: ContextVar[frozenset[str]] = ContextVar("teamharness_planning_tasks", default=frozenset())
 _review_task: ContextVar[tuple[str, str] | None] = ContextVar("teamharness_review_task", default=None)
 _ack_scope: ContextVar[tuple | None] = ContextVar("teamharness_ack_scope", default=None)
 _delivery_ack: ContextVar[dict | None] = ContextVar("teamharness_delivery_ack", default=None)
@@ -128,8 +129,14 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                     return
                 action, task_id = operation
                 review_scope = _review_task.get()
-                expected = (_execution_task.get() if action == "submit" else _completion_task.get()
-                            if action == "complete" else review_scope[0] if review_scope else "")
+                if action == "plan":
+                    expected = task_id if task_id in _planning_tasks.get() else ""
+                elif action == "submit":
+                    expected = _execution_task.get()
+                elif action == "complete":
+                    expected = _completion_task.get()
+                else:
+                    expected = review_scope[0] if review_scope else ""
                 if task_id != expected:
                     return
             from agentscope.tool import ToolResponse
@@ -146,6 +153,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             except (TypeError, ValueError):
                 return
             receipt = (receipts.creation_receipt(result, creation_source) if creation_source
+                       else receipts.planning_receipt(result, task_id) if action == "plan"
                        else receipts.review_receipt(result, task_id, review_scope[1], action) if action in {"accept", "reject"}
                        else receipts.task_receipt(result, task_id, action))
             seen = getattr(self, "_task_receipt_ids", set())
@@ -282,7 +290,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 yield ToolResponse(state="error", content=[{"type": "text", "text": _CLEANUP_GUIDANCE}])
                 return
             async for item in next_handler(**input_kwargs):
-                if getattr(call, "name", "") == "execute_shell_command" and (_execution_task.get() or _completion_task.get() or _review_task.get() or creation_source):
+                if getattr(call, "name", "") == "execute_shell_command" and (_execution_task.get() or _completion_task.get() or _planning_tasks.get() or _review_task.get() or creation_source):
                     self._inject_task_receipt(item, name, args, creation_source)
                 if name in {"projectflow", "taskflow"} and args.get("action") == "accept_task_result" and _review_task.get():
                     for block in getattr(item, "content", []):
@@ -584,6 +592,7 @@ async def _manager_report_context(ctx: Any) -> bool:
         ctx.extras["coordinator_route_token"] = _coordinator_route.set(coordinator)
         ctx.inject_context("Send the verified final result to this coordinator replyRoute; the coordinator relays it to the original requester: " + json.dumps(coordinator), source="teamharness_coordinator_route")
     api_event = meta.get("teamharness_coordination") or {}
+    receipt = {}
     if meta.get("teamharness_matrix_coordination"):
         receipt = await asyncio.to_thread(_controller_json, "coordination/events/" + urllib.parse.quote(api_event.get("id", ""), safe=""))
         if (api_event.get("kind") not in {"handoff", "task_assigned", "task_submitted", "project_ready", "main_task_ready"}
@@ -593,6 +602,10 @@ async def _manager_report_context(ctx: Any) -> bool:
                 or any(receipt.get(key, "") != api_event.get(key, "") for key in
                        ("kind", "task_id", "main_task_id", "project_id", "delivery_id", "submission_id"))):
             return True
+    if api_event.get("kind") == "handoff" and receipt:
+        saved_tasks = (((receipt.get("control") or {}).get("channel_meta") or {}).get("teamharness_main_tasks") or [])
+        ctx.extras["planning_tasks_token"] = _planning_tasks.set(frozenset(
+            task["taskId"] for task in saved_tasks if isinstance(task, dict) and isinstance(task.get("taskId"), str)))
     automatic_plan = api_event.get("dispatch_mode") == "automatic" and api_event.get("plan_type") != "loop"
     if api_event.get("kind") in {"project_ready", "main_task_ready"}:
         main_id = api_event.get("main_task_id", "")
@@ -778,6 +791,9 @@ def _register_coordination_hook(api: Any) -> None:
         priority = 190
 
         async def run(self, ctx: Any) -> Any:
+            token = ctx.extras.pop("planning_tasks_token", None)
+            if token is not None:
+                _planning_tasks.reset(token)
             token = ctx.extras.pop("delivery_ack_token", None)
             if token is not None:
                 _delivery_ack.reset(token)

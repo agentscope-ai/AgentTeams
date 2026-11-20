@@ -549,6 +549,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/tasks/{id}/files", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PublishTaskFile)))
 	mux.Handle("POST /api/v1/tasks/{id}/complete", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.CompleteTask)))
 	mux.Handle("POST /api/v1/tasks/{id}/accept", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(projh.ReviewTask(true)))
+	mux.Handle("POST /api/v1/tasks/{id}/plan", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PlanTask)))
 	mux.Handle("POST /api/v1/tasks/{id}/reject", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(projh.ReviewTask(false)))
 	mux.Handle("POST /api/v1/tasks/{id}/submit", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.SubmitTask)))
 	mux.Handle("POST /api/v1/tasks/{id}/begin", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.BeginTask)))

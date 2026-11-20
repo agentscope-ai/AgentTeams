@@ -221,6 +221,43 @@ func TestStandaloneWorkerDiscoveryIsEmptyWithoutInspectingStorageOrBackend(t *te
 	}
 }
 
+func TestCoordinatingMainTaskCannotEnterWorkerRecovery(t *testing.T) {
+	for _, kind := range []string{"main", "execution", ""} {
+		t.Run(kind, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-leader", "status": "in_progress", "task_kind": kind}))
+			h := NewTaskRecoveryHandler(newProjectTestHandler(t, store, teamWithRoster("alpha-team")), ServerDeps{})
+			h.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
+				return "instance", "qwenpaw", nil
+			}
+			caller := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-leader", Team: "alpha-team"}
+			w := httptest.NewRecorder()
+			h.ListRecoverableTasks(w, withCaller(httptest.NewRequest(http.MethodGet, "/api/v1/tasks/recoverable", nil), caller))
+			var result struct {
+				Tasks []json.RawMessage `json:"tasks"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &result); w.Code != http.StatusOK || err != nil {
+				t.Fatalf("list: %d %s (%v)", w.Code, w.Body, err)
+			}
+			wantCount, wantStatus := 1, http.StatusOK
+			if kind == "main" {
+				wantCount, wantStatus = 0, http.StatusConflict
+			}
+			if len(result.Tasks) != wantCount {
+				t.Errorf("recoverable count = %d, want %d", len(result.Tasks), wantCount)
+			}
+			r := withCaller(httptest.NewRequest(http.MethodPost, "/api/v1/tasks/t1/execution?team=alpha-team", strings.NewReader(`{"action":"claim","instance_id":"instance","process_id":"native-process"}`)), caller)
+			r.SetPathValue("id", "t1")
+			r.Header.Set("If-Match", taskMetaETag(t, store, taskMetaKey))
+			w = httptest.NewRecorder()
+			h.UpdateExecution(w, r)
+			if w.Code != wantStatus {
+				t.Errorf("claim = %d %s, want %d", w.Code, w.Body, wantStatus)
+			}
+		})
+	}
+}
+
 func TestTaskRecoveryUsesCurrentAssigneeAfterRedelegation(t *testing.T) {
 	store := ossfake.NewMemory()
 	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-dev", "status": "assigned"}))

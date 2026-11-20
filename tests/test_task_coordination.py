@@ -39,6 +39,14 @@ def test_canonical_receipt_prevents_replacing_the_task_input(packet):
     assert receive(packet)["text"] == "Canonical assignment"
 
 
+def test_completed_transport_receipt_still_allows_current_unconsumed_assignment(packet):
+    packet[1]["status"] = "completed"  # Matrix send completed, not native consumption.
+    assert receive(packet)["text"] == "Canonical assignment"
+    packet[2]["status"] = "completed"
+    with pytest.raises(protocol.IgnoredNotification):
+        receive(packet)
+
+
 @pytest.mark.parametrize("field,value", [("main_task_id", "other"), ("delivery_id", "other"), ("task_id", "other"), ("kind", "main_task_ready")])
 def test_foreign_execution_packet_is_rejected(packet, field, value):
     packet[0]["org.agentteams.coordination"]["channel_meta"]["teamharness_coordination"][field] = value
@@ -92,3 +100,12 @@ def test_receipt_read_failure_keeps_unverified_input_retryable(packet, error, ex
         raise error
     with pytest.raises(expected):
         receive((*packet[:-1], fail))
+
+
+def test_verified_closure_uses_registered_receipt_instead_of_stale_boot_role(packet, monkeypatch):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "standalone")
+    for event in (packet[0]["org.agentteams.coordination"]["channel_meta"]["teamharness_coordination"], packet[1]["control"]["channel_meta"]["teamharness_coordination"]):
+        event.update(kind="main_task_ready", task_id="", delivery_id="")
+    packet[0]["org.agentteams.coordination"]["channel_meta"]["sender_id"] = "@worker:test"
+    packet[1]["actor"] = "@worker:test"
+    assert receive(packet, sender="@worker:test")

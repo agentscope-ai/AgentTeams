@@ -152,6 +152,19 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "additionalProperties": True,
                     "description": "Original requester route supplied by the runtime; preserve it across handoffs.",
                 },
+                "tasks": {
+                    "type": "array",
+                    "description": "For Manager-to-Leader handoff, register each original main Task before delivery. Pass an array, not serialized JSON; preserve taskId, title and complete spec.",
+                    "items": {
+                        "type": "object",
+                        "required": ["taskId", "title", "spec"],
+                        "properties": {
+                            "taskId": {"type": "string"},
+                            "title": {"type": "string"},
+                            "spec": {"type": "string"},
+                        },
+                    },
+                },
                 "dryRun": {
                     "type": "boolean",
                     "description": "Return the resolved payload without sending.",
@@ -585,6 +598,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "summary": {
                     "type": "string",
                     "description": "Required non-blank result summary for submit_task, including when resultMarkdown is supplied.",
+                },
+                "report": {
+                    "type": "string",
+                    "description": "Required verified final report text for complete_task; saves the main Task result and notifies the requester.",
                 },
                 "resultMarkdown": {
                     "type": "string",

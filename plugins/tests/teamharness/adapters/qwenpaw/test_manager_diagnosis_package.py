@@ -34,6 +34,12 @@ def test_packaged_manager_and_leader_can_load_shared_diagnosis(tmp_path, monkeyp
     assert not (manager_root / "task-execution").exists()
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "leader")
     assert (plugin._skill_dir() / "task-diagnosis/SKILL.md").read_bytes() == expected
+    leader = (source / "prompts/agent/leader.md").read_text().strip()
+    assert leader in plugin._team_prompt(None)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "team_leader")
+    assert leader in plugin._team_prompt(None)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    assert (source / "prompts/agent/worker.md").read_text().strip() in plugin._team_prompt(None)
 
 
 @pytest.mark.parametrize("target", ["build-agentteams-controller", "push-agentteams-controller"])
@@ -58,6 +64,21 @@ if sys.argv[1:2] == ['build'] or sys.argv[1:3] == ['buildx', 'build']:
     assert skill == Path('plugins/teamharness/skills/agent/task-diagnosis/SKILL.md').read_bytes()
     assert b'agt monitoring' in skill and b'agt logs' in skill
     assert (root / 'resource-management/SKILL.md').is_file()
+    leader = Path('agentteams-controller/agent/team-leader-agent')
+    public = Path('plugins/teamharness')
+    assert (leader / 'AGENTS.md').read_bytes() == (public / 'prompts/agent/leader.md').read_bytes()
+    for group, names in {
+        'team': ['communication', 'file-sharing', 'roomflow', 'team-coordination',
+                 'project-management', 'task-delegation', 'task-management', 'organization'],
+        'agent': ['task-diagnosis', 'mcporter', 'find-skills'],
+    }.items():
+        for name in names:
+            assert (leader / 'skills' / name / 'SKILL.md').read_bytes() == (public / 'skills' / group / name / 'SKILL.md').read_bytes()
+    assert b'External work starts as a Project.' not in (leader / 'AGENTS.md').read_bytes()
+    for template in ['worker-agent', 'hermes-worker-agent', 'copaw-worker-agent']:
+        worker = Path('agentteams-controller/agent') / template
+        assert (worker / 'AGENTS.md').read_bytes() == (public / 'prompts/agent/worker.md').read_bytes()
+        assert (worker / 'skills/task-execution/SKILL.md').read_bytes() == (public / 'skills/team/task-execution/SKILL.md').read_bytes()
     Path('context-verified').write_text('ok')
 """)
     docker.chmod(0o755)
@@ -65,3 +86,16 @@ if sys.argv[1:2] == ['build'] or sys.argv[1:3] == ['buildx', 'build']:
                    env={**os.environ, "PATH": str(binary) + os.pathsep + os.environ["PATH"]},
                    capture_output=True, text=True, check=True)
     assert (tmp_path / "context-verified").read_text() == "ok"
+
+
+def test_embedded_uses_the_assembled_controller_leader_assets():
+    dockerfile = (ROOT / "agentteams-controller/Dockerfile.embedded").read_text()
+    for template in ["team-leader-agent", "worker-agent", "hermes-worker-agent", "copaw-worker-agent"]:
+        assert f"COPY --from=agentteams-controller /opt/agentteams/agent/{template}/ /opt/agentteams/agent/{template}/" in dockerfile
+        assert f"COPY manager/agent/{template}/" not in dockerfile
+
+
+def test_retired_leader_business_copies_are_not_maintained():
+    legacy = ROOT / "manager/agent/team-leader-agent"
+    assert not (legacy / "AGENTS.md").exists()
+    assert not (legacy / "skills").exists()

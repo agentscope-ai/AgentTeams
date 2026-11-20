@@ -562,7 +562,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         }[status]
         try:
             await self._room_send_with_retry(room_id, "m.room.message", {
-                "msgtype": "m.notice", "body": text,
+                "msgtype": "m.notice", "body": text, "org.agentteams.progress_only": True,
                 DIRECT_EXECUTION_KEY: {
                     "run_id": run_id, "status": status,
                     "capabilities": ["stop", "steer"],
@@ -852,6 +852,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 return meta["message_session_id"]
             if meta.get("task_execution"):
                 return meta["task_session_id"]
+            if meta.get("teamharness_completion_session"):
+                return meta["teamharness_completion_session"]
             room_id = meta.get("room_id")
             if room_id:
                 return f"matrix:{room_id}"
@@ -3900,6 +3902,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 "otel_received_at_ns": time.time_ns(),
             },
         }
+        workflow = payload["meta"]["teamharness_workflow"]
+        if isinstance(workflow, dict) and workflow.get("type") in {"MAIN_TASK_COMPLETED", "PROJECT_COMPLETED"}:
+            # Keep the completion's routing metadata separate from attachments.
+            payload["meta"]["teamharness_completion_session"] = f"coordination-report:{room_id}:{event.event_id}"
         if teamharness_self_trigger is not None:
             payload["meta"].update(
                 {
@@ -4353,7 +4359,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             meta.setdefault("otel_delivery", {})
         sender_id = native_payload.get("sender_id", "")
         room_id = meta.get("room_id", sender_id)
-        session_id = meta.get("message_session_id") or meta.get("task_session_id") or f"matrix:{room_id}"
+        session_id = meta.get("message_session_id") or meta.get("task_session_id") or meta.get("teamharness_completion_session") or f"matrix:{room_id}"
 
         # content_parts are already ContentType objects (from both
         # _on_room_event and _on_room_media_event); filter out None.
@@ -4794,6 +4800,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         *,
         msgtype: str = "m.notice",
         html: Optional[str] = None,
+        progress_only: bool = False,
     ) -> None:
         if not event_id or not self._client:
             return
@@ -4810,6 +4817,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
             "m.new_content": new_content,
             "m.relates_to": {"rel_type": "m.replace", "event_id": event_id},
         }
+        if progress_only:
+            content["org.agentteams.progress_only"] = True
+            new_content["org.agentteams.progress_only"] = True
         # Propagate m.mentions to the outer event — MSC3952 requires it on
         # the replacement event for notification delivery.
         if "m.mentions" in new_content:
@@ -5259,6 +5269,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             text,
             msgtype=msgtype,
             html=html,
+            progress_only=msgtype == "m.notice" or bool(send_meta.get("teamharness_matrix_coordination")),
         )
 
     # ------------------------------------------------------------------

@@ -65,7 +65,7 @@ The supported Manager Harnesses use their Worker image and entrypoint for Manage
 
 ## `manager/agent/` layout (legacy Manager assets and current member templates)
 
-Shared Manager role content lives under `plugins/teamharness/prompts/manager/` and `plugins/teamharness/skills/manager/`. Controller builds package this content into `manager-agent/` for Harnesses that use file-based role prompts. The tree under `manager/agent/` retains Worker/Leader templates and legacy installer assets.
+Shared Manager, Leader and Worker role content lives under `plugins/teamharness/prompts/` and `plugins/teamharness/skills/`. `make stage-agent-assets` assembles those role bundles for Controller images, including the native Worker Task lifecycle in each compatibility template. The embedded image reuses the assembled role bundles. Do not restore separate Leader business prompts or skills under `manager/agent/`; that tree retains compatibility templates, Leader identity and legacy installer assets.
 
 ```
 manager/agent/
@@ -82,7 +82,7 @@ manager/agent/
 ├── worker-agent/                # Builtin OpenClaw Worker workspace template
 ├── copaw-worker-agent/          # Builtin CoPaw Worker workspace template
 ├── hermes-worker-agent/         # Builtin Hermes Worker workspace template
-├── team-leader-agent/           # Team Leader agent template (Teams feature)
+├── team-leader-agent/           # Leader identity template; prompts/skills assembled from TeamHarness
 └── worker-skills/               # Extra worker skill templates (e.g. GitHub) pushed on demand
 ```
 

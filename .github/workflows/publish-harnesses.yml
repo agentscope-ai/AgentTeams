@@ -11,17 +11,31 @@ on:
         description: 'Publish final version tags after building and smoke-testing staging images'
         type: boolean
         default: true
+      controller_image:
+        description: 'Optional immutable shared CLI image; reuse requires identical Controller source'
+        type: string
+        default: ''
+      runtime:
+        description: 'Build only one runtime when recovering a failed platform'
+        type: choice
+        default: all
+        options: [all, openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
+      architecture:
+        description: 'Build only one architecture; partial builds require publish=false'
+        type: choice
+        default: all
+        options: [all, amd64, arm64]
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-harnesses-${{ inputs.version }}
+  group: publish-harnesses-${{ inputs.version }}-${{ inputs.runtime || 'all' }}-${{ inputs.architecture || 'all' }}
   cancel-in-progress: false
 
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
-  CODEX_REF: 426bfdd7b0d2eade599afcc166baf1771367d937
+  CODEX_REF: ee52e164a5df240670a8bdd1200834253b2c097b
 
 jobs:
   prepare:
@@ -29,13 +43,27 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       candidate: ${{ steps.meta.outputs.candidate }}
+      runtimes: ${{ steps.meta.outputs.runtimes }}
+      architectures: ${{ steps.meta.outputs.architectures }}
     steps:
       - name: Freeze publication identity
         id: meta
         env:
           VERSION: ${{ inputs.version }}
+          RUNTIME: ${{ inputs.runtime || 'all' }}
+          ARCHITECTURE: ${{ inputs.architecture || 'all' }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          [[ "$RUNTIME" =~ ^(all|openclaw|qwenpaw|hermes|deepseek|openhuman|codex)$ ]] || exit 1
+          [[ "$ARCHITECTURE" =~ ^(all|amd64|arm64)$ ]] || exit 1
+          [[ "$PUBLISH" != true || "$ARCHITECTURE" == all ]] || exit 1
+          runtimes='["openclaw","qwenpaw","hermes","deepseek","openhuman","codex"]'
+          architectures='["amd64","arm64"]'
+          if [[ "$RUNTIME" != all ]]; then runtimes="[\"$RUNTIME\"]"; fi
+          if [[ "$ARCHITECTURE" != all ]]; then architectures="[\"$ARCHITECTURE\"]"; fi
+          echo "runtimes=$runtimes" >> "$GITHUB_OUTPUT"
+          echo "architectures=$architectures" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "candidate=harness-${VERSION}-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
 
@@ -53,6 +81,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -63,10 +93,20 @@ jobs:
         env:
           CANDIDATE: ${{ needs.prepare.outputs.candidate }}
           ARCH: ${{ matrix.arch }}
+          REUSE_CONTROLLER: ${{ inputs.controller_image }}
         run: |
           image="${REGISTRY}/agentteams/agentteams-controller:${CANDIDATE}-${ARCH}"
-          make build-agentteams-controller LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \
-            DOCKER_BUILD_ARGS="--label org.opencontainers.image.revision=${GITHUB_SHA}"
+          if [[ -n "$REUSE_CONTROLLER" ]]; then
+            [[ "$REUSE_CONTROLLER" =~ ^higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller@sha256:[a-f0-9]{64}$ ]]
+            docker pull --platform "linux/$ARCH" "$REUSE_CONTROLLER"
+            revision=$(docker inspect "$REUSE_CONTROLLER" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+            [[ "$revision" =~ ^[a-f0-9]{40}$ ]]
+            git diff --exit-code "$revision" HEAD -- agentteams-controller manager/agent
+            docker tag "$REUSE_CONTROLLER" "$image"
+          else
+            make build-agentteams-controller LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \
+              DOCKER_BUILD_ARGS="--label org.opencontainers.image.revision=${GITHUB_SHA}"
+          fi
           docker run --rm --entrypoint agt "$image" tracing --help
           docker push "$image"
 
@@ -85,22 +125,16 @@ jobs:
           CANDIDATE: ${{ needs.prepare.outputs.candidate }}
         run: |
           image="${REGISTRY}/agentteams/agentteams-controller:${CANDIDATE}"
-          docker buildx imagetools create --annotation "index:org.opencontainers.image.revision=$GITHUB_SHA" \
-            -t "$image" "${image}-amd64" "${image}-arm64"
+          docker buildx imagetools create -t "$image" "${image}-amd64" "${image}-arm64"
 
   harness-platform:
     needs: [prepare, controller-index]
     strategy:
       fail-fast: false
       matrix:
-        runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
-        arch: [amd64, arm64]
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+        runtime: ${{ fromJSON(needs.prepare.outputs.runtimes) }}
+        arch: ${{ fromJSON(needs.prepare.outputs.architectures) }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
@@ -138,7 +172,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runtime: [openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
+        runtime: ${{ fromJSON(needs.prepare.outputs.runtimes) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

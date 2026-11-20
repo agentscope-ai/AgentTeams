@@ -10,7 +10,23 @@ MCP server natively (including QwenPaw), call that native tool directly. Your
 Controller synchronizes assigned MCP servers into your runtime; you do not need
 to create a separate CLI configuration or copy gateway credentials.
 
-Use `mcporter` only when your workspace already has `./config/mcporter.json`.
+## Bundled TeamHarness tools
+
+If your native tool list does not expose TeamHarness but your image contains
+`/opt/agentteams/plugins/teamharness/mcp/server.py`, use that bundled MCP server
+through the supported stdio client. This does not need an external MCP config:
+
+```bash
+mcporter list --stdio python3 --stdio-arg /opt/agentteams/plugins/teamharness/mcp/server.py --json
+mcporter call --stdio python3 --stdio-arg /opt/agentteams/plugins/teamharness/mcp/server.py health --output json
+mcporter call --stdio python3 --stdio-arg /opt/agentteams/plugins/teamharness/mcp/server.py taskflow --args '{"action":"check_task","payload":{"taskId":"your-assigned-task"}}'
+```
+
+Use the discovered taskflow schema for start/ACK/submit/accept/complete actions.
+Your runtime supplies its scope and credentials; do not import implementation
+modules or create credentials to bypass MCP.
+
+For other configured servers, use `mcporter` when your workspace already has `./config/mcporter.json`.
 An empty mcporter list does not mean a native MCP server is missing. If a newly
 assigned native tool is not visible yet, report that runtime synchronization is
 pending and retry on the next turn; do not extract credentials or invent config.

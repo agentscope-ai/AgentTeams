@@ -899,3 +899,17 @@ func slicesEqual(a, b []string) bool {
 	}
 	return true
 }
+
+func TestCodexDockerRetainsNativeSandboxNamespaceSupport(t *testing.T) {
+	d := &DockerBackend{}
+	for _, runtime := range []string{RuntimeCodex, RuntimeOpenClaw, RuntimeHermes, RuntimeQwenPaw, RuntimeDeepSeekHarness, RuntimeOpenHuman} {
+		p := d.buildCreatePayload(CreateRequest{Runtime: runtime}, "", 0)
+		var options []string
+		if p.HostConfig != nil {
+			options = p.HostConfig.SecurityOpt
+		}
+		if got := containsString(options, "seccomp=unconfined"); got != (runtime == RuntimeCodex) {
+			t.Fatalf("runtime %s: nested native sandbox namespace support=%v", runtime, got)
+		}
+	}
+}

@@ -28,7 +28,7 @@ elif [ "${TEST_WORKER_RUNTIME}" = "qwenpaw" ]; then
     BUILTIN_SKILLS=(communication file-sharing team-coordination project-management task-delegation task-execution mcporter)
     FILE_SHARING_SKILL="file-sharing"
 else
-    BUILTIN_CONTENT_SENTINEL="Every Session"
+    BUILTIN_CONTENT_SENTINEL="Assigned Task Lifecycle"
     BUILTIN_SKILLS=(file-sync task-progress mcporter find-skills project-participation)
     FILE_SHARING_SKILL="file-sync"
 fi

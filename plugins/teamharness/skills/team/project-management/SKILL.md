@@ -63,9 +63,10 @@ exact submission, and call `taskflow accept_task_result` with
 never unlocks dependencies. The task system dispatches newly ready subtasks
 only after your acceptance. Preserve independent QA and required boundary checks.
 
-With Controller coordination enabled, wait for `main_task_ready`. Without that
-transport, the final acceptance receipt returns `mainTaskReady` and `nextAction`;
-use that receipt directly instead of waiting for a callback. Then verify the whole original request using accepted results,
+When the final acceptance receipt returns `mainTaskReady` and `nextAction`,
+continue from that authoritative receipt directly; do not wait for another
+callback merely to repeat it. Otherwise resume on `main_task_ready`. Verify the
+whole original request using accepted results,
 then call `taskflow complete_task` with `{taskId, report}`. This saves the final
 report under `shared/tasks/{main-task-id}/result.md`, completes only that main
 Task and notifies its original source. Do not repeat testing or write accepted

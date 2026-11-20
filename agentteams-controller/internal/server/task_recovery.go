@@ -184,6 +184,12 @@ func (h *TaskRecoveryHandler) owns(ctx context.Context, caller *authpkg.CallerId
 }
 
 func recoveryStatus(task map[string]json.RawMessage) bool {
+	// A main Task belongs to Leader coordination, never Worker execution.
+	var kind string
+	_ = json.Unmarshal(task["task_kind"], &kind)
+	if kind == "main" {
+		return false
+	}
 	var status string
 	_ = json.Unmarshal(task["status"], &status)
 	if status == "assigned" || status == "in_progress" {

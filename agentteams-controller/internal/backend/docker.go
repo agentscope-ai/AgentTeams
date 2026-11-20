@@ -915,6 +915,11 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 		NetworkMode: req.Network,
 		ExtraHosts:  req.ExtraHosts,
 	}
+	if ResolveRuntime(req.Runtime, req.RuntimeFallback) == RuntimeCodex {
+		// Codex's native bubblewrap sandbox needs unprivileged user namespaces;
+		// Docker's default seccomp blocks them before any command can run.
+		hc.SecurityOpt = []string{"seccomp=unconfined"}
+	}
 
 	// Bind mounts
 	for _, v := range req.Volumes {
@@ -962,7 +967,7 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 	}
 
 	if hc.NetworkMode != "" || len(hc.ExtraHosts) > 0 || len(hc.PortBindings) > 0 ||
-		len(hc.Binds) > 0 || hc.RestartPolicy != nil {
+		len(hc.Binds) > 0 || hc.RestartPolicy != nil || len(hc.SecurityOpt) > 0 {
 		p.HostConfig = hc
 	}
 

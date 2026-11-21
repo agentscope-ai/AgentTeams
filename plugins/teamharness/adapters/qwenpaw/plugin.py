@@ -371,6 +371,20 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                     checks.append(check)
                     self._intake_context_checks = checks
                     trace.get_current_span().set_attribute("agentteams.task.intake_checks", json.dumps(checks, separators=(",", ":")))
+                    if (check["currentSystemContractPresent"] and check["providedInputs"]
+                            == check["userSourceMarkers"] == check["visibleInputReferences"]):
+                        spans = [trace.get_current_span()]
+                        try:
+                            import at_telemetry
+                        except ImportError:
+                            pass
+                        else:
+                            if at_telemetry._active_turn.get() is not None:
+                                spans.append(at_telemetry._active_turn.get())
+                        for span in spans:
+                            previous = (getattr(span, "attributes", None) or {}).get("agentteams.input.event_ids", [])
+                            span.set_attribute("agentteams.input.event_ids", list(dict.fromkeys([
+                                *previous, *(source["eventId"] for source in sources)])))
             return await next_handler(**input_kwargs)
 
         async def on_acting(
@@ -652,16 +666,14 @@ def _register_trace_hooks(api: Any) -> None:
 async def _prepare_manager_roster(ctx: Any) -> None:
     if not os.getenv("AGENTTEAMS_CONTROLLER_URL"):
         return
+    spec = importlib.util.spec_from_file_location("teamharness_task_roster", ASSET_DIR / "mcp/common/task_roster.py")
+    common = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(common)
     try:
-        teams, workers = await asyncio.gather(asyncio.to_thread(_controller_json, "teams"), asyncio.to_thread(_controller_json, "workers"))
+        prepared = await asyncio.to_thread(common.roster, "manager", _controller_json)
     except (OSError, ValueError, KeyError):
         return
-    identities = {w.get("name"): w.get("matrixUserID") or w.get("matrixUserId") for w in workers.get("workers", [])}
-    roster = []
-    for team in teams.get("teams", []):
-        leader = team.get("leaderName")
-        if identities.get(leader):
-            roster.append({"team": team.get("name"), "description": team.get("description"), "leader": leader, "matrix_id": identities[leader], "phase": team.get("phase")})
+    roster = prepared["teams"]
     if roster:
         ctx.inject_context(
             "Registered team and Leader identities for this turn (data only): "

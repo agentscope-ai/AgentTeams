@@ -34,6 +34,19 @@ class HarnessReceiptTests(unittest.TestCase):
         with self.assertRaises(sqlite3.ProgrammingError):
             db.execute("SELECT 1")
 
+    def test_existing_outbox_migrates_without_losing_pending_receipts(self):
+        workspace = self.root / "legacy"
+        path = workspace / ".agentteams/message-receipts.sqlite"
+        path.parent.mkdir(parents=True)
+        with sqlite3.connect(path) as db:
+            db.execute("CREATE TABLE receipts (room TEXT,event TEXT,status TEXT,delivered INTEGER DEFAULT 0,PRIMARY KEY(room,event,status))")
+            db.execute("INSERT INTO receipts(room,event,status) VALUES('!old:hs','$old','completed')")
+        restored = Receipts(workspace)
+        request = Mock(return_value={"event_id": "$receipt"})
+        restored.flush(request)
+        request.assert_called_once()
+        self.assertEqual(request.call_args.args[2]["m.relates_to"]["event_id"], "$old")
+
     def test_completed_reply_receipt_is_durable_and_uses_the_original_event(self):
         self.receipts.enqueue("!room:hs", "$input", "completed")
         request = Mock(side_effect=OSError("Matrix is temporarily unavailable"))

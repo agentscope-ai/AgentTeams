@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 import hashlib
 import json
 import os
@@ -25,23 +25,30 @@ class Receipts:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS receipts (
                     room TEXT NOT NULL, event TEXT NOT NULL, status TEXT NOT NULL,
-                    delivered INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(room,event,status));
+                    delivered INTEGER NOT NULL DEFAULT 0, trace_context TEXT,
+                    PRIMARY KEY(room,event,status));
                 CREATE TABLE IF NOT EXISTS committed (event TEXT PRIMARY KEY);
                 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
                 CREATE TABLE IF NOT EXISTS sources (
                     anchor TEXT NOT NULL, event TEXT NOT NULL, PRIMARY KEY(anchor,event));
             """)
+            db.execute("BEGIN IMMEDIATE")
+            if "trace_context" not in {row[1] for row in db.execute("PRAGMA table_info(receipts)")}:
+                db.execute("ALTER TABLE receipts ADD COLUMN trace_context TEXT")
 
     @contextmanager
     def connect(self):
         with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
             yield db
 
-    def enqueue(self, room, event, status="read"):
+    def enqueue(self, room, event, status="read", *, trace_context=None):
         if not room.startswith("!") or not event.startswith("$") or status not in {"read", "received", "completed"}:
             return
         with self.connect() as db:
-            db.execute("INSERT OR IGNORE INTO receipts(room,event,status) VALUES(?,?,?)", (room, event, status))
+            encoded = json.dumps(trace_context) if trace_context else None
+            db.execute("""INSERT INTO receipts(room,event,status,trace_context) VALUES(?,?,?,?)
+                ON CONFLICT(room,event,status) DO UPDATE
+                SET trace_context=COALESCE(receipts.trace_context,excluded.trace_context)""", (room, event, status, encoded))
             if status == "received" and db.execute("SELECT 1 FROM committed WHERE event=?", (event,)).fetchone():
                 db.execute("INSERT OR IGNORE INTO receipts(room,event,status) VALUES(?,?,'read')", (room, event))
 
@@ -64,12 +71,21 @@ class Receipts:
 
     def flush(self, request):
         with self.connect() as db:
-            pending = db.execute("SELECT room,event,status FROM receipts WHERE delivered=0").fetchall()
-        for room, event, status in pending:
+            pending = db.execute("SELECT room,event,status,trace_context FROM receipts WHERE delivered=0").fetchall()
+        for room, event, status, stored in pending:
             txn = hashlib.sha256(json.dumps([room, event, status]).encode()).hexdigest()
             try:
-                request("PUT", f"/_matrix/client/v3/rooms/{quote(room, safe='')}/send/{RECEIPT_TYPE}/{txn}",
-                        {"version": 1, "status": status, "m.relates_to": {"rel_type": RECEIPT_TYPE, "event_id": event}})
+                scope = nullcontext()
+                if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in {"true", "1"}:
+                    try:
+                        from at_trace_transport import reply_context
+                    except ImportError:
+                        pass
+                    else:
+                        scope = reply_context(json.loads(stored) if stored else {}, detach_if_missing=True)
+                with scope:
+                    request("PUT", f"/_matrix/client/v3/rooms/{quote(room, safe='')}/send/{RECEIPT_TYPE}/{txn}",
+                            {"version": 1, "status": status, "m.relates_to": {"rel_type": RECEIPT_TYPE, "event_id": event}})
             except Exception:
                 continue
             with self.connect() as db:

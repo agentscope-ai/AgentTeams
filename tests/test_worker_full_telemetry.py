@@ -279,6 +279,44 @@ def test_matrix_carrier_links_workers_without_reusing_session(monkeypatch):
     assert telemetry._correlation.get() == {}
 
 
+def test_delayed_receipt_preserves_origin_trace_across_failure_and_restart(monkeypatch, tmp_path):
+    from at_trace_transport import remember_reply
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'shared/lib'))
+    from agentteams_receipts import Receipts
+    monkeypatch.setenv('AGENTTEAMS_OTEL_ENABLED', 'true')
+    provider = TracerProvider()
+    turn = provider.get_tracer('fixture').start_span('actual model turn')
+    metadata = {'otel_delivery': {}}
+    remember_reply(turn, {'agentteams.turn.id': 'actual-turn'}, metadata)
+    turn.end()
+    outbox = Receipts(tmp_path)
+    outbox.enqueue('!room:test', '$input', 'completed', trace_context=metadata['otel_delivery'])
+    seen = []
+    def failed(*args):
+        seen.append((args, trace.get_current_span().get_span_context().trace_id))
+        raise OSError('own synthetic transport failure')
+    with provider.get_tracer('fixture').start_as_current_span('unrelated configuration request') as ambient:
+        outbox.flush(failed)
+        Receipts(tmp_path).flush(lambda *args: seen.append((args, trace.get_current_span().get_span_context().trace_id)))
+        assert trace.get_current_span().get_span_context().trace_id == ambient.get_span_context().trace_id
+    assert len(seen) == 2 and seen[0] == seen[1]
+    assert seen[0][1] == turn.get_span_context().trace_id
+
+
+def test_receipt_without_origin_does_not_inherit_background_request(monkeypatch, tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'shared/lib'))
+    from agentteams_receipts import Receipts
+    monkeypatch.setenv('AGENTTEAMS_OTEL_ENABLED', 'true')
+    outbox = Receipts(tmp_path)
+    outbox.enqueue('!room:test', '$input', 'read')
+    provider = TracerProvider()
+    seen = []
+    with provider.get_tracer('fixture').start_as_current_span('unrelated configuration request') as ambient:
+        outbox.flush(lambda *args: seen.append(trace.get_current_span().get_span_context().is_valid))
+        assert trace.get_current_span().get_span_context().trace_id == ambient.get_span_context().trace_id
+    assert seen == [False]
+
+
 def test_export_normalizes_returned_tool_error_and_redacts(monkeypatch):
     exporter = InMemorySpanExporter()
     provider = TracerProvider()

@@ -102,7 +102,17 @@ class NativeIntakePromptTest(unittest.TestCase):
                     self.assertEqual(check["providedInputs"], check["visibleInputReferences"])
                     self.assertNotIn(hidden, encoded)
                     self.assertNotIn("$synthetic", encoded)
-                forward.assert_awaited_once_with(**arguments)
+                    self.assertEqual(list(span.attributes["agentteams.input.event_ids"]), ["$synthetic"])
+                    # A registered input without its actual model marker/ref
+                    # must not be claimed as admitted by this model call.
+                    extra = plugin._creation_sources.set([source, {"inputId": "input-absent", "eventId": "$absent"}])
+                    try:
+                        await middleware.on_model_call(None, arguments, forward)
+                        self.assertEqual(list(span.attributes["agentteams.input.event_ids"]), ["$synthetic"])
+                    finally:
+                        plugin._creation_sources.reset(extra)
+                self.assertEqual(forward.await_count, 2)
+                forward.assert_awaited_with(**arguments)
             finally:
                 plugin._creation_sources.reset(token)
                 provider.shutdown()

@@ -225,8 +225,13 @@ def turn_fields(session_id, *, user_id="", metadata=None):
             fields["agentteams.message.received_at_ns"] = value
         if key == "execution_generation" and isinstance(value, int):
             fields["agentteams.execution.generation"] = value
-        if key in ("room_id", "task_id", "team_id", "project_id", "event_id") and value:
+        if key in ("room_id", "task_id", "team_id", "project_id", "event_id", "coordination_id") and value:
             fields[f"agentteams.{key[:-3] if key.endswith('_id') else key}.id"] = str(value)
+    coordination = (metadata or {}).get("teamharness_coordination")
+    if isinstance(coordination, dict) and coordination.get("id"):
+        fields["agentteams.coordination.id"] = str(coordination["id"])
+        if coordination.get("kind"):
+            fields["agentteams.coordination.kind"] = str(coordination["kind"])
     received = fields.get("agentteams.message.received_at_ns")
     if received:
         fields["agentteams.message.dispatch_delay_ms"] = max(0, (time.time_ns() - int(received)) / 1_000_000)

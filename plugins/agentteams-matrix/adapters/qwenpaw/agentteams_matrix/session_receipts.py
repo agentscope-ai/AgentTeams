@@ -62,9 +62,9 @@ class SessionReceipts:
                 self.pending[key].append(pending)
         self.wakeup.set()
 
-    async def complete(self, room_id, event_id):
+    async def complete(self, room_id, event_id, *, trace_context=None):
         if self._manager_outbox:
-            await asyncio.to_thread(self._manager_outbox.enqueue, room_id, event_id, "completed")
+            await asyncio.to_thread(self._manager_outbox.enqueue, room_id, event_id, "completed", trace_context=trace_context)
             self.wakeup.set()
 
     async def flush(self):

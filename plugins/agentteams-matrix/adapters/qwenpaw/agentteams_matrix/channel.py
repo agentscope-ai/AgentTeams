@@ -18,6 +18,7 @@ import sys
 import time
 import urllib.parse
 from contextvars import ContextVar
+from functools import wraps
 from uuid import uuid4
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -432,6 +433,22 @@ class _LegacySyncTokenStore:
             "the QwenPaw channel does not persist per-(room, sender) "
             "session keys"
         )
+
+
+def _with_trace_reply(method):
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in {"true", "1"}:
+            try:
+                from at_trace_transport import reply_context
+            except ImportError:
+                pass
+            else:
+                meta = kwargs.get("send_meta") or kwargs.get("meta") or (args[2] if len(args) > 2 else None)
+                with reply_context(meta):
+                    return await method(self, *args, **kwargs)
+        return await method(self, *args, **kwargs)
+    return wrapped
 
 
 class AgentTeamsMatrixChannel(BaseChannel):
@@ -3615,6 +3632,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
     def build_agent_request_from_native(self, native_payload: Any) -> Any:
         parts = native_payload.get("content_parts", [])
         meta = native_payload.get("meta", {})
+        if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in {"true", "1"}:
+            meta.setdefault("otel_delivery", {})
         sender_id = native_payload.get("sender_id", "")
         room_id = meta.get("room_id", sender_id)
         session_id = meta.get("message_session_id") or meta.get("task_session_id") or meta.get("teamharness_completion_session") or (meta.get("teamharness_coordination_session", f"matrix:{room_id}") if meta.get("teamharness_matrix_coordination") else f"matrix:{room_id}")
@@ -5020,6 +5039,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             await self._send_typing(room_id, True)
             self._enqueue(payload)
 
+    @_with_trace_reply
     async def _on_process_completed(
         self,
         request: Any,
@@ -5068,7 +5088,10 @@ class AgentTeamsMatrixChannel(BaseChannel):
             finally:
                 _MANAGER_FINAL_DELIVERY.reset(token)
             if any(kind == "m.text" for kind, _ in outcomes) and all(ok for _, ok in outcomes):
-                await receipts.complete(room, source)
+                request_meta = getattr(request, "channel_meta", None) or {}
+                sources = request_meta.get("session_source_event_ids") or send_meta.get("session_source_event_ids") or [source]
+                for identity in dict.fromkeys(sources):
+                    await receipts.complete(room, identity, trace_context=send_meta.get("otel_delivery"))
 
         if is_placeholder:
             if streaming_final_text:
@@ -5390,6 +5413,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
     # Markdown→HTML (formatted_body); m.mentions when meta has sender_id.
     # ------------------------------------------------------------------
 
+    @_with_trace_reply
     async def send(
         self,
         to_handle: str,

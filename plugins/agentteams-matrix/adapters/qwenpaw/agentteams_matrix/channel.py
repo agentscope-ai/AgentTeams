@@ -566,6 +566,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 DIRECT_EXECUTION_KEY: {
                     "run_id": run_id, "status": status,
                     "capabilities": ["stop", "steer"],
+                    "steering_mode": "restart",
                     **({"message_id": message_id} if message_id else {}),
                 },
             })

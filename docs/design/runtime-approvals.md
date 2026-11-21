@@ -36,7 +36,7 @@ accepted it or that the tool completed.
 | QwenPaw 2.2.2.post1 | Native ApprovalService future and command handler | Native `/approval approve ID` or `/approval deny ID` |
 | Hermes v0.23.0 | Native gateway approval queue and settle observer | Request-bound `/agentteams-approval` control |
 | DeepSeek 0.1.1-rc.2 | Native ApprovalService answerer and committed audit event | Request-bound `/agentteams-approval` control |
-| OpenHuman v0.54.0 | Native tool-call loop, task-local Matrix approval context and one-shot waiter | Request-bound `/agentteams-approval` control |
+| OpenHuman v0.57.18 | Native ApprovalGate, turn-scoped Matrix event surface and one-shot waiter | Request-bound `/agentteams-approval` control |
 | Codex 0.143.0 | Native App Server command/file approval RPC | Native `/approve ID CONTEXT` or `/reject ID CONTEXT` |
 
 Transport commands are sent by card buttons and rendered as compact activity,
@@ -46,9 +46,9 @@ checks. Unknown, stale or mismatched controls cannot grant another request.
 
 OpenClaw and OpenHuman patches are applied against the pinned upstream sources
 during image builds. Revalidate those patches and native tests when changing the
-pins. OpenHuman's channel dispatch previously passed no ApprovalManager and its
-non-CLI loop auto-approved configured requests; Matrix turns now use the actual
-autonomy configuration and wait before tool execution. Cancellation drops the
+pins. OpenHuman's Matrix turns register a turn-scoped approval surface with the
+native ApprovalGate, use the actual autonomy configuration and wait before tool
+execution. Cancellation drops the
 waiter and sends a cancellation receipt. Existing permission defaults are not
 changed by these adapters.
 

@@ -27,6 +27,16 @@ def test_source_references_reuse_the_public_canonical_identity(bridge):
         bridge.invoke({'operation': 'sources', 'meta': {'event_id': '$unbound'}})
 
 
+def test_json_roster_uses_trusted_native_team_scope_once(bridge):
+    calls = []
+    def get(route):
+        calls.append(route)
+        return {'name': 'alpha', 'members': [{'name': 'dev', 'role': 'worker', 'matrixUserID': '@dev:test'}]}
+    result = bridge.invoke({'operation': 'roster', 'role': 'leader', 'team': 'alpha'}, get_json=get)
+    assert calls == ['teams/alpha']
+    assert result['members'][0]['name'] == 'dev'
+
+
 def test_only_pre_call_validation_is_proven_to_have_no_effect(bridge):
     payload = {'operation': 'task', 'arguments': {'action': 'submit', 'taskId': 'foreign', 'summary': 'done'},
                'context': {'role': 'worker', 'execution': 'own'}}

@@ -15,12 +15,13 @@ import sys
 import urllib.request
 
 if __package__:
-    from . import phase_recovery, task_cli, task_context, task_receipt as receipts
+    from . import phase_recovery, task_cli, task_context, task_roster, task_receipt as receipts
 else:
     import task_cli
     import task_context
     import task_receipt as receipts
     import phase_recovery
+    import task_roster
 
 
 def controller_json(route):
@@ -47,6 +48,8 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         raise ValueError("native bridge request must be an object")
     call = call or task_cli.run
     operation = payload.get("operation")
+    if operation == "roster":
+        return task_roster.roster(native_role(payload.get("role")), get_json or controller_json, payload.get("team"))
     if operation == "admit_event":
         event, native, action = payload.get("eventId"), payload.get("nativeEventId"), payload.get("action", "begin")
         if (not isinstance(event, str) or not re.fullmatch(r"[0-9a-f]{32}", event)

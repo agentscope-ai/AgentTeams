@@ -248,8 +248,9 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             task_id, root, assignee, delegation = self._task_scope
             try:
                 from qwenpaw_worker.cleanup_policy import is_private_cleanup
+                from qwenpaw.config.context import get_tool_base_dir
                 plain = re.sub(r"^export QWENPAW_SESSION_ID='[^'\r\n]*' && ", "", command, count=1)
-                base = Path(cwd) if cwd else None
+                base = (get_tool_base_dir() / Path(cwd)).resolve() if cwd else get_tool_base_dir()
                 words = shlex.split(plain)
                 pattern_cleanup = False
                 if words and words[0] in {"mv", "/bin/mv", "/usr/bin/mv"}:
@@ -710,6 +711,24 @@ async def _prepare_task_context(ctx: Any, action: str, task_id: str) -> dict[str
     return result
 
 
+def _bind_public_task_io(ctx: Any, prepared: dict) -> None:
+    from qwenpaw.config import context
+    from qwenpaw.services.project_directory import ResolvedProjectDir
+
+    root = prepared["ack"][1]
+    output = Path(prepared["context"]["outputDirectory"]).resolve()
+    values = ((context.current_project_dir, output),
+              (context.current_project_dirs, (ResolvedProjectDir(output), ResolvedProjectDir(root / "inputs"))),
+              (context.current_project_dir_source, "request"))
+    for variable, value in values:
+        ctx.extras.setdefault("task_io_tokens", []).append((variable, variable.set(value)))
+
+
+def _reset_public_task_io(ctx: Any) -> None:
+    for variable, token in reversed(ctx.extras.pop("task_io_tokens", [])):
+        variable.reset(token)
+
+
 async def _prepare_public_task_event(ctx: Any, event: dict) -> None:
     """Bind a verified common-protocol event to the native public tool/context."""
     kind = event.get("kind")
@@ -722,6 +741,8 @@ async def _prepare_public_task_event(ctx: Any, event: dict) -> None:
         if (_phase_retry.get() or {}).get("failed"):
             return
         prepared = common.prepare(kind, event, result)
+        if kind == "task_assigned":
+            _bind_public_task_io(ctx, prepared)
         for field, variable in (("execution", _execution_task), ("ack", _ack_scope), ("review", _review_task), ("completion", _completion_task)):
             if field in prepared:
                 key = {"execution": "execution_task_token", "ack": "ack_scope_token", "review": "review_task_token", "completion": "completion_task_token"}[field]
@@ -1029,6 +1050,7 @@ def _register_coordination_hook(api: Any) -> None:
         priority = 190
 
         async def run(self, ctx: Any) -> Any:
+            _reset_public_task_io(ctx)
             phase = _phase_retry.get()
             token = ctx.extras.pop("phase_retry_token", None)
             if token is not None:

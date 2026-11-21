@@ -3,6 +3,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -85,10 +86,75 @@ class NativePublicContextTest(unittest.TestCase):
                 elif kind == "main_task_ready": self.assertEqual(plugin._completion_task.get(), "main")
                 else: self.assertEqual(plugin._planning_tasks.get(), frozenset({"main"}))
             finally:
+                plugin._reset_public_task_io(ctx)
                 for key, var in (("execution_task_token", plugin._execution_task), ("ack_scope_token", plugin._ack_scope), ("review_task_token", plugin._review_task), ("completion_task_token", plugin._completion_task), ("source_event_token", plugin._source_event), ("planning_tasks_token", plugin._planning_tasks), ("phase_retry_token", plugin._phase_retry)):
                     if key in ctx.extras: var.reset(ctx.extras[key])
         for kind in ("handoff", "task_assigned", "task_submitted", "main_task_ready"):
             asyncio.run(run(kind))
+
+    def test_native_file_and_shell_defaults_are_task_scoped_and_restore_on_failure(self):
+        from qwenpaw.config import context
+        from qwenpaw.agents.tools.file_io import write_file
+        from qwenpaw.agents.tools.shell import execute_shell_command
+
+        root = Path(__file__).resolve().parents[5]
+        spec = importlib.util.spec_from_file_location("public_io_plugin", root / "plugins/teamharness/adapters/qwenpaw/plugin.py")
+        plugin = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(plugin)
+        plugin.ASSET_DIR = root / "plugins/teamharness"
+
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="own-task-io-fixture-") as temporary:
+                base = Path(temporary)
+                profile = base / "agent-profile"
+                profile.mkdir()
+                token = context.current_workspace_dir.set(profile)
+                global_cwd = Path.cwd()
+                async def begin(ctx, action, identity):
+                    self.assertEqual(action, "begin")
+                    task_root = base / "shared/tasks" / identity
+                    output = task_root / "workspace"
+                    output.mkdir(parents=True, exist_ok=True)
+                    (task_root / "inputs").mkdir(exist_ok=True)
+                    return {"task": {"id": identity, "mainTaskId": "main", "status": "in_progress", "assignedTo": "dev", "assignmentId": "d1"},
+                            "taskDirectory": str(task_root), "outputDirectory": str(output), "scratchDirectory": str(output / ".scratch")}
+                async def execute(identity, fail=False):
+                    ctx = SimpleNamespace(extras={}, inject_context=lambda *args, **kwargs: None,
+                                          agent=SimpleNamespace(toolkit=SimpleNamespace(get_tool_schemas=AsyncMock(return_value=[]))))
+                    try:
+                        await plugin._prepare_public_task_event(ctx, {"kind": "task_assigned", "task_id": identity, "main_task_id": "main", "delivery_id": "d1"})
+                        output = base / "shared/tasks" / identity / "workspace"
+                        self.assertEqual(context.get_current_workspace_dir(), profile)
+                        self.assertEqual(context.get_tool_base_dir(), output)
+                        self.assertEqual(context.get_all_project_dir_paths()[0], output)
+                        await asyncio.sleep(0.01)
+                        await write_file("result.py", identity)
+                        self.assertEqual((output / "result.py").read_text(), identity)
+                        middleware = plugin._sanitizer_factory(None, None)
+                        current = {"task_id": identity, "status": "in_progress", "assigned_to": "dev", "notifyTxn": "d1"}
+                        with patch.object(plugin, "_controller_json", return_value=current):
+                            self.assertTrue(await middleware._allow_task_output_change("rm result.py", None))
+                            self.assertFalse(await middleware._allow_task_output_change("rm /tmp/foreign.csv", None))
+                        result = await execute_shell_command("pwd")
+                        self.assertTrue(any(str(output) in getattr(block, "text", "") for block in result.content))
+                        if fail:
+                            raise RuntimeError("own synthetic interruption")
+                    finally:
+                        plugin._reset_public_task_io(ctx)
+                        for key, variable in [("ack_scope_token", plugin._ack_scope), ("execution_task_token", plugin._execution_task)]:
+                            if key in ctx.extras:
+                                variable.reset(ctx.extras[key])
+                try:
+                    with patch.object(plugin, "_prepare_task_context", side_effect=begin):
+                        await asyncio.gather(execute("t1"), execute("t2"))
+                        with self.assertRaisesRegex(RuntimeError, "own synthetic interruption"):
+                            await execute("t1", fail=True)
+                    self.assertEqual(context.get_tool_base_dir(), profile)
+                    self.assertFalse((profile / "result.py").exists())
+                    self.assertEqual(Path.cwd(), global_cwd)
+                finally:
+                    context.current_workspace_dir.reset(token)
+        asyncio.run(run())
 
 
 if __name__ == "__main__": unittest.main()

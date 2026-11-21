@@ -46,7 +46,8 @@ def _request(event_id: str, native_event_id: str, action: str) -> dict:
     if action not in {"begin", "retry"}:
         raise ValueError("unknown coordination lifecycle action")
     process = os.environ["AGENTTEAMS_PROCESS_ID"]
-    token = Path(os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE") or "/var/run/agentteams/cli-token").read_text().strip()
+    token = os.getenv("AGENTTEAMS_AUTH_TOKEN") or Path(
+        os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE") or "/var/run/secrets/agentteams/token").read_text().strip()
     url = os.environ["AGENTTEAMS_CONTROLLER_URL"].rstrip("/") + "/api/v1/coordination/events/" + urllib.parse.quote(event_id, safe="") + "/phase"
     body = {"action": action, "native_event_id": native_event_id, "process_id": process}
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",

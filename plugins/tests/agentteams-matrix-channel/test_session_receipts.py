@@ -28,6 +28,7 @@ def test_checkpoint_precedes_receipt_and_model_even_if_model_fails():
         delivery = SimpleNamespace(submit=AsyncMock(side_effect=lambda *args: order.append('receipt')))
         channel = SimpleNamespace(_session_receipts=delivery)
         ctx = SimpleNamespace(
+            extras={},
             request=SimpleNamespace(channel='agentteams_matrix', user_id='!room:hs', channel_meta={'room_id': '!room:hs', 'session_source_event_ids': ['$1', '$3']}),
             session_id='matrix:!room:hs', mode_state={},
             workspace=SimpleNamespace(session=SimpleNamespace(save_session_state=save), channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel))),
@@ -50,6 +51,7 @@ def test_failed_save_never_acknowledges_read():
         agent = SimpleNamespace(state=state, state_dict=lambda: {'state': {'middle_context': state.middle_context}})
         delivery = SimpleNamespace(submit=AsyncMock())
         ctx = SimpleNamespace(
+            extras={},
             request=SimpleNamespace(channel='agentteams_matrix', user_id='u', channel_meta={'room_id': '!r', 'session_source_event_ids': ['$m']}),
             session_id='s', mode_state={},
             workspace=SimpleNamespace(session=SimpleNamespace(save_session_state=AsyncMock(side_effect=OSError('disk full'))), channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=SimpleNamespace(_session_receipts=delivery)))),
@@ -77,6 +79,7 @@ def test_real_agentscope_input_is_saved_before_reasoning(tmp_path):
             saved.append(kwargs['agent'].state_dict())
         delivery = SimpleNamespace(submit=AsyncMock())
         ctx = SimpleNamespace(
+            extras={},
             request=SimpleNamespace(channel='agentteams_matrix', user_id='u', channel_meta={'room_id': '!r', 'session_source_event_ids': ['$real']}),
             session_id='s', mode_state={},
             workspace=SimpleNamespace(session=SimpleNamespace(save_session_state=save), channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=SimpleNamespace(_session_receipts=delivery)))),

@@ -170,7 +170,11 @@ class NativeTaskToolTest(unittest.TestCase):
                     testcase.assertNotIn("[Task system receipt]", text)
                 elif stale_input:
                     testcase.assertIn("[Task input refresh]", text)
-                    testcase.assertIn("Do not create the requested Task.", text)
+                    testcase.assertNotIn("Do not create the requested Task.", text)
+                    human = [message for message in messages if message.get("role") == "user"]
+                    testcase.assertIn("Do not create the requested Task.", json.dumps(human))
+                    testcase.assertEqual(sum("Do not create the requested Task." in json.dumps(message)
+                                             for message in human), 1)
                 else:
                     testcase.assertIn("[Task system receipt]", text)
                 return ChatResponse(content=[TextBlock(text="Use the native task source context.")], is_last=True)

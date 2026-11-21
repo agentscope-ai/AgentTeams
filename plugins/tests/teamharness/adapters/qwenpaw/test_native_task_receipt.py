@@ -129,6 +129,12 @@ class NativeTaskReceiptTest(unittest.TestCase):
                     self.formatter = OpenAIChatFormatter(); self.calls = 0
                 async def __call__(self, *args, **kwargs):
                     self.calls += 1
+                    if self.calls == 2:
+                        refreshed = [message for message in kwargs["messages"]
+                            if message.role == "user" and message.metadata.get("agentteams.event.id") == "$new"]
+                        testcase.assertEqual(len(refreshed), 1, "Verified Human updates must reach the model as Human input")
+                        testcase.assertIn(body, "".join(block.text for block in refreshed[0].content if block.type == "text"))
+                        testcase.assertTrue(checkpointed, "New Human input must be checkpointed before inference")
                     if self.calls == 1 or amend and self.calls == 2:
                         command = 'agt task create --leader lead --title Report --input-id input-1'
                         if self.calls == 2:
@@ -146,7 +152,14 @@ class NativeTaskReceiptTest(unittest.TestCase):
             toolkit = Toolkit()
             await toolkit.add_tool(FunctionTool(execute,name="execute_shell_command",permission=PermissionDecision(behavior=PermissionBehavior.ALLOW,message="Synthetic no-network fixture")))
             model = Model()
-            agent = Agent("Manager","Interpret Human intent.",model,toolkit=toolkit,middlewares=[plugin._sanitizer_factory(None,None)])
+            checkpointed = []
+            async def checkpoint(agent, inputs):
+                testcase.assertEqual([entry["eventId"] for entry in inputs], ["$new"])
+                testcase.assertTrue(any(message.role == "user" and message.metadata.get("agentteams.event.id") == "$new"
+                    for message in agent.state.context))
+                checkpointed.append(True)
+            ctx = SimpleNamespace(extras={"agentteams_checkpoint_inputs": checkpoint})
+            agent = Agent("Manager","Interpret Human intent.",model,toolkit=toolkit,middlewares=[plugin._sanitizer_factory(ctx,None)])
             token = plugin._creation_sources.set([{"inputId":"input-1","eventId":"$original","userId":"@a:test","roomId":"!room:test"}])
             try:
                 await agent.reply(Msg(name="Human",role="user",content=[TextBlock(text="Build a CSV report.")]))

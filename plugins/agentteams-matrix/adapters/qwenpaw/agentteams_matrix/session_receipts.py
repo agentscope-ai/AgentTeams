@@ -110,7 +110,9 @@ class SessionReceipts:
 def session_receipt_middleware(ctx, _agent_config):
     if getattr(ctx.request, "channel", "") != "agentteams_matrix":
         return None
-    return SessionReceiptMiddleware(ctx)
+    middleware = SessionReceiptMiddleware(ctx)
+    ctx.extras["agentteams_checkpoint_inputs"] = middleware.checkpoint_inputs
+    return middleware
 
 
 class SessionReceiptMiddleware(MiddlewareBase):
@@ -160,7 +162,16 @@ class SessionReceiptMiddleware(MiddlewareBase):
                 await self._checkpoint(agent)
             yield event
 
-    async def _checkpoint(self, agent):
+    async def checkpoint_inputs(self, agent, sources):
+        meta = getattr(self.ctx.request, "channel_meta", {}) or {}
+        if not sources or any(source["roomId"] != meta.get("room_id") for source in sources):
+            raise ValueError("Verified Human inputs must belong to the current Matrix room")
+        meta["session_source_event_ids"] = list(dict.fromkeys([
+            *(meta.get("session_source_event_ids") or []), *(source["eventId"] for source in sources)]))
+        if not await self._checkpoint(agent, strict=True):
+            raise RuntimeError("Native Human input checkpoint support is unavailable")
+
+    async def _checkpoint(self, agent, *, strict=False):
         ctx = self.ctx
         meta = getattr(ctx.request, "channel_meta", {}) or {}
         room_id = meta.get("room_id")
@@ -201,8 +212,9 @@ class SessionReceiptMiddleware(MiddlewareBase):
             for entry in added:
                 pending.remove(entry)
             logger.warning("Session input checkpoint failed; read receipt omitted", exc_info=True)
-            if required and execution is not None:
-                raise  # A managed accepted input must not enter inference unrecorded.
+            if strict or required and execution is not None:
+                raise  # A verified new input must not enter inference unrecorded.
             return
         if delivery is not None:
             await delivery.submit(room_id, event_ids, pending)
+        return True

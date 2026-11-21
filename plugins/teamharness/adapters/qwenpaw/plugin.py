@@ -212,7 +212,8 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                     sources.extend({key: entry[key] for key in ("inputId", "eventId", "roomId", "userId")} for entry in refreshed)
                     self._refreshed_inputs = getattr(self, "_refreshed_inputs", set()) | {entry["eventId"] for entry in refreshed}
                     self._creation_refresh_pending = True
-                    # Replace the one raw result; do not duplicate Human bodies.
+                    self._pending_refreshed_inputs = getattr(self, "_pending_refreshed_inputs", []) + refreshed
+                    # Human messages and the tool's no-effect receipt have distinct roles.
                     item.content[:] = [TextBlock(text=receipts.input_refresh_context(result, refreshed))]
                     return
             receipt = (receipts.creation_receipt(result, creation_source) if creation_source
@@ -326,6 +327,22 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 agent.state.append_context(agent.name, message.content)
                 yield message
                 return
+            pending_inputs = getattr(self, "_pending_refreshed_inputs", [])
+            if pending_inputs:
+                from agentscope.message import Msg
+                for source in pending_inputs:
+                    if not any(message.role == "user" and message.metadata.get("agentteams.event.id") == source["eventId"]
+                               for message in agent.state.context):
+                        agent.state.context.append(Msg(name="Human", role="user",
+                            content=[{"type": "text", "text": "[Input " + source["inputId"] + "]\n" + source["body"]}],
+                            metadata={"agentteams.event.id": source["eventId"], "agentteams.room.id": source["roomId"],
+                                      "agentteams.sender.id": source["userId"], "agentteams.input.id": source["inputId"]}))
+                if _ctx is not None:
+                    checkpoint = getattr(_ctx, "extras", {}).get("agentteams_checkpoint_inputs")
+                    if not callable(checkpoint):
+                        raise RuntimeError("Native Human input checkpoint support is unavailable")
+                    await checkpoint(agent, pending_inputs)
+                self._pending_refreshed_inputs = []
             self._creation_refresh_pending = False
             async for item in next_handler(**input_kwargs):
                 # A final model response has admitted and interpreted the

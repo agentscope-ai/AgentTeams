@@ -1267,3 +1267,44 @@ def test_late_assignment_is_observed_in_existing_task_session(adapter, native_ch
         model.assert_not_called()
         await client.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("save_fails", [False, True])
+def test_qwenpaw_verified_input_refresh_is_saved_before_read_and_inference(native_channel, save_fails):
+    path = Path(native_channel.__file__).with_name("session_receipts.py")
+    spec = importlib.util.spec_from_file_location("_refreshed_human_checkpoint", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    async def scenario():
+        order = []
+        state = {"state": {"middle_context": {}, "context": [
+            {"role": "user", "metadata": {"agentteams.event.id": "$new"}, "content": "Updated Human request"}]}}
+        agent = SimpleNamespace(state=SimpleNamespace(middle_context=state["state"]["middle_context"]), state_dict=lambda: state)
+        async def save(**kwargs):
+            snapshot = kwargs["agent"].state_dict()
+            assert snapshot["state"]["context"][0]["role"] == "user"
+            assert snapshot["state"]["context"][0]["metadata"]["agentteams.event.id"] == "$new"
+            order.append("save")
+            if save_fails:
+                raise OSError("synthetic unavailable storage")
+        delivery = SimpleNamespace(submit=AsyncMock(side_effect=lambda *_: order.append("read")))
+        channel = SimpleNamespace(_session_receipts=delivery)
+        ctx = SimpleNamespace(extras={}, session_id="fixture", mode_state={},
+            request=SimpleNamespace(channel="agentteams_matrix", user_id="!r", channel_meta={"room_id": "!r", "session_source_event_ids": ["$original"]}),
+            workspace=SimpleNamespace(session=SimpleNamespace(save_session_state=save),
+                channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel))))
+        module.session_receipt_middleware(ctx, None)
+        async def infer():
+            await ctx.extras["agentteams_checkpoint_inputs"](agent, [{"roomId": "!r", "eventId": "$new"}])
+            order.append("model")
+        if save_fails:
+            with pytest.raises(OSError, match="unavailable storage"):
+                await infer()
+            assert order == ["save"]
+            delivery.submit.assert_not_awaited()
+        else:
+            await infer()
+            assert order == ["save", "read", "model"]
+            delivery.submit.assert_awaited_once_with("!r", ["$original", "$new"], state["state"]["middle_context"][module.PENDING_KEY])
+    asyncio.run(scenario())

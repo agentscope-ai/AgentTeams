@@ -59,6 +59,7 @@ refs.bind(globals())
 from mcp.common.config import _load_runtime_config, _protocol_enforce_enabled, _section
 from mcp.common.constants import MESSAGE_TOOL_BLOCKED_ROLES, TOOL_NAMES
 from mcp.common.tool_schemas import TOOL_SCHEMAS
+from mcp.common.task_cli import run as _task, schema as _task_schema
 from mcp.lifecycle.transitions import _append_transition_history, _assert_transition, _transition_actor
 from mcp.artifact.publish import _artifact
 from mcp.lifecycle.review_context import build_review_context
@@ -112,7 +113,7 @@ def _tool_schema(name: str) -> dict[str, Any]:
     if name == "message" and _runtime_role() == "manager":
         return {
             "name": name,
-            "description": "Send a request once to a registered standalone Worker or Team Leader. The system resolves user:<registered-name>, uses native handoff for Leaders and a private conversation for standalone Workers. Confirm delegation only after ok=true. For the current room, reply directly.",
+            "description": "Send a non-Task message once to a registered standalone Worker or Team Leader. For Team task requests use task create; task system handles its handoff and completion automatically. This compatibility message entry resolves user:<registered-name> and supports legacy handoffs. For the current room, reply directly.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -133,7 +134,7 @@ def _tool_schema(name: str) -> dict[str, Any]:
                 "additionalProperties": False,
             },
         }
-    schema = TOOL_SCHEMAS[name]
+    schema = _task_schema(_runtime_role()) if name == "task" else TOOL_SCHEMAS[name]
     return {
         "name": name,
         "description": schema["description"],
@@ -178,6 +179,8 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
         payload = _projectflow(args)
     elif name == "taskflow":
         payload = _taskflow(args)
+    elif name == "task":
+        payload = _task(args)
     elif name == "build_review_context":
         payload = build_review_context(args)
     else:
@@ -188,7 +191,7 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
             "reason": "tool behavior is defined by later TeamHarness behavior slices",
             "arguments": args,
         }
-    return {
+    result = {
         "content": [
             {
                 "type": "text",
@@ -196,6 +199,9 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
             }
         ]
     }
+    if name == "task" and payload.get("ok") is False:
+        result["isError"] = True
+    return result
 
 def _normalize_role(role: str) -> str:
     value = (role or "").strip().replace("_", "-").lower()
@@ -244,7 +250,7 @@ def _runtime_identity() -> str:
 
 def _visible_tool_names() -> list[str]:
     if _runtime_role() == "manager":
-        return [name for name in TOOL_NAMES if name in {"health", "message", "filesync", "artifact"}]
+        return [name for name in TOOL_NAMES if name in {"health", "message", "filesync", "artifact", "task"}]
     if _message_tool_blocked_for_runtime_role():
         return [name for name in TOOL_NAMES if name != "message"]
     return list(TOOL_NAMES)

@@ -60,6 +60,8 @@ def test_build_qwenpaw_native_plugin_package(tmp_path: Path) -> None:
         assert f"{root}/teamharness/skills/team/roomflow/SKILL.md" in names
         assert f"{root}/teamharness/qwenpaw-skills/communication/SKILL.md" in names
         assert f"{root}/teamharness/mcp/server.py" in names
+        assert f"{root}/teamharness/mcp/common/task_receipt.py" in names
+        assert f"{root}/teamharness/mcp/common/task_cli.py" in names
         assert f"{root}/teamharness/mcp/message_tool.py" in names
         assert f"{root}/teamharness/mcp/roomflow_tool.py" in names
         assert not any(name.startswith(f"{root}/teamharness/hooks/") for name in names)

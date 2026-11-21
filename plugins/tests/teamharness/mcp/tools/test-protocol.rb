@@ -47,7 +47,7 @@ fail!("tools/list response id mismatch: #{tools_response.inspect}") unless tools
 
 tools = tools_response.dig("result", "tools") || []
 tool_names = tools.map { |tool| tool["name"] }
-expected = %w[health message roomflow filesync artifact projectflow taskflow build_review_context]
+expected = %w[health message roomflow filesync artifact projectflow taskflow build_review_context task]
 fail!("unexpected tools: #{tool_names.inspect}") unless tool_names == expected
 
 tool_by_name = tools.to_h { |tool| [tool["name"], tool] }

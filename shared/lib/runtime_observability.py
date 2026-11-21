@@ -12,6 +12,13 @@ import threading
 _lock = threading.Lock()
 
 
+class _RuntimeFileHandler(RotatingFileHandler):
+    def handleError(self, record):
+        # stderr feeds the supervisor, which also needs the file lock. Let callers
+        # handle disk errors after releasing it instead of blocking that pipe.
+        raise
+
+
 def redact(text):
     text = str(text)
     try:
@@ -46,7 +53,7 @@ def write_record(filename, text):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     with _lock, (directory / '.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        handler = RotatingFileHandler(directory / filename,
+        handler = _RuntimeFileHandler(directory / filename,
             maxBytes=int(os.getenv('AGENTTEAMS_LOG_MAX_BYTES', str(10 * 1024 * 1024))),
             backupCount=int(os.getenv('AGENTTEAMS_LOG_BACKUPS', '3')), encoding='utf-8')
         os.chmod(directory / filename, 0o600)

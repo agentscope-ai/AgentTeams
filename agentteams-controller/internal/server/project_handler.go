@@ -54,6 +54,7 @@ type ProjectHandler struct {
 	matrix       matrix.Client // for intervention notifications; nil to skip
 	taskAssigned func()        // local queue hint after a durable assignment commit
 	recovery     *TaskRecoveryHandler
+	coordination *CoordinationHandler
 }
 
 // NewProjectHandler creates a handler reading project state from object storage.

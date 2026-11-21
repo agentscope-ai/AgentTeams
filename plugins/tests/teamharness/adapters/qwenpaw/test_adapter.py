@@ -53,6 +53,8 @@ def test_register_uses_qwenpaw_2_public_extension_points(monkeypatch):
         "_register_trace_hooks",
         lambda api: api.calls.append(("trace", (), {})),
     )
+    monkeypatch.setattr(module, "_register_coordination_hook",
+                        lambda api: api.calls.append(("coordination", (), {})))
     api = FakeApi()
     module.plugin.register(api)
     names = [call[0] for call in api.calls]
@@ -61,6 +63,7 @@ def test_register_uses_qwenpaw_2_public_extension_points(monkeypatch):
         "register_skill_provider",
         "register_middleware",
         "trace",
+        "coordination",
         "register_http_router",
     ]
 
@@ -281,3 +284,37 @@ def test_planning_preload_keeps_start_contract_and_references_full_manual_skill(
     assert "Manual and Loop reference" not in texts[0]
     assert "read the complete skill" in texts[0]
     assert len(texts[0]) < len((module.ASSET_DIR / "skills/team/project-management/SKILL.md").read_text()) / 2
+
+
+def test_task_cli_receipt_is_injected_only_for_final_success_and_current_task(monkeypatch):
+    import json
+    module = load_plugin()
+    monkeypatch.setitem(sys.modules, "agentscope.middleware", types.SimpleNamespace(MiddlewareBase=object))
+    class ToolResponse:
+        def __init__(self, content, state="success"):
+            self.content, self.state = content, state
+    class TextBlock:
+        def __init__(self, text): self.text = text
+    monkeypatch.setitem(sys.modules, "agentscope.tool", types.SimpleNamespace(ToolResponse=ToolResponse))
+    monkeypatch.setitem(sys.modules, "agentscope.message", types.SimpleNamespace(TextBlock=TextBlock))
+    middleware = module._sanitizer_factory(None, None)
+    token = module._execution_task.set("t1")
+    payload = {"task":{"id":"t1","status":"submitted","submissionId":"s1"},"notification":{"status":"queued","eventId":"e1","recipient":"leader-a"}}
+    async def run(tool="execute_shell_command", command='agt task submit t1 --summary "Done"', state="success", final=True):
+        block = TextBlock(json.dumps(payload))
+        response = ToolResponse([block], state) if final else types.SimpleNamespace(content=[block], state=state)
+        async def handler(**_kwargs): yield response
+        result = [item async for item in middleware.on_acting(None, {"tool_call":types.SimpleNamespace(name=tool,input={"command":command})}, handler)]
+        return result[0].content
+    try:
+        assert len(asyncio.run(run(state="error"))) == 1
+        assert len(asyncio.run(run(final=False))) == 1
+        assert len(asyncio.run(run(command="cat result.json"))) == 1
+        assert len(asyncio.run(run(command="agt task submit other --summary Done"))) == 1
+        content = asyncio.run(run())
+        assert len(content) == 2 and "[Task system receipt]" in content[0].text
+        assert "leader-a" in content[0].text and "Do not resend" in content[0].text
+        assert json.loads(content[1].text) == payload
+        assert len(asyncio.run(run())) == 1  # Same receipt, same current conversation.
+    finally:
+        module._execution_task.reset(token)

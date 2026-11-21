@@ -60,7 +60,10 @@ class TaskAssignments:
         room, event_id = record["room_id"], record["event_id"]
         work = record["work"]
         key = matrix_event_key(room, event_id)
-        task = await asyncio.to_thread(execution.verify, identity)
+        # Observing a late input inside the current SDK writer is monitoring
+        # its owner, not admitting a new execution of an unfinished operation.
+        live = ctx is not None and agent is not None
+        task = await asyncio.to_thread(execution.verify, identity, monitoring=live)
         if task["room_id"] != room:
             raise RecoveryConflict("Task assignment room changed")
         checkpoint = Recovery.digest(task["execution"].get("checkpoint"))
@@ -109,7 +112,7 @@ class TaskAssignments:
         saved = await store.get_session_state_dict(**address, allow_not_exist=False)
         if not retained(saved["agent"]["state"]["context"]):
             raise RecoveryConflict("SDK did not persist the accepted Task assignment")
-        current = await asyncio.to_thread(execution.verify, identity)
+        current = await asyncio.to_thread(execution.verify, identity, monitoring=live)
         if Recovery.digest(current["execution"].get("checkpoint")) != checkpoint:
             raise RecoveryConflict("Task checkpoint changed while attaching its assignment")
         digest = Recovery.digest(saved)

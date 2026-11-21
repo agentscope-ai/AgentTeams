@@ -4,10 +4,73 @@ import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 SOURCE = Path(__file__).resolve().parents[5] / "plugins/teamharness/adapters/qwenpaw/plugin.py"
+
+
+@pytest.mark.parametrize("registry_available", [True, False])
+def test_batch_sources_keep_human_authority_without_first_sender_fallback(monkeypatch, registry_available):
+    spec = importlib.util.spec_from_file_location("batch_scope_plugin", SOURCE)
+    plugin = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plugin)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
+    def read(_):
+        if not registry_available:
+            raise OSError("registry unavailable")
+        return {"humans": [{"matrixUserID": "@human:test"}]}
+    monkeypatch.setattr(plugin, "_controller_json", read)
+    monkeypatch.setattr(plugin, "_prepare_delivery_context", AsyncMock())
+    monkeypatch.setattr(plugin, "_prepare_manager_roster", AsyncMock())
+    meta = {"event_id": "$peer", "sender_id": "@peer:test", "room_id": "!room:test",
+            "teamharness_requester_route": {"target_user": "@human:test", "target_session": "!room:test"},
+            "matrix_input_sources": [
+                {"event_id": "$peer", "sender_id": "@peer:test", "room_id": "!room:test"},
+                {"event_id": "$human", "sender_id": "@human:test", "room_id": "!room:test"}]}
+    toolkit = SimpleNamespace(get_tool_schemas=AsyncMock(return_value=[]), remove_tool=AsyncMock())
+    ctx = SimpleNamespace(request=SimpleNamespace(channel_meta=meta), agent=SimpleNamespace(toolkit=toolkit), extras={},
+                          inject_context=lambda *a, **kw: None)
+    async def scenario():
+        try:
+            await plugin._manager_report_context(ctx)
+            sources = plugin._creation_sources.get()
+            assert sources == ([{"inputId": "input-2", "eventId": "$human", "userId": "@human:test", "roomId": "!room:test"}]
+                               if registry_available else [])
+        finally:
+            for key, variable in [("creation_sources_token", plugin._creation_sources),
+                                  ("source_event_token", plugin._source_event),
+                                  ("requester_route_token", plugin._requester_route)]:
+                token = ctx.extras.pop(key, None)
+                if token is not None:
+                    variable.reset(token)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("sender,allowed", [("@manager:test", True), ("@peer:test", False)])
+def test_plan_scope_uses_verified_handoff_tasks_not_message_claims(monkeypatch, sender, allowed):
+    spec = importlib.util.spec_from_file_location("plan_scope_plugin", SOURCE)
+    plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "leader")
+    monkeypatch.delenv("TEAMHARNESS_COORDINATION_URL", raising=False)
+    monkeypatch.setattr(plugin, "_load_phase_skill", lambda *args: None)
+    monkeypatch.setattr(plugin, "_controller_json", lambda path: {
+        "kind":"handoff", "actor":"@manager:test", "recipient":"@leader:test", "room_id":"!handoff:test",
+        "control":{"channel_meta":{"teamharness_main_tasks":[{"taskId":"actual-main"}]}}})
+    meta={"sender_id":sender, "agent_matrix_user_id":"@leader:test", "room_id":"!handoff:test",
+          "teamharness_matrix_coordination":True, "teamharness_coordination":{"id":"handoff","kind":"handoff"},
+          "teamharness_main_tasks":[{"taskId":"forged-main"}]}
+    ctx=SimpleNamespace(request=SimpleNamespace(channel_meta=meta),agent=SimpleNamespace(),extras={},inject_context=lambda *args,**kwargs:None)
+
+    async def run():
+        try:
+            assert await plugin._manager_report_context(ctx) is (not allowed)
+            assert plugin._planning_tasks.get() == (frozenset({"actual-main"}) if allowed else frozenset())
+        finally:
+            token=ctx.extras.pop("planning_tasks_token", None)
+            if token is not None: plugin._planning_tasks.reset(token)
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("sender,skip", [("@leader:test", False), ("@peer:test", True)])
@@ -178,3 +241,27 @@ def test_matrix_acceptance_and_closure_require_own_controller_receipt(monkeypatc
     ctx = SimpleNamespace(request=SimpleNamespace(channel_meta={"teamharness_matrix_coordination":True, "sender_id":"@sender:test", "agent_matrix_user_id":"@leader:test", "teamharness_coordination":event}),
         extras={}, agent=SimpleNamespace(toolkit=SimpleNamespace(get_tool_schemas=schemas)), inject_context=lambda *a, **kw:None)
     assert asyncio.run(plugin._manager_report_context(ctx)) is forged
+
+
+@pytest.mark.parametrize("include_new", [False, True])
+def test_verified_refresh_skips_queued_duplicates_without_skipping_new_inputs(monkeypatch, include_new):
+    spec = importlib.util.spec_from_file_location("refreshed_scope_plugin", SOURCE)
+    plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
+    monkeypatch.setattr(plugin, "_controller_json", lambda _: {"humans":[{"matrixUserID":"@human:test"}]})
+    monkeypatch.setattr(plugin, "_prepare_delivery_context", AsyncMock())
+    monkeypatch.setattr(plugin, "_prepare_manager_roster", AsyncMock())
+    frames = [{"event_id":"$handled","sender_id":"@human:test","room_id":"!room:test"}]
+    if include_new:
+        frames.append({"event_id":"$new","sender_id":"@human:test","room_id":"!room:test"})
+    meta = {"event_id":"$handled","sender_id":"@human:test","room_id":"!room:test","matrix_input_sources":frames}
+    ctx = SimpleNamespace(request=SimpleNamespace(channel_meta=meta), agent=SimpleNamespace(state=SimpleNamespace(middle_context={"teamharness.refreshed_inputs":{"$handled":True}})), extras={}, inject_context=lambda *a,**kw:None)
+    async def scenario():
+        try:
+            assert await plugin._manager_report_context(ctx) is (not include_new)
+            assert [s["eventId"] for s in plugin._creation_sources.get()] == (["$new"] if include_new else [])
+        finally:
+            for field, variable in (("creation_sources_token",plugin._creation_sources),("source_event_token",plugin._source_event),("requester_route_token",plugin._requester_route)):
+                token = ctx.extras.pop(field,None)
+                if token is not None: variable.reset(token)
+    asyncio.run(scenario())

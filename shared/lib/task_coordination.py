@@ -31,7 +31,7 @@ def controller_json(path):
         return json.load(response)
 
 
-def notification(content, room, sender, own, *, fetch=controller_json):
+def notification(content, room, sender, own, *, fetch=controller_json, event_id=None):
     """Return canonical input/session, None for chat; reject invalid controls.
 
     Call before own-echo and peer-message suppression. Only a receipt verified
@@ -60,6 +60,11 @@ def notification(content, room, sender, own, *, fetch=controller_json):
         if not isinstance(identity, str) or len(identity) != 32 or any(c not in "0123456789abcdef" for c in identity):
             raise IgnoredNotification("invalid receipt identity")
         receipt = verified_get("coordination/events/" + identity)
+        if event_id is not None:
+            if not receipt.get("native_id"):
+                raise NotificationUnavailable("native delivery receipt is not committed yet")
+            if receipt["native_id"] != "matrix:" + event_id:
+                raise IgnoredNotification("native notification attempt was superseded")
         packet = receipt["control"]
         canonical = packet["channel_meta"]["teamharness_coordination"]
         # Completed transport means Matrix accepted the notification; native
@@ -118,7 +123,7 @@ def notification(content, room, sender, own, *, fetch=controller_json):
 if __name__ == "__main__":
     try:
         args = json.load(sys.stdin)
-        print(json.dumps(notification(args["content"], args["room"], args["sender"], args["own"])))
+        print(json.dumps(notification(args["content"], args["room"], args["sender"], args["own"], event_id=args.get("event_id"))))
     except (IgnoredNotification, KeyError):
         print("null")
         sys.exit(1)

@@ -1,7 +1,7 @@
 # status/transition constants shared by all fragments (W1-a2: real module)
 from __future__ import annotations
 
-TOOL_NAMES = ["health", "message", "roomflow", "filesync", "artifact", "projectflow", "taskflow", "build_review_context"]
+TOOL_NAMES = ["health", "message", "roomflow", "filesync", "artifact", "projectflow", "taskflow", "build_review_context", "task"]
 
 
 MESSAGE_TOOL_BLOCKED_ROLES = {"worker", "remote-member"}

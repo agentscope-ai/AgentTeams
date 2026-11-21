@@ -142,6 +142,20 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 		meta["teamharness_final_report"] = e.FinalReport
 		text = "PROJECT_COMPLETED: " + e.ProjectID + "\nThe final state is accepted. Reply with the concise final report; the dispatcher returns it to the original Matrix conversation. Do not send another message or poll.\n" + text
 	}
+	if e.Protocol == "task/v1" {
+		switch e.Kind {
+		case "handoff":
+			requests, _ := json.Marshal(e.Tasks)
+			roster, _ := json.Marshal(e.EligibleAssignees)
+			text = e.Text + "\nThese main tasks are already registered. Preserve their IDs and original requirements. Use the common task tool action plan with the complete execution DAG, selecting registered assignees; the task system creates the room and dispatches ready steps. End after planning; do not send assignments or poll. Tasks: " + string(requests) + "\nRegistered assignees: " + string(roster)
+		case "task_assigned":
+			text = "TASK_ASSIGNED: " + e.TaskID + "\nUse the framework-prepared task begin receipt. Execute only this task, keep inputs read-only, and submit files relative to its prepared output directory through the common task tool. Do not repeat begin when already prepared.\n" + e.Text
+		case "task_submitted":
+			text = "TASK_SUBMITTED: " + e.TaskID + "\nReview the exact candidate and its artifacts using the common task tool. Accept or reject this submission ID with independent business evidence; the task system advances dependencies. End after review; do not dispatch or poll.\n" + e.Text
+		case "main_task_ready":
+			text = "MAIN_TASK_READY_TO_CLOSE: " + e.MainTaskID + "\nVerify the whole original request against accepted results and use the common task tool action complete with your final report. The task system returns the report and accepted artifacts to the original Human conversation using the first dispatch Agent identity. Do not send another notification.\n" + e.Text
+		}
+	}
 	user := coordinationString(original, "target_user")
 	if user == "" {
 		user = e.Actor
@@ -177,6 +191,16 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 		d.Error = "canonical state unavailable"
 		return
 	}
+	if d.NativeStart != nil {
+		recovered, err := h.recoverChangedNativeStart(ctx, d)
+		if err != nil {
+			d.Error = "native phase start unavailable"
+			return
+		}
+		if recovered {
+			return
+		}
+	}
 	if d.NativeID == "" {
 		status := coordinationString(p, "status")
 		if status == "paused" || len(coordinationMap(p, "loop")) > 0 && lenAny(coordinationMap(p, "loop")["pause_sources"]) > 0 {
@@ -195,6 +219,18 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 				d.Status = "ignored"
 				return
 			}
+			if h.taskNotifications != nil {
+				mainKey := coordinationPlanPath(e, "meta.json")
+				childKey := path.Join("teams", e.StorageTeam, "shared/tasks", e.TaskID, "meta.json")
+				if code, _ := h.taskNotifications.taskExecutionAdmissionFailure(ctx, mainKey, p); code != 0 {
+					d.Error = "main task execution is gated"
+					return
+				}
+				if code, _ := h.taskNotifications.taskExecutionAdmissionFailure(ctx, childKey, t); code != 0 {
+					d.Error = "task execution is gated"
+					return
+				}
+			}
 		}
 		if e.Kind == "task_submitted" && taskStatus != "submitted" {
 			d.Status = "ignored"
@@ -209,17 +245,34 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 					d.Error = "no saved final user report"
 					return
 				}
-				id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", e.FinalReport)
-				if sendErr != nil {
-					d.Error = "final user projection unavailable"
+				if d.UserEventID == "" {
+					if d.ReportSnapshot == "" {
+						d.ReportSnapshot = e.FinalReport
+						if persist() != nil {
+							return
+						}
+					}
+
+					id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", d.ReportSnapshot)
+					if sendErr != nil {
+						d.Error = "final user projection unavailable"
+						return
+					}
+					d.UserEventID, d.MatrixEventID = id, id
+					if persist() != nil {
+						return
+					}
+				}
+				if err := h.projectFinalArtifacts(ctx, e, d, persist); err != nil {
+					d.Error = err.Error()
 					return
 				}
-				d.UserEventID, d.MatrixEventID = id, id
+
 				d.Status, d.Error = "completed", ""
 				return
 			}
 			// Matrix transaction IDs make an uncertain send safe to retry.
-			id, sendErr := h.sendMatrixContent(ctx, e.ActorRole, e.ActorName, e.RoomID, e.ID, coordinationMatrixNotification(e, p), false)
+			id, sendErr := h.sendMatrixContent(ctx, e.ActorRole, e.ActorName, e.RoomID, d.matrixTransactionID(), coordinationMatrixNotification(e, p), false)
 			if sendErr != nil {
 				d.Error = "Matrix coordination notification unavailable"
 				return
@@ -272,7 +325,17 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 				}
 			}
 		case "handoff":
-			// The authenticated Matrix notification is the handoff receipt.
+			if e.Protocol == "task/v1" {
+				pending, err := h.handoffNeedsPlan(ctx, e)
+				if err != nil {
+					d.Error = "handoff task state unavailable"
+					return
+				}
+				if pending {
+					return
+				}
+			}
+			// Delivery alone is not a durable Task protocol plan.
 			d.Status, d.Error = "completed", ""
 		case "task_submitted":
 			if coordinationString(t, "status") == "submitted" {
@@ -355,12 +418,24 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 			d.Error = "no final user report"
 			return
 		}
-		id, err := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", text)
+		if d.ReportSnapshot == "" {
+			d.ReportSnapshot = text
+			if persist() != nil {
+				return
+			}
+		}
+		id, err := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, coordinationString(e.RequesterRoute, "target_session"), e.ID+"-user", d.ReportSnapshot)
 		if err != nil {
 			d.Error = "final user projection unavailable"
 			return
 		}
 		d.UserEventID = id
+	}
+	if coordinationCompleted(e.Kind) {
+		if err := h.projectFinalArtifacts(ctx, e, d, persist); err != nil {
+			d.Error = err.Error()
+			return
+		}
 	}
 	if d.MatrixEventID == "" || (e.Kind == "task_assigned" && d.AckEventID == "") {
 		d.Error = "progress projection unavailable"
@@ -503,7 +578,13 @@ func coordinationAssistantText(result map[string]any) string {
 	return strings.TrimSpace(strings.Join(texts, "\n"))
 }
 func (h *CoordinationHandler) project(ctx context.Context, e coordinationEvent, kind, name, room, txn, text string) (string, error) {
-	return h.projectContent(ctx, kind, name, room, txn, map[string]any{"msgtype": "m.text", "body": text})
+	content := map[string]any{"msgtype": "m.text", "body": text}
+	if coordinationCompleted(e.Kind) {
+		if user := coordinationString(e.RequesterRoute, "target_user"); strings.HasPrefix(user, "@") {
+			content["m.mentions"] = map[string]any{"user_ids": []string{user}}
+		}
+	}
+	return h.projectContent(ctx, kind, name, room, txn, content)
 }
 func (h *CoordinationHandler) projectContent(ctx context.Context, kind, name, room, txn string, content map[string]any) (string, error) {
 	return h.sendMatrixContent(ctx, kind, name, room, txn, content, true)

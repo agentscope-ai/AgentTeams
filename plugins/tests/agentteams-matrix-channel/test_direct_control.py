@@ -91,6 +91,8 @@ def test_supplement_waits_for_tool_cleanup_and_keeps_original_input():
             assert supplementary["meta"]["session_source_event_ids"] == ["$run", "$next"]
         states = [call.args[2][EXECUTION]["status"] for call in ch._room_send_with_retry.await_args_list]
         assert states == ["running", "stopping", "stopped"]
+        assert all(call.args[2][EXECUTION]["steering_mode"] == "restart"
+                   for call in ch._room_send_with_retry.await_args_list)
         assert ch._room_send_with_retry.await_args_list[-1].args[2][EXECUTION]["message_id"] == "$partial-response"
         ch._on_consume_error.assert_not_awaited()
 

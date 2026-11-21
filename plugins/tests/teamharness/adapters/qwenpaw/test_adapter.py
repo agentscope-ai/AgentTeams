@@ -53,6 +53,8 @@ def test_register_uses_qwenpaw_2_public_extension_points(monkeypatch):
         "_register_trace_hooks",
         lambda api: api.calls.append(("trace", (), {})),
     )
+    monkeypatch.setattr(module, "_register_coordination_hook",
+                        lambda api: api.calls.append(("coordination", (), {})))
     api = FakeApi()
     module.plugin.register(api)
     names = [call[0] for call in api.calls]
@@ -61,6 +63,7 @@ def test_register_uses_qwenpaw_2_public_extension_points(monkeypatch):
         "register_skill_provider",
         "register_middleware",
         "trace",
+        "coordination",
         "register_http_router",
     ]
 

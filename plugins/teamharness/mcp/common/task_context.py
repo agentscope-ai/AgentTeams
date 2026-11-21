@@ -1,6 +1,9 @@
 """Public Task preparation validation shared by native runtime adapters."""
 from pathlib import Path
 
+# These protocol phases coordinate work; only task_assigned executes it.
+COORDINATION_PHASES = frozenset({"handoff", "task_submitted", "main_task_ready"})
+
 
 def prepare(kind, event, result):
     """Return code-generated context and native operation scope, or fail closed."""
@@ -33,7 +36,7 @@ def prepare(kind, event, result):
                 or candidate.get("id") != submission or not isinstance(candidate.get("artifacts"), list)
                 or not isinstance(candidate.get("reportFile"), dict) or not candidate["reportFile"].get("artifactId")):
             raise ValueError("task candidate does not match this review")
-        return {"fact": "Review this exact candidate against its task spec. This is a public snapshot, not a completed business review. Read reportFile or artifact IDs when evidence is insufficient, then accept or reject this submission with your independent evidence. Do not execute or edit the Worker's outputs; the task system dispatches dependencies.",
+        return {"fact": "Review this exact candidate against its task spec. This is a public snapshot, not a completed business review. Read reportFile or artifact IDs when evidence is insufficient, then accept or reject this submission with your independent evidence. This is a decision-only phase: use common Task operations, not batch execution, subagents or another workflow. Do not execute or edit the Worker's outputs. If proof is missing, reject with explicit replacementSpec; the task system dispatches the correction and dependencies.",
                 "context": task, "review": (task_id, submission)}
     if kind == "main_task_ready":
         nodes = task.get("nodes")

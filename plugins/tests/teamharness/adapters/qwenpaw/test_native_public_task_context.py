@@ -60,7 +60,7 @@ class NativePublicContextTest(unittest.TestCase):
             toolkit = Toolkit()
             decision = PermissionDecision(behavior=PermissionBehavior.ALLOW, message="Isolated fixed preparation fixture")
             await toolkit.add_tool(MCPTool("teamharness", mcp.types.Tool(name="task", description="Common Task preparation", inputSchema={"type":"object","required":["action","taskId"],"properties":{"action":{"type":"string"},"taskId":{"type":"string"}}}), session=Session()))
-            for name in ("teamharness__taskflow", "teamharness__projectflow", "teamharness__filesync", "execute_shell_command"):
+            for name in ("teamharness__taskflow", "teamharness__projectflow", "teamharness__filesync", "execute_shell_command", "run_tool_batch", "workerflow__worker_agentflow", "read_file"):
                 await toolkit.add_tool(FunctionTool(forbidden, name=name, permission=decision))
             agent = Agent("Worker", "Use public Tasks", Model(), toolkit=toolkit, middlewares=[plugin._sanitizer_factory(None, None)])
             receipt = {**event, "protocol": "task/v1", "actor": "@leader:test", "recipient": "@recipient:test", "room_id": "!task:test", "control": {"channel_meta": {"teamharness_main_tasks": [{"taskId": "main"}]}}}
@@ -74,7 +74,9 @@ class NativePublicContextTest(unittest.TestCase):
                 names = {tool["function"]["name"] for tool in await toolkit.get_tool_schemas()}
                 self.assertIn("mcp__teamharness__task", names)
                 self.assertNotIn("teamharness__taskflow", names)
-                self.assertEqual("execute_shell_command" in names, kind in {"task_assigned", "handoff"})
+                self.assertEqual("execute_shell_command" in names, kind == "task_assigned")
+                for name in ("run_tool_batch", "workerflow__worker_agentflow", "read_file"):
+                    self.assertEqual(name in names, kind == "task_assigned")
                 self.assertTrue(any("# Task Collaboration" in text for text in texts))
                 if kind == "task_assigned": self.assertEqual(plugin._ack_scope.get()[2], "canonical-cr")
                 elif kind == "task_submitted": self.assertEqual(plugin._review_task.get(), ("t1", "s1"))

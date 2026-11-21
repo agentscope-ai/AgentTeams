@@ -155,21 +155,13 @@ class NativeTaskToolTest(unittest.TestCase):
                 self.calls+=1
                 if self.calls==1:
                     return ChatResponse(content=[ToolCallBlock(id="operation",name="mcp__teamharness__task",input=json.dumps(arguments))],is_last=True)
-                testcase.assertEqual(self.calls,2,"Task operation required an extra model turn")
-                messages=await self.formatter.format(kwargs.get("messages") or args[0])
-                text=json.dumps([message for message in messages if message.get("role")=="tool"])
-                if invalid_source:
-                    testcase.assertIn("Additional properties",text)
-                    testcase.assertNotIn("[Task system receipt]",text)
-                    return ChatResponse(content=[TextBlock(text="Use the native task source context.")],is_last=True)
-                testcase.assertIn("[Task system receipt]",text)
-                testcase.assertIn("queued",text)
-                if action in {"accept","reject"}:testcase.assertIn("worker-c",text)
-                if action=="reject":testcase.assertIn("remains terminal",text)
-                if action=="complete":testcase.assertIn("original conversation",text)
-                if action=="create":testcase.assertIn("registered",text)
-                if action=="create":testcase.assertNotIn("_nativeSource",json.dumps(messages))
-                return ChatResponse(content=[TextBlock(text="Task system receipt recorded.")],is_last=True)
+                testcase.assertTrue(invalid_source, "A durable Task operation invoked the model again")
+                testcase.assertEqual(self.calls, 2)
+                messages = await self.formatter.format(kwargs.get("messages") or args[0])
+                text = json.dumps([message for message in messages if message.get("role") == "tool"])
+                testcase.assertIn("Additional properties", text)
+                testcase.assertNotIn("[Task system receipt]", text)
+                return ChatResponse(content=[TextBlock(text="Use the native task source context.")], is_last=True)
 
         async def run():
             toolkit=Toolkit();model=Model()
@@ -208,7 +200,18 @@ class NativeTaskToolTest(unittest.TestCase):
                     for field,variable in (("review_task_token",plugin._review_task),("completion_task_token",plugin._completion_task)):
                         if field in ctx.extras:tokens.append((variable,ctx.extras[field]))
                 await agent.reply(inputs)
-                testcase.assertEqual(model.calls,2)
+                testcase.assertEqual(model.calls, 2 if invalid_source else 1)
+                if not invalid_source:
+                    messages = await model.formatter.format(agent.state.context)
+                    text = json.dumps([message for message in messages if message.get("role") == "tool"])
+                    testcase.assertIn("[Task system receipt]", text)
+                    testcase.assertIn("queued", text)
+                    if action in {"accept", "reject"}: testcase.assertIn("worker-c", text)
+                    if action == "reject": testcase.assertIn("remains terminal", text)
+                    if action == "complete": testcase.assertIn("original conversation", text)
+                    if action == "create":
+                        testcase.assertIn("registered", text)
+                        testcase.assertNotIn("_nativeSource", json.dumps(messages))
                 testcase.assertEqual(len(tool_calls),0 if invalid_source else 1)
                 testcase.assertEqual(len(requests),0 if invalid_source else 1)
             finally:

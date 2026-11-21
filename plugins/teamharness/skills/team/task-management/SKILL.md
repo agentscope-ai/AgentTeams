@@ -55,7 +55,11 @@ A prepared candidate snapshot does not prove business acceptance. Check the
 published files of a runnable project for its required dependencies; producer
 workspace files and hardcoded runtime paths are not delivery evidence. Review the
 independent QA evidence; do not repeat execution, edit outputs or rerun accepted
-checks. Call `accept` or `reject` with the exact `submissionId` and your evidence
+checks. This is a decision-only phase: use common Task operations, not batch
+execution, subagents or another workflow. If required proof is missing, reject
+with explicit correction requirements instead of executing the work yourself.
+Distinguish the Worker's recorded test results from your own artifact review;
+do not claim you ran checks that you only read. Call `accept` or `reject` with the exact `submissionId` and your evidence
 in `note`. If the same step needs correction, provide explicit `replacementSpec`
 in that rejection. The task system keeps the rejected attempt terminal, creates
 one replacement execution under the same main task and rewires unstarted
@@ -80,6 +84,11 @@ Call `complete` with the main `taskId` and final Human report. By default the ta
 system includes all accepted outputs; use `artifacts` only to select exact accepted
 IDs. It saves the final report and returns it with downloadable files to the
 original Human conversation using the first dispatch Agent identity.
+
+After a valid durable create, plan, submit, accept/reject or complete receipt,
+your framework records the fact and ends this phase without another model call.
+Do not repeat that operation or checkpoint after submission. Pending projection
+and delivery remain the task system's responsibility.
 
 Framework-generated receipts enter your context automatically. Queued notification
 means pending delivery, not recipient acceptance. Do not send duplicate reports,

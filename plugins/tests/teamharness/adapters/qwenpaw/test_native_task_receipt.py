@@ -74,28 +74,7 @@ class NativeTaskReceiptTest(unittest.TestCase):
                 self.calls += 1
                 if self.calls == 1:
                     return ChatResponse(content=[ToolCallBlock(id="call-one", name="execute_shell_command", input=json.dumps({"command":command}))], is_last=True)
-                testcase.assertEqual(self.calls, 2, "receipt triggered an extra model cycle")
-                messages = kwargs.get("messages") or (args[0] if args else [])
-                messages = await self.formatter.format(messages)
-                tool_messages = [m for m in messages if m.get("role") == "tool"]
-                text = json.dumps(tool_messages, ensure_ascii=False)
-                testcase.assertIn("[Task system receipt]", text)
-                if action not in {"accept", "reject"}: testcase.assertIn("worker-a" if action == "plan" else "manager-a" if action == "complete" else "leader-a", text)
-                if action == "complete": testcase.assertIn("original conversation", text)
-                testcase.assertIn("Do not recreate" if action == "plan" else "Do not repeat" if action in {"accept", "reject"} else "Do not resend" if action == "submit" else "Do not send another", text)
-                if action in {"accept", "reject"}:
-                    testcase.assertIn("synchronization is pending", text)
-                    testcase.assertIn("operation-one", text)
-                    if replacement:
-                        testcase.assertIn("exec-new", text)
-                        testcase.assertIn("remains terminal", text)
-                else:
-                    if action != "create": testcase.assertIn("not yet confirmed", text)
-                    testcase.assertIn("planId" if action == "plan" else identity_field, text)  # Original result survives.
-                for message in messages:
-                    if message.get("role") == "assistant":
-                        testcase.assertNotIn("[Task system receipt]", str(message.get("content")))
-                return ChatResponse(content=[TextBlock(text="Submitted; awaiting review.")], is_last=True)
+                raise AssertionError("A durable Task receipt must finish this phase without another model call")
 
         async def execute(command: str):
             calls.append(command)
@@ -123,7 +102,27 @@ class NativeTaskReceiptTest(unittest.TestCase):
             route_token = plugin._requester_route.set({"target_user":"@human:test","target_session":"!source:test"}) if action == "create" else None
             try:
                 await agent.reply(Msg(name="Leader", role="user", content=[TextBlock(text="Submit the result.")]))
-                testcase.assertEqual(model.calls, 2)
+                testcase.assertEqual(model.calls, 1)
+                messages = await model.formatter.format(agent.state.context)
+                text = json.dumps([m for m in messages if m.get("role") == "tool"], ensure_ascii=False)
+                testcase.assertIn("[Task system receipt]", text)
+                if action not in {"accept", "reject"}:
+                    testcase.assertIn("worker-a" if action == "plan" else "manager-a" if action == "complete" else "leader-a", text)
+                if action == "complete": testcase.assertIn("original conversation", text)
+                testcase.assertIn("Do not recreate" if action == "plan" else "Do not repeat" if action in {"accept", "reject"} else "Do not resend" if action == "submit" else "Do not send another", text)
+                if action in {"accept", "reject"}:
+                    testcase.assertIn("synchronization is pending", text)
+                    testcase.assertIn("operation-one", text)
+                    if replacement:
+                        testcase.assertIn("exec-new", text)
+                        testcase.assertIn("remains terminal", text)
+                elif action != "create":
+                    testcase.assertIn("not yet confirmed", text)
+                if action not in {"accept", "reject"}:
+                    testcase.assertIn("planId" if action == "plan" else identity_field, text)
+                # The framework-generated final message is also persisted in the
+                # fixture's real native context, with no additional inference.
+                testcase.assertIn("[Task system receipt]", json.dumps([m for m in messages if m.get("role") == "assistant"]))
                 if action == "create":
                     testcase.assertEqual(len(calls),1)
                     words=shlex.split(calls[0])

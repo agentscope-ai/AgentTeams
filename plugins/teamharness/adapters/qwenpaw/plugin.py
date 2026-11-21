@@ -123,6 +123,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         _submitted_task = ""
         _accepted_task = ""
         _task_scope = None
+        _finished_phase_receipt = ""
 
         def _inject_task_receipt(self, item: Any, tool_name: str, args: Any, creation_source: str = "") -> None:
             if tool_name not in {"execute_shell_command", "task"} or not isinstance(args, dict):
@@ -170,6 +171,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             # truncation while preserving the original result blocks.
             item.content.insert(0, TextBlock(text=receipt[1] + "\n"))
             self._task_receipt_ids = seen | {receipt[0]}
+            self._finished_phase_receipt = receipt[1]
 
         async def _allow_task_output_change(self, command: str, cwd: str | None) -> bool:
             if not self._task_scope:
@@ -235,10 +237,10 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             if acknowledgements and isinstance(middle, dict):
                 receipts.ack_delivery_context(middle, acknowledgements)
                 _delivery_ack.set(None)
-            if self._submitted_task or self._accepted_task:
+            if self._finished_phase_receipt or self._submitted_task or self._accepted_task:
                 from agentscope.message import Msg
                 message = Msg(name=agent.name, role="assistant", content=[{
-                    "type": "text", "text": (f"Task {self._submitted_task} result submitted; awaiting acceptance."
+                    "type": "text", "text": self._finished_phase_receipt or (f"Task {self._submitted_task} result submitted; awaiting acceptance."
                         if self._submitted_task else f"Task {self._accepted_task} accepted; the task system handles downstream coordination.")}])
                 agent.state.append_context(agent.name, message.content)
                 yield message
@@ -563,12 +565,12 @@ async def _prepare_task_context(ctx: Any, action: str, task_id: str) -> dict[str
 async def _prepare_public_task_event(ctx: Any, event: dict) -> None:
     """Bind a verified common-protocol event to the native public tool/context."""
     kind = event.get("kind")
+    spec = importlib.util.spec_from_file_location("teamharness_task_context", ASSET_DIR / "mcp/common/task_context.py")
+    common = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(common)
     if kind != "handoff":
         task_id = event.get("main_task_id") if kind == "main_task_ready" else event.get("task_id")
         result = await _prepare_task_context(ctx, "begin" if kind == "task_assigned" else "get", task_id)
-        spec = importlib.util.spec_from_file_location("teamharness_task_context", ASSET_DIR / "mcp/common/task_context.py")
-        common = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(common)
         prepared = common.prepare(kind, event, result)
         for field, variable in (("execution", _execution_task), ("ack", _ack_scope), ("review", _review_task), ("completion", _completion_task)):
             if field in prepared:
@@ -580,7 +582,7 @@ async def _prepare_public_task_event(ctx: Any, event: dict) -> None:
         name = tool["function"]["name"]
         short = name.split("__")[-1].lower()
         legacy = short in {"taskflow", "projectflow", "filesync"}
-        restricted = kind in {"task_submitted", "main_task_ready"} and short in {"execute_shell_command", "bash", "write_file", "edit_file", "edit", "write"}
+        restricted = kind in common.COORDINATION_PHASES and not _is_task_tool(name)
         if legacy or restricted:
             await ctx.agent.toolkit.remove_tool(name)
 

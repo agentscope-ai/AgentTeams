@@ -143,6 +143,11 @@ def execute(request):
         from task_operation import admit
         task = recovery.tools_current(identity)
         admit(task['execution'].get('checkpoint'))
+        if task.get('task_plan_id'):
+            canonical = recovery.request('POST', 'tasks/native-operations', {
+                'mode': 'admit', 'arguments': {'action': 'get', 'taskId': identity['task_id'], 'team': identity['team_id']}})
+            if canonical.get('mode') != 'admitted':
+                raise RecoveryConflict('Canonical Task outcome requires authoritative verification; do not replay')
         return {'task': task, 'checkpoint_digest': Recovery.digest(task['execution'].get('checkpoint'))}
     if action == 'begin_tools':
         return recovery.begin_tools(identity, request['calls'])

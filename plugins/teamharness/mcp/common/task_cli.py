@@ -193,7 +193,7 @@ def retryable_cli_error(message: str) -> bool:
     return bool(re.match(r'^(?:Error: )?(?:Get|Post|Put|Patch|Delete|Head) "https?://[^"\n]+": ', first))
 
 
-def run(arguments: dict) -> dict:
+def _run(arguments: dict) -> dict:
     started = False
     try:
         argv, env = command(arguments)
@@ -220,3 +220,13 @@ def run(arguments: dict) -> dict:
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         return {"ok": False, "error": "task_operation_unavailable", "message": str(error)[:2048],
                 "retryable": isinstance(error, subprocess.TimeoutExpired), "effect": "unknown" if started else "none"}
+
+
+def run(arguments: dict) -> dict:
+    if not os.getenv("AGENTTEAMS_CONTROLLER_URL"):
+        return _run(arguments)
+    if __package__:
+        from . import task_canonical
+    else:
+        import task_canonical
+    return task_canonical.run(arguments, _run, validate=command)

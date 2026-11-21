@@ -48,6 +48,12 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         raise ValueError("native bridge request must be an object")
     call = call or task_cli.run
     operation = payload.get("operation")
+    if operation == "canonical_admit":
+        if __package__:
+            from . import task_canonical
+        else:
+            import task_canonical
+        return task_canonical.admit(payload.get("context") or {})
     if operation == "roster":
         return task_roster.roster(native_role(payload.get("role")), get_json or controller_json, payload.get("team"))
     if operation == "admit_event":
@@ -113,6 +119,13 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         selected = receipts.select_creation_source(sources, arguments.get("inputId"), arguments.get("relatedInputIds"))
         source = selected["eventId"]
         arguments["_nativeSource"] = selected
+    if __package__:
+        from . import task_canonical
+    else:
+        import task_canonical
+    admission = task_canonical.admit(context)
+    if admission.get('ok') is not True:
+        return admission
     result = call(arguments)
     response = {"result": result, "phaseComplete": False}
     if action == "create":

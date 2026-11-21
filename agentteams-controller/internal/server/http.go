@@ -309,6 +309,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	recovery := NewTaskRecoveryHandler(projh, deps)
 	projh.recovery = recovery
 	mux.Handle("GET /api/v1/task-deliveries", mw.Authenticate(http.HandlerFunc(s.coordination.ListTaskDeliveries)))
+	mux.Handle("POST /api/v1/tasks/native-operations", mw.Authenticate(http.HandlerFunc(projh.NativeTaskOperation)))
 	mux.Handle("POST /api/v1/tasks", mw.Authenticate(http.HandlerFunc(projh.CreateTask)))
 	mux.Handle("GET /api/v1/tasks/recoverable", mw.Authenticate(http.HandlerFunc(recovery.ListRecoverableTasks)))
 	mux.Handle("POST /api/v1/tasks/{id}/execution", mw.Authenticate(http.HandlerFunc(recovery.UpdateExecution)))

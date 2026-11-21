@@ -14,30 +14,32 @@ import (
 // taskResource is the public task view. Storage records and notification routes
 // stay behind the API; callers use task/submission identities rather than keys.
 type taskResource struct {
-	AcceptedResults []taskResource                    `json:"acceptedResults,omitempty"`
-	RevisionOf      string                            `json:"revisionOf,omitempty"`
-	PlanID          string                            `json:"planId,omitempty"`
-	Nodes           []taskPlanNodeResource            `json:"nodes,omitempty"`
-	ID              string                            `json:"id"`
-	Team            string                            `json:"team"`
-	Kind            string                            `json:"kind,omitempty"`
-	Title           string                            `json:"title,omitempty"`
-	Status          string                            `json:"status"`
-	AssignedTo      string                            `json:"assignedTo,omitempty"`
-	AssignmentID    string                            `json:"assignmentId,omitempty"`
-	ParentTaskID    string                            `json:"parentTaskId,omitempty"`
-	MainTaskID      string                            `json:"mainTaskId,omitempty"`
-	ProjectID       string                            `json:"projectId,omitempty"`
-	Spec            string                            `json:"spec,omitempty"`
-	Summary         string                            `json:"summary,omitempty"`
-	SubmissionID    string                            `json:"submissionId,omitempty"`
-	Candidate       *taskCandidateResource            `json:"candidate,omitempty"`
-	CompletionID    string                            `json:"completionId,omitempty"`
-	Review          *taskReview                       `json:"review,omitempty"`
-	ResultStatus    string                            `json:"resultStatus,omitempty"`
-	Artifacts       []taskFinalArtifact               `json:"artifacts,omitempty"`
-	OriginEventID   string                            `json:"originEventId,omitempty"`
-	Notifications   map[string]taskNotificationStatus `json:"notifications,omitempty"`
+	Cancellation           *mainTaskCancellation             `json:"cancellation,omitempty"`
+	CancellationProjection string                            `json:"cancellationProjection,omitempty"`
+	AcceptedResults        []taskResource                    `json:"acceptedResults,omitempty"`
+	RevisionOf             string                            `json:"revisionOf,omitempty"`
+	PlanID                 string                            `json:"planId,omitempty"`
+	Nodes                  []taskPlanNodeResource            `json:"nodes,omitempty"`
+	ID                     string                            `json:"id"`
+	Team                   string                            `json:"team"`
+	Kind                   string                            `json:"kind,omitempty"`
+	Title                  string                            `json:"title,omitempty"`
+	Status                 string                            `json:"status"`
+	AssignedTo             string                            `json:"assignedTo,omitempty"`
+	AssignmentID           string                            `json:"assignmentId,omitempty"`
+	ParentTaskID           string                            `json:"parentTaskId,omitempty"`
+	MainTaskID             string                            `json:"mainTaskId,omitempty"`
+	ProjectID              string                            `json:"projectId,omitempty"`
+	Spec                   string                            `json:"spec,omitempty"`
+	Summary                string                            `json:"summary,omitempty"`
+	SubmissionID           string                            `json:"submissionId,omitempty"`
+	Candidate              *taskCandidateResource            `json:"candidate,omitempty"`
+	CompletionID           string                            `json:"completionId,omitempty"`
+	Review                 *taskReview                       `json:"review,omitempty"`
+	ResultStatus           string                            `json:"resultStatus,omitempty"`
+	Artifacts              []taskFinalArtifact               `json:"artifacts,omitempty"`
+	OriginEventID          string                            `json:"originEventId,omitempty"`
+	Notifications          map[string]taskNotificationStatus `json:"notifications,omitempty"`
 }
 
 type taskCandidateResource struct {
@@ -178,6 +180,16 @@ func publicTaskResource(id, team string, record map[string]any) taskResource {
 		_ = json.Unmarshal(data, &review)
 	}
 	var completion taskCompletion
+	var cancellation *mainTaskCancellation
+	cancellationProjection := ""
+	if record["task_cancellation"] != nil {
+		data, _ := json.Marshal(record["task_cancellation"])
+		_ = json.Unmarshal(data, &cancellation)
+		cancellationProjection = "pending"
+		if record["task_cancellation_applied"] == true {
+			cancellationProjection = "applied"
+		}
+	}
 	data, _ := json.Marshal(record["task_completion"])
 	_ = json.Unmarshal(data, &completion)
 	var origin struct {
@@ -196,6 +208,7 @@ func publicTaskResource(id, team string, record map[string]any) taskResource {
 		}
 	}
 	return taskResource{
+		Cancellation: cancellation, CancellationProjection: cancellationProjection,
 		RevisionOf: coordinationString(record, "revision_of"), Candidate: publicTaskCandidate(record),
 		PlanID: plan.ID, Nodes: nodes,
 		Review: review, ResultStatus: coordinationString(record, "result_status"),

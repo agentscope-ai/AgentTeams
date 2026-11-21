@@ -56,6 +56,7 @@ Project 归属、Team 作用域与原始回复路由属于可信任务上下文�
 |---|---|---|
 | task create | Manager | 登记原始请求、绑定 Leader/请求路由、排队交接事件 |
 | task plan | Leader | 在原主任务保存完整执行计划、准备房间、派发可执行子任务 |
+| task cancel | 有权限的决策者（CLI/API 控制入口） | 锁定主任务，取消未完成执行，保留已验收结果和文件 |
 | task begin | 执行者 | 校验执行归属、ACK、准备输入与工作目录、返回恢复上下文 |
 | task submit | 执行者 | 验证指定文件、上传、保存候选提交、排队通知 Leader |
 | task accept | Leader | 绑定精确 submissionId、机械校验、记录业务验收、推进依赖 |
@@ -66,6 +67,14 @@ Project 归属、Team 作用域与原始回复路由属于可信任务上下文�
 普通问答不创建任务；Project 仅在明确需要时单独使用。create 不替 Leader 分解任务；
 plan 沿用 Manager 已登记的主任务 ID。拒绝结果不隐式重开 terminal revision 任务。
 返工必须沿用公共生命周期允许的替代执行方式，不能私自换主任务或绕过终态。
+
+控制调用 `agt task cancel <main-task-id> --reason ...` 使用公共取消 API。主任务先
+持久化 cancelled 与不可改写的原因/操作者/操作 ID，阻止新执行、提交与依赖推进，
+再按条件写入取消未完成子节点；已验收结果、失败记录和文件保持原样。部分同步
+失败返回 projection=pending，重试相同原因或后台恢复继续完成，不重新执行任务。
+`get` 同样返回 cancellation 和 cancellationProjection。取消收据不等于运行中的
+工具已物理停止；运行时仍须遵守取消状态。现阶段这是 CLI/API 控制入口，不新增
+自动 Agent 取消动作，也不依赖各 Harness 的专用业务接口。
 
 begin 返回任务说明、验收标准、输入引用及必要预览、已准备的本地路径、输出/临时
 目录与恢复检查点。运行时已准备的收据必须验证其执行身份，不能盲信旧缓存。

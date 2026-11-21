@@ -365,7 +365,7 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ifNoneMatch == "*" {
-		if !validateTaskPlanCommit(w, nil, body) || !validateTaskReviewCommit(w, nil, body) || !validateTaskNotificationsCommit(w, nil, body) || !validateTaskSubmissionCommit(w, nil, body) || !validateTaskCompletionCommit(w, nil, body) || !validateTaskOriginCommit(w, nil, body) {
+		if !validateTaskCancellationCommit(w, nil, body) || !validateTaskPlanCommit(w, nil, body) || !validateTaskReviewCommit(w, nil, body) || !validateTaskNotificationsCommit(w, nil, body) || !validateTaskSubmissionCommit(w, nil, body) || !validateTaskCompletionCommit(w, nil, body) || !validateTaskOriginCommit(w, nil, body) {
 			return
 		}
 		if !validateTaskFileIndexCommit(w, nil, body) {
@@ -401,7 +401,7 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	currentStatus, currentStatusPresent, _ := exactTaskStatus(current)
-	if !validateTaskPlanCommit(w, current, body) || !validateTaskReviewCommit(w, current, body) || !validateTaskNotificationsCommit(w, current, body) || !validateTaskSubmissionCommit(w, current, body) || !validateTaskCompletionCommit(w, current, body) || !validateTaskOriginCommit(w, current, body) {
+	if !validateTaskCancellationCommit(w, current, body) || !validateTaskPlanCommit(w, current, body) || !validateTaskReviewCommit(w, current, body) || !validateTaskNotificationsCommit(w, current, body) || !validateTaskSubmissionCommit(w, current, body) || !validateTaskCompletionCommit(w, current, body) || !validateTaskOriginCommit(w, current, body) {
 		return
 	}
 	if !validateTaskFileIndexCommit(w, current, body) {

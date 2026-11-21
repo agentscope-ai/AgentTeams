@@ -107,6 +107,9 @@ func (h *ProjectHandler) recoverTaskNotifications(ctx context.Context) {
 				if json.Unmarshal(body, &task) != nil {
 					continue
 				}
+				if len(task["task_cancellation"]) > 0 {
+					_ = h.reconcileTaskCancellation(ctx, key)
+				}
 				if len(task["task_plan"]) > 0 {
 					_ = h.reconcileTaskPlan(ctx, key)
 				}

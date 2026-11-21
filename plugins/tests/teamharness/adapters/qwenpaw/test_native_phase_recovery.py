@@ -76,6 +76,33 @@ class NativePhaseRecoveryTest(unittest.TestCase):
                 plugin._phase_retry.reset(phase_token)
         asyncio.run(run())
 
+    def test_native_checkpoint_transport_failure_reports_retry_but_conflict_does_not(self):
+        import urllib.error
+        root = Path(__file__).resolve().parents[5]
+        spec = importlib.util.spec_from_file_location("native_checkpoint_retry_plugin", root / "plugins/teamharness/adapters/qwenpaw/plugin.py")
+        plugin = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(plugin)
+        hooks = []
+        plugin._register_coordination_hook(SimpleNamespace(register_runtime_hook=hooks.append))
+        final = next(hook for hook in hooks if hook.name == "teamharness_coordination_exit")
+
+        async def run():
+            for code, should_retry in [(503, True), (429, True), (409, False), (403, False)]:
+                with self.subTest(code=code):
+                    error = ValueError("native input persistence failed")
+                    error.__cause__ = urllib.error.HTTPError("http://controller/native", code, "fixture", {}, None)
+                    token = plugin._phase_retry.set({"id": "same-event", "native_id": "$same-attempt", "failed": False})
+                    ctx = SimpleNamespace(extras={"phase_retry_token": token}, error=error)
+                    with patch.object(plugin._phase_module(), "notify", new=AsyncMock(return_value={"retry_queued": True})) as callback:
+                        await final.run(ctx)
+                        await asyncio.gather(*plugin._phase_jobs)
+                        if should_retry:
+                            callback.assert_awaited_once_with("same-event", "$same-attempt", "retry")
+                        else:
+                            callback.assert_not_awaited()
+                        self.assertIsNone(plugin._phase_retry.get())
+        asyncio.run(run())
+
     def test_finally_reports_retry_outside_the_native_turn(self):
         root = Path(__file__).resolve().parents[5]
         spec = importlib.util.spec_from_file_location("native_retry_exit_plugin", root / "plugins/teamharness/adapters/qwenpaw/plugin.py")

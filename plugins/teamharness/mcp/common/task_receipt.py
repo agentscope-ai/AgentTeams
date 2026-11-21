@@ -384,8 +384,9 @@ def input_refresh_context(result: dict, refreshed: list[dict]) -> str:
     """Format the common control result without duplicating Human bodies."""
     return ("[Task input refresh]\nNo new Task was registered. This is a normal input update, not a failed task. "
             "Interpret the verified new Human inputs together with every pending earlier request before choosing an operation. "
-            "A newer message does not automatically supersede an earlier one: preserve genuinely independent requests even when their text is identical. "
-            "Do not create one Task per message. Bind corrections using relatedInputIds; do not put their paraphrase only in spec. "
+            "Transport copies are deduplicated by source event identity in your framework, not by matching Human text. "
+            "Distinct complete work requests ask for distinct runs even when their bodies match; fulfill each unless the Human relates it to existing work. "
+            "A question or withdrawal may need no new Task. Bind only actual Human amendments using relatedInputIds; never use it to merge duplicate-looking work requests. "
             "Address every independent request before ending your turn; do not ask the Human to resubmit merely because inputs changed.\n"
             + json.dumps({**result, "inputs": refreshed}, ensure_ascii=False))
 

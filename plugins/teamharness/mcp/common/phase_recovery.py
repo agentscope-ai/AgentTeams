@@ -10,6 +10,17 @@ import urllib.parse
 import urllib.request
 
 
+def retryable_error(error: BaseException | None) -> bool:
+    """Recognize transport failures even when a native callback wraps them."""
+    while error is not None:
+        if isinstance(error, urllib.error.HTTPError):
+            return error.code == 429 or 500 <= error.code <= 599
+        if isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError)):
+            return True
+        error = error.__cause__
+    return False
+
+
 async def notify(event_id: str, native_event_id: str, action: str, *, request=None, sleep=None) -> dict:
     """Repeat the same idempotent lifecycle fact until committed or superseded."""
     return await until_available(request or _request, event_id, native_event_id, action, sleep=sleep)

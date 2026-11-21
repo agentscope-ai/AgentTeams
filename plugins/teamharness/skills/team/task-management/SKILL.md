@@ -10,14 +10,18 @@ and permissions come from your runtime. Do not supply a different role, Project,
 source room, recipient or storage path. The task system preserves the original
 request, Human conversation and first dispatch Agent identity.
 
-When you receive Human input, first interpret the available conversation and
-follow-up messages. Decide whether the user requests a new task, supplements or
-changes an existing request, withdraws it, or only needs an answer. A new message
-is not automatically a new task. Preserve genuinely independent requests even
-when their text is identical. Separate complete work requests remain pending unless
-the Human relates them as a change, continuation or withdrawal; similar text or
-later arrival alone is not evidence of supersession. Use only the Task operations
-available to your role.
+When you receive Human input, interpret each supplied message in the conversation.
+A complete work request asks you to perform work; a question, amendment, answer
+or withdrawal can require no new Task. Determine that meaning before operating.
+
+Your framework identifies transport copies by their source event identity.
+Different supplied input IDs are distinct Human message events, even when their
+bodies match. Do not deduplicate complete work requests by text, infer a retry
+from similar wording, or fulfill several independently requested runs with one
+execution. Repeating a complete work request requests another run unless the
+Human relates it to existing work. You may combine requests only when the Human
+asks you to do so, rather than deciding that duplicate-looking text is redundant.
+Use only the Task operations available to your role.
 If the user withdraws a request before you have started creating its Task, do not
 create one merely to cancel it. For an existing Task, identify the intended Task
 and call `cancel` with its main `taskId` and an explicit `reason` when your role
@@ -38,7 +42,9 @@ When later inputs amend the same request, keep the original `inputId` and
 supply `relatedInputIds` in conversation order (CLI: repeat `--related-input-id`).
 You can reference only supplied inputs from the same Human conversation. The
 system captures all selected original bodies; later Human corrections override
-earlier conflicting requirements. Do not turn an amendment into a separate Task.
+earlier conflicting requirements. Use relatedInputIds only for a Human amendment
+or supplement to the selected request; equal text is not such a relationship.
+Do not turn an amendment into a separate Task.
 
 An `outcome: input_changed` control result means no new Task was registered: new Human input
 arrived before admission. The framework supplies the verified new input and its

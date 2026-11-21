@@ -49,7 +49,7 @@ TASK_SCHEMA = {
             "leader": {"type": "string", "description": "For create: registered Leader name."},
             "title": {"type": "string", "description": "For create: concise original request title."},
             "inputId": {"type": "string", "description": "For create: source input reference supplied by the framework; required when more than one message could be the original request. This is not a room, Project or storage path."},
-            "relatedInputIds": {"type": "array", "items": {"type": "string"}, "description": "For create: later corrections or supplements to this same request, in supplied input order; same Human conversation only. The task system captures their exact bodies automatically."},
+            "relatedInputIds": {"type": "array", "items": {"type": "string"}, "description": "For create: later corrections or supplements to this same request, in supplied input order; same Human conversation only. Never use this field to merge distinct work requests merely because their text matches. The task system captures their exact bodies automatically."},
             "spec": {"type": "string", "description": "For create: only necessary earlier context outside the supplied inputs. Bind supplied corrections with relatedInputIds; never put only their paraphrase here. The task system captures original Human bodies automatically."},
             "nodes": {"type": "array", "description": "For plan: complete execution DAG; no source routes or execution Task IDs.",
                       "items": {"type": "object", "additionalProperties": False, "required": ["id", "assignedTo", "spec", "dependsOn"],

@@ -994,7 +994,7 @@ def _register_coordination_hook(api: Any) -> None:
             token = ctx.extras.pop("phase_retry_token", None)
             if token is not None:
                 _phase_retry.reset(token)
-                if phase and phase.get("failed"):
+                if phase and (phase.get("failed") or _phase_module().retryable_error(getattr(ctx, "error", None))):
                     job = asyncio.create_task(_phase_module().notify(phase["id"], phase["native_id"], "retry"))
                     _phase_jobs.add(job)
                     def finished(task):

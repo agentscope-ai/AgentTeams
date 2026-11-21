@@ -170,6 +170,12 @@ def test_delivery_acknowledgement_is_returned_without_mutating_native_state(brid
     assert result['acknowledgements'] == {'delivery': '!room:test'}
     assert 'Accepted report' in result['facts'][0]
     assert middle == {}
+    persisted = bridge.invoke({'operation': 'ack_delivery_context', 'middle': middle,
+                              'acknowledgements': result['acknowledgements']})
+    assert middle == {}
+    assert persisted['teamharness.sent_deliveries']['!room:test']['delivery'] is True
+    repeated = bridge.invoke({'operation': 'delivery_context', 'middle': persisted, 'room': '!room:test'}, get_json=get)
+    assert repeated['facts'] == [] and repeated['acknowledgements'] == {}
 
 
 @pytest.mark.parametrize('direct,configured,expected_path', [

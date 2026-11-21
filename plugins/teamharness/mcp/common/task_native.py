@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import copy
 import os
 from pathlib import Path
 import re
@@ -68,6 +69,15 @@ def invoke(payload, *, call=None, get_json=None, notify=None):
             raise ValueError("native room and persisted delivery context required")
         facts, acknowledgements = receipts.delivery_context(middle, room, get_json or controller_json)
         return {"facts": facts, "acknowledgements": acknowledgements}
+    if operation == "ack_delivery_context":
+        middle, acknowledgements = payload.get("middle"), payload.get("acknowledgements")
+        if (not isinstance(middle, dict) or not isinstance(acknowledgements, dict)
+                or any(not isinstance(key, str) or not key or not isinstance(room, str) or not room.startswith("!")
+                       for key, room in acknowledgements.items())):
+            raise ValueError("persisted native context and exact delivery acknowledgements required")
+        updated = copy.deepcopy(middle)
+        receipts.ack_delivery_context(updated, acknowledgements)
+        return updated
     if operation != "task":
         raise ValueError("unknown native bridge operation")
     arguments, context = payload.get("arguments"), payload.get("context")

@@ -66,3 +66,34 @@ func TestTaskCreateCanCaptureOriginalRequestWithoutSpecFlag(t *testing.T) {
 		t.Fatalf("no-spec creation failed: calls=%d err=%v output=%s", calls, err, output.String())
 	}
 }
+
+func TestTaskCreateChecksSelectedInputAgainstNativeBinding(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Header.Get("X-AgentTeams-Origin-Event-ID") != "$second" {
+			t.Error("selected input lost its native source")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sourceEventId":"$second"}`))
+	}))
+	defer server.Close()
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "test-token")
+	t.Setenv("AGENTTEAMS_ORIGIN_EVENT_ID", "$second")
+	t.Setenv("AGENTTEAMS_REQUESTER_USER_ID", "@human:test")
+	t.Setenv("AGENTTEAMS_REQUESTER_ROOM_ID", "!source:test")
+	t.Setenv("AGENTTEAMS_INPUT_ID", "input-2")
+	for _, input := range []string{"input-1", "input-2"} {
+		cmd := newRootCommand("agt")
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetArgs([]string{"task", "create", "--leader", "lead", "--title", "Request", "--input-id", input})
+		err := cmd.Execute()
+		if (err == nil) != (input == "input-2") {
+			t.Fatalf("input=%s err=%v", input, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("unbound input caused a side effect: %d requests", calls)
+	}
+}

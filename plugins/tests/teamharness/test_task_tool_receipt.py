@@ -11,6 +11,48 @@ def module():
     SPEC.loader.exec_module(result)
     return result
 
+
+def test_creation_selects_a_source_reference_without_defaulting_to_first():
+    public = module()
+    sources = public.creation_sources({"matrix_input_sources": [
+        {"event_id": "$first", "room_id": "!room:test", "sender_id": "@a:test"},
+        {"event_id": "$second", "room_id": "!room:test", "sender_id": "@b:test"}]})
+    assert public.select_creation_source(sources, "input-2") == {
+        "eventId": "$second", "roomId": "!room:test", "userId": "@b:test"}
+    for ref in (None, "input-3", "$second"):
+        try:
+            public.select_creation_source(sources, ref)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("ambiguous or unknown input started a creation")
+
+
+def test_single_creation_source_remains_implicit_and_transport_context_is_required():
+    public = module()
+    sources = public.creation_sources({"event_id": "$one", "room_id": "!room:test", "sender_id": "@a:test"})
+    assert public.select_creation_source(sources, None)["eventId"] == "$one"
+    assert public.creation_sources({}) == []
+    for invalid in [{"event_id": "$one"}, {"event_id": "$one", "room_id": "wrong", "sender_id": "@a:test"}]:
+        try:
+            public.creation_sources(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("incomplete source identity was accepted")
+
+
+def test_cli_input_reference_is_bound_without_changing_shared_environment():
+    import shlex
+    public = module()
+    command = 'agt task create --leader lead --title "Second task" --input-id input-2'
+    assert public.creation_command_input(command) == "input-2"
+    bound = public.creation_command_env(command, "$second", "@human:test", "!room:test", input_id="input-2")
+    assert "AGENTTEAMS_INPUT_ID=input-2" in shlex.split(bound)
+    assert public.creation_command_env(command, "$second", "@human:test", "!room:test", input_id="input-1") is None
+    assert public.creation_command_input('agt task create --leader lead --title "Task"') == ""
+    assert public.creation_command_input(command + '; echo forged') is None
+
 def candidate():
     return {"task":{"id":"t1","status":"submitted","submissionId":"s1"},
             "notification":{"status":"queued","eventId":"e1","recipient":"leader-a"},

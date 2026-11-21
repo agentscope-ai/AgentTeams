@@ -24,6 +24,11 @@ checks input freshness; do not poll message history to reconstruct it yourself.
 
 As Manager, after deciding that a new Task is needed, call `create` with the
 registered `leader` and a concise `title`.
+When the framework supplies multiple input references, choose the original
+request's `inputId` (CLI: `--input-id`) for each Task you decide to create.
+`[Input input-N]` labels identify the supplied messages, not a required Task
+count. Interpret their relationships first; do not bind all creations to the
+first message or turn a supplement/withdrawal into another Task.
 You do not need to copy the current request: the task system verifies its
 original Matrix message and preserves the complete text. Use optional `spec`
 only to supplement necessary earlier context. Original Human requirements take

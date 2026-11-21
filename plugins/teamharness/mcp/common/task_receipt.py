@@ -8,6 +8,39 @@ import shlex
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
+def creation_sources(meta: dict) -> list[dict]:
+    """Bind turn-local input references to native, transport-owned identities."""
+    frames = meta.get("matrix_input_sources")
+    if frames is None:
+        if not meta.get("event_id"):
+            return []
+        frames = [meta]
+    if not isinstance(frames, list) or not frames:
+        raise ValueError("native input sources unavailable")
+    result = []
+    for index, frame in enumerate(frames):
+        if not isinstance(frame, dict):
+            raise ValueError("invalid native input source")
+        values = {"eventId": frame.get("event_id"), "roomId": frame.get("room_id"),
+                  "userId": frame.get("sender_id")}
+        if any(not isinstance(values[key], str) or not values[key].startswith(prefix)
+               for key, prefix in (("eventId", "$"), ("roomId", "!"), ("userId", "@"))):
+            raise ValueError("complete native source identity required")
+        result.append({"inputId": "input-" + str(index + 1), **values})
+    return result
+
+
+def select_creation_source(sources: list[dict], input_id: str | None) -> dict:
+    if input_id is None and len(sources) == 1:
+        selected = sources[0]
+    else:
+        matches = [source for source in sources if source["inputId"] == input_id]
+        if len(matches) != 1:
+            raise ValueError("choose an inputId supplied by the framework; multiple messages do not automatically mean multiple Tasks")
+        selected = matches[0]
+    return {key: selected[key] for key in ("eventId", "userId", "roomId")}
+
+
 def _task_command_words(command: str) -> list[str] | None:
     if not isinstance(command, str):
         return None
@@ -40,13 +73,23 @@ def task_operation_command(command: str) -> tuple[str, str] | None:
     return (words[2], words[3]) if _task_flags(words[4:], flags) else None
 
 
-def creation_command_env(command: str, source: str, user: str, room: str) -> str | None:
+def creation_command_input(command: str) -> str | None:
     words = _task_command_words(command)
-    if (not words or words[2] != "create" or not _task_flags(words[3:], {"--leader", "--title", "--spec"})
+    if not words or words[2] != "create" or not _task_flags(words[3:], {"--leader", "--title", "--spec", "--input-id"}):
+        return None
+    flags = dict(zip(words[3::2], words[4::2]))
+    return flags.get("--input-id", "")
+
+
+def creation_command_env(command: str, source: str, user: str, room: str, *, input_id: str | None = None) -> str | None:
+    requested = creation_command_input(command)
+    if (requested is None or (requested and requested != input_id)
             or not source or not user.startswith("@") or not room.startswith("!")):
         return None
     env = {"AGENTTEAMS_ORIGIN_EVENT_ID": source, "AGENTTEAMS_REQUESTER_USER_ID": user,
            "AGENTTEAMS_REQUESTER_ROOM_ID": room}
+    if requested:
+        env["AGENTTEAMS_INPUT_ID"] = requested
     return "env " + " ".join(shlex.quote(key + "=" + value) for key, value in env.items()) + " " + command
 
 

@@ -199,3 +199,19 @@ def test_source_ranges_preserve_each_sender_and_reply_route(matrix_channel):
     assert [s["sender_id"] for s in sources] == ["@a:test", "@b:test"]
     assert [s["teamharness_requester_route"] for s in sources] == routes
     assert [(s["content_start"], s["content_end"]) for s in sources] == [(0, 2), (2, 3)]
+
+
+def test_native_request_labels_sources_without_duplicating_their_content(matrix_channel):
+    AgentTeamsMatrixChannel, _ = matrix_channel
+    module = sys.modules[AgentTeamsMatrixChannel.__module__]
+    channel = AgentTeamsMatrixChannel(process=lambda *_: None)
+    items = [{"channel_id": channel.channel, "sender_id": "@human:test",
+              "content_parts": [module.TextContent(type=module.ContentType.TEXT, text=text)],
+              "meta": {"room_id": "!room:test", "event_id": "$" + str(index)}}
+             for index, text in enumerate(("Original unique request", "Withdraw the previous request"))]
+    request = channel.build_agent_request_from_native(channel.merge_native_items(items))
+    text = str(request.model_dump())
+    assert "[Input input-1]" in text and "[Input input-2]" in text
+    assert text.count("Original unique request") == 1
+    assert text.count("Withdraw the previous request") == 1
+    assert request.session_id == "matrix:!room:test"

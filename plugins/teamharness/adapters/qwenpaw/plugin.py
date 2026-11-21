@@ -22,6 +22,7 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 _requester_route: ContextVar[dict[str, Any] | None] = ContextVar("teamharness_requester_route", default=None)
 _coordinator_route: ContextVar[dict[str, Any] | None] = ContextVar("teamharness_coordinator_route", default=None)
 _source_event: ContextVar[str] = ContextVar("teamharness_source_event", default="")
+_creation_sources: ContextVar[list[dict] | None] = ContextVar("teamharness_creation_sources", default=None)
 _execution_task: ContextVar[str] = ContextVar("teamharness_execution_task", default="")
 _completion_task: ContextVar[str] = ContextVar("teamharness_completion_task", default="")
 _planning_tasks: ContextVar[frozenset[str]] = ContextVar("teamharness_planning_tasks", default=frozenset())
@@ -137,6 +138,16 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
 
     receipts = _receipt_module()
 
+    def source_for(input_id):
+        sources = _creation_sources.get()
+        if sources is None:
+            route = _requester_route.get() or {}
+            sources = [{"inputId": "input-1", "eventId": _source_event.get(),
+                        "userId": route.get("target_user", ""), "roomId": route.get("target_session", "")}]
+            if not sources[0]["eventId"] or not sources[0]["userId"] or not sources[0]["roomId"]:
+                raise ValueError("native original-conversation context unavailable")
+        return receipts.select_creation_source(sources, input_id)
+
     class TeamHarnessSanitizer(MiddlewareBase):
         _submitted_task = ""
         _accepted_task = ""
@@ -192,6 +203,10 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             # truncation while preserving the original result blocks.
             item.content.insert(0, TextBlock(text=receipt[1] + "\n"))
             self._task_receipt_ids = seen | {receipt[0]}
+            if creation_source:
+                # A saved creation does not settle the whole Human input.
+                # Let the Agent consider other requests, amendments or withdrawal.
+                return
             if not creation_source and action == "plan":
                 planned = getattr(self, "_planned_tasks", set()) | {task_id}
                 self._planned_tasks = planned
@@ -321,15 +336,28 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             task_tool = _is_task_tool(str(getattr(call, "name", "")))
             if task_tool and isinstance(args, dict):
                 args.pop("_nativeSource", None)
-                if args.get("action") == "create" and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and route and _source_event.get():
-                    creation_source = _source_event.get()
-                    args["_nativeSource"] = {"eventId": creation_source, "userId": str(route.get("target_user") or ""), "roomId": str(route.get("target_session") or "")}
+                if args.get("action") == "create" and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+                    try:
+                        selected = source_for(args.get("inputId"))
+                    except ValueError as error:
+                        from agentscope.tool import ToolResponse
+                        yield ToolResponse(state="error", content=[{"type": "text", "text": str(error)}])
+                        return
+                    creation_source = selected["eventId"]
+                    args["_nativeSource"] = selected
                 if json_input:
                     call.input = json.dumps(args, ensure_ascii=False)
-            if name == "execute_shell_command" and isinstance(args, dict) and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and route:
-                bound = receipts.creation_command_env(args.get("command"), _source_event.get(), str(route.get("target_user") or ""), str(route.get("target_session") or ""))
-                if bound:
-                    creation_source = _source_event.get()
+            if name == "execute_shell_command" and isinstance(args, dict) and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+                requested = receipts.creation_command_input(args.get("command"))
+                if requested is not None:
+                    try:
+                        selected = source_for(requested or None)
+                    except ValueError as error:
+                        from agentscope.tool import ToolResponse
+                        yield ToolResponse(state="error", content=[{"type": "text", "text": str(error)}])
+                        return
+                    creation_source = selected["eventId"]
+                    bound = receipts.creation_command_env(args.get("command"), creation_source, selected["userId"], selected["roomId"], input_id=requested or None)
                     args["command"] = bound
                     if json_input:
                         call.input = json.dumps(args, ensure_ascii=False)
@@ -681,6 +709,9 @@ async def _manager_report_context(ctx: Any) -> bool:
         return False
     if meta.get("event_id"):
         ctx.extras["source_event_token"] = _source_event.set(str(meta["event_id"]))
+    if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and "matrix_input_sources" in meta:
+        # An unavailable/invalid batch must never fall back to its first source.
+        ctx.extras["creation_sources_token"] = _creation_sources.set([])
     api_event = meta.get("teamharness_coordination") or {}
     receipt = {}
     if meta.get("teamharness_matrix_coordination"):
@@ -826,8 +857,15 @@ async def _manager_report_context(ctx: Any) -> bool:
 
     try:
         humans = await asyncio.to_thread(_controller_json, "humans")
-        if sender in {str(h.get("matrixUserID") or h.get("matrixUserId") or "") for h in humans.get("humans", [])}:
-            ctx.extras.setdefault("requester_route_token", _requester_route.set({"channel": "matrix", "target_session": _room_id(ctx.request), "target_user": sender}))
+        human_ids = {str(h.get("matrixUserID") or h.get("matrixUserId") or "") for h in humans.get("humans", [])}
+        sources = _creation_sources.get()
+        if "matrix_input_sources" in meta:
+            sources.extend(s for s in _receipt_module().creation_sources(meta) if s["userId"] in human_ids)
+            ctx.inject_context("[Task input references]\n" + json.dumps([s["inputId"] for s in sources]),
+                               source="teamharness_creation_inputs")
+        if sender in human_ids or sources:
+            if sender in human_ids:
+                ctx.extras.setdefault("requester_route_token", _requester_route.set({"channel": "matrix", "target_session": _room_id(ctx.request), "target_user": sender}))
             await _prepare_delivery_context(ctx)
             await _prepare_manager_roster(ctx)
             return False
@@ -939,6 +977,9 @@ def _register_coordination_hook(api: Any) -> None:
             token = ctx.extras.pop("source_event_token", None)
             if token is not None:
                 _source_event.reset(token)
+            token = ctx.extras.pop("creation_sources_token", None)
+            if token is not None:
+                _creation_sources.reset(token)
             token = ctx.extras.pop("coordinator_route_token", None)
             if token is not None:
                 _coordinator_route.reset(token)

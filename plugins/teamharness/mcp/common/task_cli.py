@@ -13,7 +13,7 @@ import subprocess
 # Required fields, optional fields, and repeated flags. No caller-supplied
 # executable, shell, environment, storage path, recipient or Project routing.
 _ACTIONS = {
-    "create": (("leader", "title"), ("spec",), {}),
+    "create": (("leader", "title"), ("spec", "inputId"), {}),
     "plan": (("nodes",), ("team",), {}),
     "get": ((), ("team",), {}),
     "begin": ((), ("team",), {}),
@@ -27,7 +27,7 @@ _ACTIONS = {
     "files_get": ((), ("team", "name", "artifactId", "version"), {}),
     "files_put": (("source", "name"), ("kind", "team"), {}),
 }
-_FLAGS = {"submissionId": "submission", "artifactId": "artifact", "replacementSpec": "replacement-spec"}
+_FLAGS = {"submissionId": "submission", "artifactId": "artifact", "replacementSpec": "replacement-spec", "inputId": "input-id"}
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 TASK_SCHEMA = {
@@ -48,6 +48,7 @@ TASK_SCHEMA = {
             "taskId": {"type": "string", "description": "Required except create. Use the task-system ID, not a local step alias."},
             "leader": {"type": "string", "description": "For create: registered Leader name."},
             "title": {"type": "string", "description": "For create: concise original request title."},
+            "inputId": {"type": "string", "description": "For create: source input reference supplied by the framework; required when more than one message could be the original request. This is not a room, Project or storage path."},
             "spec": {"type": "string", "description": "For create: optional supplementary context. The task system captures the original Human message automatically; do not copy or summarize it here."},
             "nodes": {"type": "array", "description": "For plan: complete execution DAG; no source routes or execution Task IDs.",
                       "items": {"type": "object", "additionalProperties": False, "required": ["id", "assignedTo", "spec", "dependsOn"],
@@ -164,6 +165,8 @@ def command(arguments: dict) -> tuple[list[str], dict[str, str]]:
             raise ValueError("native original-conversation context unavailable")
         env.update({"AGENTTEAMS_ORIGIN_EVENT_ID": source["eventId"], "AGENTTEAMS_REQUESTER_USER_ID": source["userId"],
                     "AGENTTEAMS_REQUESTER_ROOM_ID": source["roomId"]})
+        if "inputId" in arguments:
+            env["AGENTTEAMS_INPUT_ID"] = arguments["inputId"]
     return argv, env
 
 

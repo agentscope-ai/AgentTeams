@@ -27,6 +27,17 @@ def test_create_does_not_require_model_to_copy_original_message(monkeypatch):
     assert env["AGENTTEAMS_ORIGIN_EVENT_ID"] == "$actual"
 
 
+def test_create_carries_a_framework_selected_input_reference(monkeypatch):
+    tool = load(monkeypatch)
+    argv, env = tool.command({"action": "create", "leader": "lead", "title": "Second request", "inputId": "input-2",
+        "_nativeSource": {"eventId": "$second", "userId": "@human:test", "roomId": "!source:test"}})
+    assert argv[-2:] == ["--input-id", "input-2"]
+    assert env["AGENTTEAMS_INPUT_ID"] == "input-2"
+    assert env["AGENTTEAMS_ORIGIN_EVENT_ID"] == "$second"
+    assert "inputId" in tool.schema("manager")["inputSchema"]["properties"]
+    assert "inputId" not in tool.schema("worker")["inputSchema"]["properties"]
+
+
 def test_rejection_can_request_explicit_replacement_without_shell(monkeypatch):
     tool = load(monkeypatch)
     argv, _ = tool.command({"action":"reject", "taskId":"t1", "submissionId":"s1", "note":"QA failed", "replacementSpec":"Fix cents; literal $(text)"})

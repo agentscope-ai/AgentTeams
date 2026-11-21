@@ -65,6 +65,9 @@
 
 普通 @ 文本与停止按钮的结构化控制分开验证。先验证来源保留、输入版本围栏和意图
 关联的确定性，再用真实 Manager/Leader/Worker 验证上述场景；SDK 单测不替代真实闭环。
+当前已补齐公共输入引用选择、CLI 本次调用绑定校验、来源歧义时不执行，以及创建回执
+不强制结束人类会话的 SDK 检查。新输入版本校验及完整的相关更正关联仍待完成，因此
+尚未构建下一镜像，也未重新派发二十次认证请求。
 
 完整本地证据位于 `output/task-protocol-129-evidence-20261120/` 的
 `round01-end-audit-summary.json`、`round01-concurrency-split-summary.json` 和对应运行目录。

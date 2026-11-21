@@ -4,10 +4,48 @@ import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 SOURCE = Path(__file__).resolve().parents[5] / "plugins/teamharness/adapters/qwenpaw/plugin.py"
+
+
+@pytest.mark.parametrize("registry_available", [True, False])
+def test_batch_sources_keep_human_authority_without_first_sender_fallback(monkeypatch, registry_available):
+    spec = importlib.util.spec_from_file_location("batch_scope_plugin", SOURCE)
+    plugin = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plugin)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
+    def read(_):
+        if not registry_available:
+            raise OSError("registry unavailable")
+        return {"humans": [{"matrixUserID": "@human:test"}]}
+    monkeypatch.setattr(plugin, "_controller_json", read)
+    monkeypatch.setattr(plugin, "_prepare_delivery_context", AsyncMock())
+    monkeypatch.setattr(plugin, "_prepare_manager_roster", AsyncMock())
+    meta = {"event_id": "$peer", "sender_id": "@peer:test", "room_id": "!room:test",
+            "teamharness_requester_route": {"target_user": "@human:test", "target_session": "!room:test"},
+            "matrix_input_sources": [
+                {"event_id": "$peer", "sender_id": "@peer:test", "room_id": "!room:test"},
+                {"event_id": "$human", "sender_id": "@human:test", "room_id": "!room:test"}]}
+    toolkit = SimpleNamespace(get_tool_schemas=AsyncMock(return_value=[]), remove_tool=AsyncMock())
+    ctx = SimpleNamespace(request=SimpleNamespace(channel_meta=meta), agent=SimpleNamespace(toolkit=toolkit), extras={},
+                          inject_context=lambda *a, **kw: None)
+    async def scenario():
+        try:
+            await plugin._manager_report_context(ctx)
+            sources = plugin._creation_sources.get()
+            assert sources == ([{"inputId": "input-2", "eventId": "$human", "userId": "@human:test", "roomId": "!room:test"}]
+                               if registry_available else [])
+        finally:
+            for key, variable in [("creation_sources_token", plugin._creation_sources),
+                                  ("source_event_token", plugin._source_event),
+                                  ("requester_route_token", plugin._requester_route)]:
+                token = ctx.extras.pop(key, None)
+                if token is not None:
+                    variable.reset(token)
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("sender,allowed", [("@manager:test", True), ("@peer:test", False)])

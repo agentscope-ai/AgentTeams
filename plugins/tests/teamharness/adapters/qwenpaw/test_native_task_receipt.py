@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 import os
 import shlex
+from types import SimpleNamespace
 
 
 def native_available():
@@ -18,6 +19,61 @@ def native_available():
 
 @unittest.skipUnless(native_available(), "native QwenPaw SDK required")
 class NativeTaskReceiptTest(unittest.TestCase):
+    def test_multiple_inputs_bind_the_selected_source_and_reject_ambiguity_before_execution(self):
+        from agentscope.tool import ToolResponse
+        root = Path(__file__).resolve().parents[5]
+        spec = importlib.util.spec_from_file_location("multi_input_native_plugin", root / "plugins/teamharness/adapters/qwenpaw/plugin.py")
+        plugin = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(plugin)
+        sources = [{"inputId": "input-1", "eventId": "$first", "userId": "@a:test", "roomId": "!a:test"},
+                   {"inputId": "input-2", "eventId": "$second", "userId": "@b:test", "roomId": "!b:test"}]
+
+        async def scenario():
+            source_token = plugin._creation_sources.set(sources)
+            event_token = plugin._source_event.set("$first")
+            route_token = plugin._requester_route.set({"target_user": "@a:test", "target_session": "!a:test"})
+            try:
+                for cli in (False, True):
+                    with self.subTest(cli=cli):
+                        observed = []
+                        args = ({"command": "agt task create --leader lead --title Second --input-id input-2"}
+                                if cli else {"action": "create", "leader": "lead", "title": "Second", "inputId": "input-2"})
+                        call = SimpleNamespace(name="execute_shell_command" if cli else "teamharness__task", input=args)
+                        async def execute(**_):
+                            observed.append(json.loads(json.dumps(call.input)))
+                            result = {"sourceEventId": "$second", "task": {"id": "main", "kind": "main", "status": "planned"},
+                                      "notification": {"status": "queued", "eventId": "handoff", "recipient": "lead"}}
+                            yield ToolResponse(state="success", content=[{"type": "text", "text": json.dumps(result)}])
+                        middleware = plugin._sanitizer_factory(None, None)
+                        replies = [r async for r in middleware.on_acting(None, {"tool_call": call}, execute)]
+                        self.assertEqual(len(observed), 1)
+                        if cli:
+                            words = shlex.split(observed[0]["command"])
+                            self.assertIn("AGENTTEAMS_ORIGIN_EVENT_ID=$second", words)
+                            self.assertIn("AGENTTEAMS_INPUT_ID=input-2", words)
+                        else:
+                            self.assertEqual(observed[0]["_nativeSource"], {k: sources[1][k] for k in ("eventId", "userId", "roomId")})
+                        self.assertEqual(middleware._finished_phase_receipt, "")
+                        self.assertIn("[Task system receipt]", str(replies[0].content))
+                for input_id in (None, "input-unknown"):
+                    called = []
+                    args = {"action": "create", "leader": "lead", "title": "Ambiguous"}
+                    if input_id is not None:
+                        args["inputId"] = input_id
+                    async def forbidden(**_):
+                        called.append(True)
+                        yield ToolResponse(state="success", content=[])
+                    middleware = plugin._sanitizer_factory(None, None)
+                    replies = [r async for r in middleware.on_acting(None, {"tool_call": SimpleNamespace(name="teamharness__task", input=args)}, forbidden)]
+                    self.assertEqual(called, [])
+                    self.assertEqual(replies[0].state, "error")
+            finally:
+                plugin._creation_sources.reset(source_token)
+                plugin._source_event.reset(event_token)
+                plugin._requester_route.reset(route_token)
+        with patch.dict(os.environ, {"AGENTTEAMS_AGENT_ROLE": "manager"}):
+            asyncio.run(scenario())
+
     def test_successful_task_cli_receipt_reaches_model_as_tool_context(self):
         self._assert_receipt("submit")
 
@@ -74,6 +130,8 @@ class NativeTaskReceiptTest(unittest.TestCase):
                 self.calls += 1
                 if self.calls == 1:
                     return ChatResponse(content=[ToolCallBlock(id="call-one", name="execute_shell_command", input=json.dumps({"command":command}))], is_last=True)
+                if action == "create" and self.calls == 2:
+                    return ChatResponse(content=[TextBlock(text="Task registered; remaining input has been considered.")], is_last=True)
                 raise AssertionError("A durable Task receipt must finish this phase without another model call")
 
         async def execute(command: str):
@@ -102,7 +160,7 @@ class NativeTaskReceiptTest(unittest.TestCase):
             route_token = plugin._requester_route.set({"target_user":"@human:test","target_session":"!source:test"}) if action == "create" else None
             try:
                 await agent.reply(Msg(name="Leader", role="user", content=[TextBlock(text="Submit the result.")]))
-                testcase.assertEqual(model.calls, 1)
+                testcase.assertEqual(model.calls, 2 if action == "create" else 1)
                 messages = await model.formatter.format(agent.state.context)
                 text = json.dumps([m for m in messages if m.get("role") == "tool"], ensure_ascii=False)
                 testcase.assertIn("[Task system receipt]", text)
@@ -120,9 +178,12 @@ class NativeTaskReceiptTest(unittest.TestCase):
                     testcase.assertIn("not yet confirmed", text)
                 if action not in {"accept", "reject"}:
                     testcase.assertIn("planId" if action == "plan" else identity_field, text)
-                # The framework-generated final message is also persisted in the
-                # fixture's real native context, with no additional inference.
-                testcase.assertIn("[Task system receipt]", json.dumps([m for m in messages if m.get("role") == "assistant"]))
+                # A creation receipt is not proof that the Human conversation
+                # is finished. Fixed execution/review phases can end directly.
+                if action != "create":
+                    testcase.assertIn("[Task system receipt]", json.dumps([m for m in messages if m.get("role") == "assistant"]))
+                else:
+                    testcase.assertIn("remaining input has been considered", json.dumps(messages))
                 if action == "create":
                     testcase.assertEqual(len(calls),1)
                     words=shlex.split(calls[0])

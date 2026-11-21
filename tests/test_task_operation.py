@@ -127,3 +127,21 @@ class NativePolicyTest(unittest.TestCase):
                         'entrypoint': '/opt/agentteams/plugins/teamharness/mcp/common/task_native.py'}
         self.assertEqual(rpc.execute({'action': 'tool_policy', 'registration': registration}),
                          {'mode': 'delegate', 'unknown': 'verify_canonical_state'})
+
+
+class OperationAdmissionTest(unittest.TestCase):
+    setUp = OperationTest.setUp
+    transport = OperationTest.transport
+    def test_generic_and_canonical_calls_share_the_same_post_restart_admission(self):
+        with patch.object(rpc, 'enabled', return_value=True), patch.object(rpc, 'Recovery', return_value=self.recovery):
+            self.assertEqual(rpc.execute(dict(action='admit_tools', identity=self.identity))['task']['task_id'], 'T')
+            self.recovery.begin_tools(self.identity, self.calls)
+            with self.assertRaisesRegex(RecoveryConflict, 'verification'):
+                rpc.execute(dict(action='admit_tools', identity=self.identity))
+
+    def test_delivery_only_and_unknown_never_enter_normal_inference(self):
+        for checkpoint in ({'delivery': 'pending'}, {'operation': {'state': 'unknown'}},
+                           {'operation': {'state': 'started'}}, {'operation': {'state': 'unexpected'}}):
+            with self.subTest(checkpoint=checkpoint), self.assertRaises(RecoveryConflict):
+                operation.admit(checkpoint)
+        self.assertTrue(operation.admit({'operation': {'state': 'verified'}}))

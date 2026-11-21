@@ -139,6 +139,11 @@ def execute(request):
                 'checkpoint_digest': Recovery.digest(task['execution'].get('checkpoint'))}
     identity = request['identity']
     task = owned(recovery, identity)
+    if action == 'admit_tools':
+        from task_operation import admit
+        task = recovery.tools_current(identity)
+        admit(task['execution'].get('checkpoint'))
+        return {'task': task, 'checkpoint_digest': Recovery.digest(task['execution'].get('checkpoint'))}
     if action == 'begin_tools':
         return recovery.begin_tools(identity, request['calls'])
     if action == 'finish_tools':

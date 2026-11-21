@@ -62,3 +62,14 @@ def tool_policy(registration):
                         'entrypoint': '/opt/agentteams/plugins/teamharness/mcp/common/task_native.py'}:
         return {'mode': 'delegate', 'unknown': 'verify_canonical_state'}
     return {'mode': 'journal', 'unknown': 'verify_started_operation'}
+
+
+def admit(checkpoint):
+    """Permit normal inference/tools only after known effects and delivery."""
+    cp = checkpoint or {}
+    saved = cp.get('operation')
+    if cp.get('delivery') == 'pending':
+        raise RecoveryConflict('A saved result requires delivery-only recovery')
+    if saved and saved.get('state') != 'verified':
+        raise RecoveryConflict('An unconfirmed native operation requires verification')
+    return True

@@ -323,7 +323,8 @@ def test_task_cli_receipt_is_injected_only_for_final_success_and_current_task(mo
 def test_manager_binds_the_shared_intake_contract_as_a_prompt_section(monkeypatch):
     module = load_plugin()
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE","manager")
-    monkeypatch.setenv("TEAMHARNESS_COORDINATION_URL","http://fixture")
+    monkeypatch.delenv("TEAMHARNESS_COORDINATION_URL", raising=False)
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller:8090")
     contract=(ROOT/"plugins/teamharness/skills/team/task-management/SKILL.md").read_text().partition("## Plan as Leader")[0].strip()
     assert contract in module._team_prompt(None)
 
@@ -331,7 +332,8 @@ def test_manager_binds_the_shared_intake_contract_as_a_prompt_section(monkeypatc
 def test_roster_injection_cannot_replace_the_shared_intake_protocol(monkeypatch):
     from types import SimpleNamespace
     module = load_plugin()
-    monkeypatch.setenv("TEAMHARNESS_COORDINATION_URL","http://fixture")
+    monkeypatch.delenv("TEAMHARNESS_COORDINATION_URL", raising=False)
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller:8090")
     def read(path):
         return ({"teams":[{"name":"team","leaderName":"lead"}]} if path=="teams" else
                 {"workers":[{"name":"lead","matrixUserID":"@lead:test"}]})

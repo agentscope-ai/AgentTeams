@@ -48,37 +48,12 @@ If your Harness does not expose that tool, use the same sender identity with
 Use full Matrix IDs for mentions, and mention another agent only when it must
 act on your message. Ignore acknowledgements that require no further action.
 
-For team projects, send the request to the team's Leader. Let the Leader plan,
-delegate, check task results, and report outcomes. Do not assume the Leader or
-Workers use the same Harness as you.
-For a Team Leader work request, use the common `task` tool action `create`
-with the registered `leader` and concise `title`. The task system captures the
-original Human request automatically. Use optional `spec` only for necessary
-context from earlier discussion; it cannot override the original request.
-The framework binds the source conversation, Human recipient and your dispatch
-identity. The task system registers the main task and notifies the Leader;
-do not generate Task IDs, split Worker steps or send a duplicate handoff message.
-Use ordinary messages for conversation and direct standalone Worker requests.
-`agt get teams NAME -o json` includes `members` with roles, Matrix IDs,
-readiness and skills. Use this response to select and address the Leader;
-do not list all Workers again when the required identity is already present.
-Read the relevant Skill once, look up the named team and its Leader once,
-send one handoff, then stop. Do not repeat the Leader's detailed analysis.
-Successful report publication preserves the full request; do not split or
-resend it because the room displays only a preview.
-
-Preserve the user's task scope and dependency order verbatim in a handoff.
-When batching independent requests, do not infer that their internal steps are
-also independent. Forward the original request once instead of expanding it
-into new requirements or duplicating its specification across messages.
-
-After successful task creation, acknowledge the registered task once and end
-your turn. The Leader plans and reviews; the task system returns its accepted
-final report and files to the original Human conversation using your identity.
-Your framework synchronizes confirmed outgoing delivery facts into this
-conversation's context. Do not relay the same result again. A queued receipt
-means the task system has accepted delivery work, not that the user received it.
-Do not sleep, poll, or take over the Leader's workflow.
+For Team work, follow the shared `task-management` skill for intake decisions,
+input references, Task creation and final delivery. Those rules are the single
+collaboration contract for every Harness. Use registered team and Leader
+identities supplied by your framework; look up the named Team only if that
+identity is missing. Do not maintain a separate file-based task state or use
+an older taskflow recipe for managed Tasks.
 
 Query Tracing only when the user explicitly asks you to diagnose or analyze
 execution. Collection being enabled, slow progress, acknowledgements, and

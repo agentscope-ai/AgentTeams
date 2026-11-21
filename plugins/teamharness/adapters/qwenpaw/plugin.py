@@ -44,7 +44,7 @@ if not (ASSET_DIR / "plugin.yaml").exists():
 
 def _team_prompt(_agent: Any) -> str:
     if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
-        if not os.getenv("TEAMHARNESS_COORDINATION_URL"):
+        if not os.getenv("AGENTTEAMS_CONTROLLER_URL"):
             return ""
         # Bind the one public intake contract as a static prompt section;
         # transient roster hints must not duplicate or override this policy.
@@ -610,7 +610,7 @@ def _register_trace_hooks(api: Any) -> None:
 
 
 async def _prepare_manager_roster(ctx: Any) -> None:
-    if not os.getenv("TEAMHARNESS_COORDINATION_URL"):
+    if not os.getenv("AGENTTEAMS_CONTROLLER_URL"):
         return
     try:
         teams, workers = await asyncio.gather(asyncio.to_thread(_controller_json, "teams"), asyncio.to_thread(_controller_json, "workers"))

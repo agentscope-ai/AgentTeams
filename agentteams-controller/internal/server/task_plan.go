@@ -96,7 +96,7 @@ func normalizeTaskPlan(input *taskPlanRequest) error {
 			node.Title = node.ID
 		}
 		if node.DependsOn == nil {
-			node.DependsOn = []string{}
+			return fmt.Errorf("each node must provide dependsOn; use [] only for independent work and list every required upstream node")
 		}
 		sort.Strings(node.DependsOn)
 		for j, dependency := range node.DependsOn {

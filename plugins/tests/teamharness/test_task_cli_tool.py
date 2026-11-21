@@ -53,9 +53,9 @@ def test_create_uses_native_source_in_private_process_environment(monkeypatch):
 
 def test_lifecycle_and_file_operations_preserve_cli_semantics(monkeypatch):
     tool=load(monkeypatch)
-    argv,_=tool.command({"action":"plan","taskId":"main","nodes":[{"id":"A","assignedTo":"w","spec":"Work"}]})
+    argv,_=tool.command({"action":"plan","taskId":"main","nodes":[{"id":"A","assignedTo":"w","spec":"Work","dependsOn":[]}]})
     assert argv[:4]==["/usr/local/bin/agt","task","plan","main"]
-    assert json.loads(argv[-1])=={"nodes":[{"id":"A","assignedTo":"w","spec":"Work"}]}
+    assert json.loads(argv[-1])=={"nodes":[{"id":"A","assignedTo":"w","spec":"Work","dependsOn":[]}]}
     argv,_=tool.command({"action":"accept","taskId":"a","submissionId":"s1","note":"Evidence"})
     assert argv[2:]==["accept","a","--submission","s1","--note","Evidence"]
     argv,_=tool.command({"action":"submit","taskId":"a","summary":"Done","files":["app.py","tests.log"]})

@@ -177,7 +177,7 @@ func TestTaskPlanStoresWholeDAGAndDispatchesOnlyReadyNodes(t *testing.T) {
 }
 
 func TestTaskPlanRejectsInvalidGraphAndAssigneesBeforeSideEffects(t *testing.T) {
-	for _, scenario := range []string{"empty", "duplicate", "missing-dependency", "cycle", "self-dependency", "foreign-worker", "leader-execution", "worker-caller", "paused"} {
+	for _, scenario := range []string{"empty", "duplicate", "omitted-dependencies", "missing-dependency", "cycle", "self-dependency", "foreign-worker", "leader-execution", "worker-caller", "paused"} {
 		t.Run(scenario, func(t *testing.T) {
 			h, _, caller, mx := taskPlanFixture(t)
 			input := planRequest()
@@ -187,6 +187,8 @@ func TestTaskPlanRejectsInvalidGraphAndAssigneesBeforeSideEffects(t *testing.T) 
 				input.Nodes = nil
 			case "duplicate":
 				input.Nodes[1].ID = "A"
+			case "omitted-dependencies":
+				input.Nodes[2].DependsOn = nil
 			case "missing-dependency":
 				input.Nodes[2].DependsOn = []string{"absent"}
 			case "cycle":

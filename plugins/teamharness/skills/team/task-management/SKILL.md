@@ -20,7 +20,11 @@ precedence over supplementary context and execution assignments.
 
 Preserve the main task already registered by Manager. Call `plan` once with
 `taskId` and the complete `nodes` array. Each node has a local `id`, registered
-`assignedTo`, full `spec` and optional `dependsOn` local IDs. Keep the original
+`assignedTo`, full `spec` and explicit `dependsOn` local IDs. Use `[]` only for
+independent work. If a node consumes another node's outputs or verifies its
+result, include that upstream ID; mentioning the dependency in prose does not
+delay dispatch or prepare inputs. Check every required edge before planning.
+Keep the original
 scope and acceptance criteria. Assign execution and independent QA to Workers;
 do not perform their work yourself. The task system creates the task room,
 allocates execution IDs and dispatches ready steps. End your turn after planning.

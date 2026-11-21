@@ -84,6 +84,10 @@ with your execution Task ID. Use its spec, input previews and actual local
 paths. Do not ACK again, reconstruct paths, or download supplied inputs again.
 Inputs are read-only. Write deliverables in `outputDirectory` and temporary work
 in `scratchDirectory`. Use an isolated test directory; do not delete upstream files.
+An input with `purpose: revisionBase` is the exact rejected candidate, with its
+saved rejection in `review`. Use it as the base for the requested correction;
+it is not an accepted dependency. Keep this supplied base read-only and publish
+your corrected files from your own output directory.
 
 When your task requires a self-contained runnable project, publish unchanged
 copies of required accepted input modules alongside your app. Load dependencies

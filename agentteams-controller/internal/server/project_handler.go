@@ -112,6 +112,7 @@ type projectMeta struct {
 
 type projectTaskMeta struct {
 	TaskID       string                    `json:"task_id"`
+	RevisionOf   string                    `json:"revision_of,omitempty"`
 	ParentTaskID string                    `json:"parent_task_id,omitempty"`
 	Title        string                    `json:"title"`
 	AssignedTo   string                    `json:"assigned_to"`

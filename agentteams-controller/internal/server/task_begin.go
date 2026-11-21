@@ -19,6 +19,8 @@ type taskInputContext struct {
 	TaskID       string             `json:"taskId"`
 	SubmissionID string             `json:"submissionId,omitempty"`
 	Summary      string             `json:"summary,omitempty"`
+	Purpose      string             `json:"purpose,omitempty"`
+	Review       *taskReview        `json:"review,omitempty"`
 	ReadOnly     bool               `json:"readOnly"`
 	Files        []taskFileResource `json:"files"`
 }
@@ -58,8 +60,8 @@ func (h *ProjectHandler) ownedTaskExecution(w http.ResponseWriter, r *http.Reque
 	return execution, true
 }
 
-// taskBeginInputs reads accepted prerequisites from the task's own scope. It
-// never searches other teams or infers a Project from the task's complexity.
+// taskBeginInputs reads accepted prerequisites and the exact rejected revision
+// base from this main task. It never searches other teams or infers a Project.
 func (h *ProjectHandler) taskBeginInputs(r *http.Request, key string, task map[string]any) ([]taskInputContext, error) {
 	inputs := []taskInputContext{}
 	mainID := coordinationString(task, "main_task_id")
@@ -72,10 +74,16 @@ func (h *ProjectHandler) taskBeginInputs(r *http.Request, key string, task map[s
 	mainKey := path.Join(path.Dir(path.Dir(key)), mainID, "meta.json")
 	body, err := h.oss.GetObject(r.Context(), mainKey)
 	var main struct {
-		ID     string            `json:"task_id"`
-		Kind   string            `json:"task_kind"`
-		Status string            `json:"status"`
-		Tasks  []projectTaskMeta `json:"tasks"`
+		ID       string            `json:"task_id"`
+		Kind     string            `json:"task_kind"`
+		Status   string            `json:"status"`
+		Tasks    []projectTaskMeta `json:"tasks"`
+		Attempts map[string]struct {
+			TaskID       string `json:"task_id"`
+			Status       string `json:"status"`
+			SubmissionID string `json:"submission_id"`
+			ReviewID     string `json:"review_id"`
+		} `json:"task_attempts"`
 	}
 	if err != nil || json.Unmarshal(body, &main) != nil {
 		return nil, errors.New("main task unavailable")
@@ -122,6 +130,24 @@ func (h *ProjectHandler) taskBeginInputs(r *http.Request, key string, task map[s
 			return nil, fmt.Errorf("prerequisite %s files unavailable: %w", dependency, err)
 		}
 		inputs = append(inputs, taskInputContext{TaskID: dependency, SubmissionID: coordinationString(upstream, "submission_id"), Summary: coordinationString(upstream, "summary"), ReadOnly: true, Files: files})
+	}
+	if previous := coordinationString(task, "revision_of"); previous != "" {
+		attempt, exists := main.Attempts[previous]
+		if !isSafeTaskID(previous) || previous == node.TaskID || node.RevisionOf != previous || !exists || attempt.TaskID != previous || attempt.Status != "revision" || attempt.SubmissionID == "" || attempt.ReviewID == "" {
+			return nil, errors.New("revision base does not match the main task's rejected attempt")
+		}
+		body, err := h.oss.GetObject(r.Context(), path.Join(path.Dir(path.Dir(key)), previous, "meta.json"))
+		var base map[string]any
+		if err != nil || json.Unmarshal(body, &base) != nil || coordinationString(base, "task_id") != previous || coordinationString(base, "task_kind") != "execution" || coordinationString(base, "main_task_id") != mainID || coordinationString(base, "project_id") != coordinationString(task, "project_id") || coordinationString(base, "status") != "revision" {
+			return nil, errors.New("rejected revision base unavailable in this task scope")
+		}
+		var review taskReview
+		encoded, _ := json.Marshal(base["task_review"])
+		candidate := publicTaskCandidate(base)
+		if json.Unmarshal(encoded, &review) != nil || review.ID != attempt.ReviewID || review.Accepted || review.Status != "revision" || review.SubmissionID != attempt.SubmissionID || candidate == nil || candidate.ID != review.SubmissionID {
+			return nil, errors.New("rejected revision candidate or review identity changed")
+		}
+		inputs = append(inputs, taskInputContext{TaskID: previous, SubmissionID: candidate.ID, Summary: candidate.Summary, Purpose: "revisionBase", Review: &review, ReadOnly: true, Files: candidate.Artifacts})
 	}
 	return inputs, nil
 }

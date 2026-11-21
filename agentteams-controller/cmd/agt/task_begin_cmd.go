@@ -35,6 +35,8 @@ type taskPreparedInput struct {
 	TaskID       string             `json:"taskId"`
 	SubmissionID string             `json:"submissionId,omitempty"`
 	Summary      string             `json:"summary,omitempty"`
+	Purpose      string             `json:"purpose,omitempty"`
+	Review       json.RawMessage    `json:"review,omitempty"`
 	ReadOnly     bool               `json:"readOnly"`
 	Directory    string             `json:"directory,omitempty"`
 	Files        []taskPreparedFile `json:"files"`
@@ -123,7 +125,7 @@ func taskBeginCmd() *cobra.Command {
 		for i := range inputs {
 			input := &inputs[i]
 			if !taskIdentifier.MatchString(input.TaskID) || !input.ReadOnly {
-				return fmt.Errorf("invalid accepted input identity")
+				return fmt.Errorf("invalid prepared input identity")
 			}
 			input.Directory, err = taskLocalDirectory(batch, input.TaskID)
 			if err != nil {
@@ -152,7 +154,7 @@ func taskBeginCmd() *cobra.Command {
 					return fmt.Errorf("prepare input %s/%s: %w", input.TaskID, file.Name, err)
 				}
 				if int64(download.Size) != file.Size || (file.SHA256 != "" && file.SHA256 != download.SHA256) {
-					return fmt.Errorf("accepted input content changed")
+					return fmt.Errorf("prepared input content changed")
 				}
 				if err := os.Chmod(target, 0444); err != nil {
 					return err

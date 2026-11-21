@@ -59,7 +59,6 @@ def test_register_uses_qwenpaw_2_public_extension_points(monkeypatch):
     module.plugin.register(api)
     names = [call[0] for call in api.calls]
     assert names == [
-        "register_prompt_section",
         "register_skill_provider",
         "register_middleware",
         "trace",
@@ -320,7 +319,7 @@ def test_task_cli_receipt_is_injected_only_for_final_success_and_current_task(mo
         module._execution_task.reset(token)
 
 
-def test_manager_binds_the_shared_intake_contract_as_a_prompt_section(monkeypatch):
+def test_manager_shared_intake_contract_does_not_require_legacy_switch(monkeypatch):
     module = load_plugin()
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE","manager")
     monkeypatch.delenv("TEAMHARNESS_COORDINATION_URL", raising=False)

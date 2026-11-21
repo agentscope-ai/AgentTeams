@@ -46,7 +46,7 @@ def _team_prompt(_agent: Any) -> str:
     if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
         if not os.getenv("AGENTTEAMS_CONTROLLER_URL"):
             return ""
-        # Bind the one public intake contract as a static prompt section;
+        # Read the one public intake contract for the native system prompt;
         # transient roster hints must not duplicate or override this policy.
         try:
             return (ASSET_DIR / "skills/team/task-management/SKILL.md").read_text(encoding="utf-8").partition("## Plan as Leader")[0].strip()
@@ -161,6 +161,12 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         _task_scope = None
         _finished_phase_receipt = ""
         _creation_refresh_pending = False
+
+        async def on_system_prompt(self, agent: Any, current_prompt: str) -> str:
+            contract = _team_prompt(agent)
+            if contract and contract not in current_prompt:
+                return current_prompt + "\n\n" + contract
+            return current_prompt
 
         def _inject_task_receipt(self, item: Any, tool_name: str, args: Any, creation_source: str = "") -> None:
             if tool_name not in {"execute_shell_command", "task"} or not isinstance(args, dict):
@@ -1047,12 +1053,6 @@ def _register_coordination_hook(api: Any) -> None:
 
 class TeamHarnessPlugin:
     def register(self, api: Any) -> None:
-        api.register_prompt_section(
-            "teamharness_context",
-            after="workspace",
-            provider=_team_prompt,
-            priority=40,
-        )
         api.register_skill_provider(
             _skill_dir(),
             enabled_by_default=True,

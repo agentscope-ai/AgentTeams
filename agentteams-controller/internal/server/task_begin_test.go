@@ -217,7 +217,7 @@ func TestTaskBeginInputsBindExactSubmittedOutputsNotCatalogHeads(t *testing.T) {
 func TestTaskBeginReturnsPublicRecoveryCheckpoint(t *testing.T) {
 	store := ossfake.NewMemory()
 	h := newProjectTestHandler(t, store, team("alpha-team"))
-	execution := taskExecution{Generation: 2, InstanceID: "instance-1", ProcessID: "process-1", State: "active", Checkpoint: &taskCheckpoint{Version: 3, CompletedSteps: []string{"parsed input"}, RemainingSteps: []string{"write report"}, Operation: &taskOperation{ID: "op1", State: "verified", Evidence: "Checked original operation"}, Artifacts: []taskArtifact{{Key: "private/backend/blob", SHA256: "private-hash"}}, ReplyTxn: "private-transaction", ReplyAttempt: &matrixReplyAttempt{User: "private-user", Device: "private-device"}}}
+	execution := taskExecution{Generation: 2, InstanceID: "instance-1", ProcessID: "process-1", State: "active", Checkpoint: &taskCheckpoint{Version: 3, CompletedSteps: []string{"parsed input"}, RemainingSteps: []string{"write report"}, Operation: &taskOperation{ID: "op1", State: "verified", Evidence: "private/backend/blob"}, Artifacts: []taskArtifact{{Key: "private/backend/blob", SHA256: "private-hash"}}, ReplyTxn: "private-transaction", ReplyAttempt: &matrixReplyAttempt{User: "private-user", Device: "private-device"}}}
 	putTask(store, taskMetaKey, taskMeta(map[string]any{"status": "in_progress", "assigned_to": "dev", "task_kind": "execution", "project_id": "", "spec": "Continue assigned work", "execution": execution}))
 	h.recovery = NewTaskRecoveryHandler(h, ServerDeps{})
 	h.recovery.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {

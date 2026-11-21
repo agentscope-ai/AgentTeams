@@ -230,6 +230,16 @@ func (h *ProjectHandler) BeginTask(w http.ResponseWriter, r *http.Request) {
 		var checkpoint *taskResumeContext
 		if cp := execution.Checkpoint; cp != nil {
 			checkpoint = &taskResumeContext{cp.Version, cp.CompletedSteps, cp.RemainingSteps, cp.Operation}
+			if cp.Operation != nil {
+				operation := *cp.Operation
+				for _, artifact := range cp.Artifacts {
+					if operation.Evidence == artifact.Key {
+						operation.Evidence = "Native tool results are saved; your framework restores this evidence."
+						break
+					}
+				}
+				checkpoint.Operation = &operation
+			}
 		}
 		w.Header().Set("ETag", version)
 		httputil.WriteJSON(w, 200, struct {

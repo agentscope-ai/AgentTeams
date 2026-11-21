@@ -54,10 +54,14 @@ references. Read more only when evidence is truncated, missing or inconsistent.
 A prepared candidate snapshot does not prove business acceptance. Check the
 published files of a runnable project for its required dependencies; producer
 workspace files and hardcoded runtime paths are not delivery evidence. Review the
-independent QA evidence; do not repeat execution, edit outputs or rerun accepted
-checks. This is a decision-only phase: use common Task operations, not batch
-execution, subagents or another workflow. If required proof is missing, reject
-with explicit correction requirements instead of executing the work yourself.
+available test evidence through static inspection; execution belongs to Workers.
+Accepting this step releases its dependencies, not final acceptance of the whole
+request. Do not wait for downstream QA that depends on this step. Read missing
+evidence once; do not download files to assemble a test environment, repeat
+unchanged reads, edit outputs or rerun checks. This is a decision-only phase:
+use common Task operations, not batch execution, subagents or another workflow.
+If required proof is missing or inconsistent, reject with explicit correction
+requirements instead of executing the work yourself.
 Distinguish the Worker's recorded test results from your own artifact review;
 do not claim you ran checks that you only read. Call `accept` or `reject` with the exact `submissionId` and your evidence
 in `note`. If the same step needs correction, provide explicit `replacementSpec`

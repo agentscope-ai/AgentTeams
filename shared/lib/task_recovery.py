@@ -88,12 +88,14 @@ class Recovery:
         return next((e["task"] for e in snapshot["tasks"]
                      if e["task"]["task_id"] == task_id and e["team_id"] == team), None)
 
-    def tools_current(self, identity):
+    def tools_current(self, identity, *, verification=False):
         task = self.current(identity['task_id'], identity['team_id'])
         execution = task.get('execution', {}) if task else {}
-        if (not task or execution.get('state') != 'active' or execution.get('process_id') != self.process
+        if (not task or execution.get('process_id') != self.process
                 or any(execution.get(key) != identity.get(key) for key in ('generation', 'instance_id', 'process_id'))):
-            raise RecoveryConflict('Native tool execution was replaced or is not active')
+            raise RecoveryConflict('Native tool execution ownership was replaced')
+        if execution.get('state') not in ({'active', 'needs_verification'} if verification else {'active'}):
+            raise RecoveryConflict('Native unconfirmed operation requires verification before normal admission')
         return task
 
     def begin_tools(self, identity, calls):
@@ -107,7 +109,7 @@ class Recovery:
 
     def finish_tools(self, identity, operation, results):
         from task_operation import result_bytes, finish
-        task = self.tools_current(identity)
+        task = self.tools_current(identity, verification=True)
         original = task['execution'].get('checkpoint')
         data = result_bytes(original, operation, results)
         digest = hashlib.sha256(data).hexdigest()
@@ -193,6 +195,14 @@ class Recovery:
     def resume_text(task):
         execution = task["execution"]
         checkpoint = execution.get("checkpoint")
+        if task.get('task_plan_id'):
+            return ("Continue your existing Task through the common task protocol and its prepared output directory. "
+                "Your framework owns durable execution checkpoints and receipt recovery; do not call legacy taskflow/projectflow "
+                "or manufacture checkpoints. Do not replay an unconfirmed operation. Canonical or native unknown effects require "
+                "authoritative verification before reasoning or further tools. Preserve verified work and submit only the current "
+                "Task's outputs with the common task tool.\n"
+                + json.dumps({'task_id': task['task_id'], 'team_id': task.get('team_id'), 'status': task['status'],
+                    'generation': execution['generation'], 'checkpoint': checkpoint}, ensure_ascii=False))
         return ("Recover your existing Task from the authoritative task system. Do not create a new task.\n"
             "Before a new external side effect, record its operation identity with checkpoint_task. If an operation is "
             "started or unknown, verify its external outcome and save evidence before continuing; do not rerun it. "

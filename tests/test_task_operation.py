@@ -32,6 +32,7 @@ class OperationTest(unittest.TestCase):
         self.assertEqual(etag, 'etag')
         self.writes.append(copy.deepcopy(body['checkpoint']))
         self.task['execution']['checkpoint'] = copy.deepcopy(body['checkpoint'])
+        self.task['execution']['state'] = 'needs_verification' if body['checkpoint'].get('operation', {}).get('state') in {'started', 'unknown'} else 'active'
         return copy.deepcopy(self.task)
 
     def test_native_start_is_durable_before_execution_and_contains_only_argument_digest(self):
@@ -71,6 +72,18 @@ class OperationTest(unittest.TestCase):
         with patch('task_recovery.subprocess.run'):
             self.recovery.finish_tools(self.identity, op, [dict(self.results[0], isError=True)])
         self.assertEqual(self.task['execution']['checkpoint']['operation']['state'], 'verified')
+
+    def test_needs_verification_finishes_only_the_exact_owned_pending_operation(self):
+        op = self.recovery.begin_tools(self.identity, self.calls)
+        self.assertEqual(self.task['execution']['state'], 'needs_verification')
+        with self.assertRaises(RecoveryConflict):
+            self.recovery.tools_current(self.identity)
+        with patch('task_recovery.subprocess.run') as upload:
+            with self.assertRaises(RecoveryConflict):
+                self.recovery.finish_tools(self.identity, 'different-operation', self.results)
+            upload.assert_not_called()
+            self.recovery.finish_tools(self.identity, op, self.results)
+        self.assertEqual(self.recovery.tools_current(self.identity)['execution']['state'], 'active')
 
     def test_upload_failure_retains_started_operation(self):
         op = self.recovery.begin_tools(self.identity, self.calls)

@@ -318,3 +318,27 @@ def test_task_cli_receipt_is_injected_only_for_final_success_and_current_task(mo
         assert len(asyncio.run(run())) == 1  # Same receipt, same current conversation.
     finally:
         module._execution_task.reset(token)
+
+
+def test_manager_binds_the_shared_intake_contract_as_a_prompt_section(monkeypatch):
+    module = load_plugin()
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE","manager")
+    monkeypatch.setenv("TEAMHARNESS_COORDINATION_URL","http://fixture")
+    contract=(ROOT/"plugins/teamharness/skills/team/task-management/SKILL.md").read_text().partition("## Plan as Leader")[0].strip()
+    assert contract in module._team_prompt(None)
+
+
+def test_roster_injection_cannot_replace_the_shared_intake_protocol(monkeypatch):
+    from types import SimpleNamespace
+    module = load_plugin()
+    monkeypatch.setenv("TEAMHARNESS_COORDINATION_URL","http://fixture")
+    def read(path):
+        return ({"teams":[{"name":"team","leaderName":"lead"}]} if path=="teams" else
+                {"workers":[{"name":"lead","matrixUserID":"@lead:test"}]})
+    monkeypatch.setattr(module,"_controller_json",read)
+    injected=[]
+    ctx=SimpleNamespace(inject_context=lambda text,**kwargs:injected.append(text))
+    asyncio.run(module._prepare_manager_roster(ctx))
+    assert injected and '"leader": "lead"' in injected[0]
+    assert "spec:<complete original" not in injected[0]
+    assert "protocol and registered" not in injected[0]

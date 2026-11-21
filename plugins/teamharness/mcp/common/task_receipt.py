@@ -358,8 +358,8 @@ def ack_delivery_context(middle_context: dict, acknowledgements: dict[str, str])
 
 def refresh_creation_inputs(result: object, sources: list[dict], source_event: str) -> list[dict] | None:
     """Admit only verified no-effect stale-input results from the Task API."""
-    if (not isinstance(result, dict) or result.get("ok") is not False
-            or result.get("error") != "task_input_stale" or result.get("noTaskRegistered") is not True
+    if (not isinstance(result, dict) or result.get("ok") is not True
+            or result.get("outcome") != "input_changed" or result.get("noTaskRegistered") is not True
             or result.get("sourceEventId") != source_event):
         return None
     selected = next((source for source in sources if source["eventId"] == source_event), None)
@@ -378,3 +378,19 @@ def refresh_creation_inputs(result: object, sources: list[dict], source_event: s
         reference = "input-refresh-" + str(len(sources) + len(validated) + 1)
         validated.append({"inputId": reference, **{key: entry[key] for key in ("eventId", "roomId", "userId", "body")}})
     return validated
+
+
+def input_refresh_context(result: dict, refreshed: list[dict]) -> str:
+    """Format the common control result without duplicating Human bodies."""
+    return ("[Task input refresh]\nNo new Task was registered. This is a normal input update, not a failed task. "
+            "Interpret the verified new Human inputs together with every pending earlier request before choosing an operation. "
+            "A newer message does not automatically supersede an earlier one: preserve genuinely independent requests even when their text is identical. "
+            "Do not create one Task per message. Bind corrections using relatedInputIds; do not put their paraphrase only in spec. "
+            "Address every independent request before ending your turn; do not ask the Human to resubmit merely because inputs changed.\n"
+            + json.dumps({**result, "inputs": refreshed}, ensure_ascii=False))
+
+
+def handled_input_context(sources: list[dict]) -> str:
+    return ("[Task input acknowledgement]\nYour framework already included these verified inputs in an earlier turn's input refresh and you responded there. "
+            "This turn only drains their queued transport copies. Do not repeat task operations or notifications. Input IDs: "
+            + json.dumps([source["eventId"] for source in sources]))

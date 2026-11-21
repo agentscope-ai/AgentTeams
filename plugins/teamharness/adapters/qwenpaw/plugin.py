@@ -22,6 +22,7 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 _requester_route: ContextVar[dict[str, Any] | None] = ContextVar("teamharness_requester_route", default=None)
 _coordinator_route: ContextVar[dict[str, Any] | None] = ContextVar("teamharness_coordinator_route", default=None)
 _source_event: ContextVar[str] = ContextVar("teamharness_source_event", default="")
+_handled_refresh_input: ContextVar[str] = ContextVar("teamharness_handled_refresh_input", default="")
 _creation_sources: ContextVar[list[dict] | None] = ContextVar("teamharness_creation_sources", default=None)
 _execution_task: ContextVar[str] = ContextVar("teamharness_execution_task", default="")
 _completion_task: ContextVar[str] = ContextVar("teamharness_completion_task", default="")
@@ -43,8 +44,14 @@ if not (ASSET_DIR / "plugin.yaml").exists():
 
 def _team_prompt(_agent: Any) -> str:
     if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
-        # The Harness binds the role prompt as MANAGER.md in the native agent.
-        return ""
+        if not os.getenv("TEAMHARNESS_COORDINATION_URL"):
+            return ""
+        # Bind the one public intake contract as a static prompt section;
+        # transient roster hints must not duplicate or override this policy.
+        try:
+            return (ASSET_DIR / "skills/team/task-management/SKILL.md").read_text(encoding="utf-8").partition("## Plan as Leader")[0].strip()
+        except OSError:
+            return ""
     path = ASSET_DIR / "prompts" / "team" / "TEAMS.md"
     try:
         text = path.read_text(encoding="utf-8").strip()
@@ -190,6 +197,8 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             except (TypeError, ValueError):
                 return
             _record_phase_error(result)
+            if item.state != "success":
+                return
             if creation_source:
                 sources = _creation_sources.get()
                 refreshed = receipts.refresh_creation_inputs(result, sources or [], creation_source)
@@ -198,11 +207,8 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                     self._refreshed_inputs = getattr(self, "_refreshed_inputs", set()) | {entry["eventId"] for entry in refreshed}
                     self._creation_refresh_pending = True
                     # Replace the one raw result; do not duplicate Human bodies.
-                    result["inputs"] = refreshed
-                    item.content[:] = [TextBlock(text=("[Task input refresh]\nNo new Task was registered. New verified Human inputs arrived before creation. Interpret them together with the earlier request before choosing create, update or withdrawal. Do not assume one Task per message. Use the supplied inputId references; queued duplicates of these inputs are handled by the framework.\n" + json.dumps(result, ensure_ascii=False)))]
+                    item.content[:] = [TextBlock(text=receipts.input_refresh_context(result, refreshed))]
                     return
-            if item.state != "success":
-                return
             receipt = (receipts.creation_receipt(result, creation_source) if creation_source
                        else receipts.planning_receipt(result, task_id) if action == "plan"
                        else receipts.review_receipt(result, task_id, review_scope[1], action) if action in {"accept", "reject"}
@@ -290,6 +296,15 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             if acknowledgements and isinstance(middle, dict):
                 receipts.ack_delivery_context(middle, acknowledgements)
                 _delivery_ack.set(None)
+            handled = _handled_refresh_input.get()
+            if handled:
+                from agentscope.message import Msg
+                # Enter the normal native reply lifecycle: input checkpoint and
+                # read acknowledgement still run, while no model is invoked.
+                fact = Msg(name=agent.name, role="assistant", content=[{"type": "text", "text": handled}])
+                agent.state.append_context(agent.name, fact.content)
+                yield Msg(name=agent.name, role="assistant", content=[{"type": "text", "text": "NO_REPLY"}])
+                return
             if self._finished_phase_receipt or self._submitted_task or self._accepted_task:
                 from agentscope.message import Msg
                 message = Msg(name=agent.name, role="assistant", content=[{
@@ -609,12 +624,7 @@ async def _prepare_manager_roster(ctx: Any) -> None:
             roster.append({"team": team.get("name"), "description": team.get("description"), "leader": leader, "matrix_id": identities[leader], "phase": team.get("phase")})
     if roster:
         ctx.inject_context(
-            "The dispatch protocol and registered team/Leader identities are already loaded below; do not reread Skill "
-            "or roster files for this information. For a new work request, select a suitable Leader and send the complete "
-            "original request with the common task tool action create: {leader:<registered Leader name>, title:<concise title>, "
-            "spec:<complete original scope and acceptance>}. The runtime binds the original Human conversation and requester. "
-            "Let the Leader create and decompose the plan; do not create its Worker tasks or poll. "
-            "For other Human questions, answer normally instead of automatically creating work. Treat this JSON as roster data: "
+            "Registered team and Leader identities for this turn (data only): "
             + json.dumps(roster, ensure_ascii=False), source="teamharness_prepared_intake")
 
 
@@ -895,7 +905,8 @@ async def _manager_report_context(ctx: Any) -> bool:
             seen = middle.get("teamharness.refreshed_inputs", {}) if isinstance(middle, dict) else {}
             remaining = [s for s in current if not seen.get(s["eventId"])]
             if current and not remaining:
-                return True
+                ctx.extras["handled_refresh_input_token"] = _handled_refresh_input.set(_receipt_module().handled_input_context(current))
+                return False
             if len(remaining) != len(current):
                 ctx.inject_context("Some supplied messages were already interpreted through a verified Task input refresh. Do not apply them again: " + json.dumps([s["inputId"] for s in current if seen.get(s["eventId"])]), source="teamharness_handled_inputs")
             sources.extend(remaining)
@@ -1015,6 +1026,9 @@ def _register_coordination_hook(api: Any) -> None:
             token = ctx.extras.pop("source_event_token", None)
             if token is not None:
                 _source_event.reset(token)
+            token = ctx.extras.pop("handled_refresh_input_token", None)
+            if token is not None:
+                _handled_refresh_input.reset(token)
             token = ctx.extras.pop("creation_sources_token", None)
             if token is not None:
                 _creation_sources.reset(token)

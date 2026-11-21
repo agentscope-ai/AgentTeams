@@ -201,7 +201,7 @@ def test_related_corrections_are_bound_to_ordered_native_sources_not_model_bodie
 def test_verified_input_refresh_preserves_body_and_rejects_unbound_results():
     public = module()
     sources = [{"inputId": "input-1", "eventId": "$original", "roomId": "!room:test", "userId": "@a:test"}]
-    result = {"ok": False, "error": "task_input_stale", "noTaskRegistered": True, "sourceEventId": "$original",
+    result = {"ok": True, "outcome": "input_changed", "noTaskRegistered": True, "sourceEventId": "$original",
               "inputs": [{"eventId": "$new", "roomId": "!room:test", "userId": "@a:test", "body": "Do not create that Task."}]}
     updates = public.refresh_creation_inputs(result, sources, "$original")
     assert updates[0]["body"] == "Do not create that Task."
@@ -211,3 +211,13 @@ def test_verified_input_refresh_preserves_body_and_rejects_unbound_results():
     assert public.refresh_creation_inputs(wrong, sources, "$original") is None
     wrong = copy.deepcopy(result); wrong["noTaskRegistered"] = False
     assert public.refresh_creation_inputs(wrong, sources, "$original") is None
+
+
+def test_input_change_is_a_nonfatal_control_outcome_not_a_creation_receipt():
+    public = module()
+    sources = [{"inputId":"input-1","eventId":"$original","roomId":"!room:test","userId":"@a:test"}]
+    result = {"ok":True,"outcome":"input_changed","noTaskRegistered":True,"sourceEventId":"$original",
+              "inputs":[{"eventId":"$independent","roomId":"!room:test","userId":"@a:test","body":"This is a new independent request."}]}
+    refreshed = public.refresh_creation_inputs(result,sources,"$original")
+    assert refreshed and refreshed[0]["eventId"] == "$independent"
+    assert public.creation_receipt(result,"$original") is None

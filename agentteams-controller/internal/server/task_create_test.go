@@ -412,11 +412,11 @@ func TestTaskCreateDefersNewHumanInputBeforeAnyRegistration(t *testing.T) {
 	h.coordination.deps.MatrixConfig.ServerURL = server.URL
 	w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$original", `{"title":"Report","leader":"lead-cr"}`)
 	var result struct {
-		Error  string              `json:"error"`
-		NoTask bool                `json:"noTaskRegistered"`
-		Inputs []map[string]string `json:"inputs"`
+		Outcome string              `json:"outcome"`
+		NoTask  bool                `json:"noTaskRegistered"`
+		Inputs  []map[string]string `json:"inputs"`
 	}
-	if w.Code != 409 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Error != "task_input_stale" || !result.NoTask || len(result.Inputs) != 1 || result.Inputs[0]["eventId"] != "$new" || !strings.Contains(result.Inputs[0]["body"], "Cancel") {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Outcome != "input_changed" || !result.NoTask || len(result.Inputs) != 1 || result.Inputs[0]["eventId"] != "$new" || !strings.Contains(result.Inputs[0]["body"], "Cancel") {
 		t.Fatalf("stale intent reached registration: %d %s", w.Code, w.Body.String())
 	}
 	after, _ := store.ListObjects(t.Context(), "teams/alpha/shared/tasks/")

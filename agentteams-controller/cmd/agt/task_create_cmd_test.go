@@ -137,8 +137,8 @@ func TestTaskCreatePreservesTypedNoEffectInputRefresh(t *testing.T) {
 		if r.Header.Get("X-AgentTeams-Input-Frontier") != "$frontier" {
 			t.Error("native input frontier lost")
 		}
-		w.WriteHeader(409)
-		_, _ = w.Write([]byte(`{"ok":false,"error":"task_input_stale","noTaskRegistered":true,"sourceEventId":"$original","inputs":[{"eventId":"$new","userId":"@a:test","roomId":"!room:test","body":"Cancel"}]}`))
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"ok":true,"outcome":"input_changed","noTaskRegistered":true,"sourceEventId":"$original","inputs":[{"eventId":"$new","userId":"@a:test","roomId":"!room:test","body":"Cancel"}]}`))
 	}))
 	defer server.Close()
 	t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
@@ -155,7 +155,7 @@ func TestTaskCreatePreservesTypedNoEffectInputRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result map[string]any
-	if json.Unmarshal(output.Bytes(), &result) != nil || result["ok"] != false || result["error"] != "task_input_stale" {
+	if json.Unmarshal(output.Bytes(), &result) != nil || result["ok"] != true || result["outcome"] != "input_changed" {
 		t.Fatalf("typed refresh lost: %s", output.String())
 	}
 }

@@ -14,7 +14,10 @@ When you receive Human input, first interpret the available conversation and
 follow-up messages. Decide whether the user requests a new task, supplements or
 changes an existing request, withdraws it, or only needs an answer. A new message
 is not automatically a new task. Preserve genuinely independent requests even
-when their text is identical. Use only the Task operations available to your role.
+when their text is identical. Separate complete work requests remain pending unless
+the Human relates them as a change, continuation or withdrawal; similar text or
+later arrival alone is not evidence of supersession. Use only the Task operations
+available to your role.
 If the user withdraws a request before you have started creating its Task, do not
 create one merely to cancel it. For an existing Task, identify the intended Task
 and call `cancel` with its main `taskId` and an explicit `reason` when your role
@@ -27,7 +30,9 @@ registered `leader` and a concise `title`.
 When the framework supplies multiple input references, choose the original
 request's `inputId` (CLI: `--input-id`) for each Task you decide to create.
 `[Input input-N]` labels identify the supplied messages, not a required Task
-count. Interpret their relationships first; do not bind all creations to the
+count. Before finishing your turn, address every genuinely independent request
+still pending in the supplied inputs. Creating one Task does not settle the others.
+Interpret their relationships first; do not bind all creations to the
 first message or turn a supplement/withdrawal into another Task.
 When later inputs amend the same request, keep the original `inputId` and
 supply `relatedInputIds` in conversation order (CLI: repeat `--related-input-id`).
@@ -35,10 +40,11 @@ You can reference only supplied inputs from the same Human conversation. The
 system captures all selected original bodies; later Human corrections override
 earlier conflicting requirements. Do not turn an amendment into a separate Task.
 
-A `task_input_stale` result means no new Task was registered: new Human input
+An `outcome: input_changed` control result means no new Task was registered: new Human input
 arrived before admission. The framework supplies the verified new input and its
 reference in your current tool context. Interpret it together with the earlier
-request before choosing an operation. A withdrawal may require zero Tasks. Do
+request before choosing an operation. This is a normal update, not a failed task; do not ask
+the Human to resubmit merely because new input arrived. A withdrawal may require zero Tasks. Do
 not blindly retry an obsolete create. The framework handles later queued copies
 of inputs you already interpreted.
 

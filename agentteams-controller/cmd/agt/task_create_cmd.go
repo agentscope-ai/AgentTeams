@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -47,22 +45,6 @@ func taskCreateCmd() *cobra.Command {
 		response, err := NewAPIClient().doWithHeadersContext(cmd.Context(), http.MethodPost, "/api/v1/tasks", payload, http.Header{"X-Agentteams-Input-Frontier": {os.Getenv("AGENTTEAMS_INPUT_FRONTIER")}, "X-Agentteams-Origin-Event-Id": {source}, "X-Agentteams-Requester-User-Id": {user}, "X-Agentteams-Requester-Room-Id": {room}})
 		if err != nil {
 			return err
-		}
-		if response.StatusCode == http.StatusConflict {
-			raw, readErr := io.ReadAll(response.Body)
-			response.Body.Close()
-			if readErr != nil {
-				return readErr
-			}
-			var stale struct {
-				OK     bool   `json:"ok"`
-				Code   string `json:"error"`
-				NoTask bool   `json:"noTaskRegistered"`
-			}
-			if json.Unmarshal(raw, &stale) == nil && !stale.OK && stale.Code == "task_input_stale" && stale.NoTask {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(json.RawMessage(raw))
-			}
-			response.Body = io.NopCloser(bytes.NewReader(raw))
 		}
 		var result json.RawMessage
 		if err := decodeJSONResponse(response, &result); err != nil {

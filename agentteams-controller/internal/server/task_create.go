@@ -142,7 +142,7 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(updates) > 0 {
-			httputil.WriteJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "task_input_stale", "sourceEventId": source, "noTaskRegistered": true, "inputs": updates})
+			httputil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "outcome": "input_changed", "sourceEventId": source, "noTaskRegistered": true, "inputs": updates})
 			return
 		}
 	} else if len(exists) == 0 {

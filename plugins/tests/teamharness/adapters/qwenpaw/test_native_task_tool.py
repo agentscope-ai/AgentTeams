@@ -136,13 +136,13 @@ class NativeTaskToolTest(unittest.TestCase):
                     "notification":{"status":"queued","recipient":"leader-a","eventId":"handoff"}}
 
         if stale_input:
-            result = {"ok":False,"error":"task_input_stale","noTaskRegistered":True,"sourceEventId":"$source","inputs":[{"eventId":"$new","userId":"@human:test","roomId":"!source:test","body":"Do not create the requested Task."}]}
+            result = {"ok":True,"outcome":"input_changed","noTaskRegistered":True,"sourceEventId":"$source","inputs":[{"eventId":"$new","userId":"@human:test","roomId":"!source:test","body":"Do not create the requested Task."}]}
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body=json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 requests.append((urlsplit(self.path).path,body,dict(self.headers)))
-                self.send_response(409 if stale_input else 200);self.send_header("Content-Type","application/json");self.end_headers()
+                self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers()
                 self.wfile.write(json.dumps(result).encode())
             def log_message(self,*args):pass
 

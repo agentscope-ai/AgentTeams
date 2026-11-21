@@ -258,10 +258,11 @@ def test_verified_refresh_skips_queued_duplicates_without_skipping_new_inputs(mo
     ctx = SimpleNamespace(request=SimpleNamespace(channel_meta=meta), agent=SimpleNamespace(state=SimpleNamespace(middle_context={"teamharness.refreshed_inputs":{"$handled":True}})), extras={}, inject_context=lambda *a,**kw:None)
     async def scenario():
         try:
-            assert await plugin._manager_report_context(ctx) is (not include_new)
+            assert await plugin._manager_report_context(ctx) is False
+            assert bool(plugin._handled_refresh_input.get()) is (not include_new)
             assert [s["eventId"] for s in plugin._creation_sources.get()] == (["$new"] if include_new else [])
         finally:
-            for field, variable in (("creation_sources_token",plugin._creation_sources),("source_event_token",plugin._source_event),("requester_route_token",plugin._requester_route)):
+            for field, variable in (("handled_refresh_input_token",plugin._handled_refresh_input),("creation_sources_token",plugin._creation_sources),("source_event_token",plugin._source_event),("requester_route_token",plugin._requester_route)):
                 token = ctx.extras.pop(field,None)
                 if token is not None: variable.reset(token)
     asyncio.run(scenario())

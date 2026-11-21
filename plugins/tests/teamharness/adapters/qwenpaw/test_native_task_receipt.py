@@ -138,7 +138,7 @@ class NativeTaskReceiptTest(unittest.TestCase):
             async def execute(command: str):
                 commands.append(command)
                 if len(commands) == 1:
-                    return {"ok":False,"error":"task_input_stale","noTaskRegistered":True,"sourceEventId":"$original", "inputs":[{"eventId":"$new","userId":"@a:test","roomId":"!room:test","body":body}]}
+                    return {"ok":True,"outcome":"input_changed","noTaskRegistered":True,"sourceEventId":"$original", "inputs":[{"eventId":"$new","userId":"@a:test","roomId":"!room:test","body":body}]}
                 env = dict(part.split("=",1) for part in shlex.split(command)[1:] if part.startswith("AGENTTEAMS_"))
                 testcase.assertEqual(env["AGENTTEAMS_INPUT_FRONTIER"], "$new")
                 testcase.assertEqual(json.loads(env["AGENTTEAMS_RELATED_INPUTS"]), {"input-refresh-2":"$new"})
@@ -162,6 +162,63 @@ class NativeTaskReceiptTest(unittest.TestCase):
             for amend in (False, True):
                 with self.subTest(amend=amend):
                     asyncio.run(scenario(amend))
+
+    def test_handled_queued_input_still_checkpoints_and_reads_without_model_inference(self):
+        from agentscope.agent import Agent
+        from agentscope.model import ChatModelBase
+        from agentscope.message import Msg, TextBlock
+        from agentscope.formatter import OpenAIChatFormatter
+        from qwenpaw.agents.react_agent import QwenPawAgent
+        from pydantic import BaseModel
+        from unittest.mock import AsyncMock
+        root=Path(__file__).resolve().parents[5]
+        def load(name,path):
+            spec=importlib.util.spec_from_file_location(name,path)
+            module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
+        plugin=load("handled_input_native_plugin",root/"plugins/teamharness/adapters/qwenpaw/plugin.py")
+        matrix=load("handled_input_receipts",root/"plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/session_receipts.py")
+        class Parameters(BaseModel):
+            pass
+        class Model(ChatModelBase):
+            def __init__(self):
+                super().__init__(None,"must-not-run",Parameters(),stream=False)
+                self.formatter=OpenAIChatFormatter();self.calls=0
+            async def __call__(self,*args,**kwargs):
+                self.calls+=1
+                raise AssertionError("Handled transport copy invoked the model")
+        async def scenario():
+            order=[]
+            async def save(**kwargs):
+                order.append("checkpoint")
+                snapshot=kwargs["agent"].state_dict()
+                self.assertIn("$handled",json.dumps(snapshot))
+                self.assertIn("Previously interpreted input.",json.dumps(snapshot))
+            async def read(room,events,pending):
+                self.assertEqual((room,events),("!room:test",["$handled"]))
+                order.append("read")
+            delivery=SimpleNamespace(submit=read)
+            channel=SimpleNamespace(_session_receipts=delivery,_task_execution=None)
+            workspace=SimpleNamespace(channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel)),session=SimpleNamespace(save_session_state=save))
+            meta={"event_id":"$handled","sender_id":"@human:test","room_id":"!room:test","session_source_event_ids":["$handled"]}
+            ctx=SimpleNamespace(request=SimpleNamespace(channel="agentteams_matrix",channel_meta=meta,user_id="!room:test"),workspace=workspace,session_id="matrix:!room:test",mode_state={},extras={},inject_context=lambda *a,**kw:None,agent=None)
+            model=Model()
+            agent=Agent("Manager","Handle Human input.",model,middlewares=[matrix.SessionReceiptMiddleware(ctx),plugin._sanitizer_factory(None,None)])
+            # Use the real runtime serializer on the same native SDK state.
+            agent.state_dict=lambda:QwenPawAgent.state_dict(agent)
+            ctx.agent=agent;agent.state.middle_context["teamharness.refreshed_inputs"]={"$handled":True}
+            try:
+                with patch.object(plugin,"_controller_json",return_value={"humans":[{"matrixUserID":"@human:test"}]}):
+                    self.assertFalse(await plugin._manager_report_context(ctx))
+                await agent.reply(Msg(name="Human",role="user",content=[TextBlock(text="Previously interpreted input.")]))
+                self.assertEqual(model.calls,0)
+                self.assertEqual(order,["checkpoint","read"])
+                self.assertIn("[Task input acknowledgement]",json.dumps(await model.formatter.format(agent.state.context)))
+            finally:
+                for field,variable in (("handled_refresh_input_token",plugin._handled_refresh_input),("creation_sources_token",plugin._creation_sources),("source_event_token",plugin._source_event)):
+                    token=ctx.extras.pop(field,None)
+                    if token is not None:variable.reset(token)
+        with patch.dict(os.environ,{"AGENTTEAMS_AGENT_ROLE":"manager"}):
+            asyncio.run(scenario())
 
     def test_successful_task_cli_receipt_reaches_model_as_tool_context(self):
         self._assert_receipt("submit")
@@ -304,7 +361,7 @@ class StaleCreationBatchTest(unittest.TestCase):
                 calls = []
                 async def execute(**kwargs):
                     calls.append(True)
-                    yield ToolResponse(state="error",content=[{"type":"text","text":json.dumps({"ok":False,"error":"task_input_stale","noTaskRegistered":True,"sourceEventId":"$original","inputs":[{"eventId":"$new","roomId":"!room:test","userId":"@a:test","body":"Withdraw it."}]})}])
+                    yield ToolResponse(state="success",content=[{"type":"text","text":json.dumps({"ok":True,"outcome":"input_changed","noTaskRegistered":True,"sourceEventId":"$original","inputs":[{"eventId":"$new","roomId":"!room:test","userId":"@a:test","body":"Withdraw it."}]})}])
                 for _ in range(2):
                     call = SimpleNamespace(name="teamharness__task",input={"action":"create","leader":"lead","title":"Report","inputId":"input-1"})
                     replies = [item async for item in middleware.on_acting(None,{"tool_call":call},execute)]

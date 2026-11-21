@@ -333,6 +333,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	workerRuntimeNames := teamWorkerRuntimeNames(members, leaderRef.Name)
 
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
+		LeaderDMRoomID:       t.Status.LeaderDMRoomID,
 		TeamName:             teamRuntimeName,
 		TeamAliasName:        teamRoomAliasName(t),
 		LeaderName:           leaderRuntimeName,

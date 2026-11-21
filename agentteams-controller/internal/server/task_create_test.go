@@ -28,6 +28,14 @@ func taskCreateFixture(t *testing.T) (*ProjectHandler, *ossfake.Memory) {
 	if err := coordination.deps.Client.Update(t.Context(), &team); err != nil {
 		t.Fatal(err)
 	}
+	var leader v1beta1.Worker
+	if err := coordination.deps.Client.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "lead-cr"}, &leader); err != nil {
+		t.Fatal(err)
+	}
+	leader.Status.RoomID = "!manager-leader:test"
+	if err := coordination.deps.Client.Update(t.Context(), &leader); err != nil {
+		t.Fatal(err)
+	}
 	h := NewProjectHandler(coordination.deps.Client, "default", store)
 	h.coordination = coordination
 	taskCreateSourceServer(t, h, func(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +170,7 @@ func TestTaskCreateUsesOriginalContextAndSingleDurableHandoff(t *testing.T) {
 	}
 	data, err = store.GetObject(t.Context(), coordinationPending+first.Notification.EventID+".json")
 	var handoff coordinationDelivery
-	if err != nil || json.Unmarshal(data, &handoff) != nil || handoff.Event.RoomID != "!leader-dm:test" || coordinationString(handoff.Event.SourceRoute, "target_session") != "!source:test" || len(handoff.Event.Tasks) != 1 || handoff.Event.Tasks[0].TaskID != first.Task.ID {
+	if err != nil || json.Unmarshal(data, &handoff) != nil || handoff.Event.RoomID != "!manager-leader:test" || coordinationString(handoff.Event.SourceRoute, "target_session") != "!source:test" || len(handoff.Event.Tasks) != 1 || handoff.Event.Tasks[0].TaskID != first.Task.ID {
 		t.Fatalf("wrong handoff room or request identity: %s %v", data, err)
 	}
 	if handoff.Event.Protocol != "task/v1" {
@@ -275,5 +283,59 @@ func TestCreatedTaskPublicViewExposesSourceIdentityAndNotificationReferences(t *
 	}
 	if strings.Contains(result.Body.String(), "!source:test") || strings.Contains(result.Body.String(), "task_notifications") || strings.Contains(result.Body.String(), "shared/tasks") {
 		t.Fatalf("public resource exposed internal notification storage: %s", result.Body.String())
+	}
+}
+
+func TestTaskCreateDeliversThroughManagerLeaderRoom(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	sent := 0
+	taskCreateSourceServer(t, h, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer dispatch-manager-token" {
+			t.Error("wrong dispatch identity")
+		}
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(map[string]any{"event_id": "$request", "room_id": "!source:test", "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": "Original request"}})
+			return
+		}
+		// The private Leader/Admin room intentionally excludes Manager membership.
+		if !strings.HasPrefix(r.URL.Path, "/_matrix/client/v3/rooms/!manager-leader:test/send/m.room.message/") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		sent++
+		_ = json.NewEncoder(w).Encode(map[string]any{"event_id": "$handoff"})
+	})
+	w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$request", `{"title":"CSV","leader":"lead-cr"}`)
+	var result struct {
+		Notification taskNotificationStatus `json:"notification"`
+	}
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &result) != nil {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	data, err := store.GetObject(t.Context(), coordinationPending+result.Notification.EventID+".json")
+	var delivery coordinationDelivery
+	if err != nil || json.Unmarshal(data, &delivery) != nil {
+		t.Fatalf("missing handoff: %s %v", data, err)
+	}
+	h.coordination.advance(t.Context(), &delivery, func() error { return nil })
+	if sent != 1 || delivery.MatrixEventID != "$handoff" || delivery.Status != "running" {
+		t.Fatalf("handoff failed: sent=%d status=%s error=%s room=%s", sent, delivery.Status, delivery.Error, delivery.Event.RoomID)
+	}
+}
+
+func TestTaskCreateRequiresReadyManagerLeaderRoom(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	var leader v1beta1.Worker
+	if err := h.coordination.deps.Client.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "lead-cr"}, &leader); err != nil {
+		t.Fatal(err)
+	}
+	leader.Status.RoomID = ""
+	if err := h.coordination.deps.Client.Update(t.Context(), &leader); err != nil {
+		t.Fatal(err)
+	}
+	w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$request", `{"title":"CSV","leader":"lead-cr"}`)
+	entries, _ := store.ListObjects(t.Context(), coordinationPending)
+	if w.Code != http.StatusConflict || len(entries) != 0 {
+		t.Fatalf("unready route registered handoff: %d %s", w.Code, w.Body.String())
 	}
 }

@@ -311,6 +311,9 @@ Leader 可以在 `reject` 的同一次决定中提供可选 `replacementSpec`，
 不同原始事件即使内容相同也独立创建；同一原始请求改写需求不能覆盖已登记任务。
 任务登记和待交接意图一起保存，队列暂时失败或进程退出后恢复扫描补齐交接。
 人类来源会话和 Leader 接单 DM 分别定位，不将前者误作执行房间。
+Manager 派单使用登记在 `Worker.Status.RoomID` 的 Manager–Leader 会话；
+`Team.Status.LeaderDMRoomID` 是 Leader 与 Team Admin 的私聊，不作为 Manager 的交接目标。
+该规则属于公共任务路由，与 Harness 无关；交接会话未就绪时拒绝创建，不要求 Agent 拼接或猜测房间。
 
 Leader 不填写接收人、会话地址或
 派单 Agent 的账号，不从最近一条消息推断终态接收人。

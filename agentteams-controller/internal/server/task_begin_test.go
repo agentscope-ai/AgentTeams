@@ -252,7 +252,7 @@ func TestTaskBeginReturnsPublicRecoveryCheckpoint(t *testing.T) {
 }
 
 func TestTaskBeginPreparesExactRejectedRevisionBase(t *testing.T) {
-	for _, invalid := range []string{"", "foreign-main", "foreign-project", "accepted", "wrong-submission", "wrong-review", "missing-attempt", "wrong-node"} {
+	for _, invalid := range []string{"", "blocked-base", "foreign-main", "foreign-project", "accepted", "wrong-submission", "wrong-review", "missing-attempt", "wrong-node", "missing-correction"} {
 		t.Run(invalid, func(t *testing.T) {
 			store := ossfake.NewMemory()
 			h := newProjectTestHandler(t, store, team("alpha-team"))
@@ -264,13 +264,18 @@ func TestTaskBeginPreparesExactRejectedRevisionBase(t *testing.T) {
 			if err := store.PutObject(t.Context(), root+"old/artifacts/"+version, data); err != nil {
 				t.Fatal(err)
 			}
-			review := taskReview{ID: "r1", SubmissionID: "s1", Status: "revision", Note: "Fix only the test log", Actor: "leader:lead"}
+			review := taskReview{ID: "r1", SubmissionID: "s1", Status: "revision", Note: "Fix only the test log", ReplacementSpec: "Fix only the test log", Actor: "leader:lead"}
 			old := map[string]any{"task_id": "old", "task_kind": "execution", "main_task_id": "main", "project_id": "", "status": "revision", "submission_id": "s1", "task_review": review,
 				"task_submission": taskSubmission{ID: "s1", Request: taskSubmitRequest{Artifacts: []string{"candidate-a"}}},
 				"task_files":      taskFileIndex{Artifacts: map[string]publishedTaskFile{"candidate-a": artifact}, Heads: map[string]string{"unsubmitted.txt": "other"}}}
 			attempts := map[string]any{"old": map[string]any{"task_id": "old", "status": "revision", "submission_id": "s1", "review_id": "r1"}}
 			node := map[string]any{"task_id": "replacement", "assigned_to": "dev", "revision_of": "old", "depends_on": []string{}}
 			switch invalid {
+			case "blocked-base":
+				old["status"], review.Status = "blocked", "blocked"
+				attempts["old"].(map[string]any)["status"] = "blocked"
+			case "missing-correction":
+				review.ReplacementSpec = ""
 			case "foreign-main":
 				old["main_task_id"] = "other"
 			case "foreign-project":
@@ -291,7 +296,7 @@ func TestTaskBeginPreparesExactRejectedRevisionBase(t *testing.T) {
 			putTask(store, root+"main/meta.json", map[string]any{"task_id": "main", "task_kind": "main", "status": "in_progress", "tasks": []any{node}, "task_attempts": attempts})
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/replacement/begin", nil)
 			inputs, err := h.taskBeginInputs(request, root+"replacement/meta.json", map[string]any{"task_id": "replacement", "main_task_id": "main", "project_id": "", "assigned_to": "dev", "revision_of": "old"})
-			if invalid != "" {
+			if invalid != "" && invalid != "blocked-base" {
 				if err == nil {
 					t.Fatalf("invalid revision base accepted: %+v", inputs)
 				}

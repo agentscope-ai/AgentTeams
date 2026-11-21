@@ -133,18 +133,18 @@ func (h *ProjectHandler) taskBeginInputs(r *http.Request, key string, task map[s
 	}
 	if previous := coordinationString(task, "revision_of"); previous != "" {
 		attempt, exists := main.Attempts[previous]
-		if !isSafeTaskID(previous) || previous == node.TaskID || node.RevisionOf != previous || !exists || attempt.TaskID != previous || attempt.Status != "revision" || attempt.SubmissionID == "" || attempt.ReviewID == "" {
+		if !isSafeTaskID(previous) || previous == node.TaskID || node.RevisionOf != previous || !exists || attempt.TaskID != previous || (attempt.Status != "revision" && attempt.Status != "blocked") || attempt.SubmissionID == "" || attempt.ReviewID == "" {
 			return nil, errors.New("revision base does not match the main task's rejected attempt")
 		}
 		body, err := h.oss.GetObject(r.Context(), path.Join(path.Dir(path.Dir(key)), previous, "meta.json"))
 		var base map[string]any
-		if err != nil || json.Unmarshal(body, &base) != nil || coordinationString(base, "task_id") != previous || coordinationString(base, "task_kind") != "execution" || coordinationString(base, "main_task_id") != mainID || coordinationString(base, "project_id") != coordinationString(task, "project_id") || coordinationString(base, "status") != "revision" {
+		if err != nil || json.Unmarshal(body, &base) != nil || coordinationString(base, "task_id") != previous || coordinationString(base, "task_kind") != "execution" || coordinationString(base, "main_task_id") != mainID || coordinationString(base, "project_id") != coordinationString(task, "project_id") || coordinationString(base, "status") != attempt.Status {
 			return nil, errors.New("rejected revision base unavailable in this task scope")
 		}
 		var review taskReview
 		encoded, _ := json.Marshal(base["task_review"])
 		candidate := publicTaskCandidate(base)
-		if json.Unmarshal(encoded, &review) != nil || review.ID != attempt.ReviewID || review.Accepted || review.Status != "revision" || review.SubmissionID != attempt.SubmissionID || candidate == nil || candidate.ID != review.SubmissionID {
+		if json.Unmarshal(encoded, &review) != nil || review.ID != attempt.ReviewID || review.Accepted || review.Status != attempt.Status || review.ReplacementSpec == "" || review.SubmissionID != attempt.SubmissionID || candidate == nil || candidate.ID != review.SubmissionID {
 			return nil, errors.New("rejected revision candidate or review identity changed")
 		}
 		inputs = append(inputs, taskInputContext{TaskID: previous, SubmissionID: candidate.ID, Summary: candidate.Summary, Purpose: "revisionBase", Review: &review, ReadOnly: true, Files: candidate.Artifacts})

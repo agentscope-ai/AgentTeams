@@ -74,6 +74,15 @@ def test_build_qwenpaw_native_plugin_package(tmp_path: Path) -> None:
         assert "name: teamharness-project-management" in project_skill
         assert "payload` as a JSON object" in project_skill
 
+        # The full Skill can be loaded after the shorter Manager system policy.
+        # Its phase-ending rule must not contradict multi-request intake.
+        task_skill = archive.read(f"{root}/teamharness/skills/team/task-management/SKILL.md").decode("utf-8")
+        exposed_task_skill = archive.read(f"{root}/teamharness/qwenpaw-skills/task-management/SKILL.md").decode("utf-8")
+        assert exposed_task_skill == task_skill
+        phase_end = re.search(r"After a valid durable ([^.]+)\.", task_skill)
+        assert phase_end and "create" not in phase_end.group(1)
+        assert "Creating one Task does not settle the others" in task_skill
+
         manifest = json.loads(archive.read(f"{root}/plugin.json"))
         extract_dir = tmp_path / "extract"
         archive.extractall(extract_dir)

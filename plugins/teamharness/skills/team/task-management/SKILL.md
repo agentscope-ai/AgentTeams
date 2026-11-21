@@ -47,8 +47,9 @@ or supplement to the selected request; equal text is not such a relationship.
 Do not turn an amendment into a separate Task.
 
 An `outcome: input_changed` control result means no new Task was registered: new Human input
-arrived before admission. The framework supplies the verified new input and its
-reference in your current tool context. Interpret it together with the earlier
+arrived before admission. Your framework adds the verified new input as a native Human user message
+and preserves its reference in the control receipt. It saves that context before
+acknowledging the input or continuing inference. Interpret it together with the earlier
 request before choosing an operation. This is a normal update, not a failed task; do not ask
 the Human to resubmit merely because new input arrived. A withdrawal may require zero Tasks. Do
 not blindly retry an obsolete create. The framework handles later queued copies
@@ -143,10 +144,12 @@ system includes all accepted outputs; use `artifacts` only to select exact accep
 IDs. It saves the final report and returns it with downloadable files to the
 original Human conversation using the first dispatch Agent identity.
 
-After a valid durable create, plan, submit, accept/reject or complete receipt,
+After a valid durable plan, submit, accept/reject or complete receipt,
 your framework records the fact and ends this phase without another model call.
 Do not repeat that operation or checkpoint after submission. Pending projection
 and delivery remain the task system's responsibility.
+A create receipt confirms only its selected request was registered; continue
+interpreting any other pending Human inputs before ending your turn.
 
 Framework-generated receipts enter your context automatically. Queued notification
 means pending delivery, not recipient acceptance. Do not send duplicate reports,

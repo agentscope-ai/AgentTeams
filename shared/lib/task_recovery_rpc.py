@@ -25,6 +25,9 @@ def native_reply_plan(checkpoint, request, bind):
 
 
 def execute(request):
+    if request.get('action') == 'tool_policy':
+        from task_operation import tool_policy
+        return tool_policy(request.get('registration'))
     if not enabled():
         raise RecoveryConflict('Worker process recovery is not configured')
     recovery = Recovery(device_delivery=request.get("device_delivery") is True)
@@ -136,6 +139,10 @@ def execute(request):
                 'checkpoint_digest': Recovery.digest(task['execution'].get('checkpoint'))}
     identity = request['identity']
     task = owned(recovery, identity)
+    if action == 'begin_tools':
+        return recovery.begin_tools(identity, request['calls'])
+    if action == 'finish_tools':
+        return recovery.finish_tools(identity, request['operation_id'], request['results'])
     if action == 'current':
         return {'task': task, 'checkpoint_digest': Recovery.digest(task['execution'].get('checkpoint'))}
     if action == 'plan_reply':

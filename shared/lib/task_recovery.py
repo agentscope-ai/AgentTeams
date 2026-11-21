@@ -66,7 +66,7 @@ class Recovery:
         return self.request("POST", self.task_path(entry["task"]["task_id"], entry["team_id"]),
             {"action": "claim", "instance_id": snapshot["instance_id"], "process_id": self.process}, entry["etag"])
 
-    def checkpoint(self, task_id, team, checkpoint, *, release=False):
+    def checkpoint(self, task_id, team, checkpoint, *, release=False, expected_identity=None, expected_digest=None):
         snapshot = self.discover()
         entry = next((e for e in snapshot["tasks"] if e["task"]["task_id"] == task_id and e["team_id"] == team), None)
         if entry is None:
@@ -74,6 +74,11 @@ class Recovery:
         execution = entry["task"].get("execution", {})
         if execution.get("process_id") != self.process or execution.get("instance_id") != snapshot["instance_id"]:
             raise RecoveryConflict("Task is not owned by this process")
+        if expected_identity is not None and any(execution.get(key) != expected_identity.get(key)
+                                                for key in ('generation', 'instance_id', 'process_id')):
+            raise RecoveryConflict('Native tool execution ownership changed')
+        if expected_digest is not None and self.digest(execution.get('checkpoint')) != expected_digest:
+            raise RecoveryConflict('Native tool checkpoint changed before commit')
         return self.request("POST", self.task_path(task_id, team),
             {"action": "release" if release else "checkpoint", "instance_id": snapshot["instance_id"],
              "process_id": self.process, "checkpoint": checkpoint}, entry["etag"])
@@ -82,6 +87,36 @@ class Recovery:
         snapshot = self.discover()
         return next((e["task"] for e in snapshot["tasks"]
                      if e["task"]["task_id"] == task_id and e["team_id"] == team), None)
+
+    def tools_current(self, identity):
+        task = self.current(identity['task_id'], identity['team_id'])
+        execution = task.get('execution', {}) if task else {}
+        if (not task or execution.get('state') != 'active' or execution.get('process_id') != self.process
+                or any(execution.get(key) != identity.get(key) for key in ('generation', 'instance_id', 'process_id'))):
+            raise RecoveryConflict('Native tool execution was replaced or is not active')
+        return task
+
+    def begin_tools(self, identity, calls):
+        from task_operation import begin
+        task = self.tools_current(identity)
+        original = task['execution'].get('checkpoint')
+        operation, cp = begin(original, [identity['team_id'], identity['task_id']], calls)
+        self.checkpoint(identity['task_id'], identity['team_id'], cp,
+                        expected_identity=identity, expected_digest=self.digest(original))
+        return operation
+
+    def finish_tools(self, identity, operation, results):
+        from task_operation import result_bytes, finish
+        task = self.tools_current(identity)
+        original = task['execution'].get('checkpoint')
+        data = result_bytes(original, operation, results)
+        digest = hashlib.sha256(data).hexdigest()
+        key = f"teams/{identity['team_id']}/shared/tasks/{identity['task_id']}/checkpoints/tools-{digest}.txt"
+        subprocess.run(['mc', 'pipe', os.environ['AGENTTEAMS_STORAGE_PREFIX'].rstrip('/') + '/' + key],
+                       input=data, check=True, capture_output=True, timeout=30)
+        cp = finish(original, operation, {'key': key, 'sha256': digest, 'size': len(data)})
+        return self.checkpoint(identity['task_id'], identity['team_id'], cp,
+                               expected_identity=identity, expected_digest=self.digest(original))
 
     def save_reply(self, task_id, team, text):
         task = self.current(task_id, team)

@@ -237,20 +237,8 @@ class WorkerMatrix:
     def message_begin_tools(self, identity, calls, *, reply=None, output_bytes=()):
         """Commit the native call identities before the adapter invokes any tool."""
         entry = self.message_current(identity)
-        if not calls or any(not c.get("id") or not c.get("name") or "arguments" not in c for c in calls):
-            raise RecoveryConflict("Native tool calls require IDs, names and arguments")
-        ids = [call["id"] for call in calls]
-        if len(set(ids)) != len(ids):
-            raise RecoveryConflict("Native tool call IDs must be unique")
-        op = "tools:" + Recovery.digest([identity["event_key"], calls])
-        cp = dict(entry["execution"].get("checkpoint") or {})
-        if op in (cp.get("completed_steps") or []):
-            raise RecoveryConflict("Tool operation already completed")
-        # Retain enough information to verify an interrupted native batch. A
-        # digest of arguments avoids placing full command payloads in metadata.
-        expected = [{"id": c["id"], "name": c["name"], "arguments_sha256": Recovery.digest(c["arguments"])} for c in calls]
-        cp.update(version=cp.get("version", 0) + 1,
-                  operation={"id": op, "state": "started", "evidence": json.dumps(expected)})
+        from task_operation import begin
+        op, cp = begin(entry['execution'].get('checkpoint'), identity['event_key'], calls)
         if reply is not None:
             if not reply:
                 raise RecoveryConflict("An attachment reply needs a saved result")
@@ -264,29 +252,22 @@ class WorkerMatrix:
     def message_pending_tools(self, identity, operation_id):
         """Recheck the operation immediately before issuing a native side effect."""
         entry = self._message_owned(identity)
-        cp = entry["execution"].get("checkpoint") or {}
-        operation = cp.get("operation") or {}
-        if (entry["recovery"] != "verify" or operation.get("id") != operation_id
-                or operation.get("state") != "started"):
-            raise RecoveryConflict("Native results do not own an outstanding tool operation")
+        from task_operation import pending
+        if entry['recovery'] != 'verify':
+            raise RecoveryConflict('Native results do not own an outstanding tool operation')
+        pending(entry['execution'].get('checkpoint'), operation_id)
         return entry
 
     def message_finish_tools(self, identity, operation_id, results, *, deliver_result=False):
         """Call only for confirmed tool returns. Uncertain effects remain fenced."""
         entry = self.message_pending_tools(identity, operation_id)
-        cp = dict(entry["execution"]["checkpoint"])
-        expected = json.loads(cp["operation"]["evidence"])
-        if (sorted(r["id"] for r in results) != sorted(c["id"] for c in expected)
-                or any("content" not in result for result in results)):
-            raise RecoveryConflict("Native tool receipts differ from the admitted calls")
-        if deliver_result and not cp.get("result"):
-            raise RecoveryConflict("Message has no staged result")
-        data = json.dumps({"calls": expected, "results": results}, ensure_ascii=False).encode()
+        from task_operation import result_bytes, finish
+        original = entry['execution']['checkpoint']
+        data = result_bytes(original, operation_id, results)
+        if deliver_result and not original.get('result'):
+            raise RecoveryConflict('Message has no staged result')
         artifact = self._message_artifact(entry, data)
-        cp.update(version=cp["version"] + 1,
-                  completed_steps=[*(cp.get("completed_steps") or []), operation_id],
-                  artifacts=[*(cp.get("artifacts") or []), artifact],
-                  operation={"id": operation_id, "state": "verified", "evidence": artifact["key"]})
+        cp = finish(original, operation_id, artifact)
         if deliver_result:
             self._pending_reply(entry, cp)
         return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "checkpoint", cp))

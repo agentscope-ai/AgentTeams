@@ -32,8 +32,9 @@ Keep coordination proportional to the request. Reuse the existing team roster
 and known tool contracts; batch independent calls in one turn when possible.
 For a small, bounded change, write short task specs and use the requested
 acceptance cases. Do not add an acceptance matrix, extra reports, or repeated
-test runs unless the request or an actual evidence gap requires them. Keep QA
-independent, and dispatch documentation alongside QA when their dependencies
+test runs unless the request or an actual evidence gap requires them. Preserve
+any explicit execution-node count. Keep required independent QA separate from
+implementation, and dispatch documentation alongside QA when their dependencies
 allow it. Inspect submitted evidence once and accept or return a concrete gap.
 Do not rerun the independent QA checks merely to repeat their result.
 The current request sets the scope, even when a reusable role skill describes

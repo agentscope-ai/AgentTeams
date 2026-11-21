@@ -123,7 +123,7 @@ def test_old_queue_cancellation_does_not_drop_accepted_followup(monkeypatch, mat
 
 
 @pytest.mark.parametrize("count", [2, 3])
-def test_sdk_batch_preserves_each_independent_matrix_input(monkeypatch, matrix_channel, count):
+def test_sdk_batch_retains_each_source_without_forcing_separate_turns(monkeypatch, matrix_channel, count):
     AgentTeamsMatrixChannel, BaseChannel = matrix_channel
     from qwenpaw.app.channels.manager import ChannelManager, _process_batch
 
@@ -147,7 +147,55 @@ def test_sdk_batch_preserves_each_independent_matrix_input(monkeypatch, matrix_c
             queues.setdefault(key, []).append(payload)
         for batch in queues.values():
             await _process_batch(channel, batch)
-        assert consumed == inputs
+        assert len(consumed) == 1
+        merged = consumed[0]
+        assert merged["content_parts"] == [p for item in inputs for p in item["content_parts"]]
+        assert merged["meta"]["matrix_input_sources"] == [
+            {"event_id": "$source-" + str(index), "room_id": "!room:test",
+             "sender_id": "@human:test", "content_start": index, "content_end": index + 1}
+            for index in range(count)]
         assert channel.resolve_session_id("@human:test", inputs[0]["meta"]) == "matrix:!room:test"
 
     asyncio.run(scenario())
+
+
+def test_batch_keeps_a_request_and_its_withdrawal_in_one_context(matrix_channel):
+    AgentTeamsMatrixChannel, _ = matrix_channel
+    channel = AgentTeamsMatrixChannel.__new__(AgentTeamsMatrixChannel)
+    items = [{"channel_id": channel.channel, "sender_id": "@human:test",
+              "content_parts": [{"type": "text", "text": text}],
+              "meta": {"room_id": "!room:test", "event_id": event}}
+             for event, text in [("$request", "Build the project."),
+                                 ("$withdrawal", "Cancel that task; do not start it.")]]
+    merged = channel.merge_native_items(items)
+    assert merged["content_parts"] == [p for item in items for p in item["content_parts"]]
+    assert [s["event_id"] for s in merged["meta"]["matrix_input_sources"]] == ["$request", "$withdrawal"]
+
+
+def test_nested_batches_keep_original_content_ranges(matrix_channel):
+    AgentTeamsMatrixChannel, _ = matrix_channel
+    channel = AgentTeamsMatrixChannel.__new__(AgentTeamsMatrixChannel)
+    items = [{"channel_id": channel.channel, "sender_id": "@human:test",
+              "content_parts": [{"type": "text", "text": str(index)}],
+              "meta": {"room_id": "!room:test", "event_id": "$" + str(index)}} for index in range(3)]
+    merged = channel.merge_native_items([items[0], channel.merge_native_items(items[1:])])
+    assert [(s["event_id"], s["content_start"], s["content_end"])
+            for s in merged["meta"]["matrix_input_sources"]] == [("$0", 0, 1), ("$1", 1, 2), ("$2", 2, 3)]
+
+
+def test_source_ranges_preserve_each_sender_and_reply_route(matrix_channel):
+    AgentTeamsMatrixChannel, _ = matrix_channel
+    channel = AgentTeamsMatrixChannel.__new__(AgentTeamsMatrixChannel)
+    routes = [{"target_user": "@a:test", "target_session": "!human-a:test"},
+              {"target_user": "@b:test", "target_session": "!human-b:test"}]
+    parts = [[{"type": "text", "text": "request"}, {"type": "text", "text": "attachment"}],
+             [{"type": "text", "text": "follow-up"}]]
+    items = [{"channel_id": channel.channel, "sender_id": sender, "content_parts": content,
+              "meta": {"room_id": "!room:test", "event_id": "$" + str(index),
+                       "teamharness_requester_route": routes[index]}}
+             for index, (sender, content) in enumerate(zip(("@a:test", "@b:test"), parts))]
+    merged = channel.merge_native_items(items)
+    sources = merged["meta"]["matrix_input_sources"]
+    assert [s["sender_id"] for s in sources] == ["@a:test", "@b:test"]
+    assert [s["teamharness_requester_route"] for s in sources] == routes
+    assert [(s["content_start"], s["content_end"]) for s in sources] == [(0, 2), (2, 3)]

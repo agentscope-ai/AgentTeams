@@ -691,7 +691,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         return self._room_history._room_event_log
 
     # ------------------------------------------------------------------
-    # Queue each source independently; _consume_with_tracker serializes by room.
+    # Debounce key — serialize by room_id (avoid concurrent session access)
     # ------------------------------------------------------------------
 
     async def _stream_with_tracker(self, payload: Any):
@@ -927,9 +927,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 return meta["teamharness_completion_session"]
             room_id = meta.get("room_id")
             if room_id:
-                key = f"matrix:{room_id}"
-                event_id = meta.get("event_id")
-                return f"{key}:{event_id}" if event_id else key
+                return f"matrix:{room_id}"
             return payload.get("sender_id") or ""
         return getattr(payload, "session_id", "") or ""
 
@@ -3598,6 +3596,20 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 event_id for item in items
                 for event_id in (item.get("meta", {}).get("session_source_event_ids") or [])
             ))
+            sources, offset = [], 0
+            for item in items:
+                meta = item.get("meta", {})
+                count = len(item.get("content_parts") or [])
+                original = meta.get("matrix_input_sources") or [{
+                    "event_id": meta.get("event_id"), "room_id": meta.get("room_id"),
+                    "sender_id": meta.get("sender_id") or item.get("sender_id"),
+                    "content_start": 0, "content_end": count,
+                    **{key: meta[key] for key in ("teamharness_requester_route", "teamharness_coordinator_route") if meta.get(key)},
+                }]
+                sources.extend({**source, "content_start": source["content_start"] + offset,
+                                "content_end": source["content_end"] + offset} for source in original)
+                offset += count
+            merged["meta"]["matrix_input_sources"] = sources
         return merged
 
     def build_agent_request_from_native(self, native_payload: Any) -> Any:

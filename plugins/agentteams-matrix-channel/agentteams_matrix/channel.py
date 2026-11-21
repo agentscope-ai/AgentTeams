@@ -842,7 +842,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         return blocked
 
     # ------------------------------------------------------------------
-    # Debounce key — serialize by room_id (avoid concurrent session access)
+    # Queue each source independently; _consume_with_tracker serializes by room.
     # ------------------------------------------------------------------
 
     def get_debounce_key(self, payload: Any) -> str:
@@ -856,7 +856,9 @@ class AgentTeamsMatrixChannel(BaseChannel):
                 return meta["teamharness_completion_session"]
             room_id = meta.get("room_id")
             if room_id:
-                return f"matrix:{room_id}"
+                key = f"matrix:{room_id}"
+                event_id = meta.get("event_id")
+                return f"{key}:{event_id}" if event_id else key
             return payload.get("sender_id") or ""
         return getattr(payload, "session_id", "") or ""
 

@@ -47,6 +47,22 @@ class RunSummaryTests(unittest.TestCase):
         self.assertEqual(len(result), 3)
         self.assertTrue(all(group['attempts'] == 1 for group in result))
 
+    def test_concurrency_sizes_do_not_share_latency_percentiles(self):
+        rows = [(self.record(concurrencySize=size, protocolRunPassed=True,
+                             fullDeliverySeconds=seconds), None)
+                for size, seconds in [(1, 100), (2, 200), (3, 300)]]
+        groups = summarize(rows)
+        self.assertEqual(len(groups), 3)
+        self.assertEqual({g['concurrencySize']: g['protocolDeliverySeconds']['p50']
+                          for g in groups}, {1: 100, 2: 200, 3: 300})
+
+    def test_legacy_serial_records_group_with_explicit_serial_size(self):
+        groups = summarize([(self.record(), None),
+                            (self.record(concurrencySize=1), None)])
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]['concurrencySize'], 1)
+        self.assertEqual(groups[0]['attempts'], 2)
+
     def test_protocol_success_can_coexist_with_business_failure(self):
         result = summarize([(self.record(protocolRunPassed=True, functionalDeliveryPassed=False,
             businessOracleVerified=True, businessOraclePassed=False, fullDeliverySeconds=340,

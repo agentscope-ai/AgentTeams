@@ -1190,7 +1190,10 @@ def test_late_assignment_is_observed_in_existing_task_session(adapter, native_ch
     execution.matrix.native_committed = Mock(side_effect=commit)
     channel._session_receipts.submit.side_effect = lambda *_: order.append("read")
     canonical = {"text": "Canonical assigned Task T", "meta": {"teamharness_coordination": {"kind": "task_assigned", "task_id": "T"}}}
-    monkeypatch.setattr("task_coordination.notification", lambda *_: canonical)
+    def notification(*_args, event_id):
+        assert event_id == record["event_id"]
+        return canonical
+    monkeypatch.setattr("task_coordination.notification", notification)
     channel._user_id = "@worker:hs"
     runner = ManagedNioSync(channel, execution)
     snapshot = {"state": {"pending": [key], "rooms": {room: {}}}}

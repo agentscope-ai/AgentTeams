@@ -16,9 +16,10 @@ def summarize(rows):
     groups = defaultdict(list)
     for record, trace in rows:
         if record.get('sourceEventId'):
-            groups[(record['sourceCommit'], record['stage'], record['case'])].append((record, trace))
+            groups[(record['sourceCommit'], record['stage'], record['case'],
+                    record.get('concurrencySize', 1))].append((record, trace))
     result = []
-    for (source, stage, case), samples in sorted(groups.items()):
+    for (source, stage, case, concurrency), samples in sorted(groups.items()):
         records = [record for record, _ in samples]
         passed = sum(r.get('functionalDeliveryPassed') is True for r in records)
         failed = sum(r.get('functionalDeliveryPassed') is False for r in records)
@@ -37,6 +38,7 @@ def summarize(rows):
             metrics[field] = {'knownTotal': sum(known) if known else None,
                               'measuredRuns': len(known), 'unknownRuns': len(samples) - len(known)}
         result.append({'sourceCommit': source, 'stage': stage, 'case': case,
+            'concurrencySize': concurrency,
             'attempts': len(samples), 'auditedRuns': audited, 'qualityPassed': passed,
             'qualityFailed': failed, 'pendingQualityAudit': len(samples) - audited,
             'qualityPassRateAmongAudited': passed / audited if audited else None,
@@ -71,6 +73,7 @@ def main():
         rows.append((record, json.loads(trace.read_text()) if trace.exists() else None))
     print(json.dumps({'groups': summarize(rows),
         'notes': ['Sources and Harness combinations are separate; no automatic baseline comparison.',
+                  'Serial, pair and triple request groups have separate latency and success statistics.',
                   'Unfinished/unaudited runs remain visible; pass rate denominator is auditedRuns.',
                   'P50/P95 use nearest rank over verified successful complete delivery times only.',
                   'Timeout records remain timeouts even when later delivery passes quality gates.',

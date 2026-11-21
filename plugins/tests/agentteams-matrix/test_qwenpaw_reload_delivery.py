@@ -9,10 +9,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-@pytest.fixture
-def matrix_channel(monkeypatch):
+@pytest.fixture(params=["legacy", "bundle"])
+def matrix_channel(monkeypatch, request):
     pytest.importorskip("qwenpaw.app.channels.base")
-    path = Path(__file__).resolve().parents[2] / "agentteams-matrix-channel/agentteams_matrix/channel.py"
+    root = Path(__file__).resolve().parents[2]
+    path = root / ("agentteams-matrix-channel/agentteams_matrix/channel.py"
+                   if request.param == "legacy" else "agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py")
     # The bundle parity tests also import an older adapter with this package
     # name. Load the actual image-owned plugin independently of that cache.
     spec = importlib.util.spec_from_file_location("_reload_delivery_channel", path)
@@ -116,5 +118,36 @@ def test_old_queue_cancellation_does_not_drop_accepted_followup(monkeypatch, mat
         assert not release.cancelled()
         release.set_result(None)
         await asyncio.wait_for(delivered.wait(), 1)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("count", [2, 3])
+def test_sdk_batch_preserves_each_independent_matrix_input(monkeypatch, matrix_channel, count):
+    AgentTeamsMatrixChannel, BaseChannel = matrix_channel
+    from qwenpaw.app.channels.manager import ChannelManager, _process_batch
+
+    async def scenario():
+        channel = AgentTeamsMatrixChannel.__new__(AgentTeamsMatrixChannel)
+        inputs = [{"channel_id": channel.channel, "sender_id": "@human:test",
+                   "content_parts": [{"type": "text", "text": "same task request"}],
+                   "meta": {"room_id": "!room:test", "event_id": "$source-" + str(index),
+                            "session_source_event_ids": ["$source-" + str(index)]}}
+                  for index in range(count)]
+        consumed = []
+
+        async def sdk_consume(_channel, payload):
+            consumed.append(payload)
+
+        monkeypatch.setattr(BaseChannel, "_consume_one_request", sdk_consume)
+        manager = ChannelManager.__new__(ChannelManager)
+        queues = {}
+        for payload in inputs:
+            key = manager._extract_session_id(channel, payload)
+            queues.setdefault(key, []).append(payload)
+        for batch in queues.values():
+            await _process_batch(channel, batch)
+        assert consumed == inputs
+        assert channel.resolve_session_id("@human:test", inputs[0]["meta"]) == "matrix:!room:test"
 
     asyncio.run(scenario())

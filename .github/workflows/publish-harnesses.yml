@@ -35,7 +35,7 @@ concurrency:
 
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
-  CODEX_REF: 15ad95ff495add0c18f24edb1315b99eee48c921
+  CODEX_REF: d286aba1582c60ff9b2f1b159d26636c95842a34
 
 jobs:
   prepare:

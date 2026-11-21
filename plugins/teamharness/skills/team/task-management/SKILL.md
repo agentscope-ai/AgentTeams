@@ -96,11 +96,6 @@ Call `complete` with the main `taskId` and final Human report. By default the ta
 system includes all accepted outputs; use `artifacts` only to select exact accepted
 IDs. It saves the final report and returns it with downloadable files to the
 original Human conversation using the first dispatch Agent identity.
-Keep this Human report concise: outcome, deliverables, recorded validation evidence
-and remaining limitations. Attribute tests to the recorded source; do not invent
-totals or claim you ran them. Leave implementation walkthroughs and code snippets
-in the retained review records. This changes presentation, not the required review
-or QA: complete those checks before declaring the main task ready.
 
 After a valid durable create, plan, submit, accept/reject or complete receipt,
 your framework records the fact and ends this phase without another model call.

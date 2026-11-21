@@ -44,6 +44,24 @@ def prepare(kind, event, result):
                 or not isinstance(nodes, list) or not nodes
                 or any(node.get("status") != "completed" for node in nodes)):
             raise ValueError("main task is not ready to close")
-        return {"fact": "All execution steps are accepted. Verify the whole original request and call task complete with your final report. The task system returns the report and accepted artifacts to the original Human conversation using the first dispatch Agent identity. Do not send another message or poll.",
+        accepted = task.get("acceptedResults")
+        remaining = {node.get("taskId") for node in nodes}
+        if (not isinstance(accepted, list) or len(accepted) != len(nodes)
+                or len(remaining) != len(nodes) or not all(isinstance(identity, str) and identity for identity in remaining)):
+            raise ValueError("accepted result evidence is incomplete")
+        for child in accepted:
+            if not isinstance(child, dict):
+                raise ValueError("accepted result evidence is invalid")
+            candidate, review = child.get("candidate"), child.get("review")
+            submission = child.get("submissionId")
+            if (child.get("id") not in remaining or child.get("mainTaskId") != task_id
+                    or child.get("projectId", "") != task.get("projectId", "") or child.get("kind") != "execution"
+                    or child.get("status") != "completed" or not isinstance(submission, str) or not submission
+                    or not isinstance(candidate, dict) or candidate.get("id") != submission
+                    or not isinstance(review, dict) or not review.get("id") or review.get("accepted") is not True
+                    or review.get("status") != "completed" or review.get("submissionId") != submission):
+                raise ValueError("accepted result identity or saved review changed")
+            remaining.remove(child["id"])
+        return {"fact": "All execution steps are accepted. Use acceptedResults below: each id is the actual execution Task ID, with its exact candidate, saved review, report and artifact versions. Verify whole-request coverage from this evidence; do not reread unchanged accepted files or rerun checks. Read more only for a concrete missing or inconsistent requirement, using that result's id, never a local step alias or the main Task ID for child files. Call task complete with your final report, distinguishing recorded tests from your own review. The task system returns report and artifacts to the original Human conversation using the first dispatch identity. Do not send another message or poll.",
                 "context": task, "completion": task_id}
     raise ValueError("unsupported task preparation event")

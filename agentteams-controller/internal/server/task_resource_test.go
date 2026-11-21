@@ -94,3 +94,100 @@ func TestTaskResourceInfersWorkerTeamForRepeatedTaskIDs(t *testing.T) {
 		t.Fatalf("own scope not inferred: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestMainTaskResourceIncludesAcceptedCandidateAndReviewForClosure(t *testing.T) {
+	h, store, caller, submission := taskReviewFixture(t)
+	if w := callTaskReview(h, caller, submission, "Read published report and verified business evidence", true); w.Code != 200 {
+		t.Fatalf("accept: %d %s", w.Code, w.Body.String())
+	}
+	key := "teams/alpha/shared/tasks/main/meta.json"
+	data, _ := store.GetObject(t.Context(), key)
+	var main map[string]any
+	_ = json.Unmarshal(data, &main)
+	main["task_plan"] = taskPlan{ID: "plan-1", ActorName: caller.Username, Request: taskPlanRequest{Nodes: []taskPlanNode{{ID: "implementation", AssignedTo: "worker-cr", Spec: "Create a report."}}}}
+	main["tasks"].([]any)[0].(map[string]any)["step_id"] = "implementation"
+	putTask(store, key, main)
+	read := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/main?team=alpha", nil)
+		r.SetPathValue("id", "main")
+		w := httptest.NewRecorder()
+		h.GetTaskResource(w, withCaller(r, caller))
+		return w
+	}
+	first := read()
+	var result struct {
+		Version string `json:"version"`
+		Task    struct {
+			Accepted []taskResource `json:"acceptedResults"`
+		} `json:"task"`
+	}
+	if first.Code != 200 || json.Unmarshal(first.Body.Bytes(), &result) != nil || len(result.Task.Accepted) != 1 {
+		t.Fatalf("missing closure evidence: %d %s", first.Code, first.Body.String())
+	}
+	child := result.Task.Accepted[0]
+	if child.ID != "t1" || child.MainTaskID != "main" || child.Status != "completed" || child.Candidate == nil || child.Candidate.ID != submission || child.Candidate.Report != "Verified candidate" || len(child.Candidate.Artifacts) != 1 || child.Review == nil || !child.Review.Accepted || child.Review.SubmissionID != submission || child.Review.Note != "Read published report and verified business evidence" {
+		t.Fatalf("incomplete accepted result: %+v", child)
+	}
+	for _, hidden := range []string{"shared/tasks/", "meta.json", "!source:test", "!private:test"} {
+		if strings.Contains(first.Body.String(), hidden) {
+			t.Fatalf("storage/route exposed: %s", first.Body.String())
+		}
+	}
+	data, _ = store.GetObject(t.Context(), "teams/alpha/shared/tasks/t1/meta.json")
+	var saved map[string]any
+	_ = json.Unmarshal(data, &saved)
+	saved["title"] = "Updated display title"
+	putTask(store, "teams/alpha/shared/tasks/t1/meta.json", saved)
+	second := read()
+	if second.Code != 200 || second.Header().Get("ETag") == first.Header().Get("ETag") {
+		t.Fatalf("composite version ignored child change: %d %s", second.Code, second.Body.String())
+	}
+}
+
+func TestMainTaskResourceRejectsChangedAcceptedResult(t *testing.T) {
+	for _, scenario := range []string{"wrong-main", "wrong-project", "wrong-assignee", "not-accepted", "missing-review", "wrong-submission", "unsafe-node"} {
+		t.Run(scenario, func(t *testing.T) {
+			h, store, caller, submission := taskReviewFixture(t)
+			if w := callTaskReview(h, caller, submission, "Verified evidence", true); w.Code != 200 {
+				t.Fatal(w.Body.String())
+			}
+			mainKey := "teams/alpha/shared/tasks/main/meta.json"
+			data, _ := store.GetObject(t.Context(), mainKey)
+			var main map[string]any
+			_ = json.Unmarshal(data, &main)
+			main["task_plan"] = taskPlan{ID: "plan-1", ActorName: caller.Username, Request: taskPlanRequest{Nodes: []taskPlanNode{{ID: "implementation", AssignedTo: "worker-cr", Spec: "Create report"}}}}
+			node := main["tasks"].([]any)[0].(map[string]any)
+			node["step_id"] = "implementation"
+			if scenario == "unsafe-node" {
+				node["task_id"] = "../foreign"
+			}
+			putTask(store, mainKey, main)
+			childKey := "teams/alpha/shared/tasks/t1/meta.json"
+			data, _ = store.GetObject(t.Context(), childKey)
+			var child map[string]any
+			_ = json.Unmarshal(data, &child)
+			switch scenario {
+			case "wrong-main":
+				child["main_task_id"] = "other"
+			case "wrong-project":
+				child["project_id"] = "other"
+			case "wrong-assignee":
+				child["assigned_to"] = "other"
+			case "not-accepted":
+				child["status"] = "submitted"
+			case "missing-review":
+				delete(child, "task_review")
+			case "wrong-submission":
+				child["task_review"].(map[string]any)["submissionId"] = "other"
+			}
+			putTask(store, childKey, child)
+			r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/main?team=alpha", nil)
+			r.SetPathValue("id", "main")
+			w := httptest.NewRecorder()
+			h.GetTaskResource(w, withCaller(r, caller))
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("invalid accepted result returned: %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}

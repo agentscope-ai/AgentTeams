@@ -54,9 +54,33 @@ def test_review_binds_exact_public_candidate_and_does_not_claim_business_validat
         with pytest.raises(ValueError): context.prepare("task_submitted", event, bad)
 
 
-def test_closure_requires_all_public_nodes_accepted():
+def closure():
     event = {"main_task_id": "main"}
-    result = {"task": {"id": "main", "kind": "main", "status": "in_progress", "nodes": [{"status": "completed"}]}}
-    assert context.prepare("main_task_ready", event, result)["completion"] == "main"
+    accepted = {"id": "t1", "kind": "execution", "mainTaskId": "main", "status": "completed", "submissionId": "s1",
+                "candidate": {"id": "s1", "summary": "Verified result", "artifacts": [], "reportFile": {"artifactId": "report-s1"}},
+                "review": {"id": "r1", "submissionId": "s1", "accepted": True, "status": "completed"}}
+    result = {"task": {"id": "main", "kind": "main", "status": "in_progress", "nodes": [{"taskId": "t1", "status": "completed"}], "acceptedResults": [accepted]}}
+    return event, result
+
+
+def test_closure_requires_all_public_nodes_accepted():
+    event, result = closure()
+    prepared = context.prepare("main_task_ready", event, result)
+    assert prepared["completion"] == "main"
+    assert prepared["context"]["acceptedResults"][0]["review"]["id"] == "r1"
     result["task"]["nodes"][0]["status"] = "submitted"
+    with pytest.raises(ValueError): context.prepare("main_task_ready", event, result)
+
+
+@pytest.mark.parametrize("change", ["missing", "wrong-task", "wrong-main", "unreviewed", "wrong-candidate", "wrong-review", "duplicate"])
+def test_closure_rejects_missing_or_mismatched_accepted_evidence(change):
+    event, result = closure()
+    task = result["task"]; accepted = task["acceptedResults"][0]
+    if change == "missing": del task["acceptedResults"]
+    elif change == "wrong-task": accepted["id"] = "other"
+    elif change == "wrong-main": accepted["mainTaskId"] = "other"
+    elif change == "unreviewed": accepted["review"]["accepted"] = False
+    elif change == "wrong-candidate": accepted["candidate"]["id"] = "other"
+    elif change == "wrong-review": accepted["review"]["submissionId"] = "other"
+    else: task["acceptedResults"].append(copy.deepcopy(accepted))
     with pytest.raises(ValueError): context.prepare("main_task_ready", event, result)

@@ -50,7 +50,7 @@ class NativePublicContextTest(unittest.TestCase):
             if kind == "task_submitted":
                 task.update(status="submitted", submissionId="s1", candidate={"id": "s1", "artifacts": [], "reportFile": {"artifactId": "report-s1"}})
             if kind == "main_task_ready":
-                result = {"task": {"id": "main", "kind": "main", "status": "in_progress", "nodes": [{"status": "completed"}]}}
+                result = {"task": {"id": "main", "kind": "main", "status": "in_progress", "nodes": [{"taskId": "t1", "status": "completed"}], "acceptedResults": [{"id": "t1", "kind": "execution", "mainTaskId": "main", "status": "completed", "submissionId": "s1", "candidate": {"id": "s1"}, "review": {"id": "r1", "submissionId": "s1", "accepted": True, "status": "completed"}}]}}
             class Session:
                 async def call_tool(self, name, arguments, **kwargs):
                     calls.append((arguments["action"], arguments["taskId"]))

@@ -79,7 +79,11 @@ normal submission publishes the named output files. Never guess storage keys.
 
 ## Complete as Leader
 
-On `main_task_ready`, verify the whole original request against accepted results.
+On `main_task_ready`, use the prepared `acceptedResults` from `get` to verify
+whole-request coverage. Each result includes its actual execution `id`, exact
+candidate, saved review, report and artifact versions. Do not reread unchanged
+accepted files or rerun checks. For a concrete evidence gap, use the result's
+execution ID; a plan step alias and main Task ID do not own child files.
 Call `complete` with the main `taskId` and final Human report. By default the task
 system includes all accepted outputs; use `artifacts` only to select exact accepted
 IDs. It saves the final report and returns it with downloadable files to the

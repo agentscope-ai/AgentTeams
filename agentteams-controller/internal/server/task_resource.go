@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"path"
 	"unicode/utf8"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
@@ -13,29 +14,30 @@ import (
 // taskResource is the public task view. Storage records and notification routes
 // stay behind the API; callers use task/submission identities rather than keys.
 type taskResource struct {
-	RevisionOf    string                            `json:"revisionOf,omitempty"`
-	PlanID        string                            `json:"planId,omitempty"`
-	Nodes         []taskPlanNodeResource            `json:"nodes,omitempty"`
-	ID            string                            `json:"id"`
-	Team          string                            `json:"team"`
-	Kind          string                            `json:"kind,omitempty"`
-	Title         string                            `json:"title,omitempty"`
-	Status        string                            `json:"status"`
-	AssignedTo    string                            `json:"assignedTo,omitempty"`
-	AssignmentID  string                            `json:"assignmentId,omitempty"`
-	ParentTaskID  string                            `json:"parentTaskId,omitempty"`
-	MainTaskID    string                            `json:"mainTaskId,omitempty"`
-	ProjectID     string                            `json:"projectId,omitempty"`
-	Spec          string                            `json:"spec,omitempty"`
-	Summary       string                            `json:"summary,omitempty"`
-	SubmissionID  string                            `json:"submissionId,omitempty"`
-	Candidate     *taskCandidateResource            `json:"candidate,omitempty"`
-	CompletionID  string                            `json:"completionId,omitempty"`
-	Review        *taskReview                       `json:"review,omitempty"`
-	ResultStatus  string                            `json:"resultStatus,omitempty"`
-	Artifacts     []taskFinalArtifact               `json:"artifacts,omitempty"`
-	OriginEventID string                            `json:"originEventId,omitempty"`
-	Notifications map[string]taskNotificationStatus `json:"notifications,omitempty"`
+	AcceptedResults []taskResource                    `json:"acceptedResults,omitempty"`
+	RevisionOf      string                            `json:"revisionOf,omitempty"`
+	PlanID          string                            `json:"planId,omitempty"`
+	Nodes           []taskPlanNodeResource            `json:"nodes,omitempty"`
+	ID              string                            `json:"id"`
+	Team            string                            `json:"team"`
+	Kind            string                            `json:"kind,omitempty"`
+	Title           string                            `json:"title,omitempty"`
+	Status          string                            `json:"status"`
+	AssignedTo      string                            `json:"assignedTo,omitempty"`
+	AssignmentID    string                            `json:"assignmentId,omitempty"`
+	ParentTaskID    string                            `json:"parentTaskId,omitempty"`
+	MainTaskID      string                            `json:"mainTaskId,omitempty"`
+	ProjectID       string                            `json:"projectId,omitempty"`
+	Spec            string                            `json:"spec,omitempty"`
+	Summary         string                            `json:"summary,omitempty"`
+	SubmissionID    string                            `json:"submissionId,omitempty"`
+	Candidate       *taskCandidateResource            `json:"candidate,omitempty"`
+	CompletionID    string                            `json:"completionId,omitempty"`
+	Review          *taskReview                       `json:"review,omitempty"`
+	ResultStatus    string                            `json:"resultStatus,omitempty"`
+	Artifacts       []taskFinalArtifact               `json:"artifacts,omitempty"`
+	OriginEventID   string                            `json:"originEventId,omitempty"`
+	Notifications   map[string]taskNotificationStatus `json:"notifications,omitempty"`
 }
 
 type taskCandidateResource struct {
@@ -113,12 +115,41 @@ func (h *ProjectHandler) GetTaskResource(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusServiceUnavailable, "invalid task state")
 		return
 	}
+	resource := publicTaskResource(id, team, record)
 	version := contentETag(body)
+	if resource.Kind == "main" && resource.PlanID != "" {
+		// Closure consumes saved accepted evidence, never guessed task identities.
+		storedNodes, _ := record["tasks"].([]any)
+		for i, node := range resource.Nodes {
+			if node.Status != "completed" {
+				continue
+			}
+			if !isSafeTaskID(node.TaskID) || node.TaskID == id {
+				writeError(w, 503, "accepted result identity unavailable")
+				return
+			}
+			data, err := h.oss.GetObject(r.Context(), path.Join(path.Dir(path.Dir(key)), node.TaskID, "meta.json"))
+			var child map[string]any
+			if err != nil || json.Unmarshal(data, &child) != nil || coordinationString(child, "task_id") != node.TaskID || coordinationString(child, "main_task_id") != id || coordinationString(child, "project_id") != resource.ProjectID || coordinationString(child, "assigned_to") != node.AssignedTo || coordinationString(child, "task_kind") != "execution" || coordinationString(child, "status") != "completed" {
+				writeError(w, 503, "accepted result snapshot unavailable or changed")
+				return
+			}
+			accepted := publicTaskResource(node.TaskID, team, child)
+			projection, _ := storedNodes[i].(map[string]any)
+			if accepted.Candidate == nil || accepted.Review == nil || !accepted.Review.Accepted || accepted.Review.Status != "completed" || accepted.Review.ID == "" || accepted.Review.ID != coordinationString(projection, "review_id") || accepted.Review.SubmissionID != accepted.SubmissionID || accepted.Candidate.ID != accepted.SubmissionID || accepted.SubmissionID != coordinationString(projection, "submission_id") {
+				writeError(w, 503, "accepted candidate or review identity unavailable")
+				return
+			}
+			resource.AcceptedResults = append(resource.AcceptedResults, accepted)
+		}
+		data, _ := json.Marshal(resource)
+		version = contentETag(data)
+	}
 	w.Header().Set("ETag", version)
 	httputil.WriteJSON(w, http.StatusOK, struct {
 		Version string       `json:"version"`
 		Task    taskResource `json:"task"`
-	}{Version: version, Task: publicTaskResource(id, team, record)})
+	}{Version: version, Task: resource})
 }
 
 func publicTaskResource(id, team string, record map[string]any) taskResource {

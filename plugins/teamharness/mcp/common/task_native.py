@@ -41,7 +41,7 @@ def native_role(value):
     return role
 
 
-def invoke(payload, *, call=None, get_json=None, notify=None):
+def _invoke(payload, *, call=None, get_json=None, notify=None):
     """Execute one bound operation without process-global context mutation."""
     if not isinstance(payload, dict):
         raise ValueError("native bridge request must be an object")
@@ -138,9 +138,29 @@ def invoke(payload, *, call=None, get_json=None, notify=None):
     return response
 
 
+class NativeTaskValidationError(ValueError):
+    """A rejected native binding before any CLI/API call, never an unknown write."""
+    effect = "none"
+
+
+def invoke(payload, *, call=None, get_json=None, notify=None):
+    started = False
+    def invoke_cli(arguments):
+        nonlocal started
+        started = True
+        return (call or task_cli.run)(arguments)
+    try:
+        return _invoke(payload, call=invoke_cli, get_json=get_json, notify=notify)
+    except (ValueError, KeyError, TypeError) as error:
+        if isinstance(payload, dict) and payload.get("operation") == "task" and not started:
+            raise NativeTaskValidationError(str(error)) from error
+        raise
+
+
 if __name__ == "__main__":
     try:
         print(json.dumps(invoke(json.load(sys.stdin)), ensure_ascii=False))
     except (OSError, ValueError, KeyError, TypeError) as error:
-        print(json.dumps({"ok": False, "error": "native_task_context_unavailable", "message": str(error)[:2048]}))
+        print(json.dumps({"ok": False, "error": "native_task_context_unavailable", "message": str(error)[:2048],
+                          "effect": getattr(error, "effect", "unknown")}))
         sys.exit(1)

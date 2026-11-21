@@ -45,6 +45,15 @@ def test_private_source_field_is_never_advertised_as_a_model_argument(monkeypatc
     assert "_nativeSource" not in str(error.value)
 
 
+def test_cli_validation_and_unconfirmed_execution_have_distinct_effects(monkeypatch):
+    tool = load(monkeypatch)
+    assert tool.run({"action": "submit", "taskId": "t1"})["effect"] == "none"
+    def timeout(*args, **kwargs):
+        raise tool.subprocess.TimeoutExpired(args[0], 120)
+    monkeypatch.setattr(tool.subprocess, "run", timeout)
+    assert tool.run({"action": "submit", "taskId": "t1", "summary": "done"})["effect"] == "unknown"
+
+
 def test_create_carries_a_framework_selected_input_reference(monkeypatch):
     tool = load(monkeypatch)
     argv, env = tool.command({"action": "create", "leader": "lead", "title": "Second request", "inputId": "input-2",

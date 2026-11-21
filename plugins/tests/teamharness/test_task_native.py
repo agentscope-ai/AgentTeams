@@ -27,6 +27,21 @@ def test_source_references_reuse_the_public_canonical_identity(bridge):
         bridge.invoke({'operation': 'sources', 'meta': {'event_id': '$unbound'}})
 
 
+def test_only_pre_call_validation_is_proven_to_have_no_effect(bridge):
+    payload = {'operation': 'task', 'arguments': {'action': 'submit', 'taskId': 'foreign', 'summary': 'done'},
+               'context': {'role': 'worker', 'execution': 'own'}}
+    calls = []
+    with pytest.raises(bridge.NativeTaskValidationError) as error:
+        bridge.invoke(payload, call=lambda args: calls.append(args))
+    assert error.value.effect == 'none' and calls == []
+    payload['arguments']['taskId'] = 'own'
+    def unknown(_):
+        raise ValueError('invalid response after a possible write')
+    with pytest.raises(ValueError) as error:
+        bridge.invoke(payload, call=unknown)
+    assert getattr(error.value, 'effect', 'unknown') == 'unknown'
+
+
 def test_phase_admission_reuses_the_public_lifecycle_without_model(bridge):
     calls = []
     async def notify(*args):

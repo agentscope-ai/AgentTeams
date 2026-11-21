@@ -254,3 +254,23 @@ def test_refresh_receipt_keeps_failed_request_and_current_reference_manifest():
     assert wire["attemptedInputId"] == sources[0]["inputId"]
     assert [ref["inputId"] for ref in wire["inputReferences"]] == [source["inputId"] for source in sources]
     assert "body" not in wire["inputs"][0] and "A different request." not in context
+
+
+def test_model_context_check_reports_only_binding_metadata():
+    import json
+    from types import SimpleNamespace
+    public = module()
+    sources = [{"inputId": "input-current", "eventId": "$current"}]
+    hidden = "private example text must never leave the native framework"
+    messages = [SimpleNamespace(role="system", content=[{"text": "current public contract"}]),
+                SimpleNamespace(role="system", content=[{"text": hidden}]),
+                SimpleNamespace(role="user", content=[{"text": "[Message $current]\n" + hidden}]),
+                SimpleNamespace(role="assistant", content=[{"type": "tool_result", "output": "input-current"}])]
+    check = public.input_context_check(messages, "current public contract", sources)
+    assert check["currentSystemContractPresent"] is True
+    assert check["systemMessages"] == 2
+    assert check["providedInputs"] == check["userSourceMarkers"] == check["visibleInputReferences"] == 1
+    assert hidden not in json.dumps(check) and "$current" not in json.dumps(check)
+    assert "current public contract" not in json.dumps(check)
+    missing = public.input_context_check(messages[1:], "current public contract", sources)
+    assert missing["currentSystemContractPresent"] is False

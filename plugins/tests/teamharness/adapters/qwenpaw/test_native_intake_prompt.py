@@ -66,3 +66,46 @@ class NativeIntakePromptTest(unittest.TestCase):
             "AGENTTEAMS_AGENT_ROLE": "manager", "AGENTTEAMS_CONTROLLER_URL": "http://controller:8090",
         }):
             asyncio.run(run(directory))
+
+    def test_native_model_call_records_metadata_and_forwards_inputs_unchanged(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        try:
+            from opentelemetry.sdk.trace import TracerProvider
+        except ImportError:
+            self.skipTest("optional tracing SDK required")
+        root = Path(__file__).resolve().parents[5]
+        spec = importlib.util.spec_from_file_location("native_intake_metadata", root / "plugins/teamharness/adapters/qwenpaw/plugin.py")
+        plugin = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(plugin)
+
+        async def run():
+            contract = plugin._team_prompt(None)
+            hidden = "synthetic private content must not be exported"
+            source = {"inputId": "input-synthetic", "eventId": "$synthetic"}
+            messages = [SimpleNamespace(role="system", content=[{"text": contract}]),
+                        SimpleNamespace(role="user", content=[{"text": "[Message $synthetic]\ninput-synthetic\n" + hidden}])]
+            arguments = {"messages": messages, "tools": [], "tool_choice": "auto"}
+            result = object()
+            forward = AsyncMock(return_value=result)
+            middleware = plugin._sanitizer_factory(None, None)
+            provider = TracerProvider()
+            token = plugin._creation_sources.set([source])
+            try:
+                with provider.get_tracer("intake-test").start_as_current_span("native-turn") as span:
+                    self.assertIs(await middleware.on_model_call(None, arguments, forward), result)
+                    encoded = span.attributes["agentteams.task.intake_checks"]
+                    check = json.loads(encoded)[0]
+                    self.assertTrue(check["currentSystemContractPresent"])
+                    self.assertEqual(check["systemMessages"], 1)
+                    self.assertEqual(check["providedInputs"], check["userSourceMarkers"])
+                    self.assertEqual(check["providedInputs"], check["visibleInputReferences"])
+                    self.assertNotIn(hidden, encoded)
+                    self.assertNotIn("$synthetic", encoded)
+                forward.assert_awaited_once_with(**arguments)
+            finally:
+                plugin._creation_sources.reset(token)
+                provider.shutdown()
+
+        with patch.dict(os.environ, {"AGENTTEAMS_AGENT_ROLE": "manager", "AGENTTEAMS_CONTROLLER_URL": "http://controller:8090", "AGENTTEAMS_OTEL_ENABLED": "true"}):
+            asyncio.run(run())

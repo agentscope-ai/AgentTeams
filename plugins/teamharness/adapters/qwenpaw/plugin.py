@@ -357,6 +357,21 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                         seen[event_id] = True
                 yield item
 
+        async def on_model_call(self, agent, input_kwargs, next_handler):
+            sources = _creation_sources.get()
+            if sources and os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() == "true":
+                try:
+                    from opentelemetry import trace
+                except ImportError:
+                    pass
+                else:
+                    check = receipts.input_context_check(input_kwargs["messages"], _team_prompt(agent), sources)
+                    checks = getattr(self, "_intake_context_checks", [])
+                    checks.append(check)
+                    self._intake_context_checks = checks
+                    trace.get_current_span().set_attribute("agentteams.task.intake_checks", json.dumps(checks, separators=(",", ":")))
+            return await next_handler(**input_kwargs)
+
         async def on_acting(
             self,
             agent: Any,

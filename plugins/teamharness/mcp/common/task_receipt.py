@@ -15,6 +15,30 @@ def input_reference(room_id: str, event_id: str) -> str:
                                                separators=(",", ":")).encode()).hexdigest()[:24]
 
 
+def input_context_check(messages, contract: str, sources: list[dict]) -> dict:
+    """Describe native binding without exporting any conversation content."""
+    def text(content):
+        if isinstance(content, str):
+            return content
+        parts = []
+        for block in content or []:
+            get = block.get if isinstance(block, dict) else lambda key, default=None: getattr(block, key, default)
+            value = get("text")
+            if isinstance(value, str):
+                parts.append(value)
+            if get("type") == "tool_result":
+                parts.append(text(get("output")))
+        return "\n".join(parts)
+    visible = [(message.role, text(message.content)) for message in messages]
+    systems = [body for role, body in visible if role == "system"]
+    users = [body for role, body in visible if role == "user"]
+    return {"contractHash": hashlib.sha256(contract.encode()).hexdigest()[:16],
+            "currentSystemContractPresent": bool(contract) and any(contract in body for body in systems),
+            "systemMessages": len(systems), "providedInputs": len(sources),
+            "userSourceMarkers": sum(any("[Message " + source["eventId"] + "]" in body for body in users) for source in sources),
+            "visibleInputReferences": sum(any(source["inputId"] in body for _, body in visible) for source in sources)}
+
+
 def creation_sources(meta: dict) -> list[dict]:
     """Bind stable input references to native, transport-owned identities."""
     frames = meta.get("matrix_input_sources")

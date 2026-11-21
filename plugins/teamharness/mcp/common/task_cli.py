@@ -109,8 +109,11 @@ def command(arguments: dict) -> tuple[list[str], dict[str, str]]:
         allowed.add("taskId")
     else:
         allowed.add("_nativeSource")
-    if set(arguments) - allowed:
-        raise ValueError("unsupported arguments for this task action")
+    unsupported = set(arguments) - allowed
+    if unsupported:
+        public_fields = sorted(allowed - {"_nativeSource"})
+        raise ValueError(f"unsupported arguments for task {action}: {', '.join(sorted(unsupported))}; "
+                         f"allowed fields: {', '.join(public_fields)}")
     binary = shutil.which("agt")
     if not binary:
         raise ValueError("task CLI unavailable in this runtime")

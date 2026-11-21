@@ -39,6 +39,16 @@ def test_canonical_receipt_prevents_replacing_the_task_input(packet):
     assert receive(packet)["text"] == "Canonical assignment"
 
 
+def test_handoff_keeps_trusted_routes_as_metadata_without_legacy_task_instructions(packet):
+    for control in [packet[0]["org.agentteams.coordination"], packet[1]["control"]]:
+        control["channel_meta"]["teamharness_coordination"]["kind"] = "handoff"
+        control["channel_meta"]["teamharness_requester_route"] = {"channel": "matrix", "target_session": "!original:test"}
+    result = receive(packet)
+    assert result["text"] == "Canonical assignment"
+    assert result["meta"]["teamharness_requester_route"]["target_session"] == "!original:test"
+    assert "start_task" not in result["text"]
+
+
 def test_completed_transport_receipt_still_allows_current_unconsumed_assignment(packet):
     packet[1]["status"] = "completed"  # Matrix send completed, not native consumption.
     assert receive(packet)["text"] == "Canonical assignment"

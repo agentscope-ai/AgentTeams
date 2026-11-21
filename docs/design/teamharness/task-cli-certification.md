@@ -8,8 +8,10 @@
 
 最终合并门禁（2026-11-21 用户确认）：QwenPaw、OpenClaw、Hermes、DeepSeek Harness、
 Codex、OpenHuman 六种 Harness 全部按统一协议完成改造，每种通过简单十组、复杂十组
-共二十组完整场景，以及交叉 Harness 验证，再推进 PR 合并。先完整验证 QwenPaw、
-稳定公共协议，通过后才逐个改造其他 Harness；阶段性单测或入口门禁不能替代整种
+共二十组完整场景，以及交叉 Harness 验证，再推进 PR 合并。2026-11-22 用户调整实施顺序：
+未发现需要重做状态机或协作拓扑的结构性协议问题时，其他五种 Harness 的改造和验证
+并行推进，同时完成 QwenPaw 认证和公共修复。各自使用隔离分支，公共契约由同一处维护；
+运行中冻结批次不改镜像或配置，最终认证须包含最新公共修复。阶段性单测或入口门禁不能替代整种
 Harness 的二十组认证。原生绑定必须用合成工作区核验公共指令确实进入实际模型请求，
 且连续轮次不重复增长；文件哈希、读取函数或注册成功不能替代这项证明。
 还须校验 Skill 工具实际加载的完整文档与打包副本，不能只检查系统提示词截取的
@@ -244,10 +246,11 @@ Go CLI/API 全量测试和公共 MCP/QwenPaw 测试（456 passed、47 skipped）
 
 ## 一、顺序与环境
 
-1. 固定最新 main 的基线，用 QwenPaw Leader + QwenPaw Workers 采集对照数据。
-2. 同一环境验证新协议 QwenPaw Leader + QwenPaw Workers；满足本阶段全部门禁才认证。
-3. 公共契约保持不变，接入 OpenClaw，先认证 OpenClaw Leader + OpenClaw Workers。
-4. 验证 QwenPaw Leader + OpenClaw Workers，以及 OpenClaw Leader + QwenPaw Workers。
+1. 保留已有 main 对照和失败证据，不继续补跑旧基线。
+2. 收尾新协议 QwenPaw 固定批次，集中修复已确认的公共问题。
+3. 无结构性协议重构阻碍时，并行改造和验证 OpenClaw、Hermes、DeepSeek Harness、Codex、OpenHuman。
+4. 各 Harness 基于一致公共修复完成简单十组、复杂十组，再完成 QwenPaw 与其余五种的双向交叉验证。
+5. 六种完整认证、交叉验证和必要 PR 检查全部通过后推进合并；任一单项完成不结束目标。
 
 每队一名 Leader、两名执行 Worker。Manager、模型与参数、CPU/内存限制、工具权限、
 输入和验收标准固定；Manager 的 Harness 不随队伍变更。任务由同一 Manager 的原始

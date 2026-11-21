@@ -27,6 +27,24 @@ def test_create_does_not_require_model_to_copy_original_message(monkeypatch):
     assert env["AGENTTEAMS_ORIGIN_EVENT_ID"] == "$actual"
 
 
+def test_wrong_action_fields_name_the_action_and_valid_public_fields(monkeypatch):
+    tool = load(monkeypatch)
+    with pytest.raises(ValueError) as error:
+        tool.command({"action": "accept", "taskId": "t1", "submissionId": "s1", "note": "OK", "replacementSpec": "wrong phase"})
+    message = str(error.value)
+    assert "accept" in message and "replacementSpec" in message
+    assert "submissionId" in message and "note" in message
+    assert "_nativeSource" not in message
+
+
+def test_private_source_field_is_never_advertised_as_a_model_argument(monkeypatch):
+    tool = load(monkeypatch)
+    with pytest.raises(ValueError) as error:
+        tool.command({"action": "create", "leader": "lead", "title": "Request", "bogus": True})
+    assert "bogus" in str(error.value)
+    assert "_nativeSource" not in str(error.value)
+
+
 def test_create_carries_a_framework_selected_input_reference(monkeypatch):
     tool = load(monkeypatch)
     argv, env = tool.command({"action": "create", "leader": "lead", "title": "Second request", "inputId": "input-2",

@@ -107,12 +107,6 @@ def notification(content, room, sender, own, *, fetch=controller_json, event_id=
         text = packet["input"][0]["content"][0]["text"]
         if not isinstance(text, str) or not text.strip():
             raise IgnoredNotification("missing canonical input")
-        if kind == "handoff":
-            routes = packet["channel_meta"]
-            text += "\nPreserve these routes in start_task: " + json.dumps({
-                "requesterReplyRoute": routes.get("teamharness_requester_route", {}),
-                "replyRoute": routes.get("teamharness_coordinator_route", {}),
-            }, ensure_ascii=False)
         return {"text": text, "session_id": packet["session_id"], "meta": packet["channel_meta"]}
     except IgnoredNotification:
         raise

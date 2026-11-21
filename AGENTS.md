@@ -163,8 +163,8 @@ make build-openclaw-base DOCKER_BUILD_ARGS="--build-arg APT_MIRROR=mirrors.aliyu
 
 ### To modify the Manager container
 
-- [worker/Dockerfile](worker/Dockerfile) and [worker/scripts/worker-entrypoint.sh](worker/scripts/worker-entrypoint.sh) — shared OpenClaw Harness; [manager/Dockerfile](manager/Dockerfile) is a compatibility wrapper
-- [qwenpaw/Dockerfile](qwenpaw/Dockerfile) — shared QwenPaw Harness for Manager, Leader, and Worker; [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) only aliases an explicitly supplied Harness image
+- [worker/Dockerfile](https://github.com/agentteams-group/agentteams-harness-openclaw/blob/867c7b850be59acef7614f875f5be745b11a0e24/Dockerfile) and [worker/scripts/worker-entrypoint.sh](https://github.com/agentteams-group/agentteams-harness-openclaw/blob/867c7b850be59acef7614f875f5be745b11a0e24/scripts/worker-entrypoint.sh) — shared OpenClaw Harness; [manager/Dockerfile](manager/Dockerfile) is a compatibility wrapper
+- [qwenpaw/Dockerfile](https://github.com/agentteams-group/agentteams-harness-qwenpaw/blob/a76f5c0090811e8b8dd7ec9183d00cbefa92f996/Dockerfile) — shared QwenPaw Harness for Manager, Leader, and Worker; [manager/Dockerfile.qwenpaw](manager/Dockerfile.qwenpaw) only aliases an explicitly supplied Harness image
 - [manager/supervisord.conf](manager/supervisord.conf) — process orchestration (local embedded stack)
 - [hermes/](hermes/), [deepseek-harness/](deepseek-harness/), [openhuman/](openhuman/) — shared entrypoints and native Manager role bindings for the other Harnesses
 - [plugins/teamharness/prompts/manager/](plugins/teamharness/prompts/manager/) and [plugins/teamharness/skills/manager/](plugins/teamharness/skills/manager/) — common role instructions and resource-management tools
@@ -176,8 +176,8 @@ The Manager uses the selected Harness image. Higress, Tuwunel, MinIO, and Elemen
 
 ### To modify the Worker container (OpenClaw)
 
-- [worker/Dockerfile](worker/Dockerfile) — build definition (Node.js from build stage / openclaw-base pattern)
-- [worker/scripts/worker-entrypoint.sh](worker/scripts/worker-entrypoint.sh) — startup logic
+- [worker/Dockerfile](https://github.com/agentteams-group/agentteams-harness-openclaw/blob/867c7b850be59acef7614f875f5be745b11a0e24/Dockerfile) — build definition (Node.js from build stage / openclaw-base pattern)
+- [worker/scripts/worker-entrypoint.sh](https://github.com/agentteams-group/agentteams-harness-openclaw/blob/867c7b850be59acef7614f875f5be745b11a0e24/scripts/worker-entrypoint.sh) — startup logic
 
 ### To modify the Hermes worker runtime
 
@@ -187,13 +187,13 @@ The Manager uses the selected Harness image. Higress, Tuwunel, MinIO, and Elemen
 ### To modify the DeepSeek Harness worker runtime
 
 - [deepseek-harness/](deepseek-harness/) — managed image, Matrix bridge, persisted room sessions, and runtime tests
-- [deepseek-harness/plugins/teamharness/adapters/deepseek-harness/](deepseek-harness/plugins/teamharness/adapters/deepseek-harness/) — DSH-native TeamHarness adapter and compatibility checks
+- [deepseek-harness/plugins/teamharness/adapters/deepseek-harness/](https://github.com/agentteams-group/agentteams-harness-deepseek/tree/c4ca8383fb9e93df2aff192592c9cc8793e0acad/plugins/teamharness/adapters/deepseek-harness) — DSH-native TeamHarness adapter and compatibility checks
 
 ### To modify the OpenHuman worker runtime
 
 - [agentteams-group/agentteams-harness-openhuman](https://github.com/agentteams-group/agentteams-harness-openhuman) — independent Rust runtime integration, checked out as the `openhuman/` Git submodule
 - [openhuman/Dockerfile](https://github.com/agentteams-group/agentteams-harness-openhuman/blob/main/Dockerfile) — Build from the Harness directory with `--build-context agentteams=.` pointing to this Core checkout. Multi-stage build: `rust:1.93-bookworm` → `debian:bookworm-slim`
-- [openhuman/scripts/openhuman-worker-entrypoint.sh](openhuman/scripts/openhuman-worker-entrypoint.sh) — Entrypoint: config.toml generation, MinIO sync, health check
+- [openhuman/scripts/openhuman-worker-entrypoint.sh](https://github.com/agentteams-group/agentteams-harness-openhuman/blob/a7b9bb43194f4301d69ba88a2edbd32b1dc19cb2/scripts/openhuman-worker-entrypoint.sh) — Entrypoint: config.toml generation, MinIO sync, health check
 - [manager/agent/openhuman-worker-agent/](manager/agent/openhuman-worker-agent/) — Agent template and skills
 
 ### To manage Worker containers via socket (local Docker)

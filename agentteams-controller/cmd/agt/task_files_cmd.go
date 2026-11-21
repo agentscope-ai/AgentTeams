@@ -65,7 +65,6 @@ func taskFilesCmd() *cobra.Command {
 			child.Flags().StringVar(&name, "name", "", "Declared task-local file name")
 			child.Flags().StringVar(&artifact, "artifact", "", "Immutable task artifact ID")
 			child.MarkFlagsOneRequired("name", "artifact")
-			child.MarkFlagsMutuallyExclusive("name", "artifact")
 			child.Flags().StringVar(&version, "version", "", "Exact file version; refuse a changed file")
 		}
 		if action == "read" {

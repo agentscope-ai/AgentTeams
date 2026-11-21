@@ -61,7 +61,7 @@ TASK_SCHEMA = {
             "replacementSpec": {"type": "string", "description": "For reject only: optional explicit corrections to dispatch a new execution of the same step, preserving the rejected attempt."},
             "note": {"type": "string", "description": "For accept/reject: your independent business validation evidence or rejection reason."},
             "team": {"type": "string", "description": "Only when the task system reports an ambiguous task ID."},
-            "name": {"type": "string", "description": "Declared task-local file name; use artifactId for immutable outputs."},
+            "name": {"type": "string", "description": "Declared task-local file name. With artifactId, this is an optional consistency check and must match that artifact."},
             "artifactId": {"type": "string"}, "version": {"type": "string"},
             "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 4, "maximum": 32768},
             "source": {"type": "string", "description": "For files_put: file relative to your prepared task output directory, including scratch intermediates."},
@@ -87,6 +87,8 @@ def schema(role: str) -> dict:
         fields.update((*required, *optional, *repeated))
     result["inputSchema"]["properties"] = {key: value for key, value in properties.items() if key in fields}
     result["inputSchema"]["properties"]["action"]["enum"] = [action for action in _ACTIONS if action in allowed]
+    if "create" not in allowed:
+        result["inputSchema"]["required"] = ["action", "taskId"]
     return result
 
 
@@ -148,8 +150,8 @@ def command(arguments: dict) -> tuple[list[str], dict[str, str]]:
             raise ValueError(field + " must be an array of nonempty strings")
         for value in values:
             argv += ["--" + flag, value]
-    if action in {"files_read", "files_get"} and bool(arguments.get("name")) == bool(arguments.get("artifactId")):
-        raise ValueError("exactly one of name or artifactId required")
+    if action in {"files_read", "files_get"} and not (arguments.get("name") or arguments.get("artifactId")):
+        raise ValueError("name or artifactId required")
     env = os.environ.copy()
     if action == "create":
         source = arguments.get("_nativeSource")

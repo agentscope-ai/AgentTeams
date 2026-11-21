@@ -193,6 +193,9 @@ agt task files put T1 --source ./analysis.csv --name analysis.csv --kind interme
 - get 准备并校验文件，返回当前执行环境实际可读的 localPath、版本、大小和摘要。
 - put 显式发布中间产物并返回稳定引用，不提交或完成任务。
 - name 是任务空间内的相对名称；拒绝绝对路径、越界与同名歧义。
+- 读取固定产物优先使用 artifactId 与 version；可以同时提供 name 做一致性校验。
+  name 与产物不符时拒绝，不退回按名称查找其他版本。
+- Leader/Worker 的公共工具结构将 taskId 标为必填；描述、工具校验、CLI 与 API 使用同一身份规则。
 - 任务逻辑身份包含 Team 作用域。身份上下文可唯一确定时自动使用；有歧义必须明确。
 - 产物引用绑定确定版本；上游输入默认只读，本地临时文件不自动成为共享产物。
 - begin 已准备的输入不重复获取，submit 的最终文件不要求提前 put。

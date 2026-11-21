@@ -68,6 +68,7 @@ func TestTaskFilePublishIsIdempotentAndPreservesTaskState(t *testing.T) {
 	}
 	for _, tc := range []struct{ query, expected string }{
 		{"&artifactId=" + a.ArtifactID, "id,value\na,1\n"},
+		{"&artifactId=" + a.ArtifactID + "&name=analysis.csv", "id,value\na,1\n"},
 		{"&name=analysis.csv", contents},
 	} {
 		r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/t1/files?team=alpha-team"+tc.query, nil)
@@ -77,6 +78,14 @@ func TestTaskFilePublishIsIdempotentAndPreservesTaskState(t *testing.T) {
 		if w.Code != http.StatusOK || w.Body.String() != tc.expected {
 			t.Fatalf("artifact read: %d %q", w.Code, w.Body.String())
 		}
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/t1/files?team=alpha-team&artifactId="+a.ArtifactID+"&name=wrong.csv", nil)
+	r.SetPathValue("id", "t1")
+	mismatch := httptest.NewRecorder()
+	h.GetTaskFiles(mismatch, withCaller(r, caller))
+	if mismatch.Code != http.StatusNotFound {
+		t.Fatalf("artifact/name mismatch accepted: %d %s", mismatch.Code, mismatch.Body.String())
 	}
 	if stale := publish("process-old"); stale.Code != http.StatusConflict {
 		t.Fatalf("stale process accepted: %d %s", stale.Code, stale.Body.String())

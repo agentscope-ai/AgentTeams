@@ -72,7 +72,7 @@ def test_lifecycle_and_file_operations_preserve_cli_semantics(monkeypatch):
     {"action":"create","leader":"lead","title":"Request","spec":"Work"},
     {"action":"accept","taskId":"a","submissionId":"s1","note":" "},
     {"action":"files_get","taskId":"a","artifactId":"opaque","output":"/outside"},
-    {"action":"files_read","taskId":"a","name":"app.py","artifactId":"opaque"},
+    {"action":"files_read","taskId":"a"},
     {"action":{"malformed":True}}, [],
 ])
 def test_invalid_input_fails_before_process_execution(monkeypatch,arguments):
@@ -117,3 +117,16 @@ def test_current_trace_is_copied_into_only_this_cli_process(monkeypatch):
     monkeypatch.setattr(tool.subprocess,"run",execute)
     assert tool.run({"action":"get","taskId":"a"})["task"]["id"]=="a"
     assert os.environ["AT_OTEL_TRACEPARENT"]=="previous-process"
+
+
+def test_file_identity_can_include_consistency_check_name(monkeypatch):
+    tool = load(monkeypatch)
+    argv, _ = tool.command({"action": "files_read", "taskId": "a", "name": "app.py", "artifactId": "opaque", "version": "v1"})
+    assert argv == ["/usr/local/bin/agt", "task", "files", "read", "a", "--name", "app.py", "--artifact", "opaque", "--version", "v1"]
+
+
+def test_execution_and_leader_schemas_require_task_identity(monkeypatch):
+    tool = load(monkeypatch)
+    for role in ["leader", "worker"]:
+        assert set(tool.schema(role)["inputSchema"]["required"]) == {"action", "taskId"}
+    assert tool.schema("manager")["inputSchema"]["required"] == ["action"]

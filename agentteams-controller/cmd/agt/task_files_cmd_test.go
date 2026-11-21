@@ -69,3 +69,34 @@ func TestTaskFileDownloadVerifiesBeforePublishingLocalPath(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskFileReadChecksNameWithImmutableArtifactIdentity(t *testing.T) {
+	for _, name := range []string{"app.py", "wrong.py"} {
+		t.Run(name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				query := r.URL.Query()
+				if query.Get("artifactId") != "artifact-1" || query.Get("name") != name || query.Get("version") != "v1" {
+					t.Errorf("lost identity fields: %s", r.URL)
+				}
+				if name != "app.py" {
+					http.Error(w, "artifact name mismatch", http.StatusNotFound)
+					return
+				}
+				_, _ = w.Write([]byte(`{"taskId":"t1","name":"app.py","content":"print(1)","version":"v1"}`))
+			}))
+			defer server.Close()
+			t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
+			t.Setenv("AGENTTEAMS_AUTH_TOKEN", "test-token")
+			cmd := newRootCommand("agt")
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetArgs([]string{"task", "files", "read", "t1", "--artifact", "artifact-1", "--name", name, "--version", "v1"})
+			err := cmd.Execute()
+			if requests != 1 || (err != nil) != (name != "app.py") {
+				t.Fatalf("requests=%d err=%v output=%s", requests, err, out.String())
+			}
+		})
+	}
+}

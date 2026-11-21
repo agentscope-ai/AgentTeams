@@ -173,3 +173,41 @@ def test_acceptance_dispatch_receipt_does_not_claim_worker_execution_or_delivery
     result["dispatchStatus"]="ready"
     ready=module().review_receipt(result,"a","s1","accept")
     assert ready[0]!=pending[0]
+
+
+def test_related_corrections_are_bound_to_ordered_native_sources_not_model_bodies():
+    import pytest
+    public = module()
+    sources = public.creation_sources({"matrix_input_sources": [
+        {"event_id": "$original", "room_id": "!room:test", "sender_id": "@a:test"},
+        {"event_id": "$change", "room_id": "!room:test", "sender_id": "@a:test"},
+        {"event_id": "$other", "room_id": "!room:test", "sender_id": "@b:test"}]})
+    selected = public.select_creation_source(sources, "input-1", ["input-2"])
+    assert selected["relatedSources"] == ["$change"]
+    for related in (["input-1"], ["input-2", "input-2"], ["input-3"], ["input-unknown"], "input-2"):
+        with pytest.raises(ValueError):
+            public.select_creation_source(sources, "input-1", related)
+    with pytest.raises(ValueError):
+        public.select_creation_source(sources, "input-2", ["input-1"])
+    command = 'agt task create --leader lead --title Report --input-id input-1 --related-input-id input-2'
+    assert public.creation_command_related_inputs(command) == ["input-2"]
+    bound = public.creation_command_env(command, "$original", "@a:test", "!room:test", input_id="input-1", related_sources=["$change"])
+    import shlex, json
+    environment = dict(part.split("=", 1) for part in shlex.split(bound)[1:] if part.startswith("AGENTTEAMS_"))
+    assert json.loads(environment["AGENTTEAMS_RELATED_INPUTS"]) == {"input-2": "$change"}
+    assert public.creation_command_env(command, "$original", "@a:test", "!room:test", input_id="input-1") is None
+
+
+def test_verified_input_refresh_preserves_body_and_rejects_unbound_results():
+    public = module()
+    sources = [{"inputId": "input-1", "eventId": "$original", "roomId": "!room:test", "userId": "@a:test"}]
+    result = {"ok": False, "error": "task_input_stale", "noTaskRegistered": True, "sourceEventId": "$original",
+              "inputs": [{"eventId": "$new", "roomId": "!room:test", "userId": "@a:test", "body": "Do not create that Task."}]}
+    updates = public.refresh_creation_inputs(result, sources, "$original")
+    assert updates[0]["body"] == "Do not create that Task."
+    assert updates[0]["inputId"] == "input-refresh-2"
+    assert public.refresh_creation_inputs(result, sources, "$wrong") is None
+    wrong = copy.deepcopy(result); wrong["inputs"][0]["userId"] = "@other:test"
+    assert public.refresh_creation_inputs(wrong, sources, "$original") is None
+    wrong = copy.deepcopy(result); wrong["noTaskRegistered"] = False
+    assert public.refresh_creation_inputs(wrong, sources, "$original") is None

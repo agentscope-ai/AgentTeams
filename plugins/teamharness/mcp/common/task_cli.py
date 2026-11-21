@@ -13,7 +13,7 @@ import subprocess
 # Required fields, optional fields, and repeated flags. No caller-supplied
 # executable, shell, environment, storage path, recipient or Project routing.
 _ACTIONS = {
-    "create": (("leader", "title"), ("spec", "inputId"), {}),
+    "create": (("leader", "title"), ("spec", "inputId"), {"relatedInputIds": "related-input-id"}),
     "plan": (("nodes",), ("team",), {}),
     "get": ((), ("team",), {}),
     "begin": ((), ("team",), {}),
@@ -49,6 +49,7 @@ TASK_SCHEMA = {
             "leader": {"type": "string", "description": "For create: registered Leader name."},
             "title": {"type": "string", "description": "For create: concise original request title."},
             "inputId": {"type": "string", "description": "For create: source input reference supplied by the framework; required when more than one message could be the original request. This is not a room, Project or storage path."},
+            "relatedInputIds": {"type": "array", "items": {"type": "string"}, "description": "For create: later corrections or supplements to this same request, in supplied input order; same Human conversation only. The task system captures their exact bodies automatically."},
             "spec": {"type": "string", "description": "For create: optional supplementary context. The task system captures the original Human message automatically; do not copy or summarize it here."},
             "nodes": {"type": "array", "description": "For plan: complete execution DAG; no source routes or execution Task IDs.",
                       "items": {"type": "object", "additionalProperties": False, "required": ["id", "assignedTo", "spec", "dependsOn"],
@@ -159,12 +160,21 @@ def command(arguments: dict) -> tuple[list[str], dict[str, str]]:
     env = os.environ.copy()
     if action == "create":
         source = arguments.get("_nativeSource")
-        if (not isinstance(source, dict) or set(source) != {"eventId", "userId", "roomId"}
-                or not all(isinstance(value, str) and value for value in source.values())
+        if (not isinstance(source, dict) or set(source) - {"eventId", "userId", "roomId", "relatedSources", "frontierEventId"} or not {"eventId", "userId", "roomId"}.issubset(source)
+                or not all(isinstance(source.get(key), str) and source[key] for key in ("eventId", "userId", "roomId"))
                 or not source["userId"].startswith("@") or not source["roomId"].startswith("!")):
             raise ValueError("native original-conversation context unavailable")
         env.update({"AGENTTEAMS_ORIGIN_EVENT_ID": source["eventId"], "AGENTTEAMS_REQUESTER_USER_ID": source["userId"],
                     "AGENTTEAMS_REQUESTER_ROOM_ID": source["roomId"]})
+        if source.get("frontierEventId"):
+            env["AGENTTEAMS_INPUT_FRONTIER"] = source["frontierEventId"]
+        related = source.get("relatedSources", [])
+        refs = arguments.get("relatedInputIds", [])
+        if (not isinstance(related, list) or len(related) != len(refs)
+                or len(set(refs)) != len(refs) or any(not isinstance(event, str) or not event.startswith("$") for event in related)):
+            raise ValueError("related inputs do not match their native source binding")
+        if refs:
+            env["AGENTTEAMS_RELATED_INPUTS"] = json.dumps(dict(zip(refs, related)))
         if "inputId" in arguments:
             env["AGENTTEAMS_INPUT_ID"] = arguments["inputId"]
     return argv, env

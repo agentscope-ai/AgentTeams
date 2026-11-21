@@ -30,7 +30,7 @@ def creation_sources(meta: dict) -> list[dict]:
     return result
 
 
-def select_creation_source(sources: list[dict], input_id: str | None) -> dict:
+def select_creation_source(sources: list[dict], input_id: str | None, related_inputs: list[str] | None = None) -> dict:
     if input_id is None and len(sources) == 1:
         selected = sources[0]
     else:
@@ -38,7 +38,29 @@ def select_creation_source(sources: list[dict], input_id: str | None) -> dict:
         if len(matches) != 1:
             raise ValueError("choose an inputId supplied by the framework; multiple messages do not automatically mean multiple Tasks")
         selected = matches[0]
-    return {key: selected[key] for key in ("eventId", "userId", "roomId")}
+    result = {key: selected[key] for key in ("eventId", "userId", "roomId")}
+    frontier = next(source["eventId"] for source in reversed(sources)
+                    if source["userId"] == selected["userId"] and source["roomId"] == selected["roomId"])
+    if frontier != selected["eventId"]:
+        result["frontierEventId"] = frontier
+    if related_inputs is not None:
+        if (not isinstance(related_inputs, list) or len(related_inputs) > 50
+                or any(not isinstance(ref, str) for ref in related_inputs)
+                or len(set(related_inputs)) != len(related_inputs)):
+            raise ValueError("relatedInputIds must be distinct supplied input references")
+        previous, events = sources.index(selected), []
+        for ref in related_inputs:
+            matches = [(index, source) for index, source in enumerate(sources) if source["inputId"] == ref]
+            if len(matches) != 1:
+                raise ValueError("related input reference unavailable in this conversation")
+            index, source = matches[0]
+            if index <= previous or source["roomId"] != selected["roomId"] or source["userId"] != selected["userId"]:
+                raise ValueError("related inputs must follow the original request in order from the same Human conversation")
+            previous = index
+            events.append(source["eventId"])
+        if events:
+            result["relatedSources"] = events
+    return result
 
 
 def _task_command_words(command: str) -> list[str] | None:
@@ -75,19 +97,33 @@ def task_operation_command(command: str) -> tuple[str, str] | None:
 
 def creation_command_input(command: str) -> str | None:
     words = _task_command_words(command)
-    if not words or words[2] != "create" or not _task_flags(words[3:], {"--leader", "--title", "--spec", "--input-id"}):
+    if not words or words[2] != "create" or not _task_flags(words[3:], {"--leader", "--title", "--spec", "--input-id", "--related-input-id"}):
         return None
     flags = dict(zip(words[3::2], words[4::2]))
     return flags.get("--input-id", "")
 
 
-def creation_command_env(command: str, source: str, user: str, room: str, *, input_id: str | None = None) -> str | None:
+def creation_command_related_inputs(command: str) -> list[str]:
+    if creation_command_input(command) is None:
+        raise ValueError("single task creation command required")
+    words = _task_command_words(command)
+    return [words[index+1] for index in range(3, len(words), 2) if words[index] == "--related-input-id"]
+
+
+def creation_command_env(command: str, source: str, user: str, room: str, *, input_id: str | None = None, related_sources: list[str] | None = None, frontier: str | None = None) -> str | None:
     requested = creation_command_input(command)
     if (requested is None or (requested and requested != input_id)
             or not source or not user.startswith("@") or not room.startswith("!")):
         return None
     env = {"AGENTTEAMS_ORIGIN_EVENT_ID": source, "AGENTTEAMS_REQUESTER_USER_ID": user,
            "AGENTTEAMS_REQUESTER_ROOM_ID": room}
+    if frontier:
+        env["AGENTTEAMS_INPUT_FRONTIER"] = frontier
+    refs = creation_command_related_inputs(command)
+    if len(refs) != len(related_sources or []):
+        return None
+    if refs:
+        env["AGENTTEAMS_RELATED_INPUTS"] = json.dumps(dict(zip(refs, related_sources)))
     if requested:
         env["AGENTTEAMS_INPUT_ID"] = requested
     return "env " + " ".join(shlex.quote(key + "=" + value) for key, value in env.items()) + " " + command
@@ -318,3 +354,27 @@ def ack_delivery_context(middle_context: dict, acknowledgements: dict[str, str])
     """
     for identity, room in acknowledgements.items():
         middle_context.setdefault(_DELIVERY_SEEN, {}).setdefault(room, {})[identity] = True
+
+
+def refresh_creation_inputs(result: object, sources: list[dict], source_event: str) -> list[dict] | None:
+    """Admit only verified no-effect stale-input results from the Task API."""
+    if (not isinstance(result, dict) or result.get("ok") is not False
+            or result.get("error") != "task_input_stale" or result.get("noTaskRegistered") is not True
+            or result.get("sourceEventId") != source_event):
+        return None
+    selected = next((source for source in sources if source["eventId"] == source_event), None)
+    updates = result.get("inputs")
+    if not selected or not isinstance(updates, list) or not 0 < len(updates) <= 50:
+        return None
+    validated, known = [], {source["eventId"] for source in sources}
+    for entry in updates:
+        if (not isinstance(entry, dict) or not isinstance(entry.get("eventId"), str) or not entry["eventId"].startswith("$")
+                or entry.get("roomId") != selected["roomId"] or entry.get("userId") != selected["userId"]
+                or not isinstance(entry.get("body"), str) or not entry["body"].strip() or len(entry["body"]) > 65536):
+            return None
+        if entry["eventId"] in known:
+            continue
+        known.add(entry["eventId"])
+        reference = "input-refresh-" + str(len(sources) + len(validated) + 1)
+        validated.append({"inputId": reference, **{key: entry[key] for key in ("eventId", "roomId", "userId", "body")}})
+    return validated

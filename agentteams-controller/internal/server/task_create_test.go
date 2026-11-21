@@ -56,7 +56,15 @@ func callTaskCreate(h *ProjectHandler, caller *authpkg.CallerIdentity, source, b
 
 func taskCreateSourceServer(t *testing.T, h *ProjectHandler, handler http.HandlerFunc) {
 	t.Helper()
-	server := httptest.NewServer(handler)
+	last := "$source"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/messages") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"chunk": []any{map[string]any{"event_id": last, "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": "Latest input"}}}})
+			return
+		}
+		last = r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		handler(w, r)
+	}))
 	t.Cleanup(server.Close)
 	creds := &service.FileCredentialStore{Dir: t.TempDir()}
 	if err := creds.Save(t.Context(), "default", &service.WorkerCredentials{MatrixToken: "dispatch-manager-token"}); err != nil {
@@ -337,5 +345,101 @@ func TestTaskCreateRequiresReadyManagerLeaderRoom(t *testing.T) {
 	entries, _ := store.ListObjects(t.Context(), coordinationPending)
 	if w.Code != http.StatusConflict || len(entries) != 0 {
 		t.Fatalf("unready route registered handoff: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTaskCreateCapturesRelatedHumanCorrectionsWithoutModelCopy(t *testing.T) {
+	h, _ := taskCreateFixture(t)
+	taskCreateSourceServer(t, h, func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		body := "Use CSV output."
+		if id == "$correction" {
+			body = "Change the output to JSON; keep the other requirements."
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"event_id": id, "room_id": "!source:test", "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": body}})
+	})
+	w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$original", `{"title":"Report","leader":"lead-cr","relatedSources":["$correction"]}`)
+	var result struct {
+		Task taskResource `json:"task"`
+	}
+	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &result) != nil || !strings.Contains(result.Task.Spec, "Use CSV output.") || !strings.Contains(result.Task.Spec, "Change the output to JSON") || strings.Contains(result.Task.Spec, "cannot override the original") {
+		t.Fatalf("correction snapshot lost or unable to supersede original: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTaskCreateRejectsInvalidRelatedSourcesBeforeRegistration(t *testing.T) {
+	for _, related := range []string{`["$original"]`, `["$correction","$correction"]`, `["not-an-event"]`, `["$foreign"]`} {
+		t.Run(related, func(t *testing.T) {
+			h, store := taskCreateFixture(t)
+			before, _ := store.ListObjects(t.Context(), "teams/alpha/shared/tasks/")
+			taskCreateSourceServer(t, h, func(w http.ResponseWriter, r *http.Request) {
+				id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+				sender := "@human:test"
+				if id == "$foreign" {
+					sender = "@another:test"
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"event_id": id, "room_id": "!source:test", "sender": sender, "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": "requirements"}})
+			})
+			w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$original", `{"title":"Report","leader":"lead-cr","relatedSources":`+related+`}`)
+			if w.Code != 400 && w.Code != 403 {
+				t.Fatalf("invalid correction accepted: %d %s", w.Code, w.Body.String())
+			}
+			roots, _ := store.ListObjects(t.Context(), "teams/alpha/shared/tasks/")
+			if len(roots) != len(before) {
+				t.Fatalf("invalid correction created task objects: %v", roots)
+			}
+		})
+	}
+}
+
+func TestTaskCreateDefersNewHumanInputBeforeAnyRegistration(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	before, _ := store.ListObjects(t.Context(), "teams/alpha/shared/tasks/")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		event := func(id, body string) map[string]any {
+			return map[string]any{"event_id": id, "room_id": "!source:test", "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": body}}
+		}
+		if strings.HasSuffix(r.URL.Path, "/messages") {
+			if r.URL.Query().Get("dir") != "b" || !strings.Contains(r.URL.Query().Get("filter"), "@human:test") {
+				t.Error("frontier must use the authenticated requester's reverse timeline")
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"chunk": []any{event("$new", "Cancel the pending request; do not create a Task."), event("$original", "Build a report.")}})
+		} else {
+			_ = json.NewEncoder(w).Encode(event("$original", "Build a report."))
+		}
+	}))
+	defer server.Close()
+	h.coordination.deps.MatrixConfig.ServerURL = server.URL
+	w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$original", `{"title":"Report","leader":"lead-cr"}`)
+	var result struct {
+		Error  string              `json:"error"`
+		NoTask bool                `json:"noTaskRegistered"`
+		Inputs []map[string]string `json:"inputs"`
+	}
+	if w.Code != 409 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Error != "task_input_stale" || !result.NoTask || len(result.Inputs) != 1 || result.Inputs[0]["eventId"] != "$new" || !strings.Contains(result.Inputs[0]["body"], "Cancel") {
+		t.Fatalf("stale intent reached registration: %d %s", w.Code, w.Body.String())
+	}
+	after, _ := store.ListObjects(t.Context(), "teams/alpha/shared/tasks/")
+	if len(before) != len(after) {
+		t.Fatalf("stale intent created task objects: %v", after)
+	}
+}
+
+func TestTaskCreateFreshnessReadFailureDoesNotRegister(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	before, _ := store.ListObjects(t.Context(), "teams/alpha/shared/tasks/")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/messages") {
+			w.WriteHeader(503)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"event_id": "$original", "room_id": "!source:test", "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": "Build a report."}})
+	}))
+	defer server.Close()
+	h.coordination.deps.MatrixConfig.ServerURL = server.URL
+	w := callTaskCreate(h, &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}, "$original", `{"title":"Report","leader":"lead-cr"}`)
+	after, _ := store.ListObjects(t.Context(), "teams/alpha/shared/tasks/")
+	if w.Code != 503 || len(before) != len(after) {
+		t.Fatalf("unavailable freshness admitted creation: %d %s", w.Code, w.Body.String())
 	}
 }

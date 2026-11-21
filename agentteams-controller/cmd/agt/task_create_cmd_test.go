@@ -97,3 +97,65 @@ func TestTaskCreateChecksSelectedInputAgainstNativeBinding(t *testing.T) {
 		t.Fatalf("unbound input caused a side effect: %d requests", calls)
 	}
 }
+
+func TestTaskCreateBindsRelatedInputsBeforeSendingHTTP(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body struct {
+			Related []string `json:"relatedSources"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || len(body.Related) != 1 || body.Related[0] != "$change" {
+			t.Errorf("lost related native source: %+v", body)
+		}
+		_, _ = w.Write([]byte(`{"sourceEventId":"$original"}`))
+	}))
+	defer server.Close()
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "test-token")
+	t.Setenv("AGENTTEAMS_ORIGIN_EVENT_ID", "$original")
+	t.Setenv("AGENTTEAMS_REQUESTER_USER_ID", "@a:test")
+	t.Setenv("AGENTTEAMS_REQUESTER_ROOM_ID", "!room:test")
+	t.Setenv("AGENTTEAMS_INPUT_ID", "input-1")
+	t.Setenv("AGENTTEAMS_RELATED_INPUTS", `{"input-2":"$change"}`)
+	for _, ref := range []string{"input-unknown", "input-2"} {
+		cmd := newRootCommand("agt")
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetArgs([]string{"task", "create", "--leader", "lead", "--title", "Report", "--input-id", "input-1", "--related-input-id", ref})
+		err := cmd.Execute()
+		if (err == nil) != (ref == "input-2") {
+			t.Fatalf("ref=%s err=%v", ref, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("unbound amendment caused HTTP side effect: %d", calls)
+	}
+}
+
+func TestTaskCreatePreservesTypedNoEffectInputRefresh(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-AgentTeams-Input-Frontier") != "$frontier" {
+			t.Error("native input frontier lost")
+		}
+		w.WriteHeader(409)
+		_, _ = w.Write([]byte(`{"ok":false,"error":"task_input_stale","noTaskRegistered":true,"sourceEventId":"$original","inputs":[{"eventId":"$new","userId":"@a:test","roomId":"!room:test","body":"Cancel"}]}`))
+	}))
+	defer server.Close()
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "test-token")
+	t.Setenv("AGENTTEAMS_ORIGIN_EVENT_ID", "$original")
+	t.Setenv("AGENTTEAMS_REQUESTER_USER_ID", "@a:test")
+	t.Setenv("AGENTTEAMS_REQUESTER_ROOM_ID", "!room:test")
+	t.Setenv("AGENTTEAMS_INPUT_FRONTIER", "$frontier")
+	cmd := newRootCommand("agt")
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"task", "create", "--leader", "lead", "--title", "Report"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if json.Unmarshal(output.Bytes(), &result) != nil || result["ok"] != false || result["error"] != "task_input_stale" {
+		t.Fatalf("typed refresh lost: %s", output.String())
+	}
+}

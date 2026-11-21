@@ -42,6 +42,9 @@ class NativeTaskToolTest(unittest.TestCase):
     def test_create_uses_captured_request_without_spec_copy(self):
         self.run_task("create", no_spec=True)
 
+    def test_stale_create_error_refreshes_context_without_an_extra_task_call(self):
+        self.run_task("create", stale_input=True)
+
     def test_model_cannot_supply_private_source_fields(self):
         self.run_task("create", invalid_source=True)
 
@@ -92,7 +95,7 @@ class NativeTaskToolTest(unittest.TestCase):
         finally:
             server.shutdown();server.server_close();thread.join()
 
-    def run_task(self, action, invalid_source=False, no_spec=False):
+    def run_task(self, action, invalid_source=False, no_spec=False, stale_input=False):
         from agentscope.agent import Agent
         from agentscope.model import ChatModelBase, ChatResponse
         from agentscope.message import Msg, ToolCallBlock, TextBlock
@@ -132,11 +135,14 @@ class NativeTaskToolTest(unittest.TestCase):
             result={"sourceEventId":"$source","task":{"id":"main","kind":"main","status":"planned"},
                     "notification":{"status":"queued","recipient":"leader-a","eventId":"handoff"}}
 
+        if stale_input:
+            result = {"ok":False,"error":"task_input_stale","noTaskRegistered":True,"sourceEventId":"$source","inputs":[{"eventId":"$new","userId":"@human:test","roomId":"!source:test","body":"Do not create the requested Task."}]}
+
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body=json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 requests.append((urlsplit(self.path).path,body,dict(self.headers)))
-                self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers()
+                self.send_response(409 if stale_input else 200);self.send_header("Content-Type","application/json");self.end_headers()
                 self.wfile.write(json.dumps(result).encode())
             def log_message(self,*args):pass
 
@@ -155,12 +161,18 @@ class NativeTaskToolTest(unittest.TestCase):
                 self.calls+=1
                 if self.calls==1:
                     return ChatResponse(content=[ToolCallBlock(id="operation",name="mcp__teamharness__task",input=json.dumps(arguments))],is_last=True)
-                testcase.assertTrue(invalid_source, "A durable Task operation invoked the model again")
+                testcase.assertTrue(invalid_source or action == "create", "A fixed Task phase invoked the model again")
                 testcase.assertEqual(self.calls, 2)
                 messages = await self.formatter.format(kwargs.get("messages") or args[0])
                 text = json.dumps([message for message in messages if message.get("role") == "tool"])
-                testcase.assertIn("Additional properties", text)
-                testcase.assertNotIn("[Task system receipt]", text)
+                if invalid_source:
+                    testcase.assertIn("Additional properties", text)
+                    testcase.assertNotIn("[Task system receipt]", text)
+                elif stale_input:
+                    testcase.assertIn("[Task input refresh]", text)
+                    testcase.assertIn("Do not create the requested Task.", text)
+                else:
+                    testcase.assertIn("[Task system receipt]", text)
                 return ChatResponse(content=[TextBlock(text="Use the native task source context.")], is_last=True)
 
         async def run():
@@ -175,7 +187,8 @@ class NativeTaskToolTest(unittest.TestCase):
             tokens=[]
             try:
                 if action=="create":
-                    tokens=[(plugin._source_event,plugin._source_event.set("$source")),
+                    tokens=[(plugin._creation_sources,plugin._creation_sources.set([{ "inputId":"input-1", "eventId":"$source", "userId":"@human:test", "roomId":"!source:test"}])),
+                            (plugin._source_event,plugin._source_event.set("$source")),
                             (plugin._requester_route,plugin._requester_route.set({"target_user":"@human:test","target_session":"!source:test"}))]
                     inputs=[Msg(name="Human",role="user",content=[TextBlock(text="Delegate this request.")])]
                 else:
@@ -200,8 +213,10 @@ class NativeTaskToolTest(unittest.TestCase):
                     for field,variable in (("review_task_token",plugin._review_task),("completion_task_token",plugin._completion_task)):
                         if field in ctx.extras:tokens.append((variable,ctx.extras[field]))
                 await agent.reply(inputs)
-                testcase.assertEqual(model.calls, 2 if invalid_source else 1)
-                if not invalid_source:
+                testcase.assertEqual(model.calls, 2 if invalid_source or action == "create" else 1)
+                if stale_input:
+                    testcase.assertTrue(agent.state.middle_context["teamharness.refreshed_inputs"]["$new"])
+                if not invalid_source and not stale_input:
                     messages = await model.formatter.format(agent.state.context)
                     text = json.dumps([message for message in messages if message.get("role") == "tool"])
                     testcase.assertIn("[Task system receipt]", text)

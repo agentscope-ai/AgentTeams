@@ -29,6 +29,19 @@ request's `inputId` (CLI: `--input-id`) for each Task you decide to create.
 `[Input input-N]` labels identify the supplied messages, not a required Task
 count. Interpret their relationships first; do not bind all creations to the
 first message or turn a supplement/withdrawal into another Task.
+When later inputs amend the same request, keep the original `inputId` and
+supply `relatedInputIds` in conversation order (CLI: repeat `--related-input-id`).
+You can reference only supplied inputs from the same Human conversation. The
+system captures all selected original bodies; later Human corrections override
+earlier conflicting requirements. Do not turn an amendment into a separate Task.
+
+A `task_input_stale` result means no new Task was registered: new Human input
+arrived before admission. The framework supplies the verified new input and its
+reference in your current tool context. Interpret it together with the earlier
+request before choosing an operation. A withdrawal may require zero Tasks. Do
+not blindly retry an obsolete create. The framework handles later queued copies
+of inputs you already interpreted.
+
 You do not need to copy the current request: the task system verifies its
 original Matrix message and preserves the complete text. Use optional `spec`
 only to supplement necessary earlier context. Original Human requirements take

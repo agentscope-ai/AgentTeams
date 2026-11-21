@@ -138,7 +138,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
 
     receipts = _receipt_module()
 
-    def source_for(input_id):
+    def source_for(input_id, related_inputs=None):
         sources = _creation_sources.get()
         if sources is None:
             route = _requester_route.get() or {}
@@ -146,13 +146,14 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                         "userId": route.get("target_user", ""), "roomId": route.get("target_session", "")}]
             if not sources[0]["eventId"] or not sources[0]["userId"] or not sources[0]["roomId"]:
                 raise ValueError("native original-conversation context unavailable")
-        return receipts.select_creation_source(sources, input_id)
+        return receipts.select_creation_source(sources, input_id, related_inputs)
 
     class TeamHarnessSanitizer(MiddlewareBase):
         _submitted_task = ""
         _accepted_task = ""
         _task_scope = None
         _finished_phase_receipt = ""
+        _creation_refresh_pending = False
 
         def _inject_task_receipt(self, item: Any, tool_name: str, args: Any, creation_source: str = "") -> None:
             if tool_name not in {"execute_shell_command", "task"} or not isinstance(args, dict):
@@ -189,6 +190,17 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             except (TypeError, ValueError):
                 return
             _record_phase_error(result)
+            if creation_source:
+                sources = _creation_sources.get()
+                refreshed = receipts.refresh_creation_inputs(result, sources or [], creation_source)
+                if refreshed:
+                    sources.extend({key: entry[key] for key in ("inputId", "eventId", "roomId", "userId")} for entry in refreshed)
+                    self._refreshed_inputs = getattr(self, "_refreshed_inputs", set()) | {entry["eventId"] for entry in refreshed}
+                    self._creation_refresh_pending = True
+                    # Replace the one raw result; do not duplicate Human bodies.
+                    result["inputs"] = refreshed
+                    item.content[:] = [TextBlock(text=("[Task input refresh]\nNo new Task was registered. New verified Human inputs arrived before creation. Interpret them together with the earlier request before choosing create, update or withdrawal. Do not assume one Task per message. Use the supplied inputId references; queued duplicates of these inputs are handled by the framework.\n" + json.dumps(result, ensure_ascii=False)))]
+                    return
             if item.state != "success":
                 return
             receipt = (receipts.creation_receipt(result, creation_source) if creation_source
@@ -293,7 +305,17 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 agent.state.append_context(agent.name, message.content)
                 yield message
                 return
+            self._creation_refresh_pending = False
             async for item in next_handler(**input_kwargs):
+                # A final model response has admitted and interpreted the
+                # refreshed inputs. Native session persistence saves this fact.
+                from agentscope.message import Msg
+                if (getattr(self, "_refreshed_inputs", set())
+                        and isinstance(item, Msg) and getattr(item, "role", None) == "assistant"
+                        and isinstance(middle, dict)):
+                    seen = middle.setdefault("teamharness.refreshed_inputs", {})
+                    for event_id in getattr(self, "_refreshed_inputs", set()):
+                        seen[event_id] = True
                 yield item
 
         async def on_acting(
@@ -337,8 +359,12 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             if task_tool and isinstance(args, dict):
                 args.pop("_nativeSource", None)
                 if args.get("action") == "create" and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+                    if self._creation_refresh_pending:
+                        from agentscope.tool import ToolResponse
+                        yield ToolResponse(state="error", content=[{"type":"text", "text":"No Task created. Interpret the refreshed Human inputs before choosing another operation."}])
+                        return
                     try:
-                        selected = source_for(args.get("inputId"))
+                        selected = source_for(args.get("inputId"), args.get("relatedInputIds"))
                     except ValueError as error:
                         from agentscope.tool import ToolResponse
                         yield ToolResponse(state="error", content=[{"type": "text", "text": str(error)}])
@@ -350,14 +376,18 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             if name == "execute_shell_command" and isinstance(args, dict) and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
                 requested = receipts.creation_command_input(args.get("command"))
                 if requested is not None:
+                    if self._creation_refresh_pending:
+                        from agentscope.tool import ToolResponse
+                        yield ToolResponse(state="error", content=[{"type":"text", "text":"No Task created. Interpret the refreshed Human inputs before choosing another operation."}])
+                        return
                     try:
-                        selected = source_for(requested or None)
+                        selected = source_for(requested or None, receipts.creation_command_related_inputs(args.get("command")))
                     except ValueError as error:
                         from agentscope.tool import ToolResponse
                         yield ToolResponse(state="error", content=[{"type": "text", "text": str(error)}])
                         return
                     creation_source = selected["eventId"]
-                    bound = receipts.creation_command_env(args.get("command"), creation_source, selected["userId"], selected["roomId"], input_id=requested or None)
+                    bound = receipts.creation_command_env(args.get("command"), creation_source, selected["userId"], selected["roomId"], input_id=requested or None, related_sources=selected.get("relatedSources"), frontier=selected.get("frontierEventId"))
                     args["command"] = bound
                     if json_input:
                         call.input = json.dumps(args, ensure_ascii=False)
@@ -709,7 +739,7 @@ async def _manager_report_context(ctx: Any) -> bool:
         return False
     if meta.get("event_id"):
         ctx.extras["source_event_token"] = _source_event.set(str(meta["event_id"]))
-    if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and "matrix_input_sources" in meta:
+    if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager" and meta.get("event_id"):
         # An unavailable/invalid batch must never fall back to its first source.
         ctx.extras["creation_sources_token"] = _creation_sources.set([])
     api_event = meta.get("teamharness_coordination") or {}
@@ -859,8 +889,16 @@ async def _manager_report_context(ctx: Any) -> bool:
         humans = await asyncio.to_thread(_controller_json, "humans")
         human_ids = {str(h.get("matrixUserID") or h.get("matrixUserId") or "") for h in humans.get("humans", [])}
         sources = _creation_sources.get()
-        if "matrix_input_sources" in meta:
-            sources.extend(s for s in _receipt_module().creation_sources(meta) if s["userId"] in human_ids)
+        if sources is not None:
+            current = [s for s in _receipt_module().creation_sources(meta) if s["userId"] in human_ids]
+            middle = getattr(getattr(ctx.agent, "state", None), "middle_context", {})
+            seen = middle.get("teamharness.refreshed_inputs", {}) if isinstance(middle, dict) else {}
+            remaining = [s for s in current if not seen.get(s["eventId"])]
+            if current and not remaining:
+                return True
+            if len(remaining) != len(current):
+                ctx.inject_context("Some supplied messages were already interpreted through a verified Task input refresh. Do not apply them again: " + json.dumps([s["inputId"] for s in current if seen.get(s["eventId"])]), source="teamharness_handled_inputs")
+            sources.extend(remaining)
             ctx.inject_context("[Task input references]\n" + json.dumps([s["inputId"] for s in sources]),
                                source="teamharness_creation_inputs")
         if sender in human_ids or sources:

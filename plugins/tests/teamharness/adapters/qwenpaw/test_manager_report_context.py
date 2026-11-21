@@ -241,3 +241,27 @@ def test_matrix_acceptance_and_closure_require_own_controller_receipt(monkeypatc
     ctx = SimpleNamespace(request=SimpleNamespace(channel_meta={"teamharness_matrix_coordination":True, "sender_id":"@sender:test", "agent_matrix_user_id":"@leader:test", "teamharness_coordination":event}),
         extras={}, agent=SimpleNamespace(toolkit=SimpleNamespace(get_tool_schemas=schemas)), inject_context=lambda *a, **kw:None)
     assert asyncio.run(plugin._manager_report_context(ctx)) is forged
+
+
+@pytest.mark.parametrize("include_new", [False, True])
+def test_verified_refresh_skips_queued_duplicates_without_skipping_new_inputs(monkeypatch, include_new):
+    spec = importlib.util.spec_from_file_location("refreshed_scope_plugin", SOURCE)
+    plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
+    monkeypatch.setattr(plugin, "_controller_json", lambda _: {"humans":[{"matrixUserID":"@human:test"}]})
+    monkeypatch.setattr(plugin, "_prepare_delivery_context", AsyncMock())
+    monkeypatch.setattr(plugin, "_prepare_manager_roster", AsyncMock())
+    frames = [{"event_id":"$handled","sender_id":"@human:test","room_id":"!room:test"}]
+    if include_new:
+        frames.append({"event_id":"$new","sender_id":"@human:test","room_id":"!room:test"})
+    meta = {"event_id":"$handled","sender_id":"@human:test","room_id":"!room:test","matrix_input_sources":frames}
+    ctx = SimpleNamespace(request=SimpleNamespace(channel_meta=meta), agent=SimpleNamespace(state=SimpleNamespace(middle_context={"teamharness.refreshed_inputs":{"$handled":True}})), extras={}, inject_context=lambda *a,**kw:None)
+    async def scenario():
+        try:
+            assert await plugin._manager_report_context(ctx) is (not include_new)
+            assert [s["eventId"] for s in plugin._creation_sources.get()] == (["$new"] if include_new else [])
+        finally:
+            for field, variable in (("creation_sources_token",plugin._creation_sources),("source_event_token",plugin._source_event),("requester_route_token",plugin._requester_route)):
+                token = ctx.extras.pop(field,None)
+                if token is not None: variable.reset(token)
+    asyncio.run(scenario())

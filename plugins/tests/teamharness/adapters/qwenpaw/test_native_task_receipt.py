@@ -74,6 +74,95 @@ class NativeTaskReceiptTest(unittest.TestCase):
         with patch.dict(os.environ, {"AGENTTEAMS_AGENT_ROLE": "manager"}):
             asyncio.run(scenario())
 
+    def test_related_input_binding_reaches_the_native_task_tool(self):
+        from agentscope.tool import ToolResponse
+        root = Path(__file__).resolve().parents[5]
+        spec = importlib.util.spec_from_file_location("related_native_plugin", root / "plugins/teamharness/adapters/qwenpaw/plugin.py")
+        plugin = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(plugin)
+        sources = [{"inputId": "input-1", "eventId": "$original", "userId": "@a:test", "roomId": "!room:test"},
+                   {"inputId": "input-2", "eventId": "$change", "userId": "@a:test", "roomId": "!room:test"}]
+
+        async def scenario():
+            token = plugin._creation_sources.set(sources)
+            try:
+                middleware = plugin._sanitizer_factory(None, None)
+                for shell in (False, True):
+                    command = 'agt task create --leader lead --title Report --input-id input-1 --related-input-id input-2'
+                    args = {"command": command} if shell else {"action": "create", "leader": "lead", "title": "Report", "inputId": "input-1", "relatedInputIds": ["input-2"]}
+                    call = SimpleNamespace(name="execute_shell_command" if shell else "teamharness__task", input=args)
+                    async def execute(**kwargs):
+                        bound = kwargs["tool_call"].input
+                        if shell:
+                            env = dict(part.split("=", 1) for part in shlex.split(bound["command"])[1:] if part.startswith("AGENTTEAMS_"))
+                            self.assertEqual(json.loads(env["AGENTTEAMS_RELATED_INPUTS"]), {"input-2": "$change"})
+                        else:
+                            self.assertEqual(bound["_nativeSource"]["relatedSources"], ["$change"])
+                        yield ToolResponse(state="success", content=[])
+                    _ = [reply async for reply in middleware.on_acting(None, {"tool_call": call}, execute)]
+            finally:
+                plugin._creation_sources.reset(token)
+        with patch.dict(os.environ, {"AGENTTEAMS_AGENT_ROLE": "manager"}):
+            asyncio.run(scenario())
+
+    def test_fresh_input_is_reasoned_before_creation_and_queued_duplicates_are_recorded(self):
+        from agentscope.agent import Agent
+        from agentscope.model import ChatModelBase, ChatResponse
+        from agentscope.message import Msg, ToolCallBlock, TextBlock, ThinkingBlock
+        from agentscope.tool import Toolkit, FunctionTool
+        from agentscope.formatter import OpenAIChatFormatter
+        from agentscope.permission import PermissionBehavior, PermissionDecision
+        from pydantic import BaseModel
+        root = Path(__file__).resolve().parents[5]
+        spec = importlib.util.spec_from_file_location("fresh_input_native_plugin", root / "plugins/teamharness/adapters/qwenpaw/plugin.py")
+        plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+        class Parameters(BaseModel):
+            pass
+        testcase = self
+
+        async def scenario(amend):
+            commands = []
+            body = "Change the report to JSON." if amend else "Do not create the requested Task."
+            class Model(ChatModelBase):
+                def __init__(self):
+                    super().__init__(None, "synthetic-intake-boundary", Parameters(), stream=False)
+                    self.formatter = OpenAIChatFormatter(); self.calls = 0
+                async def __call__(self, *args, **kwargs):
+                    self.calls += 1
+                    if self.calls == 1 or amend and self.calls == 2:
+                        command = 'agt task create --leader lead --title Report --input-id input-1'
+                        if self.calls == 2:
+                            command += ' --related-input-id input-refresh-2'
+                        return ChatResponse(content=[ToolCallBlock(id="call-"+str(self.calls), name="execute_shell_command", input=json.dumps({"command":command}))], is_last=True)
+                    return ChatResponse(content=[ThinkingBlock(thinking="Synthetic final reasoning block."), TextBlock(text="Updated intent has been handled.")], is_last=True)
+            async def execute(command: str):
+                commands.append(command)
+                if len(commands) == 1:
+                    return {"ok":False,"error":"task_input_stale","noTaskRegistered":True,"sourceEventId":"$original", "inputs":[{"eventId":"$new","userId":"@a:test","roomId":"!room:test","body":body}]}
+                env = dict(part.split("=",1) for part in shlex.split(command)[1:] if part.startswith("AGENTTEAMS_"))
+                testcase.assertEqual(env["AGENTTEAMS_INPUT_FRONTIER"], "$new")
+                testcase.assertEqual(json.loads(env["AGENTTEAMS_RELATED_INPUTS"]), {"input-refresh-2":"$new"})
+                return {"sourceEventId":"$original","task":{"id":"main","kind":"main","status":"planned"},"notification":{"status":"queued","eventId":"handoff","recipient":"lead"}}
+            toolkit = Toolkit()
+            await toolkit.add_tool(FunctionTool(execute,name="execute_shell_command",permission=PermissionDecision(behavior=PermissionBehavior.ALLOW,message="Synthetic no-network fixture")))
+            model = Model()
+            agent = Agent("Manager","Interpret Human intent.",model,toolkit=toolkit,middlewares=[plugin._sanitizer_factory(None,None)])
+            token = plugin._creation_sources.set([{"inputId":"input-1","eventId":"$original","userId":"@a:test","roomId":"!room:test"}])
+            try:
+                await agent.reply(Msg(name="Human",role="user",content=[TextBlock(text="Build a CSV report.")]))
+                testcase.assertEqual(len(commands), 2 if amend else 1)
+                testcase.assertEqual(model.calls, 3 if amend else 2)
+                text = json.dumps(await model.formatter.format(agent.state.context),ensure_ascii=False)
+                testcase.assertIn(body,text)
+                testcase.assertIn("[Task input refresh]",text)
+                testcase.assertTrue(agent.state.middle_context["teamharness.refreshed_inputs"]["$new"])
+            finally:
+                plugin._creation_sources.reset(token)
+        with patch.dict(os.environ,{"AGENTTEAMS_AGENT_ROLE":"manager"}):
+            for amend in (False, True):
+                with self.subTest(amend=amend):
+                    asyncio.run(scenario(amend))
+
     def test_successful_task_cli_receipt_reaches_model_as_tool_context(self):
         self._assert_receipt("submit")
 
@@ -199,3 +288,29 @@ class NativeTaskReceiptTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(native_available(), "native QwenPaw SDK required")
+class StaleCreationBatchTest(unittest.TestCase):
+    def test_obsolete_model_batch_cannot_create_again_before_reasoning_refresh(self):
+        from agentscope.tool import ToolResponse
+        root = Path(__file__).resolve().parents[5]
+        spec = importlib.util.spec_from_file_location("obsolete_batch_plugin",root/"plugins/teamharness/adapters/qwenpaw/plugin.py")
+        plugin = importlib.util.module_from_spec(spec);spec.loader.exec_module(plugin)
+        async def scenario():
+            token = plugin._creation_sources.set([{"inputId":"input-1","eventId":"$original","roomId":"!room:test","userId":"@a:test"}])
+            try:
+                middleware = plugin._sanitizer_factory(None,None)
+                calls = []
+                async def execute(**kwargs):
+                    calls.append(True)
+                    yield ToolResponse(state="error",content=[{"type":"text","text":json.dumps({"ok":False,"error":"task_input_stale","noTaskRegistered":True,"sourceEventId":"$original","inputs":[{"eventId":"$new","roomId":"!room:test","userId":"@a:test","body":"Withdraw it."}]})}])
+                for _ in range(2):
+                    call = SimpleNamespace(name="teamharness__task",input={"action":"create","leader":"lead","title":"Report","inputId":"input-1"})
+                    replies = [item async for item in middleware.on_acting(None,{"tool_call":call},execute)]
+                self.assertEqual(len(calls),1)
+                self.assertEqual(replies[0].state,"error")
+            finally:
+                plugin._creation_sources.reset(token)
+        with patch.dict(os.environ,{"AGENTTEAMS_AGENT_ROLE":"manager"}):
+            asyncio.run(scenario())

@@ -196,3 +196,16 @@ def test_only_process_timeout_is_retryable_without_cli_status(monkeypatch):
             raise error
         monkeypatch.setattr(tool.subprocess, "run", fail)
         assert tool.run({"action": "get", "taskId": "a"})["retryable"] is expected
+
+
+def test_create_binds_related_corrections_in_a_private_process_environment(monkeypatch):
+    tool = load(monkeypatch)
+    source = {"eventId": "$original", "userId": "@a:test", "roomId": "!room:test", "relatedSources": ["$change"]}
+    arguments = {"action": "create", "leader": "lead", "title": "Report", "inputId": "input-1", "relatedInputIds": ["input-2"], "_nativeSource": source}
+    argv, env = tool.command(arguments)
+    assert argv[-2:] == ["--related-input-id", "input-2"]
+    assert json.loads(env["AGENTTEAMS_RELATED_INPUTS"]) == {"input-2": "$change"}
+    assert "relatedInputIds" not in tool.schema("worker")["inputSchema"]["properties"]
+    arguments["relatedInputIds"] = ["input-2", "input-3"]
+    with pytest.raises(ValueError):
+        tool.command(arguments)

@@ -47,6 +47,16 @@ class RunSummaryTests(unittest.TestCase):
         self.assertEqual(len(result), 3)
         self.assertTrue(all(group['attempts'] == 1 for group in result))
 
+    def test_protocol_success_can_coexist_with_business_failure(self):
+        result = summarize([(self.record(protocolRunPassed=True, functionalDeliveryPassed=False,
+            businessOracleVerified=True, businessOraclePassed=False, fullDeliverySeconds=340,
+            status='timeout', latencyTargetMet=False), None)])[0]
+        self.assertEqual(result['protocolPassed'], 1)
+        self.assertEqual(result['businessOracleFailed'], 1)
+        self.assertEqual(result['qualityFailed'], 1)
+        self.assertEqual(result['protocolDeliverySeconds']['p50'], 340)
+        self.assertEqual(result['observationTimeouts'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()

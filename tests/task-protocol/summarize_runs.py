@@ -23,6 +23,8 @@ def summarize(rows):
         passed = sum(r.get('functionalDeliveryPassed') is True for r in records)
         failed = sum(r.get('functionalDeliveryPassed') is False for r in records)
         audited = passed + failed
+        protocol_good = [r for r in records if r.get('protocolRunPassed') is True]
+        protocol_bad = sum(r.get('protocolRunPassed') is False for r in records)
         delivery = [r['fullDeliverySeconds'] for r in records
                     if r.get('functionalDeliveryPassed') is True
                     and type(r.get('fullDeliverySeconds')) in (int, float)
@@ -38,6 +40,14 @@ def summarize(rows):
             'attempts': len(samples), 'auditedRuns': audited, 'qualityPassed': passed,
             'qualityFailed': failed, 'pendingQualityAudit': len(samples) - audited,
             'qualityPassRateAmongAudited': passed / audited if audited else None,
+            'protocolPassed': len(protocol_good), 'protocolFailed': protocol_bad,
+            'pendingProtocolAudit': len(samples) - len(protocol_good) - protocol_bad,
+            'businessOraclePassed': sum(r.get('businessOraclePassed') is True for r in records),
+            'businessOracleFailed': sum(r.get('businessOraclePassed') is False
+                                       and r.get('businessOracleVerified') is True for r in records),
+            'protocolDeliverySeconds': percentiles([r['fullDeliverySeconds'] for r in protocol_good
+                if type(r.get('fullDeliverySeconds')) in (int, float)
+                and math.isfinite(r['fullDeliverySeconds'])]),
             'observationTimeouts': sum(r.get('status') == 'timeout' for r in records),
             'latencyTargetMet': sum(r.get('latencyTargetMet') is True for r in records),
             'latencyTargetMissed': sum(r.get('latencyTargetMet') is False for r in records),

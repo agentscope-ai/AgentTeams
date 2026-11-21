@@ -4377,12 +4377,14 @@ class AgentTeamsMatrixChannel(BaseChannel):
 
         # content_parts are already ContentType objects (from both
         # _on_room_event and _on_room_media_event); filter out None.
-        starts = {source["content_start"]: index + 1
-                  for index, source in enumerate(meta.get("matrix_input_sources") or [])}
+        starts = {source["content_start"]: source["event_id"]
+                  for source in (meta.get("matrix_input_sources") or [])}
+        if not starts and meta.get("event_id"):
+            starts[0] = meta["event_id"]
         content = []
         for index, part in enumerate(parts):
             if index in starts:
-                content.append(TextContent(type=ContentType.TEXT, text=f"[Input input-{starts[index]}]"))
+                content.append(TextContent(type=ContentType.TEXT, text=f"[Message {starts[index]}]"))
             if part is not None:
                 content.append(part)
         if not content:

@@ -211,7 +211,24 @@ def test_native_request_labels_sources_without_duplicating_their_content(matrix_
              for index, text in enumerate(("Original unique request", "Withdraw the previous request"))]
     request = channel.build_agent_request_from_native(channel.merge_native_items(items))
     text = str(request.model_dump())
-    assert "[Input input-1]" in text and "[Input input-2]" in text
+    assert "[Message $0]" in text and "[Message $1]" in text
     assert text.count("Original unique request") == 1
     assert text.count("Withdraw the previous request") == 1
     assert request.session_id == "matrix:!room:test"
+
+
+def test_single_and_batched_native_inputs_keep_the_same_message_identity(matrix_channel):
+    AgentTeamsMatrixChannel, _ = matrix_channel
+    module = sys.modules[AgentTeamsMatrixChannel.__module__]
+    channel = AgentTeamsMatrixChannel(process=lambda *_: None)
+    items = [{"channel_id": channel.channel, "sender_id": "@human:test",
+              "content_parts": [module.TextContent(type=module.ContentType.TEXT, text="Identical request")],
+              "meta": {"room_id": "!room:test", "event_id": event}}
+             for event in ("$first", "$second")]
+    for item in items:
+        text = str(channel.build_agent_request_from_native(item).model_dump())
+        assert "[Message " + item["meta"]["event_id"] + "]" in text
+        assert text.count("Identical request") == 1
+    merged = str(channel.build_agent_request_from_native(channel.merge_native_items(items)).model_dump())
+    assert "[Message $first]" in merged and "[Message $second]" in merged
+    assert merged.count("Identical request") == 2

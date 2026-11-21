@@ -138,7 +138,7 @@ class NativeTaskReceiptTest(unittest.TestCase):
                     if self.calls == 1 or amend and self.calls == 2:
                         command = 'agt task create --leader lead --title Report --input-id input-1'
                         if self.calls == 2:
-                            command += ' --related-input-id input-refresh-2'
+                            command += ' --related-input-id ' + plugin._receipt_module().input_reference('!room:test', '$new')
                         return ChatResponse(content=[ToolCallBlock(id="call-"+str(self.calls), name="execute_shell_command", input=json.dumps({"command":command}))], is_last=True)
                     return ChatResponse(content=[ThinkingBlock(thinking="Synthetic final reasoning block."), TextBlock(text="Updated intent has been handled.")], is_last=True)
             async def execute(command: str):
@@ -147,7 +147,7 @@ class NativeTaskReceiptTest(unittest.TestCase):
                     return {"ok":True,"outcome":"input_changed","noTaskRegistered":True,"sourceEventId":"$original", "inputs":[{"eventId":"$new","userId":"@a:test","roomId":"!room:test","body":body}]}
                 env = dict(part.split("=",1) for part in shlex.split(command)[1:] if part.startswith("AGENTTEAMS_"))
                 testcase.assertEqual(env["AGENTTEAMS_INPUT_FRONTIER"], "$new")
-                testcase.assertEqual(json.loads(env["AGENTTEAMS_RELATED_INPUTS"]), {"input-refresh-2":"$new"})
+                testcase.assertEqual(json.loads(env["AGENTTEAMS_RELATED_INPUTS"]), {plugin._receipt_module().input_reference("!room:test", "$new"):"$new"})
                 return {"sourceEventId":"$original","task":{"id":"main","kind":"main","status":"planned"},"notification":{"status":"queued","eventId":"handoff","recipient":"lead"}}
             toolkit = Toolkit()
             await toolkit.add_tool(FunctionTool(execute,name="execute_shell_command",permission=PermissionDecision(behavior=PermissionBehavior.ALLOW,message="Synthetic no-network fixture")))

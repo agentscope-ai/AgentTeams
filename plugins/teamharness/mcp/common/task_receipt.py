@@ -1,6 +1,7 @@
 """Validate public Task receipts and render facts for native tool context."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shlex
@@ -8,8 +9,14 @@ import shlex
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
+def input_reference(room_id: str, event_id: str) -> str:
+    """Keep the same opaque reference across turns, batching and refresh."""
+    return "input-" + hashlib.sha256(json.dumps([room_id, event_id], ensure_ascii=False,
+                                               separators=(",", ":")).encode()).hexdigest()[:24]
+
+
 def creation_sources(meta: dict) -> list[dict]:
-    """Bind turn-local input references to native, transport-owned identities."""
+    """Bind stable input references to native, transport-owned identities."""
     frames = meta.get("matrix_input_sources")
     if frames is None:
         if not meta.get("event_id"):
@@ -18,7 +25,7 @@ def creation_sources(meta: dict) -> list[dict]:
     if not isinstance(frames, list) or not frames:
         raise ValueError("native input sources unavailable")
     result = []
-    for index, frame in enumerate(frames):
+    for frame in frames:
         if not isinstance(frame, dict):
             raise ValueError("invalid native input source")
         values = {"eventId": frame.get("event_id"), "roomId": frame.get("room_id"),
@@ -26,7 +33,7 @@ def creation_sources(meta: dict) -> list[dict]:
         if any(not isinstance(values[key], str) or not values[key].startswith(prefix)
                for key, prefix in (("eventId", "$"), ("roomId", "!"), ("userId", "@"))):
             raise ValueError("complete native source identity required")
-        result.append({"inputId": "input-" + str(index + 1), **values})
+        result.append({"inputId": input_reference(values["roomId"], values["eventId"]), **values})
     return result
 
 
@@ -375,21 +382,25 @@ def refresh_creation_inputs(result: object, sources: list[dict], source_event: s
         if entry["eventId"] in known:
             continue
         known.add(entry["eventId"])
-        reference = "input-refresh-" + str(len(sources) + len(validated) + 1)
+        reference = input_reference(entry["roomId"], entry["eventId"])
         validated.append({"inputId": reference, **{key: entry[key] for key in ("eventId", "roomId", "userId", "body")}})
     return validated
 
 
-def input_refresh_context(result: dict, refreshed: list[dict]) -> str:
+def input_refresh_context(result: dict, refreshed: list[dict], sources: list[dict]) -> str:
     """Format the common control result without duplicating Human bodies."""
     return ("[Task input refresh]\nNo new Task was registered. This is a normal input update, not a failed task. "
             "Your framework adds the verified Human messages to your native user inputs before the next reasoning step. "
-            "Interpret them together with every pending earlier request before choosing an operation. "
+            "This attempt did not register its selected earlier request; new messages do not automatically replace it. "
+            "Interpret all supplied inputs together before choosing an operation. "
             "Transport copies are deduplicated by source event identity in your framework, not by matching Human text. "
             "Distinct complete work requests ask for distinct runs even when their bodies match; fulfill each unless the Human relates it to existing work. "
             "A question or withdrawal may need no new Task. Bind only actual Human amendments using relatedInputIds; never use it to merge duplicate-looking work requests. "
             "Address every independent request before ending your turn; do not ask the Human to resubmit merely because inputs changed.\n"
-            + json.dumps({**result, "inputs": [{key: value for key, value in source.items() if key != "body"}
+            + json.dumps({**result, "attemptedInputId": next(source["inputId"] for source in sources
+                                                               if source["eventId"] == result["sourceEventId"]),
+                          "inputReferences": [{key: source[key] for key in ("inputId", "eventId")} for source in sources],
+                          "inputs": [{key: value for key, value in source.items() if key != "body"}
                                                 for source in refreshed]}, ensure_ascii=False))
 
 

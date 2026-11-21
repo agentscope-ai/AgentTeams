@@ -17,7 +17,7 @@ def test_creation_selects_a_source_reference_without_defaulting_to_first():
     sources = public.creation_sources({"matrix_input_sources": [
         {"event_id": "$first", "room_id": "!room:test", "sender_id": "@a:test"},
         {"event_id": "$second", "room_id": "!room:test", "sender_id": "@b:test"}]})
-    assert public.select_creation_source(sources, "input-2") == {
+    assert public.select_creation_source(sources, sources[1]["inputId"]) == {
         "eventId": "$second", "roomId": "!room:test", "userId": "@b:test"}
     for ref in (None, "input-3", "$second"):
         try:
@@ -182,13 +182,14 @@ def test_related_corrections_are_bound_to_ordered_native_sources_not_model_bodie
         {"event_id": "$original", "room_id": "!room:test", "sender_id": "@a:test"},
         {"event_id": "$change", "room_id": "!room:test", "sender_id": "@a:test"},
         {"event_id": "$other", "room_id": "!room:test", "sender_id": "@b:test"}]})
-    selected = public.select_creation_source(sources, "input-1", ["input-2"])
+    first, second, third = [source["inputId"] for source in sources]
+    selected = public.select_creation_source(sources, first, [second])
     assert selected["relatedSources"] == ["$change"]
-    for related in (["input-1"], ["input-2", "input-2"], ["input-3"], ["input-unknown"], "input-2"):
+    for related in ([first], [second, second], [third], ["input-unknown"], second):
         with pytest.raises(ValueError):
-            public.select_creation_source(sources, "input-1", related)
+            public.select_creation_source(sources, first, related)
     with pytest.raises(ValueError):
-        public.select_creation_source(sources, "input-2", ["input-1"])
+        public.select_creation_source(sources, second, [first])
     command = 'agt task create --leader lead --title Report --input-id input-1 --related-input-id input-2'
     assert public.creation_command_related_inputs(command) == ["input-2"]
     bound = public.creation_command_env(command, "$original", "@a:test", "!room:test", input_id="input-1", related_sources=["$change"])
@@ -205,7 +206,7 @@ def test_verified_input_refresh_preserves_body_and_rejects_unbound_results():
               "inputs": [{"eventId": "$new", "roomId": "!room:test", "userId": "@a:test", "body": "Do not create that Task."}]}
     updates = public.refresh_creation_inputs(result, sources, "$original")
     assert updates[0]["body"] == "Do not create that Task."
-    assert updates[0]["inputId"] == "input-refresh-2"
+    assert updates[0]["inputId"] == public.input_reference("!room:test", "$new")
     assert public.refresh_creation_inputs(result, sources, "$wrong") is None
     wrong = copy.deepcopy(result); wrong["inputs"][0]["userId"] = "@other:test"
     assert public.refresh_creation_inputs(wrong, sources, "$original") is None
@@ -221,3 +222,35 @@ def test_input_change_is_a_nonfatal_control_outcome_not_a_creation_receipt():
     refreshed = public.refresh_creation_inputs(result,sources,"$original")
     assert refreshed and refreshed[0]["eventId"] == "$independent"
     assert public.creation_receipt(result,"$original") is None
+
+
+def test_input_references_survive_batch_order_and_late_transport_copies():
+    public = module()
+    first = {"event_id": "$first", "room_id": "!room:test", "sender_id": "@a:test"}
+    second = {**first, "event_id": "$second"}
+    a = public.creation_sources(first)[0]
+    b = public.creation_sources(second)[0]
+    assert a["inputId"] != b["inputId"], "Different source events must not reuse a turn-local input-1"
+    batch = public.creation_sources({"matrix_input_sources": [second, first]})
+    assert [row["inputId"] for row in batch] == [b["inputId"], a["inputId"]]
+    update = {"ok": True, "outcome": "input_changed", "noTaskRegistered": True,
+              "sourceEventId": "$first", "inputs": [{"eventId": "$second", "roomId": "!room:test",
+                                                        "userId": "@a:test", "body": "Repeat the complete work request."}]}
+    refreshed = public.refresh_creation_inputs(update, [a], "$first")
+    assert refreshed[0]["inputId"] == b["inputId"], "The queued copy and refresh must expose one stable reference"
+    assert public.creation_sources({**first, "room_id": "!other:test"})[0]["inputId"] != a["inputId"]
+
+
+def test_refresh_receipt_keeps_failed_request_and_current_reference_manifest():
+    import json
+    public = module()
+    sources = public.creation_sources({"event_id": "$first", "room_id": "!room:test", "sender_id": "@a:test"})
+    result = {"ok": True, "outcome": "input_changed", "noTaskRegistered": True, "sourceEventId": "$first",
+              "inputs": [{"eventId": "$second", "roomId": "!room:test", "userId": "@a:test", "body": "A different request."}]}
+    updates = public.refresh_creation_inputs(result, sources, "$first")
+    sources.extend(updates)
+    context = public.input_refresh_context(result, updates, sources)
+    wire = json.loads(context.split("\n", 2)[2])
+    assert wire["attemptedInputId"] == sources[0]["inputId"]
+    assert [ref["inputId"] for ref in wire["inputReferences"]] == [source["inputId"] for source in sources]
+    assert "body" not in wire["inputs"][0] and "A different request." not in context

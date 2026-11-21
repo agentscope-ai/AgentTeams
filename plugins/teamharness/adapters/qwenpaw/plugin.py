@@ -149,7 +149,8 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         sources = _creation_sources.get()
         if sources is None:
             route = _requester_route.get() or {}
-            sources = [{"inputId": "input-1", "eventId": _source_event.get(),
+            sources = [{"inputId": receipts.input_reference(route.get("target_session", ""), _source_event.get()),
+                        "eventId": _source_event.get(),
                         "userId": route.get("target_user", ""), "roomId": route.get("target_session", "")}]
             if not sources[0]["eventId"] or not sources[0]["userId"] or not sources[0]["roomId"]:
                 raise ValueError("native original-conversation context unavailable")
@@ -214,7 +215,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                     self._creation_refresh_pending = True
                     self._pending_refreshed_inputs = getattr(self, "_pending_refreshed_inputs", []) + refreshed
                     # Human messages and the tool's no-effect receipt have distinct roles.
-                    item.content[:] = [TextBlock(text=receipts.input_refresh_context(result, refreshed))]
+                    item.content[:] = [TextBlock(text=receipts.input_refresh_context(result, refreshed, sources))]
                     return
             receipt = (receipts.creation_receipt(result, creation_source) if creation_source
                        else receipts.planning_receipt(result, task_id) if action == "plan"
@@ -334,7 +335,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                     if not any(message.role == "user" and message.metadata.get("agentteams.event.id") == source["eventId"]
                                for message in agent.state.context):
                         agent.state.context.append(Msg(name="Human", role="user",
-                            content=[{"type": "text", "text": "[Input " + source["inputId"] + "]\n" + source["body"]}],
+                            content=[{"type": "text", "text": "[Message " + source["eventId"] + "]\n" + source["body"]}],
                             metadata={"agentteams.event.id": source["eventId"], "agentteams.room.id": source["roomId"],
                                       "agentteams.sender.id": source["userId"], "agentteams.input.id": source["inputId"]}))
                 if _ctx is not None:
@@ -933,7 +934,7 @@ async def _manager_report_context(ctx: Any) -> bool:
             if len(remaining) != len(current):
                 ctx.inject_context("Some supplied messages were already interpreted through a verified Task input refresh. Do not apply them again: " + json.dumps([s["inputId"] for s in current if seen.get(s["eventId"])]), source="teamharness_handled_inputs")
             sources.extend(remaining)
-            ctx.inject_context("[Task input references]\n" + json.dumps([s["inputId"] for s in sources]),
+            ctx.inject_context("[Task input references]\n" + json.dumps([{key: s[key] for key in ("inputId", "eventId")} for s in sources]),
                                source="teamharness_creation_inputs")
         if sender in human_ids or sources:
             if sender in human_ids:

@@ -36,7 +36,7 @@ def test_batch_sources_keep_human_authority_without_first_sender_fallback(monkey
         try:
             await plugin._manager_report_context(ctx)
             sources = plugin._creation_sources.get()
-            assert sources == ([{"inputId": "input-2", "eventId": "$human", "userId": "@human:test", "roomId": "!room:test"}]
+            assert sources == ([{"inputId": plugin._receipt_module().input_reference("!room:test", "$human"), "eventId": "$human", "userId": "@human:test", "roomId": "!room:test"}]
                                if registry_available else [])
         finally:
             for key, variable in [("creation_sources_token", plugin._creation_sources),

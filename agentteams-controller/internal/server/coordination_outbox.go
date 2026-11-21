@@ -87,7 +87,12 @@ func (h *CoordinationHandler) Run(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	var nextTaskScan time.Time
+	var nextAssistantScan time.Time
 	for {
+		if h.assistant != nil && time.Now().After(nextAssistantScan) {
+			h.scheduleAssistants(ctx)
+			nextAssistantScan = time.Now().Add(time.Minute)
+		}
 		if h.taskNotifications != nil && time.Now().After(nextTaskScan) {
 			h.taskNotifications.recoverTaskNotifications(ctx)
 			nextTaskScan = time.Now().Add(15 * time.Second)
@@ -243,6 +248,12 @@ func (h *CoordinationHandler) GetEvent(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal(data, &d) != nil {
 			writeError(w, 503, "invalid coordination receipt")
 			return
+		}
+		if d.Event.Kind == "assistant_digest" {
+			if _, err := h.resolveAssistant(r.Context(), d.Event, caller); err != nil {
+				writeError(w, 404, "assistant execution no longer available")
+				return
+			}
 		}
 		recipient := false
 		if d.Event.RecipientKind == "worker" && (caller.Role == authpkg.RoleWorker || caller.Role == authpkg.RoleTeamLeader) {

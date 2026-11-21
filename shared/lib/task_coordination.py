@@ -102,6 +102,11 @@ def notification(content, room, sender, own, *, fetch=controller_json, event_id=
                     or not leaves or any(n.get("status") != "completed" for n in leaves)
                     or sender != own):
                 raise IgnoredNotification("plan is not ready to close")
+        elif kind == "assistant_digest":
+            context = verified_get("assistant/context?" + urllib.parse.urlencode({"team": packet["channel_meta"].get("assistant_team", "")}))
+            if (sender != own or context.get("owner") != canonical.get("delivery_id")
+                    or context.get("roomId") != room or context.get("context", {}).get("enabled") is not True):
+                raise IgnoredNotification("assistant ownership or schedule changed")
         elif kind != "handoff":
             raise IgnoredNotification("unsupported notification kind")
         text = packet["input"][0]["content"][0]["text"]

@@ -9,4 +9,3 @@ COPY --from=controller /opt/agentteams/agent/ /opt/agentteams/agent/
 COPY --from=controller /opt/agentteams/plugins/ /opt/agentteams/plugins/
 FROM ${QWENPAW_IMAGE} AS qwenpaw
 COPY --from=controller /usr/local/bin/agt /usr/local/bin/agt
-COPY examples/proactive-assistant/run-digest.py /opt/agentteams/scripts/run-digest.py

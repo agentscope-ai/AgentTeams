@@ -685,7 +685,7 @@ async def _manager_report_context(ctx: Any) -> bool:
     receipt = {}
     if meta.get("teamharness_matrix_coordination"):
         receipt = await _phase_module().until_available(_controller_json, "coordination/events/" + urllib.parse.quote(api_event.get("id", ""), safe=""))
-        if (api_event.get("kind") not in {"handoff", "task_assigned", "task_submitted", "project_ready", "main_task_ready"}
+        if (api_event.get("kind") not in {"assistant_digest", "handoff", "task_assigned", "task_submitted", "project_ready", "main_task_ready"}
                 or receipt.get("actor") != meta.get("sender_id")
                 or receipt.get("recipient") != meta.get("agent_matrix_user_id")
                 or receipt.get("room_id", "") != meta.get("room_id", "")

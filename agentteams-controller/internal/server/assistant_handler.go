@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -63,7 +64,8 @@ func NewAssistantHandler(deps ServerDeps) *AssistantHandler {
 		if err := deps.MatrixClient.JoinRoom(ctx, room, token); err != nil {
 			return "", fmt.Errorf("assistant join conversation: %w", err)
 		}
-		return coord.sendMatrixContent(ctx, kind, name, room, txn, content, true)
+		_, control := content["org.agentteams.coordination"]
+		return coord.sendMatrixContent(ctx, kind, name, room, txn, content, !control)
 	}}
 }
 
@@ -73,7 +75,10 @@ func assistantHash(s string) string {
 }
 
 func (h *AssistantHandler) route(r *http.Request) (assistantRoute, error) {
-	ctx, caller := r.Context(), authpkg.CallerFromContext(r.Context())
+	return h.routeFor(r.Context(), authpkg.CallerFromContext(r.Context()), r.URL.Query().Get("team"))
+}
+
+func (h *AssistantHandler) routeFor(ctx context.Context, caller *authpkg.CallerIdentity, teamName string) (assistantRoute, error) {
 	var out assistantRoute
 	if caller == nil || h.deps.OSS == nil {
 		return out, fmt.Errorf("assistant unavailable")
@@ -83,7 +88,7 @@ func (h *AssistantHandler) route(r *http.Request) (assistantRoute, error) {
 	if h.deps.APIReader != nil {
 		reader = h.deps.APIReader
 	}
-	if teamName := r.URL.Query().Get("team"); teamName != "" {
+	if teamName != "" {
 		if caller.Role != authpkg.RoleTeamLeader && caller.Role != authpkg.RoleAdmin && caller.Role != authpkg.RoleHuman {
 			return out, fmt.Errorf("current Leader required")
 		}
@@ -158,8 +163,10 @@ func (h *AssistantHandler) Context(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, 403, err.Error())
 		return
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	if r.Method == http.MethodPut {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+	}
 	state := assistantContext{Enabled: true, EverySeconds: 86400}
 	err = h.read(r.Context(), path.Join(route.prefix, "context.json"), &state)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -203,7 +210,56 @@ func (h *AssistantHandler) Context(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	httputil.WriteJSON(w, 200, map[string]any{"owner": route.owner, "roomId": route.room, "recipient": route.user, "assistant": route.label, "context": state})
+	view := map[string]any{"owner": route.owner, "roomId": route.room, "recipient": route.user, "assistant": route.label, "context": state}
+	if r.Method == http.MethodGet && h.deps.Provisioner != nil && h.deps.MatrixConfig.ServerURL != "" {
+		token, err := h.deps.Provisioner.AgentMatrixToken(r.Context(), route.kind, route.name)
+		if err != nil {
+			httputil.WriteError(w, 503, "assistant conversation unavailable")
+			return
+		}
+		request, err := http.NewRequestWithContext(r.Context(), "GET", strings.TrimRight(h.deps.MatrixConfig.ServerURL, "/")+"/_matrix/client/v3/rooms/"+url.PathEscape(route.room)+"/messages?dir=b&limit=12", nil)
+		if err != nil {
+			httputil.WriteError(w, 503, "assistant conversation unavailable")
+			return
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		response, err := (&http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(request)
+		if err != nil {
+			httputil.WriteError(w, 503, "assistant conversation unavailable")
+			return
+		}
+		defer response.Body.Close()
+		var history struct {
+			Chunk []struct {
+				Type    string         `json:"type"`
+				Sender  string         `json:"sender"`
+				Content map[string]any `json:"content"`
+			} `json:"chunk"`
+		}
+		if response.StatusCode != 200 || json.NewDecoder(http.MaxBytesReader(w, response.Body, 256<<10)).Decode(&history) != nil {
+			httputil.WriteError(w, 503, "assistant conversation unavailable")
+			return
+		}
+		messages := []map[string]string{}
+		for i := len(history.Chunk) - 1; i >= 0; i-- {
+			event := history.Chunk[i]
+			body, _ := event.Content["body"].(string)
+			if event.Type == "m.room.message" && body != "" && event.Content["org.agentteams.coordination"] == nil {
+				text := []rune(body)
+				if len(text) > 2000 {
+					text = text[:2000]
+				}
+				messages = append(messages, map[string]string{"sender": event.Sender, "text": string(text)})
+			}
+		}
+		current, err := h.route(r)
+		if err != nil || current.owner != route.owner || current.user != route.user || current.room != route.room {
+			httputil.WriteError(w, 409, "assistant role changed while reading conversation")
+			return
+		}
+		view["recentMessages"] = messages
+	}
+	httputil.WriteJSON(w, 200, view)
 }
 
 func (h *AssistantHandler) Send(w http.ResponseWriter, r *http.Request) {

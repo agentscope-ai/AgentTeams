@@ -18,6 +18,9 @@ func assistantCmd() *cobra.Command {
 	cmd.AddCommand(&cobra.Command{Use: "context", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return projectWrite("GET", endpoint("context"), nil)
 	}})
+	cmd.AddCommand(&cobra.Command{Use: "receipt <request-id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return projectWrite("GET", endpoint("messages/"+url.PathEscape(args[0])), nil)
+	}})
 	for _, action := range []string{"send", "remember"} {
 		var file string
 		sub := &cobra.Command{Use: action, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {

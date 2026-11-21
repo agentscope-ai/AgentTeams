@@ -103,6 +103,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		mux.Handle("POST /api/v1/task-rooms/{roomId}/"+action, mw.Authenticate(archives.Mutate(action)))
 	}
 	s.coordination = NewCoordinationHandler(deps)
+	s.coordination.assistant = assistant
 	mux.Handle("POST /api/v1/coordination/events", mw.Authenticate(http.HandlerFunc(s.coordination.PostEvent)))
 	mux.Handle("POST /api/v1/teams/{name}/task-rooms/{roomId}/join-humans", mw.Authenticate(http.HandlerFunc(s.coordination.JoinTaskRoomHumans)))
 	mux.Handle("GET /api/v1/coordination/events/{id}", mw.Authenticate(http.HandlerFunc(s.coordination.GetEvent)))

@@ -20,6 +20,27 @@ def bridge(monkeypatch):
     return module
 
 
+def test_source_references_reuse_the_public_canonical_identity(bridge):
+    meta = {'room_id': '!source:test', 'event_id': '$request', 'sender_id': '@human:test'}
+    assert bridge.invoke({'operation': 'sources', 'meta': meta}) == bridge.receipts.creation_sources(meta)
+    with pytest.raises(ValueError):
+        bridge.invoke({'operation': 'sources', 'meta': {'event_id': '$unbound'}})
+
+
+def test_phase_admission_reuses_the_public_lifecycle_without_model(bridge):
+    calls = []
+    async def notify(*args):
+        calls.append(args)
+        return {'active': True, 'pending_task_ids': ['main']}
+    payload = {'operation': 'admit_event', 'eventId': 'a' * 32, 'nativeEventId': 'matrix:$native'}
+    assert bridge.invoke(payload, notify=notify)['pending_task_ids'] == ['main']
+    assert calls == [('a' * 32, 'matrix:$native', 'begin')]
+    for change in [{'eventId': '../foreign'}, {'nativeEventId': ''}, {'action': 'complete'}]:
+        with pytest.raises(ValueError):
+            bridge.invoke({**payload, **change}, notify=notify)
+    assert len(calls) == 1
+
+
 def test_handoff_uses_only_admitted_ids_without_another_task_call(bridge):
     def unexpected(_):
         pytest.fail('handoff must not call the Task CLI')

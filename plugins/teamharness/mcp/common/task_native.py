@@ -6,17 +6,20 @@ persist refreshed Human inputs and delivery acknowledgements in their own SDK.
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 from pathlib import Path
+import re
 import sys
 import urllib.request
 
 if __package__:
-    from . import task_cli, task_context, task_receipt as receipts
+    from . import phase_recovery, task_cli, task_context, task_receipt as receipts
 else:
     import task_cli
     import task_context
     import task_receipt as receipts
+    import phase_recovery
 
 
 def controller_json(route):
@@ -37,12 +40,23 @@ def native_role(value):
     return role
 
 
-def invoke(payload, *, call=None, get_json=None):
+def invoke(payload, *, call=None, get_json=None, notify=None):
     """Execute one bound operation without process-global context mutation."""
     if not isinstance(payload, dict):
         raise ValueError("native bridge request must be an object")
     call = call or task_cli.run
     operation = payload.get("operation")
+    if operation == "admit_event":
+        event, native, action = payload.get("eventId"), payload.get("nativeEventId"), payload.get("action", "begin")
+        if (not isinstance(event, str) or not re.fullmatch(r"[0-9a-f]{32}", event)
+                or not isinstance(native, str) or not native or action not in {"begin", "retry"}):
+            raise ValueError("verified notification and native delivery identity required")
+        return asyncio.run((notify or phase_recovery.notify)(event, native, action))
+    if operation == "sources":
+        meta = payload.get("meta")
+        if not isinstance(meta, dict):
+            raise ValueError("trusted native source metadata required")
+        return receipts.creation_sources(meta)
     if operation == "schema":
         return task_cli.schema(native_role(payload.get("role")))
     if operation == "prepare_event":

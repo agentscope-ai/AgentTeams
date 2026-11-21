@@ -61,6 +61,13 @@ func TestAssistantUsesOneTeamsProtocolForEveryHarness(t *testing.T) {
 			if err != nil || !retry.Reused || first.EventID != retry.EventID {
 				t.Fatal("duplicate Teams wake", retry, err)
 			}
+			operatorRequest := withCaller(httptest.NewRequest("GET", "/api/v1/coordination/events/"+first.EventID, nil), &authpkg.CallerIdentity{Role: authpkg.RoleAdmin})
+			operatorRequest.SetPathValue("id", first.EventID)
+			operatorResponse := httptest.NewRecorder()
+			h.GetEvent(operatorResponse, operatorRequest)
+			if operatorResponse.Code != 200 {
+				t.Fatal("operator cannot inspect its scheduled delivery", operatorResponse.Code)
+			}
 			var delivery coordinationDelivery
 			b, err := h.deps.OSS.GetObject(t.Context(), coordinationPending+first.EventID+".json")
 			if err != nil || json.Unmarshal(b, &delivery) != nil {

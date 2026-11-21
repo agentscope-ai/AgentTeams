@@ -249,7 +249,7 @@ func (h *CoordinationHandler) GetEvent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 503, "invalid coordination receipt")
 			return
 		}
-		if d.Event.Kind == "assistant_digest" {
+		if d.Event.Kind == "assistant_digest" && caller.Role != authpkg.RoleAdmin {
 			if _, err := h.resolveAssistant(r.Context(), d.Event, caller); err != nil {
 				writeError(w, 404, "assistant execution no longer available")
 				return

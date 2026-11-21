@@ -144,6 +144,11 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         return None
 
     receipts = _receipt_module()
+    if _ctx is not None:
+        from qwenpaw_message_execution import canonical_registration
+        async def registration(agent, call):
+            return await canonical_registration(agent, call, ASSET_DIR / 'mcp/server.py')
+        _ctx.extras['agentteams_task_registration'] = registration
 
     def source_for(input_id, related_inputs=None):
         sources = _creation_sources.get()

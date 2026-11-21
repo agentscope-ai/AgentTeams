@@ -1084,7 +1084,7 @@ def test_qwenpaw_native_tool_hook_holds_unknown_effects(native_channel, outcome)
     matrix = SimpleNamespace(message_begin_tools=begin, message_finish_tools=finish)
     messages = SimpleNamespace(matrix=matrix, turns={"key": turn})
     channel = SimpleNamespace(_task_execution=SimpleNamespace(messages=messages))
-    ctx = SimpleNamespace(request=SimpleNamespace(channel_meta={"message_execution": identity}),
+    ctx = SimpleNamespace(extras={}, request=SimpleNamespace(channel_meta={"message_execution": identity}),
         workspace=SimpleNamespace(channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel))))
     async def invoke(_call):
         assert _call is call

@@ -159,15 +159,56 @@ class MessageExecution:
                                     Recovery.digest(native), int(time.time()) + 86400)
 
 
-async def guarded_tool(matrix, turn, call, next_handler, kwargs):
+async def canonical_registration(agent, call, server_path):
+    """Bind delegation to the registered native MCP session and builtin file."""
+    from pathlib import Path
+    import sys
+    from agentscope.mcp import MCPClient
+    from agentscope.mcp._config import StdioMCPConfig
+    from agentscope.tool import MCPTool
+
+    toolkit = getattr(agent, 'toolkit', None)
+    if toolkit is None:
+        return None
+    tool = await toolkit.get_tool(call.name)
+    if type(tool) is not MCPTool or getattr(tool._tool, 'name', None) != 'task':
+        return None
+    for group in toolkit.tool_groups:
+        for client in group.mcps:
+            if not isinstance(client, MCPClient) or not client.is_stateful:
+                continue
+            config = client.mcp_config
+            args = getattr(config, 'args', None)
+            if (getattr(config, 'command', None) not in {'python', 'python3', sys.executable,
+                    '/opt/venv/qwenpaw/bin/python', '/opt/venv/qwenpaw/bin/python3'}
+                    or not isinstance(config, StdioMCPConfig) or not isinstance(args, list)
+                    or len(args) != 1 or Path(args[0]).resolve() != Path(server_path).resolve()
+                    or client._session is None or tool._session is not client._session):
+                continue
+            return {'origin': 'agentteams.common.task_native',
+                    'entrypoint': '/opt/agentteams/plugins/teamharness/mcp/common/task_native.py'}
+    return None
+
+
+async def guarded_tool(owner, turn, call, next_handler, kwargs, *, registration=None):
     """Only the final successful AgentScope ToolResponse proves completion."""
     from agentscope.tool import ToolResponse
+    from task_operation import tool_policy
 
     identity = turn["identity"]
     async with turn["lock"]:
+        if tool_policy(registration)['mode'] == 'delegate':
+            # The public Task bridge owns its transaction and unknown fence.
+            # A generic started operation would block its own submit call.
+            async for item in next_handler(**kwargs):
+                yield item
+            return
         call_id = call.id
         arguments = json.loads(call.input) if isinstance(call.input, str) else call.input
-        operation = await asyncio.to_thread(matrix.message_begin_tools, identity, [
+        message = 'event_key' in identity
+        begin = owner.message_begin_tools if message else owner.begin_tools
+        finish = owner.message_finish_tools if message else owner.finish_tools
+        operation = await asyncio.to_thread(begin, identity, [
             {"id": call_id, "name": call.name, "arguments": arguments}])
         final = None
         async for item in next_handler(**kwargs):
@@ -181,7 +222,8 @@ async def guarded_tool(matrix, turn, call, next_handler, kwargs):
                 yield item
         if final is None:
             raise RecoveryConflict("Native tool closed without a confirmed result")
-        saved = await asyncio.to_thread(matrix.message_finish_tools, identity, operation, [
+        saved = await asyncio.to_thread(finish, identity, operation, [
             {"id": call_id, "content": final.model_dump(mode="json")["content"]}])
-        turn["checkpoint_digest"] = saved["checkpoint_digest"]
+        turn["checkpoint_digest"] = (saved["checkpoint_digest"] if message else
+                                      Recovery.digest(saved['execution'].get('checkpoint')))
         yield final

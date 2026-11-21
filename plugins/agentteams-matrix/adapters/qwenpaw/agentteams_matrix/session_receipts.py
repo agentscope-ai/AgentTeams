@@ -144,12 +144,40 @@ class SessionReceiptMiddleware(MiddlewareBase):
 
     async def on_acting(self, agent, input_kwargs, next_handler):
         managed = await self._message_turn()
+        if not managed:
+            identity = (getattr(self.ctx.request, 'channel_meta', None) or {}).get('task_execution')
+            if identity:
+                channel = await self.ctx.workspace.channel_manager.get_channel('agentteams_matrix')
+                execution = channel._task_execution
+                await asyncio.to_thread(execution.verify, identity)
+                turn = self.ctx.extras.setdefault('agentteams_task_tool_turn',
+                    {'identity': identity, 'lock': asyncio.Lock()})
+                managed = execution.recovery, turn
         if managed:
             from qwenpaw_message_execution import guarded_tool
-            stream = guarded_tool(*managed, input_kwargs["tool_call"], next_handler, input_kwargs)
+            binding = self.ctx.extras.get('agentteams_task_registration')
+            registration = await binding(agent, input_kwargs['tool_call']) if binding else None
+            stream = guarded_tool(*managed, input_kwargs["tool_call"], next_handler, input_kwargs,
+                                  registration=registration)
         else:
             stream = next_handler(**input_kwargs)
         async for item in stream:
+            yield item
+
+    async def on_model_call(self, agent, input_kwargs, next_handler):
+        from task_operation import admit
+        managed = await self._message_turn()
+        if managed:
+            matrix, turn = managed
+            snapshot = await asyncio.to_thread(matrix.message_current, turn['identity'])
+            admit(snapshot['execution'].get('checkpoint'))
+        else:
+            identity = (getattr(self.ctx.request, 'channel_meta', None) or {}).get('task_execution')
+            if identity:
+                channel = await self.ctx.workspace.channel_manager.get_channel('agentteams_matrix')
+                task = await asyncio.to_thread(channel._task_execution.recovery.tools_current, identity)
+                admit(task['execution'].get('checkpoint'))
+        async for item in next_handler(**input_kwargs):
             yield item
 
     async def on_reply(self, agent, input_kwargs, next_handler):

@@ -1,6 +1,6 @@
 # Direct conversation execution controls
 
-Refs #1620.
+Refs #1620 and #1685.
 
 ## Scope and behavior
 
@@ -11,10 +11,15 @@ delegated Worker tasks are outside this change.
 
 - **Stop** cancels the captured active execution and waits for the native
   stream to close. It preserves conversation history and completed actions.
-- **Supplement and continue** performs the same cancellation, then enqueues
-  the supplementary input in the existing conversation. Original and
-  interrupted supplementary inputs are carried forward, including when
-  interruption happens before the first native context checkpoint.
+- **Supplement and continue** uses native steering when the Harness exposes
+  it. The current execution and its tools remain active; the native runtime
+  delivers the supplementary input at its supported boundary. This does not
+  emit `stopping` or `stopped`. Stop remains a separate cancellation action.
+- QwenPaw retains cancellation followed by continuation because its pinned
+  integration has no native mid-turn injection path. Original and interrupted
+  supplementary inputs are carried forward, including before the first
+  native context checkpoint. Text/media support follows each native API;
+  Codex image supplements and Hermes media supplements retain this fallback.
 - A confirmed stop marks the corresponding Agent message **已停止** while
   preserving its partial content. If no response exists, the acknowledgement
   appears as its own Agent message. A stop request alone never marks a message.
@@ -25,12 +30,12 @@ delegated Worker tasks are outside this change.
 
 | Harness | Cancellation and continuation | Focused validation |
 | --- | --- | --- |
-| OpenClaw | Public reply `abortSignal`; wait for dispatch/draft cleanup; reuse native conversation | Native exec cancellation for stop and steer; fresh membership rejection; 61 Matrix handler regressions |
-| QwenPaw | Captured TaskTracker producer cancellation; native stream cleanup; original and supplementary inputs retained | 12 direct-control tests with the native TaskTracker and long shell tool, including overlapping controls during cleanup |
-| Hermes | Native `hard_interrupt`, including its tool-worker thread signal; wait for processing owner; retain session | Native local shell cancellation for stop and steer; owner, membership and stale-run checks |
-| DeepSeek Harness | Keep receiving controls while DSH runs; dispose native profile and reap the owned process group; resume room session | Packaged DSH CLI, native bash, durable supplementary input and native session resume for stop and steer |
-| OpenHuman | Run-scoped cancellation around the native agent bus; finish typing/draft cleanup; reap native shell process group | Pinned v0.54.0 compile; Matrix SDK lifecycle/continuation integration and real native tool cancellation |
-| Codex | Native App Server `turn/interrupt`; await terminal receipt and process cleanup; continue the same native thread | Packaged App Server, real native exec, stop and steer, original/supplementary input and thread persistence |
+| OpenClaw | Native `/steer` prepared-reply queue for supplementary text; public reply `abortSignal` for Stop | Consecutive supplements leave the native exec alive; Stop waits for process cleanup; fresh membership rejection |
+| QwenPaw | Captured TaskTracker producer cancellation; native stream cleanup; original and supplementary inputs retained | 24 direct-control tests with the native TaskTracker and long shell tool, including overlapping controls during cleanup |
+| Hermes | Native `/steer` command and steering buffer for text; `hard_interrupt` for Stop | Ordered native steering delivery, retained source/ID, native shell cancellation and recovery regressions |
+| DeepSeek Harness | Private per-process socket delivers input to native `agent.steer`; flush the session before acknowledging acceptance; dispose/reap only for Stop | Packaged DSH CLI with real bash preservation during steer, next-inference input, deduplication and same-session Stop continuation |
+| OpenHuman | Upgrade to v0.57.18 and feed its native `RunQueue::Steer` at the engine boundary; retain run-scoped Stop | Matrix source receipts, native queue delivery, completion-boundary handoff and process-group cleanup |
+| Codex | App Server `turn/steer` with `expectedTurnId`; `turn/interrupt` for Stop | Real App Server and shell preservation during steer; ordered controls, completion-race retention and native Stop |
 
 The local model endpoints in the DeepSeek and Codex tests are deterministic
 fixtures. Native tools, subprocess cancellation and session persistence are
@@ -43,6 +48,11 @@ The Agent sends `m.room.message` notices with `com.agentteams.execution`:
 ```json
 {"run_id":"$original-input-event","status":"running","capabilities":["stop","steer"]}
 ```
+
+The notice also includes `steering_mode`: `native` or `restart`. This is
+advisory runtime metadata; existing clients can keep using the same control
+action. `native` describes supported text steering, not universal attachment
+injection or immediate interruption of an in-flight tool.
 
 Statuses are `running`, `stopping`, `stopped`, `completed`, `failed`, and
 `unavailable` (the requested producer no longer exists).
@@ -60,7 +70,7 @@ Dashboard messages carry `com.agentteams.control` alongside the normal body:
 
 The sender comes from the authenticated Matrix event, never this metadata.
 Controls bypass the normal execution queue. The channel checks the existing
-ACL and fetches current joined membership before cancelling. The Agent,
+ACL and fetches current joined membership before steering or cancelling. The Agent,
 room, requester and execution must match. A stale Stop cannot cancel a newer
 run; stale supplementary text remains an ordinary queued input.
 Unmarked messages retain their existing queue/command behavior, including

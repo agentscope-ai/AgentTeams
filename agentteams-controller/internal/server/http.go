@@ -91,6 +91,11 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	}
 
 	mw := deps.AuthMw
+	assistant := NewAssistantHandler(deps)
+	mux.Handle("GET /api/v1/assistant/context", mw.Authenticate(http.HandlerFunc(assistant.Context)))
+	mux.Handle("PUT /api/v1/assistant/context", mw.Authenticate(http.HandlerFunc(assistant.Context)))
+	mux.Handle("POST /api/v1/assistant/messages", mw.Authenticate(http.HandlerFunc(assistant.Send)))
+	mux.Handle("GET /api/v1/assistant/messages/{id}", mw.Authenticate(http.HandlerFunc(assistant.Receipt)))
 	archives := NewTaskRoomArchiveHandler(deps)
 	mux.Handle("GET /api/v1/task-rooms/archived", mw.Authenticate(http.HandlerFunc(archives.List)))
 	mux.Handle("GET /api/v1/task-rooms/{roomId}/archive", mw.Authenticate(http.HandlerFunc(archives.Status)))

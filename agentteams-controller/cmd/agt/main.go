@@ -42,6 +42,7 @@ Environment variables:
 	rootCmd.AddCommand(logsCmd())
 	rootCmd.AddCommand(workerCmd())
 	rootCmd.AddCommand(messageCmd())
+	rootCmd.AddCommand(assistantCmd())
 	rootCmd.AddCommand(statusCmd())
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(llmPreflightCmd())

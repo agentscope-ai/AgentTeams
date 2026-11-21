@@ -1015,7 +1015,7 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 	workerEnv["AGENTTEAMS_AGENT_ROLE"] = m.Role.String()
 	workerEnv["AGENTTEAMS_TEAM_NAME"] = m.TeamName
 	runtime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
-	if d.ObservabilityReader != nil && (runtime == "qwenpaw" || runtime == "hermes" || runtime == "openclaw") {
+	if d.ObservabilityReader != nil && observability.SupportsRuntime(runtime) {
 		config, _, err := observability.Read(ctx, d.ObservabilityReader, m.Namespace)
 		if err != nil {
 			return nil, fmt.Errorf("read Worker observability configuration: %w", err)

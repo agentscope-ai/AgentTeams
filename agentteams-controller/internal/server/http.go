@@ -91,6 +91,11 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	}
 
 	mw := deps.AuthMw
+	assistant := NewAssistantHandler(deps)
+	mux.Handle("GET /api/v1/assistant/context", mw.Authenticate(http.HandlerFunc(assistant.Context)))
+	mux.Handle("PUT /api/v1/assistant/context", mw.Authenticate(http.HandlerFunc(assistant.Context)))
+	mux.Handle("POST /api/v1/assistant/messages", mw.Authenticate(http.HandlerFunc(assistant.Send)))
+	mux.Handle("GET /api/v1/assistant/messages/{id}", mw.Authenticate(http.HandlerFunc(assistant.Receipt)))
 	archives := NewTaskRoomArchiveHandler(deps)
 	mux.Handle("GET /api/v1/task-rooms/archived", mw.Authenticate(http.HandlerFunc(archives.List)))
 	mux.Handle("GET /api/v1/task-rooms/{roomId}/archive", mw.Authenticate(http.HandlerFunc(archives.Status)))
@@ -98,6 +103,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		mux.Handle("POST /api/v1/task-rooms/{roomId}/"+action, mw.Authenticate(archives.Mutate(action)))
 	}
 	s.coordination = NewCoordinationHandler(deps)
+	s.coordination.assistant = assistant
 	mux.Handle("POST /api/v1/coordination/events", mw.Authenticate(http.HandlerFunc(s.coordination.PostEvent)))
 	mux.Handle("POST /api/v1/teams/{name}/task-rooms/{roomId}/join-humans", mw.Authenticate(http.HandlerFunc(s.coordination.JoinTaskRoomHumans)))
 	mux.Handle("GET /api/v1/coordination/events/{id}", mw.Authenticate(http.HandlerFunc(s.coordination.GetEvent)))

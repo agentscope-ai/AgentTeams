@@ -2935,13 +2935,21 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.progress_only") is True:
             return
         content = (getattr(event, "source", {}) or {}).get("content", {})
-        if self._task_execution and "org.agentteams.coordination" in content:
+        control = content.get("org.agentteams.coordination")
+        control_meta = control.get("channel_meta", {}) if isinstance(control, dict) else {}
+        assignment = control_meta.get("teamharness_coordination", {}) if isinstance(control_meta, dict) else {}
+        assistant_control = isinstance(assignment, dict) and assignment.get("kind") == "assistant_digest"
+        verified_control = None
+        if (self._task_execution or assistant_control) and "org.agentteams.coordination" in content:
             from task_coordination import notification, IgnoredNotification
             try:
                 canonical = await asyncio.to_thread(notification, content, room.room_id, event.sender, self._user_id, event_id=event.event_id)
             except IgnoredNotification:
                 return
-            if canonical["meta"]["teamharness_coordination"]["kind"] == "task_assigned":
+            if assistant_control:
+                verified_control = {"session_id": canonical["session_id"], "channel_meta": canonical["meta"],
+                    "input": [{"content": [{"text": canonical["text"]}]}]}
+            if self._task_execution and canonical["meta"]["teamharness_coordination"]["kind"] == "task_assigned":
                 if prepare:
                     return await prepare(room.room_id, event, "task_notification",
                         task_id=canonical["meta"]["teamharness_coordination"]["task_id"])
@@ -2950,7 +2958,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         task_id=canonical["meta"]["teamharness_coordination"]["task_id"])
                 await self._task_execution.recover(canonical["meta"]["teamharness_coordination"]["task_id"], event, source_room=room.room_id, source_text=canonical["text"])
                 return
-        control = (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.coordination")
+        if assistant_control:
+            control = verified_control
         control_meta = control.get("channel_meta", {}) if isinstance(control, dict) else {}
         if control is not None:
             if not isinstance(control_meta, dict):
@@ -2965,6 +2974,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
             if not isinstance(control_text, str):
                 return
             expected_session = {
+                "assistant_digest": "coordination-assistant:" + str(assignment.get("id", "")),
                 "handoff": "coordination-handoff:" + str(assignment.get("id", "")),
                 "task_assigned": "coordination-task:" + str(assignment.get("task_id", "")) + ":" + str(assignment.get("delivery_id", "")),
                 "task_submitted": "coordination-review:" + str(assignment.get("task_id", "")) + ":" + str(assignment.get("submission_id", "")),
@@ -2984,7 +2994,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         teamharness_self_trigger = None
         if sender_id == self._user_id:
             teamharness_self_trigger = self._teamharness_self_trigger(room_id, event)
-            if control is not None and assignment.get("kind") in {"task_assigned", "task_submitted", "project_ready", "main_task_ready"}:
+            if control is not None and assignment.get("kind") in {"assistant_digest", "task_assigned", "task_submitted", "project_ready", "main_task_ready"}:
                 # The runtime hook verifies self-addressed execution/closure
                 # against the Controller receipt and current task before inference.
                 teamharness_self_trigger = {"type": "project_ready", "kind": "coordination"}

@@ -1,0 +1,11 @@
+ARG CONTROLLER_BASE
+FROM higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/golang:1.26-alpine AS build
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && apk add --no-cache gcc musl-dev
+ENV GOPROXY=https://goproxy.cn,direct
+WORKDIR /build
+COPY agentteams-controller/ ./
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=1 go build -ldflags '-extldflags "-static"' -o /out/agentteams-controller ./cmd/controller
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -o /out/agt ./cmd/agt
+FROM ${CONTROLLER_BASE}
+COPY --from=build /out/agentteams-controller /usr/local/bin/agentteams-controller
+COPY --from=build /out/agt /usr/local/bin/agt

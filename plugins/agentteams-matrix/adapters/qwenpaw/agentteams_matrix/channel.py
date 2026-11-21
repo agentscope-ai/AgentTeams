@@ -2935,15 +2935,20 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.progress_only") is True:
             return
         content = (getattr(event, "source", {}) or {}).get("content", {})
+        control = content.get("org.agentteams.coordination")
+        control_meta = control.get("channel_meta", {}) if isinstance(control, dict) else {}
+        assignment = control_meta.get("teamharness_coordination", {}) if isinstance(control_meta, dict) else {}
+        assistant_control = isinstance(assignment, dict) and assignment.get("kind") == "assistant_digest"
         verified_control = None
-        if "org.agentteams.coordination" in content:
+        if (self._task_execution or assistant_control) and "org.agentteams.coordination" in content:
             from task_coordination import notification, IgnoredNotification
             try:
                 canonical = await asyncio.to_thread(notification, content, room.room_id, event.sender, self._user_id, event_id=event.event_id)
             except IgnoredNotification:
                 return
-            verified_control = {"session_id": canonical["session_id"], "channel_meta": canonical["meta"],
-                "input": [{"content": [{"text": canonical["text"]}]}]}
+            if assistant_control:
+                verified_control = {"session_id": canonical["session_id"], "channel_meta": canonical["meta"],
+                    "input": [{"content": [{"text": canonical["text"]}]}]}
             if self._task_execution and canonical["meta"]["teamharness_coordination"]["kind"] == "task_assigned":
                 if prepare:
                     return await prepare(room.room_id, event, "task_notification",
@@ -2953,7 +2958,8 @@ class AgentTeamsMatrixChannel(BaseChannel):
                         task_id=canonical["meta"]["teamharness_coordination"]["task_id"])
                 await self._task_execution.recover(canonical["meta"]["teamharness_coordination"]["task_id"], event, source_room=room.room_id, source_text=canonical["text"])
                 return
-        control = verified_control
+        if assistant_control:
+            control = verified_control
         control_meta = control.get("channel_meta", {}) if isinstance(control, dict) else {}
         if control is not None:
             if not isinstance(control_meta, dict):

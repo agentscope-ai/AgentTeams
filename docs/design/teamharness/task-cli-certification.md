@@ -255,6 +255,17 @@ python3 tests/task-protocol/run_oracle.py simple-csv /absolute/downloaded-projec
 工程假设，必须用实测替换，不能作为预先填写的结果。认证进度逐组合报告，禁止把
 一种 Harness 的通过推广成六种或全部异构组合通过。
 
+保留运行记录后，可用以下只读命令按运行时源码、Harness 组合和场景汇总：
+
+```sh
+python3 tests/task-protocol/summarize_runs.py /absolute/path/to/evidence/runs --source FULL_RUNTIME_COMMIT
+```
+
+汇总同时列出已发送、已验收、失败和待验收样本；成功率分母明确使用已验收样本数，
+未完成项单列。P50/P95 用完整质量通过样本的真实交付耗时按 nearest rank 计算；
+原始超时和迟到质量通过可同时出现。Trace 不完整或字段缺失时保留 unknown，不补零；
+不自动合并不同源码或组合，不把这个统计结果声明为 Harness 认证。
+
 ## 五、产物与发布边界
 
 提交到分支：协议、CLI/API 实现、公共契约测试、确定性 fixtures/oracle 与统计脚本。

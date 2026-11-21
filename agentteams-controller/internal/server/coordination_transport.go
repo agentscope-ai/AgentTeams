@@ -191,6 +191,16 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 		d.Error = "canonical state unavailable"
 		return
 	}
+	if d.NativeStart != nil {
+		recovered, err := h.recoverChangedNativeStart(ctx, d)
+		if err != nil {
+			d.Error = "native phase start unavailable"
+			return
+		}
+		if recovered {
+			return
+		}
+	}
 	if d.NativeID == "" {
 		status := coordinationString(p, "status")
 		if status == "paused" || len(coordinationMap(p, "loop")) > 0 && lenAny(coordinationMap(p, "loop")["pause_sources"]) > 0 {
@@ -262,7 +272,7 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 				return
 			}
 			// Matrix transaction IDs make an uncertain send safe to retry.
-			id, sendErr := h.sendMatrixContent(ctx, e.ActorRole, e.ActorName, e.RoomID, e.ID, coordinationMatrixNotification(e, p), false)
+			id, sendErr := h.sendMatrixContent(ctx, e.ActorRole, e.ActorName, e.RoomID, d.matrixTransactionID(), coordinationMatrixNotification(e, p), false)
 			if sendErr != nil {
 				d.Error = "Matrix coordination notification unavailable"
 				return
@@ -315,7 +325,17 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 				}
 			}
 		case "handoff":
-			// The authenticated Matrix notification is the handoff receipt.
+			if e.Protocol == "task/v1" {
+				pending, err := h.handoffNeedsPlan(ctx, e)
+				if err != nil {
+					d.Error = "handoff task state unavailable"
+					return
+				}
+				if pending {
+					return
+				}
+			}
+			// Delivery alone is not a durable Task protocol plan.
 			d.Status, d.Error = "completed", ""
 		case "task_submitted":
 			if coordinationString(t, "status") == "submitted" {

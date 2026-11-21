@@ -2938,7 +2938,7 @@ class AgentTeamsMatrixChannel(BaseChannel):
         if self._task_execution and "org.agentteams.coordination" in content:
             from task_coordination import notification, IgnoredNotification
             try:
-                canonical = await asyncio.to_thread(notification, content, room.room_id, event.sender, self._user_id)
+                canonical = await asyncio.to_thread(notification, content, room.room_id, event.sender, self._user_id, event_id=event.event_id)
             except IgnoredNotification:
                 return
             if canonical["meta"]["teamharness_coordination"]["kind"] == "task_assigned":

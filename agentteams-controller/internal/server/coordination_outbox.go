@@ -13,29 +13,33 @@ import (
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 )
 
 const coordinationPending = "control/coordination/pending/"
 const coordinationDone = "control/coordination/completed/"
 
 type coordinationDelivery struct {
-	DeliveredAt    time.Time         `json:"delivered_at,omitempty"`
-	ReportSnapshot string            `json:"report_snapshot,omitempty"`
-	ArtifactEvents map[string]string `json:"artifact_events,omitempty"`
-	Transport      string            `json:"transport,omitempty"`
-	Approvals      map[string]string `json:"approvals,omitempty"`
-	Event          coordinationEvent `json:"event"`
-	Status         string            `json:"status"`
-	NativeID       string            `json:"native_id,omitempty"`
-	Created        time.Time         `json:"created"`
-	NextAttempt    time.Time         `json:"next_attempt"`
-	LeaseUntil     time.Time         `json:"lease_until"`
-	Attempts       int               `json:"attempts"`
-	Error          string            `json:"error,omitempty"`
-	MatrixEventID  string            `json:"matrix_event_id,omitempty"`
-	AckEventID     string            `json:"ack_event_id,omitempty"`
-	UserEventID    string            `json:"user_event_id,omitempty"`
-	FailureEventID string            `json:"failure_event_id,omitempty"`
+	DeliveredAt       time.Time            `json:"delivered_at,omitempty"`
+	ReportSnapshot    string               `json:"report_snapshot,omitempty"`
+	ArtifactEvents    map[string]string    `json:"artifact_events,omitempty"`
+	Transport         string               `json:"transport,omitempty"`
+	Approvals         map[string]string    `json:"approvals,omitempty"`
+	Event             coordinationEvent    `json:"event"`
+	Status            string               `json:"status"`
+	NativeID          string               `json:"native_id,omitempty"`
+	PreviousNativeIDs []string             `json:"previous_native_ids,omitempty"`
+	Replays           int                  `json:"replays,omitempty"`
+	NativeStart       *service.WorkerStart `json:"native_start,omitempty"`
+	Created           time.Time            `json:"created"`
+	NextAttempt       time.Time            `json:"next_attempt"`
+	LeaseUntil        time.Time            `json:"lease_until"`
+	Attempts          int                  `json:"attempts"`
+	Error             string               `json:"error,omitempty"`
+	MatrixEventID     string               `json:"matrix_event_id,omitempty"`
+	AckEventID        string               `json:"ack_event_id,omitempty"`
+	UserEventID       string               `json:"user_event_id,omitempty"`
+	FailureEventID    string               `json:"failure_event_id,omitempty"`
 }
 
 // PostEvent acknowledges durable queue admission, not delivery or acceptance.
@@ -253,7 +257,7 @@ func (h *CoordinationHandler) GetEvent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "coordination receipt not found")
 			return
 		}
-		httputil.WriteJSON(w, 200, map[string]any{"protocol": d.Event.Protocol, "event_id": id, "kind": d.Event.Kind, "project_id": d.Event.ProjectID, "main_task_id": d.Event.MainTaskID, "task_id": d.Event.TaskID, "status": d.Status, "created": d.Created, "error": d.Error, "native_id": d.NativeID, "user_event_id": d.UserEventID, "artifact_events": d.ArtifactEvents, "artifacts": d.Event.Artifacts, "requester_room_id": coordinationString(d.Event.RequesterRoute, "target_session"), "failure_event_id": d.FailureEventID, "actor": d.Event.Actor, "recipient": d.Event.Recipient, "delivery_id": d.Event.DeliveryID, "submission_id": d.Event.SubmissionID, "room_id": d.Event.RoomID, "transport": d.Transport, "control": coordinationPayload(d.Event)})
+		httputil.WriteJSON(w, 200, map[string]any{"protocol": d.Event.Protocol, "event_id": id, "kind": d.Event.Kind, "project_id": d.Event.ProjectID, "main_task_id": d.Event.MainTaskID, "task_id": d.Event.TaskID, "status": d.Status, "created": d.Created, "error": d.Error, "native_id": d.NativeID, "previous_native_ids": d.PreviousNativeIDs, "replays": d.Replays, "user_event_id": d.UserEventID, "artifact_events": d.ArtifactEvents, "artifacts": d.Event.Artifacts, "requester_room_id": coordinationString(d.Event.RequesterRoute, "target_session"), "failure_event_id": d.FailureEventID, "actor": d.Event.Actor, "recipient": d.Event.Recipient, "delivery_id": d.Event.DeliveryID, "submission_id": d.Event.SubmissionID, "room_id": d.Event.RoomID, "transport": d.Transport, "control": coordinationPayload(d.Event)})
 		return
 	}
 	writeError(w, 404, "coordination receipt not found")

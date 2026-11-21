@@ -130,3 +130,30 @@ def test_execution_and_leader_schemas_require_task_identity(monkeypatch):
     for role in ["leader", "worker"]:
         assert set(tool.schema(role)["inputSchema"]["required"]) == {"action", "taskId"}
     assert tool.schema("manager")["inputSchema"]["required"] == ["action"]
+
+
+@pytest.mark.parametrize("message, retryable", [
+    ("Error: HTTP 503: storage unavailable\nUsage: agt task accept", True),
+    ("HTTP 429: rate limited", True),
+    ('Error: Post "http://controller/api/v1/tasks/a/accept": EOF', True),
+    ("Error: HTTP 400: input contains HTTP 503", False),
+    ("Error: HTTP 409: stale candidate", False),
+    ("unknown argument: 503", False),
+])
+def test_retryable_status_is_transport_scoped(monkeypatch, message, retryable):
+    tool = load(monkeypatch)
+    monkeypatch.setattr(tool.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=1, stderr=message, stdout=""))
+    result = tool.run({"action": "get", "taskId": "a"})
+    assert result["ok"] is False
+    assert result["retryable"] is retryable
+
+
+def test_only_process_timeout_is_retryable_without_cli_status(monkeypatch):
+    tool = load(monkeypatch)
+    for error, expected in [(tool.subprocess.TimeoutExpired("agt", 120), True),
+                            (FileNotFoundError("agt missing"), False)]:
+        def fail(*args, **kwargs):
+            raise error
+        monkeypatch.setattr(tool.subprocess, "run", fail)
+        assert tool.run({"action": "get", "taskId": "a"})["retryable"] is expected

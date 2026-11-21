@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 def available():
@@ -64,12 +64,14 @@ class NativePublicContextTest(unittest.TestCase):
                 await toolkit.add_tool(FunctionTool(forbidden, name=name, permission=decision))
             agent = Agent("Worker", "Use public Tasks", Model(), toolkit=toolkit, middlewares=[plugin._sanitizer_factory(None, None)])
             receipt = {**event, "protocol": "task/v1", "actor": "@leader:test", "recipient": "@recipient:test", "room_id": "!task:test", "control": {"channel_meta": {"teamharness_main_tasks": [{"taskId": "main"}]}}}
-            meta = {"teamharness_coordination": event, "teamharness_matrix_coordination": True, "sender_id": receipt["actor"], "agent_matrix_user_id": receipt["recipient"], "room_id": receipt["room_id"]}
+            meta = {"event_id": "$current", "teamharness_coordination": event, "teamharness_matrix_coordination": True, "sender_id": receipt["actor"], "agent_matrix_user_id": receipt["recipient"], "room_id": receipt["room_id"]}
             ctx = SimpleNamespace(request=SimpleNamespace(channel_meta=meta), agent=agent, extras={}, inject_context=lambda text, **kw: texts.append(text))
             try:
-                with patch.dict(os.environ, {"AGENTTEAMS_AGENT_ROLE": "worker" if kind == "task_assigned" else "leader"}), patch.object(plugin, "_controller_json", return_value=receipt) as backend:
+                with patch.dict(os.environ, {"AGENTTEAMS_AGENT_ROLE": "worker" if kind == "task_assigned" else "leader"}), patch.object(plugin, "_controller_json", return_value=receipt) as backend, patch.object(plugin._phase_module(), "notify", new=AsyncMock(return_value={"active": True, "pending_task_ids": ["main"]})) as lifecycle:
                     self.assertFalse(await plugin._manager_report_context(ctx))
                 self.assertEqual(backend.call_count, 1)
+                if kind == "task_assigned": lifecycle.assert_not_awaited()
+                else: lifecycle.assert_awaited_once_with("event-1", "$current", "begin")
                 self.assertEqual(calls, [] if kind == "handoff" else [("begin", "t1")] if kind == "task_assigned" else [("get", "main" if kind == "main_task_ready" else "t1")])
                 names = {tool["function"]["name"] for tool in await toolkit.get_tool_schemas()}
                 self.assertIn("mcp__teamharness__task", names)
@@ -83,7 +85,7 @@ class NativePublicContextTest(unittest.TestCase):
                 elif kind == "main_task_ready": self.assertEqual(plugin._completion_task.get(), "main")
                 else: self.assertEqual(plugin._planning_tasks.get(), frozenset({"main"}))
             finally:
-                for key, var in (("execution_task_token", plugin._execution_task), ("ack_scope_token", plugin._ack_scope), ("review_task_token", plugin._review_task), ("completion_task_token", plugin._completion_task), ("source_event_token", plugin._source_event), ("planning_tasks_token", plugin._planning_tasks)):
+                for key, var in (("execution_task_token", plugin._execution_task), ("ack_scope_token", plugin._ack_scope), ("review_task_token", plugin._review_task), ("completion_task_token", plugin._completion_task), ("source_event_token", plugin._source_event), ("planning_tasks_token", plugin._planning_tasks), ("phase_retry_token", plugin._phase_retry)):
                     if key in ctx.extras: var.reset(ctx.extras[key])
         for kind in ("handoff", "task_assigned", "task_submitted", "main_task_ready"):
             asyncio.run(run(kind))

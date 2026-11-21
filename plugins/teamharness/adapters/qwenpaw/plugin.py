@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import asyncio
 import json
+import logging
 from functools import lru_cache
 from contextvars import ContextVar
 from contextlib import nullcontext
@@ -28,6 +29,8 @@ _review_task: ContextVar[tuple[str, str] | None] = ContextVar("teamharness_revie
 _ack_scope: ContextVar[tuple | None] = ContextVar("teamharness_ack_scope", default=None)
 _delivery_ack: ContextVar[dict | None] = ContextVar("teamharness_delivery_ack", default=None)
 _approval_status_records: dict[str, dict[str, Any]] = {}
+_phase_retry: ContextVar[dict | None] = ContextVar("teamharness_phase_retry", default=None)
+_phase_jobs: set[asyncio.Task] = set()
 
 
 def _is_task_tool(name: str) -> bool:
@@ -111,6 +114,21 @@ def _receipt_module():
     return receipts
 
 
+@lru_cache(maxsize=1)
+def _phase_module():
+    spec = importlib.util.spec_from_file_location(
+        "teamharness_phase_recovery", ASSET_DIR / "mcp/common/phase_recovery.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _record_phase_error(result: Any) -> None:
+    phase = _phase_retry.get()
+    if phase is not None and isinstance(result, dict) and result.get("ok") is False and result.get("retryable") is True:
+        phase["failed"] = True
+
+
 def _sanitizer_factory(_ctx: Any, _agent_config: Any):
     try:
         from agentscope.middleware import MiddlewareBase
@@ -149,7 +167,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             from agentscope.tool import ToolResponse
             from agentscope.message import TextBlock
 
-            if not isinstance(item, ToolResponse) or item.state != "success":
+            if not isinstance(item, ToolResponse):
                 return
             # One complete CLI JSON result is required. Errors, stderr-prefixed
             # output and streaming chunks are never interpreted as receipts.
@@ -158,6 +176,9 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             try:
                 result = json.loads(text)
             except (TypeError, ValueError):
+                return
+            _record_phase_error(result)
+            if item.state != "success":
                 return
             receipt = (receipts.creation_receipt(result, creation_source) if creation_source
                        else receipts.planning_receipt(result, task_id) if action == "plan"
@@ -171,6 +192,11 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             # truncation while preserving the original result blocks.
             item.content.insert(0, TextBlock(text=receipt[1] + "\n"))
             self._task_receipt_ids = seen | {receipt[0]}
+            if not creation_source and action == "plan":
+                planned = getattr(self, "_planned_tasks", set()) | {task_id}
+                self._planned_tasks = planned
+                if _planning_tasks.get() - planned:
+                    return
             self._finished_phase_receipt = receipt[1]
 
         async def _allow_task_output_change(self, command: str, cwd: str | None) -> bool:
@@ -245,6 +271,13 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 agent.state.append_context(agent.name, message.content)
                 yield message
                 return
+            if (_phase_retry.get() or {}).get("failed"):
+                from agentscope.message import Msg
+                message = Msg(name=agent.name, role="assistant", content=[{
+                    "type": "text", "text": "Task call outcome awaits verification; the task system will resume from its saved state."}])
+                agent.state.append_context(agent.name, message.content)
+                yield message
+                return
             async for item in next_handler(**input_kwargs):
                 yield item
 
@@ -311,6 +344,12 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 return
             async for item in next_handler(**input_kwargs):
                 if task_tool:
+                    text = "".join(block.get("text", "") if isinstance(block, dict)
+                                   else getattr(block, "text", "") for block in getattr(item, "content", []))
+                    try:
+                        _record_phase_error(json.loads(text))
+                    except (TypeError, ValueError):
+                        pass
                     self._inject_task_receipt(item, "task", args, creation_source)
                 if getattr(call, "name", "") == "execute_shell_command" and (_execution_task.get() or _completion_task.get() or _planning_tasks.get() or _review_task.get() or creation_source):
                     self._inject_task_receipt(item, name, args, creation_source)
@@ -555,6 +594,8 @@ async def _prepare_task_context(ctx: Any, action: str, task_id: str) -> dict[str
                     value = json.loads(text)
                 except (ValueError, TypeError):
                     continue
+                if public:
+                    _record_phase_error(value)
                 if isinstance(value, dict) and ((public and isinstance(value.get("task"), dict)) or value.get("action") == action):
                     result = value
     if not result or (result.get("ok") is False if public else result.get("ok") is not True):
@@ -571,6 +612,8 @@ async def _prepare_public_task_event(ctx: Any, event: dict) -> None:
     if kind != "handoff":
         task_id = event.get("main_task_id") if kind == "main_task_ready" else event.get("task_id")
         result = await _prepare_task_context(ctx, "begin" if kind == "task_assigned" else "get", task_id)
+        if (_phase_retry.get() or {}).get("failed"):
+            return
         prepared = common.prepare(kind, event, result)
         for field, variable in (("execution", _execution_task), ("ack", _ack_scope), ("review", _review_task), ("completion", _completion_task)):
             if field in prepared:
@@ -641,7 +684,7 @@ async def _manager_report_context(ctx: Any) -> bool:
     api_event = meta.get("teamharness_coordination") or {}
     receipt = {}
     if meta.get("teamharness_matrix_coordination"):
-        receipt = await asyncio.to_thread(_controller_json, "coordination/events/" + urllib.parse.quote(api_event.get("id", ""), safe=""))
+        receipt = await _phase_module().until_available(_controller_json, "coordination/events/" + urllib.parse.quote(api_event.get("id", ""), safe=""))
         if (api_event.get("kind") not in {"handoff", "task_assigned", "task_submitted", "project_ready", "main_task_ready"}
                 or receipt.get("actor") != meta.get("sender_id")
                 or receipt.get("recipient") != meta.get("agent_matrix_user_id")
@@ -654,8 +697,19 @@ async def _manager_report_context(ctx: Any) -> bool:
         ctx.extras["planning_tasks_token"] = _planning_tasks.set(frozenset(
             task["taskId"] for task in saved_tasks if isinstance(task, dict) and isinstance(task.get("taskId"), str)))
     if receipt.get("protocol") == "task/v1":
+        if api_event.get("kind") in {"handoff", "task_submitted", "main_task_ready"}:
+            native_id = str(meta.get("event_id") or "")
+            if not native_id.startswith("$"):
+                raise ValueError("current Matrix event required for coordination lifecycle")
+            phase = {"id": api_event["id"], "native_id": native_id, "failed": False}
+            ctx.extras["phase_retry_token"] = _phase_retry.set(phase)
+            admission = await _phase_module().notify(phase["id"], native_id, "begin")
+            if admission.get("active") is not True:
+                return True
+            if api_event.get("kind") == "handoff":
+                _planning_tasks.set(frozenset(admission["pending_task_ids"]))
         await _prepare_public_task_event(ctx, api_event)
-        return False
+        return bool((_phase_retry.get() or {}).get("failed"))
     route = meta.get("teamharness_requester_route")
     if isinstance(route, dict) and route.get("target_session"):
         ctx.extras.setdefault("requester_route_token", _requester_route.set(route))
@@ -849,6 +903,21 @@ def _register_coordination_hook(api: Any) -> None:
         priority = 190
 
         async def run(self, ctx: Any) -> Any:
+            phase = _phase_retry.get()
+            token = ctx.extras.pop("phase_retry_token", None)
+            if token is not None:
+                _phase_retry.reset(token)
+                if phase and phase.get("failed"):
+                    job = asyncio.create_task(_phase_module().notify(phase["id"], phase["native_id"], "retry"))
+                    _phase_jobs.add(job)
+                    def finished(task):
+                        _phase_jobs.discard(task)
+                        if not task.cancelled():
+                            error = task.exception()
+                            if error is not None:
+                                logging.getLogger(__name__).warning(
+                                    "Coordination lifecycle callback ended: %s", type(error).__name__)
+                    job.add_done_callback(finished)
             token = ctx.extras.pop("planning_tasks_token", None)
             if token is not None:
                 _planning_tasks.reset(token)

@@ -164,6 +164,16 @@ def command(arguments: dict) -> tuple[list[str], dict[str, str]]:
     return argv, env
 
 
+def retryable_cli_error(message: str) -> bool:
+    """Classify the CLI transport status, never numbers inside a server message."""
+    first = message.strip().splitlines()[0] if message.strip() else ""
+    status = re.match(r"^(?:Error: )?HTTP ([0-9]{3})(?::|\s|$)", first)
+    if status:
+        code = int(status.group(1))
+        return code == 429 or 500 <= code <= 599
+    return bool(re.match(r'^(?:Error: )?(?:Get|Post|Put|Patch|Delete|Head) "https?://[^"\n]+": ', first))
+
+
 def run(arguments: dict) -> dict:
     try:
         argv, env = command(arguments)
@@ -181,10 +191,11 @@ def run(arguments: dict) -> dict:
         process = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
         if process.returncode:
             return {"ok": False, "error": "task_operation_failed", "exitCode": process.returncode,
-                    "message": process.stderr.strip()[:2048]}
+                    "message": process.stderr.strip()[:2048], "retryable": retryable_cli_error(process.stderr)}
         result = json.loads(process.stdout)
         if not isinstance(result, dict):
             raise ValueError("task CLI returned an invalid receipt")
         return result
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
-        return {"ok": False, "error": "task_operation_unavailable", "message": str(error)[:2048]}
+        return {"ok": False, "error": "task_operation_unavailable", "message": str(error)[:2048],
+                "retryable": isinstance(error, subprocess.TimeoutExpired)}

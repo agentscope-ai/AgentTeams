@@ -109,3 +109,15 @@ def test_verified_closure_uses_registered_receipt_instead_of_stale_boot_role(pac
     packet[0]["org.agentteams.coordination"]["channel_meta"]["sender_id"] = "@worker:test"
     packet[1]["actor"] = "@worker:test"
     assert receive(packet, sender="@worker:test")
+
+
+def test_native_attempt_is_fenced_by_current_receipt(packet):
+    content, receipt, _, _, fetch = packet
+    receipt["native_id"] = "matrix:$retry"
+    receipt["previous_native_ids"] = ["matrix:$old"]
+    assert protocol.notification(content, "!room:test", "@lead:test", "@worker:test", fetch=fetch, event_id="$retry")
+    with pytest.raises(protocol.IgnoredNotification):
+        protocol.notification(content, "!room:test", "@lead:test", "@worker:test", fetch=fetch, event_id="$old")
+    receipt["native_id"] = ""
+    with pytest.raises(protocol.NotificationUnavailable):
+        protocol.notification(content, "!room:test", "@lead:test", "@worker:test", fetch=fetch, event_id="$retry")

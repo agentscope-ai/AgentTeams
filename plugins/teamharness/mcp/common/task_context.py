@@ -1,8 +1,33 @@
 """Public Task preparation validation shared by native runtime adapters."""
 from pathlib import Path
+import re
 
 # These protocol phases coordinate work; only task_assigned executes it.
 COORDINATION_PHASES = frozenset({"handoff", "task_submitted", "main_task_ready"})
+
+
+def prepare_event(event, call):
+    """Prepare a trusted notification using the common Task operation once."""
+    if not isinstance(event, dict):
+        raise ValueError("verified task event required")
+    kind = event.get("kind")
+    if kind == "handoff":
+        identities = event.get("pending_task_ids")
+        if (not isinstance(identities, list) or not 0 < len(identities) <= 50
+                or any(not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", identity)
+                       for identity in identities) or len(set(identities)) != len(identities)):
+            raise ValueError("handoff requires the admitted pending task IDs")
+        return {"planning": list(identities)}
+    if kind not in {"task_assigned", "task_submitted", "main_task_ready"}:
+        raise ValueError("unsupported task preparation event")
+    identity = event.get("main_task_id") if kind == "main_task_ready" else event.get("task_id")
+    if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", identity):
+        raise ValueError("verified task identity required")
+    arguments = {"action": "begin" if kind == "task_assigned" else "get", "taskId": identity}
+    result = call(arguments)
+    if isinstance(result, dict) and result.get("ok") is False:
+        return {"ok": False, "result": result, "retryable": result.get("retryable") is True}
+    return prepare(kind, event, result)
 
 
 def prepare(kind, event, result):

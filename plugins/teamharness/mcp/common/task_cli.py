@@ -21,6 +21,7 @@ _ACTIONS = {
     "accept": (("submissionId", "note"), ("team",), {}),
     "reject": (("submissionId", "note"), ("team", "replacementSpec"), {}),
     "complete": (("report",), ("team",), {"artifacts": "artifact"}),
+    "cancel": (("reason",), ("team",), {}),
     "files_list": ((), ("team",), {}),
     "files_read": ((), ("team", "name", "artifactId", "version", "offset", "limit"), {}),
     "files_get": ((), ("team", "name", "artifactId", "version"), {}),
@@ -31,7 +32,8 @@ _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 TASK_SCHEMA = {
     "description": (
-        "Operate on tasks through the common task-system CLI/API. Manager: create an original request; "
+        "Operate on tasks through the common task-system CLI/API. Interpret Human intent before choosing an operation. "
+        "Manager: create a task when needed; Manager/Leader: cancel the intended existing main task; "
         "Leader: plan, inspect and accept/reject exact submissions, then complete the main task; "
         "Worker: begin and submit outputs. Use task IDs and artifact IDs, not Project or storage paths. "
         "The task system prepares rooms, dispatches dependencies and returns accepted reports/artifacts "
@@ -60,6 +62,7 @@ TASK_SCHEMA = {
             "submissionId": {"type": "string", "description": "For accept/reject: exact candidate ID from the task system."},
             "replacementSpec": {"type": "string", "description": "For reject only: optional explicit corrections to dispatch a new execution of the same step, preserving the rejected attempt."},
             "note": {"type": "string", "description": "For accept/reject: your independent business validation evidence or rejection reason."},
+            "reason": {"type": "string", "description": "For cancel: explicit reason for cancelling this exact main Task. Saved results are retained; cancellation does not confirm a running tool has stopped."},
             "team": {"type": "string", "description": "Only when the task system reports an ambiguous task ID."},
             "name": {"type": "string", "description": "Declared task-local file name. With artifactId, this is an optional consistency check and must match that artifact."},
             "artifactId": {"type": "string"}, "version": {"type": "string"},
@@ -74,8 +77,8 @@ TASK_SCHEMA = {
 def schema(role: str) -> dict:
     """Present each runtime role's operations; API authorization remains final."""
     allowed = {
-        "manager": {"create", "get", "files_list", "files_read", "files_get"},
-        "leader": {"plan", "get", "accept", "reject", "complete", "files_list", "files_read", "files_get"},
+        "manager": {"create", "get", "cancel", "files_list", "files_read", "files_get"},
+        "leader": {"plan", "get", "accept", "reject", "complete", "cancel", "files_list", "files_read", "files_get"},
         "worker": {"begin", "get", "submit", "files_list", "files_read", "files_get", "files_put"},
         "remote-member": {"begin", "get", "submit", "files_list", "files_read", "files_get", "files_put"},
     }.get(role, set(_ACTIONS))

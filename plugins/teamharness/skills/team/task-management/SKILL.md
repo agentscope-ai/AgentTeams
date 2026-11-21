@@ -17,7 +17,8 @@ is not automatically a new task. Preserve genuinely independent requests even
 when their text is identical. Use only the Task operations available to your role.
 If the user withdraws a request before you have started creating its Task, do not
 create one merely to cancel it. For an existing Task, identify the intended Task
-and use the supported cancellation flow; do not cancel unrelated work or claim
+and call `cancel` with its main `taskId` and an explicit `reason` when your role
+permits it; do not cancel unrelated work or claim
 that a running tool has stopped without confirmation. The framework supplies and
 checks input freshness; do not poll message history to reconstruct it yourself.
 

@@ -35,6 +35,34 @@ def test_rejection_can_request_explicit_replacement_without_shell(monkeypatch):
         tool.command({"action":"accept", "taskId":"t1", "submissionId":"s1", "note":"OK", "replacementSpec":"Fix"})
 
 
+def test_cancellation_uses_the_public_cli_and_preserves_its_receipt(monkeypatch):
+    tool = load(monkeypatch)
+    receipt = {"task": {"id": "main", "status": "cancelled"},
+               "cancellation": {"id": "cancel-one", "reason": "Stop; literal $(text)"},
+               "projection": "pending"}
+    def execute(argv, **kwargs):
+        assert argv == ["/usr/local/bin/agt", "task", "cancel", "main", "--reason", "Stop; literal $(text)", "--team", "alpha"]
+        assert "shell" not in kwargs
+        return SimpleNamespace(returncode=0, stdout=json.dumps(receipt), stderr="")
+    monkeypatch.setattr(tool.subprocess, "run", execute)
+    assert tool.run({"action": "cancel", "taskId": "main", "reason": "Stop; literal $(text)", "team": "alpha"}) == receipt
+    for role in ("manager", "leader"):
+        assert "cancel" in tool.schema(role)["inputSchema"]["properties"]["action"]["enum"]
+    for role in ("worker", "remote-member"):
+        assert "cancel" not in tool.schema(role)["inputSchema"]["properties"]["action"]["enum"]
+
+
+@pytest.mark.parametrize("arguments", [
+    {"action": "cancel", "taskId": "main"},
+    {"action": "cancel", "taskId": "main", "reason": " "},
+    {"action": "cancel", "taskId": "../main", "reason": "Stop"},
+])
+def test_invalid_cancellation_does_not_start_a_cli_process(monkeypatch, arguments):
+    tool = load(monkeypatch)
+    monkeypatch.setattr(tool.subprocess, "run", lambda *args, **kwargs: pytest.fail("invalid cancellation executed"))
+    assert tool.run(arguments)["ok"] is False
+
+
 def test_create_uses_native_source_in_private_process_environment(monkeypatch):
     tool=load(monkeypatch)
     monkeypatch.setenv("AGENTTEAMS_ORIGIN_EVENT_ID","other-conversation")

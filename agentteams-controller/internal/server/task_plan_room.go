@@ -32,6 +32,7 @@ func (h *CoordinationHandler) ensureTaskPlanRoom(ctx context.Context, main map[s
 		return "", fmt.Errorf("task room creator unavailable")
 	}
 	inviteSet := map[string]bool{}
+	workerNames := map[string]string{}
 	workers := []map[string]any{}
 	for _, node := range plan.Request.Nodes {
 		worker, err := h.worker(ctx, node.AssignedTo)
@@ -46,6 +47,7 @@ func (h *CoordinationHandler) ensureTaskPlanRoom(ctx context.Context, main map[s
 		}
 		if !inviteSet[worker.Status.MatrixUserID] {
 			inviteSet[worker.Status.MatrixUserID] = true
+			workerNames[worker.Status.MatrixUserID] = worker.Name
 			workers = append(workers, map[string]any{"userId": worker.Status.MatrixUserID, "workerName": worker.Spec.EffectiveWorkerName(worker.Name)})
 		}
 	}
@@ -120,6 +122,35 @@ func (h *CoordinationHandler) ensureTaskPlanRoom(ctx context.Context, main map[s
 			return "", err
 		}
 		membership[id] = "invite"
+	}
+	// Planned workers must be able to read the first assignment in this room.
+	// Use each registered worker's existing identity to accept its invitation.
+	pendingWorkers := map[string]bool{}
+	for _, id := range invite {
+		name := workerNames[id]
+		if name == "" || membership[id] == "join" {
+			continue
+		}
+		workerToken, err := h.deps.Provisioner.AgentMatrixToken(ctx, "worker", name)
+		if err != nil || h.deps.Provisioner.JoinRoomAs(ctx, room.RoomID, workerToken) != nil {
+			return "", fmt.Errorf("task room worker membership pending")
+		}
+		pendingWorkers[id] = true
+	}
+	if len(pendingWorkers) > 0 {
+		members, err := h.deps.MatrixClient.ListRoomMembersWithToken(ctx, room.RoomID, token)
+		if err != nil {
+			return "", err
+		}
+		for _, member := range members {
+			membership[member.UserID] = member.Membership
+			if member.Membership == "join" {
+				delete(pendingWorkers, member.UserID)
+			}
+		}
+		if len(pendingWorkers) > 0 {
+			return "", fmt.Errorf("task room worker membership pending")
+		}
 	}
 	if !explicitAdmin && admin != "" && membership[admin] != "join" {
 		adminToken, err := h.deps.Provisioner.LoginAsHuman(ctx, adminName, h.deps.MatrixConfig.AdminPassword)

@@ -21,6 +21,8 @@ def test_prepared_assignment_uses_backend_canonical_identity():
     prepared = context.prepare("task_assigned", event, result)
     assert prepared["execution"] == "t1"
     assert prepared["ack"][2:] == ("canonical-worker-cr", "d1")
+    assert "exact absolute outputDirectory" in prepared["fact"]
+    assert "submit before ending your turn" in prepared["fact"]
 
 
 @pytest.mark.parametrize("field,value", [("id", "other"), ("assignmentId", "stale"), ("status", "submitted"), ("mainTaskId", "other")])

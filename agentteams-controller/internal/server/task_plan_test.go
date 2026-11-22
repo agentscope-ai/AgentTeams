@@ -25,6 +25,7 @@ type planTestMatrix struct {
 	lostResponse bool
 	foreignRoom  bool
 	joined       map[string]bool
+	joinBlocked  string
 }
 
 func (m *planTestMatrix) CreateRoom(_ context.Context, request matrix.CreateRoomRequest) (*matrix.RoomInfo, error) {
@@ -66,6 +67,9 @@ func (m *planTestMatrix) Login(_ context.Context, name, password string) (string
 	return name + "-token", nil
 }
 func (m *planTestMatrix) JoinRoom(_ context.Context, room, token string) error {
+	if token == m.joinBlocked {
+		return errors.New("injected join failure")
+	}
 	if m.joined == nil {
 		m.joined = map[string]bool{}
 	}
@@ -78,8 +82,10 @@ func taskPlanFixture(t *testing.T) (*ProjectHandler, *ossfake.Memory, *authpkg.C
 	coordination, store := coordinationFixture(t)
 	mx := &planTestMatrix{rooms: map[string]matrix.CreateRoomRequest{}}
 	creds := &service.FileCredentialStore{Dir: t.TempDir()}
-	if err := creds.Save(t.Context(), "lead-cr", &service.WorkerCredentials{MatrixToken: "leader-token"}); err != nil {
-		t.Fatal(err)
+	for worker, token := range map[string]string{"lead-cr": "leader-token", "worker-cr": "worker-token", "second-cr": "second-token"} {
+		if err := creds.Save(t.Context(), worker, &service.WorkerCredentials{MatrixToken: token}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	coordination.deps.MatrixClient = mx
 	coordination.deps.Provisioner = service.NewProvisioner(service.ProvisionerConfig{Matrix: mx, Creds: creds, MatrixDomain: "test"})
@@ -123,6 +129,24 @@ func callPlan(h *ProjectHandler, caller *authpkg.CallerIdentity, input taskPlanR
 	w := httptest.NewRecorder()
 	h.PlanTask(w, withCaller(r, caller))
 	return w
+}
+
+func TestTaskPlanWaitsForAssignedWorkersToJoinBeforeDispatch(t *testing.T) {
+	h, store, caller, mx := taskPlanFixture(t)
+	mx.joinBlocked = "worker-token"
+	first := callPlan(h, caller, planRequest())
+	var result struct {
+		Progress string `json:"progress"`
+	}
+	entries, _, err := store.ListObjectsRecursive(t.Context(), coordinationPending, "", 100)
+	if first.Code != 200 || json.Unmarshal(first.Body.Bytes(), &result) != nil || result.Progress != "pending" || err != nil || len(entries) != 0 {
+		t.Fatalf("worker invitation incorrectly permitted dispatch: %d %s events=%v err=%v", first.Code, first.Body.String(), entries, err)
+	}
+	mx.joinBlocked = ""
+	retry := callPlan(h, caller, planRequest())
+	if retry.Code != 200 || json.Unmarshal(retry.Body.Bytes(), &result) != nil || result.Progress != "ready" || !mx.joined["@worker:test"] || !mx.joined["@second:test"] || mx.creates != 1 {
+		t.Fatalf("the same room did not safely resume dispatch: %d %s joined=%v rooms=%d", retry.Code, retry.Body.String(), mx.joined, mx.creates)
+	}
 }
 
 func TestTaskPlanStoresWholeDAGAndDispatchesOnlyReadyNodes(t *testing.T) {

@@ -51,7 +51,10 @@ def prepare(kind, event, result):
                 or not output.is_absolute() or not scratch.is_absolute()
                 or not output.resolve().is_relative_to(root.resolve()) or not scratch.resolve().is_relative_to(root.resolve())):
             raise ValueError("task begin receipt does not match this assignment")
-        return {"fact": "Your assignment is acknowledged and inputs are prepared. Do not repeat begin or download supplied inputs. Execute from this task spec and the authoritative directories; submit only your output files.",
+        return {"fact": "Your assignment is acknowledged and inputs are prepared. Do not repeat begin or download supplied inputs. "
+                        "Write each deliverable using the exact absolute outputDirectory below plus its filename. "
+                        "Use scratchDirectory for temporary work. In Task submit, give only paths relative to outputDirectory. "
+                        "Once you have produced and checked your deliverables, call Task submit before ending your turn.",
                 "context": result, "execution": task_id,
                 "ack": (task_id, root.resolve(), task["assignedTo"], task["assignmentId"])}
     if kind == "task_submitted":

@@ -71,6 +71,19 @@ def test_cli_nonzero_or_malformed_result_keeps_unknown_marker(monkeypatch):
         assert ledger.saved['state'] == 'unknown'
 
 
+def test_unknown_complete_retains_cli_status_without_exposing_stderr(monkeypatch):
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
+    ledger = Ledger()
+    call = Mock(return_value={'ok': False, 'effect': 'unknown', 'httpStatus': 409,
+                              'message': 'private transport detail'})
+    args = {'action': 'complete', 'taskId': 'main'}
+    first = guard.run(args, call, rpc=ledger)
+    assert first['effect'] == 'unknown' and first['failureStage'] == 'cli'
+    assert first['httpStatus'] == 409 and 'private transport detail' not in str(first)
+    assert guard.run(args, call, rpc=ledger)['effect'] == 'unknown'
+    call.assert_called_once()
+
+
 def test_durably_cached_receipt_survives_lost_finish_response_without_second_cli(monkeypatch):
     monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
     ledger = Ledger()
@@ -212,11 +225,15 @@ def test_http_preledger_contract_is_required_and_never_trusted_after_execution(m
     rejected = {'ok': False, 'effect': 'none', 'error': 'invalid_task_handoff',
                 'message': 'registered Team Leader required'}
     def response(body):
-        return urllib.error.HTTPError('http://own-fixture', 403, 'Forbidden', {}, io.BytesIO(json.dumps(body).encode()))
+        status = 409 if body.get('error') == 'repeated_task_request' else 403
+        return urllib.error.HTTPError('http://own-fixture', status, 'Request rejected', {}, io.BytesIO(json.dumps(body).encode()))
     plan_rejected = {'ok': False, 'effect': 'none', 'error': 'invalid_task_plan_assignee',
                      'message': 'Choose an independent registered Worker from your Team.'}
+    relation_rejected = {'ok': False, 'effect': 'none', 'error': 'repeated_task_request',
+                         'message': 'Use a distinct inputId for independent work.'}
     for mode, body, correctable in [('begin', rejected, True), ('finish', rejected, False),
                                     ('begin', plan_rejected, True), ('finish', plan_rejected, False),
+                                    ('begin', relation_rejected, True), ('finish', relation_rejected, False),
                                     ('begin', {'message': 'Forbidden'}, False)]:
         with patch.object(guard.urllib.request, 'urlopen', side_effect=response(body)):
             if correctable:

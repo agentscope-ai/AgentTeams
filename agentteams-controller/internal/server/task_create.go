@@ -12,11 +12,14 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strings"
 
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 )
+
+const repeatedTaskRequestMessage = "A distinct input repeats the original request without amending it. Use its own inputId for independent work; do not pass it as relatedInputIds. No new Task was registered by this call."
 
 // CreateTask preserves the incoming request before Leader planning. Source
 // identity is supplied by native tool context, never an Agent-facing parameter.
@@ -86,6 +89,10 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		snapshots = append(snapshots, body)
+	}
+	if slices.Contains(snapshots[1:], original) {
+		writeError(w, http.StatusConflict, repeatedTaskRequestMessage)
+		return
 	}
 	if len(snapshots) > 1 {
 		// Bodies come from authenticated Matrix events, not model transcription.

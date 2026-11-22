@@ -392,6 +392,23 @@ func TestTaskCreateRejectsInvalidRelatedSourcesBeforeRegistration(t *testing.T) 
 	}
 }
 
+func TestTaskCreateRejectsUnchangedRequestAsRelatedInput(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}
+	before, err := store.ListObjects(t.Context(), "teams/alpha/shared/tasks/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := callTaskCreate(h, caller, "$original", `{"title":"Report","leader":"lead-cr","relatedSources":["$repeat"]}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "its own inputId") {
+		t.Fatalf("unchanged request accepted as amendment: %d %s", w.Code, w.Body.String())
+	}
+	entries, err := store.ListObjects(t.Context(), "teams/alpha/shared/tasks/")
+	if err != nil || len(entries) != len(before) {
+		t.Fatalf("related request rejection registered a task: %v %v", entries, err)
+	}
+}
+
 func TestTaskCreateDefersNewHumanInputBeforeAnyRegistration(t *testing.T) {
 	h, store := taskCreateFixture(t)
 	before, _ := store.ListObjects(t.Context(), "teams/alpha/shared/tasks/")

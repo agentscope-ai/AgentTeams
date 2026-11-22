@@ -107,7 +107,8 @@ func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Req
 			writeError(w, 403, "registered Manager required")
 			return "", scope, false
 		}
-		if _, status := h.coordination.taskSourceRequest(r.Context(), manager.Name, room, event, user); status != 0 {
+		original, status := h.coordination.taskSourceRequest(r.Context(), manager.Name, room, event, user)
+		if status != 0 {
 			writeError(w, status, "original request authority unavailable")
 			return "", scope, false
 		}
@@ -117,6 +118,27 @@ func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Req
 		actor = append(actor, "source", room, user, event)
 		scope.SourceEventID = event
 		if input.Mode == "begin" {
+			related, _ := source["relatedSources"].([]any)
+			if len(related) > 50 {
+				writeError(w, http.StatusBadRequest, "too many related request sources")
+				return "", scope, false
+			}
+			for _, raw := range related {
+				id, _ := raw.(string)
+				if !strings.HasPrefix(id, "$") || id == event {
+					writeError(w, http.StatusBadRequest, "distinct related request event IDs required")
+					return "", scope, false
+				}
+				body, status := h.coordination.taskSourceRequest(r.Context(), manager.Name, room, id, user)
+				if status != 0 {
+					writeError(w, status, "related request authority unavailable")
+					return "", scope, false
+				}
+				if body == original {
+					httputil.WriteJSON(w, http.StatusConflict, map[string]any{"ok": false, "effect": "none", "error": "repeated_task_request", "message": repeatedTaskRequestMessage})
+					return "", scope, false
+				}
+			}
 			resolved, status, message := h.resolveTaskHandoff(r.Context(), caller, coordinationString(input.Arguments, "leader"), event, room, user, "")
 			if status != 0 {
 				httputil.WriteJSON(w, status, map[string]any{"ok": false, "effect": "none", "error": "invalid_task_handoff", "message": message})

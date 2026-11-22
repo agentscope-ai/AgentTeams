@@ -86,6 +86,13 @@ def schema(role: str) -> dict:
         "remote-member": {"begin", "get", "submit", "files_list", "files_read", "files_get", "files_put"},
     }.get(role, set(_ACTIONS))
     result = copy.deepcopy(TASK_SCHEMA)
+    if role == "manager":
+        result["description"] = (
+            "Delegate new business work with action=create whenever a registered Team can handle it, "
+            "including quick work that produces a file or other deliverable. The Task system delivers "
+            "the accepted result to the original conversation. Use get to inspect an existing Task, "
+            "cancel for its explicit withdrawal, and the file actions for its verified artifacts."
+        )
     properties = result["inputSchema"]["properties"]
     fields = {"action", "taskId"}
     for action in allowed:
@@ -184,13 +191,18 @@ def command(arguments: dict) -> tuple[list[str], dict[str, str]]:
     return argv, env
 
 
-def retryable_cli_error(message: str) -> bool:
-    """Classify the CLI transport status, never numbers inside a server message."""
+def cli_http_status(message: str) -> int | None:
     first = message.strip().splitlines()[0] if message.strip() else ""
     status = re.match(r"^(?:Error: )?HTTP ([0-9]{3})(?::|\s|$)", first)
-    if status:
-        code = int(status.group(1))
+    return int(status.group(1)) if status else None
+
+
+def retryable_cli_error(message: str) -> bool:
+    """Classify the CLI transport status, never numbers inside a server message."""
+    code = cli_http_status(message)
+    if code is not None:
         return code == 429 or 500 <= code <= 599
+    first = message.strip().splitlines()[0] if message.strip() else ""
     return bool(re.match(r'^(?:Error: )?(?:Get|Post|Put|Patch|Delete|Head) "https?://[^"\n]+": ', first))
 
 
@@ -213,9 +225,12 @@ def _run(arguments: dict) -> dict:
             failure_effect = "unknown"
         process = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
         if process.returncode:
-            return {"ok": False, "error": "task_operation_failed", "exitCode": process.returncode,
-                    "message": process.stderr.strip()[:2048], "retryable": retryable_cli_error(process.stderr),
-                    "effect": failure_effect}
+            failure = {"ok": False, "error": "task_operation_failed", "exitCode": process.returncode,
+                       "message": process.stderr.strip()[:2048], "retryable": retryable_cli_error(process.stderr),
+                       "effect": failure_effect}
+            if (status := cli_http_status(process.stderr)) is not None:
+                failure["httpStatus"] = status
+            return failure
         result = json.loads(process.stdout)
         if not isinstance(result, dict):
             raise ValueError("task CLI returned an invalid receipt")

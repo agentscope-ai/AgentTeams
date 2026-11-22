@@ -243,6 +243,29 @@ func TestNativeOperationInputRefreshPreservesTheSuccessfulNoTaskControlResult(t 
 	}
 }
 
+func TestNativeCreateRejectsRepeatedRequestAsAmendmentBeforeFencing(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}
+	source := map[string]any{"eventId": "$first", "roomId": "!source:test", "userId": "@human:test", "relatedSources": []string{"$second"}}
+	args := map[string]any{"action": "create", "leader": "lead-cr", "title": "Report", "_nativeSource": source}
+	w, response := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+	if w.Code != http.StatusConflict || response["error"] != "repeated_task_request" || response["effect"] != "none" {
+		t.Fatalf("expected correctable relation rejection: %d %s", w.Code, w.Body.String())
+	}
+	keys, err := store.ListObjects(t.Context(), "control/task-native/")
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("rejected relation fenced a source: %v %v", keys, err)
+	}
+	delete(source, "relatedSources")
+	for _, event := range []string{"$first", "$second"} {
+		source["eventId"] = event
+		w, response := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+		if w.Code != http.StatusOK || response["mode"] != "execute" {
+			t.Fatalf("independent source %s was not admitted: %d %s", event, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestNativeCreateRouteRejectsUnknownLeaderWithoutFencingCorrectedHandoff(t *testing.T) {
 	h, store := taskCreateFixture(t)
 	caller := &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"}

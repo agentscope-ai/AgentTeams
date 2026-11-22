@@ -38,7 +38,7 @@ def request(payload):
             result = json.load(error)
             if (isinstance(result, dict) and result.get('ok') is False
                     and result.get('effect') == 'none'
-                    and result.get('error') in {'invalid_task_handoff', 'invalid_task_plan_assignee'}):
+                    and result.get('error') in {'invalid_task_handoff', 'invalid_task_plan_assignee', 'repeated_task_request'}):
                 return result
         raise
     if not isinstance(result, dict):
@@ -46,11 +46,15 @@ def request(payload):
     return result
 
 
-def _failure(authority=None):
+def _failure(authority=None, *, stage=None, http_status=None):
     result = {'ok': False, 'effect': 'unknown', 'error': 'canonical_operation_requires_verification',
               'message': 'Canonical Task outcome requires authoritative verification; do not replay the call.'}
     if authority is not None:
         result['authority'] = authority
+    if stage is not None:
+        result['failureStage'] = stage
+    if type(http_status) is int and 400 <= http_status <= 599:
+        result['httpStatus'] = http_status
     return result
 
 
@@ -110,8 +114,8 @@ def run(arguments, call, *, validate=None, rpc=None):
     payload = {'arguments': arguments, 'contentFingerprints': content}
     try:
         admission = rpc(dict(payload, mode='begin'))
-    except (OSError, ValueError):
-        return _failure()
+    except (OSError, ValueError) as error:
+        return _failure(stage='begin', http_status=getattr(error, 'code', None))
     if admission.get('effect') == 'none' and admission.get('ok') is False:
         return admission
     if admission.get('mode') == 'recovered':
@@ -120,20 +124,26 @@ def run(arguments, call, *, validate=None, rpc=None):
     if admission.get('mode') != 'execute' or not admission.get('operationId'):
         return _failure(admission.get('authority'))
     payload['operationId'] = admission['operationId']
+    stage, http_status = 'cli', None
     try:
         result = call(arguments)
         if confirmed(arguments, result):
+            stage = 'finish'
             saved = rpc(dict(payload, mode='finish', result=result))
             if saved.get('mode') == 'verified':
                 return result
-    except (OSError, ValueError):
-        pass
+        elif isinstance(result, dict) and result.get('ok') is False:
+            http_status = result.get('httpStatus')
+        else:
+            stage = 'receipt'
+    except (OSError, ValueError) as error:
+        http_status = getattr(error, 'code', None)
     # A failed marker write cannot authorize replay: the earlier start remains.
     try:
         rpc(dict(payload, mode='unknown'))
     except (OSError, ValueError):
         pass
-    return _failure()
+    return _failure(stage=stage, http_status=http_status)
 
 
 def admit(context, *, rpc=None):

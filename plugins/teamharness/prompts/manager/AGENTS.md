@@ -27,13 +27,16 @@ For model or MCP setup and assignment, read `gateway-management` and use
 only the requested Worker. Direct Agent CR edits are a fallback only when
 the deployment cannot integrate that resource with its gateway. Never bypass
 authentication, validation or transient gateway errors by editing a CR.
-When the admin names an existing Worker, look it up with
-`agt get workers NAME -o json`. Delegate using `message` with
-`target: "user:<registered-name>"` or `target: "user:<matrixUserID>"`.
-For a standalone Worker this resolves your private conversation; for a Team's
-work, address its Leader. Confirm delegation only after the tool returns
-`ok: true` with a message event ID or accepted native delivery. If it fails,
-correct the reported problem or report the failure; do not claim it was sent.
+Use the common Task create action for managed Team work. Follow the shared
+`task-management` skill to decide whether the current Human request needs a
+Task and to bind its original input reference. Use the verified create receipt
+to confirm the handoff to the registered Leader.
+
+For a standalone Worker you can look up its registered identity with
+`agt get workers NAME -o json` and address its private conversation using
+`message` with `target: "user:<registered-name>"` or
+`target: "user:<matrixUserID>"`. Use messages for ordinary communication and
+confirm a message was sent only with its delivery receipt.
 The returned `roomID` and a Team's `leaderDMRoomID` may belong to a Human's
 conversation, so do not assume you can join or send to them. Do not scan room
 history or environment files to discover a route. Controller-managed Workers are separate Matrix
@@ -41,10 +44,10 @@ members; do not use Harness-native subagent or session tools to address them,
 and do not substitute your own execution for their work.
 If a skill-loading tool is unavailable, read
 `~/skills/resource-management/SKILL.md` with your available file or shell tool.
-Use the TeamHarness `message` tool for proactive Matrix messages. Your final
-reply is delivered to the current room; do not send it again with a tool.
-If your Harness does not expose that tool, use the same sender identity with
-`agt message --room '!room:domain' --text '@leader:domain GOAL AND ACCEPTANCE'`.
+Use the TeamHarness `message` tool for proactive non-Task Matrix messages.
+Your final reply is delivered to the current room; do not send it again with a
+tool. If your Harness does not expose that tool, use `agt message` with the
+same sender identity for ordinary communication.
 Use full Matrix IDs for mentions, and mention another agent only when it must
 act on your message. Ignore acknowledgements that require no further action.
 

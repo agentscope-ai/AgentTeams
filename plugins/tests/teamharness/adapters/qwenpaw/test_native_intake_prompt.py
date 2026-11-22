@@ -45,7 +45,8 @@ class NativeIntakePromptTest(unittest.TestCase):
                 return ChatResponse(content=[TextBlock(text="Understood")], is_last=True)
 
         async def run(directory):
-            Path(directory, "MANAGER.md").write_text("You are the Manager.", encoding="utf-8")
+            manager_prompt = root / "plugins/teamharness/prompts/manager/AGENTS.md"
+            Path(directory, "MANAGER.md").write_text(manager_prompt.read_text(encoding="utf-8"), encoding="utf-8")
             ctx = SimpleNamespace(workspace_dir=Path(directory), agent_id="fixture", extras={},
                 workspace=SimpleNamespace(plugins=SimpleNamespace(prompt_manager=build_default_prompt_manager())))
             builder = AgentBuilder()
@@ -61,6 +62,9 @@ class NativeIntakePromptTest(unittest.TestCase):
             for request in model.seen:
                 self.assertEqual(request.count("Different supplied input IDs are distinct Human message events"), 1)
                 self.assertIn("relatedInputIds", request)
+                self.assertIn("Use the common Task create action for managed Team work", request)
+                self.assertNotIn("Delegate using", request)
+                self.assertNotIn("GOAL AND ACCEPTANCE", request)
 
         with TemporaryDirectory() as directory, patch.dict(os.environ, {
             "AGENTTEAMS_AGENT_ROLE": "manager", "AGENTTEAMS_CONTROLLER_URL": "http://controller:8090",

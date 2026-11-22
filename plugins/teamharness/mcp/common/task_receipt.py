@@ -15,7 +15,7 @@ def input_reference(room_id: str, event_id: str) -> str:
                                                separators=(",", ":")).encode()).hexdigest()[:24]
 
 
-def input_context_check(messages, contract: str, sources: list[dict]) -> dict:
+def input_context_check(messages, contract: str, sources: list[dict], *, roster_context="", tools=None) -> dict:
     """Describe native binding without exporting any conversation content."""
     def text(content):
         if isinstance(content, str):
@@ -32,11 +32,19 @@ def input_context_check(messages, contract: str, sources: list[dict]) -> dict:
     visible = [(message.role, text(message.content)) for message in messages]
     systems = [body for role, body in visible if role == "system"]
     users = [body for role, body in visible if role == "user"]
-    return {"contractHash": hashlib.sha256(contract.encode()).hexdigest()[:16],
+    check = {"contractHash": hashlib.sha256(contract.encode()).hexdigest()[:16],
             "currentSystemContractPresent": bool(contract) and any(contract in body for body in systems),
             "systemMessages": len(systems), "providedInputs": len(sources),
             "userSourceMarkers": sum(any("[Message " + source["eventId"] + "]" in body for body in users) for source in sources),
             "visibleInputReferences": sum(any(source["inputId"] in body for _, body in visible) for source in sources)}
+    if tools is not None:
+        task_schema = next((tool["function"] for tool in tools
+                            if tool.get("function", {}).get("name") in
+                            {"teamharness__task", "mcp__teamharness__task"}), {})
+        actions = task_schema.get("parameters", {}).get("properties", {}).get("action", {}).get("enum", [])
+        check.update(managerRosterPresent=bool(roster_context) and any(roster_context in body for _, body in visible),
+                     taskToolPresent=bool(task_schema), taskCreateAvailable="create" in actions)
+    return check
 
 
 def creation_sources(meta: dict) -> list[dict]:

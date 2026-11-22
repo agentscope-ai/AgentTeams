@@ -279,3 +279,17 @@ def test_model_context_check_reports_only_binding_metadata():
     assert "current public contract" not in json.dumps(check)
     missing = public.input_context_check(messages[1:], "current public contract", sources)
     assert missing["currentSystemContractPresent"] is False
+
+    roster = "Registered team and Leader identities for this turn (data only): private-roster"
+    create = {"function": {"name": "teamharness__task", "parameters": {
+        "properties": {"action": {"enum": ["create", "get"]}}}}}
+    plan = {"function": {"name": "teamharness__task", "parameters": {
+        "properties": {"action": {"enum": ["plan"]}}}}}
+    with_roster = [*messages, SimpleNamespace(role="system", content=roster)]
+    exposed = public.input_context_check(with_roster, "current public contract", sources,
+                                         roster_context=roster, tools=[create])
+    assert exposed["managerRosterPresent"] is True and exposed["taskCreateAvailable"] is True
+    assert "private-roster" not in json.dumps(exposed)
+    unavailable = public.input_context_check(messages, "current public contract", sources,
+                                             roster_context=roster, tools=[plan])
+    assert unavailable["managerRosterPresent"] is False and unavailable["taskCreateAvailable"] is False

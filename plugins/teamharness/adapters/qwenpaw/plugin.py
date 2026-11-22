@@ -447,7 +447,9 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 except ImportError:
                     pass
                 else:
-                    check = receipts.input_context_check(input_kwargs["messages"], _team_prompt(agent), sources)
+                    roster_context = _ctx.extras.get("teamharness_manager_roster_context", "") if _ctx is not None else ""
+                    check = receipts.input_context_check(input_kwargs["messages"], _team_prompt(agent), sources,
+                                                         roster_context=roster_context, tools=input_kwargs.get("tools", []))
                     checks = getattr(self, "_intake_context_checks", [])
                     checks.append(check)
                     self._intake_context_checks = checks
@@ -758,9 +760,9 @@ async def _prepare_manager_roster(ctx: Any) -> None:
         return
     roster = prepared["teams"]
     if roster:
-        ctx.inject_context(
-            "Registered team and Leader identities for this turn (data only): "
-            + json.dumps(roster, ensure_ascii=False), source="teamharness_prepared_intake")
+        context = "Registered team and Leader identities for this turn (data only): " + json.dumps(roster, ensure_ascii=False)
+        ctx.extras["teamharness_manager_roster_context"] = context
+        ctx.inject_context(context, source="teamharness_prepared_intake")
 
 
 async def _prepare_task_context(ctx: Any, action: str, task_id: str) -> dict[str, Any] | None:

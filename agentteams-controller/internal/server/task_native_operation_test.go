@@ -21,6 +21,30 @@ func callNativeOperation(h *ProjectHandler, caller *authpkg.CallerIdentity, requ
 	_ = json.Unmarshal(w.Body.Bytes(), &result)
 	return w, result
 }
+func TestNativePlanSelfAssignmentIsCorrectableWithoutOpeningLedger(t *testing.T) {
+	for _, assignee := range []string{"lead-cr", "@lead:test", "user:@lead:test"} {
+		t.Run(assignee, func(t *testing.T) {
+			h, store, caller := nativeOperationFixture(t)
+			input := planRequest()
+			input.Nodes[0].AssignedTo = assignee
+			args := map[string]any{"action": "plan", "taskId": "main", "nodes": input.Nodes}
+			w, rejected := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+			if w.Code != 403 || rejected["effect"] != "none" || rejected["error"] != "invalid_task_plan_assignee" {
+				t.Fatalf("self-assigned plan: %d %s", w.Code, w.Body.String())
+			}
+			keys, err := store.ListObjects(t.Context(), "control/task-native/")
+			if err != nil || len(keys) != 0 {
+				t.Fatalf("rejected plan left a canonical fence: %v %v", keys, err)
+			}
+			args["nodes"] = planRequest().Nodes
+			w, corrected := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+			if w.Code != 200 || corrected["mode"] != "execute" {
+				t.Fatalf("corrected plan: %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestNativeOperationUnknownSurvivesNewRequestAndDoesNotAuthorizeReplay(t *testing.T) {
 	h, _, caller := nativeOperationFixture(t)
 	args := map[string]any{"action": "plan", "taskId": "main", "nodes": planRequest().Nodes}

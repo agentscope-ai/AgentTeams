@@ -37,7 +37,8 @@ def request(payload):
         if payload.get('mode') == 'begin' and error.code in {403, 409}:
             result = json.load(error)
             if (isinstance(result, dict) and result.get('ok') is False
-                    and result.get('effect') == 'none' and result.get('error') == 'invalid_task_handoff'):
+                    and result.get('effect') == 'none'
+                    and result.get('error') in {'invalid_task_handoff', 'invalid_task_plan_assignee'}):
                 return result
         raise
     if not isinstance(result, dict):

@@ -213,11 +213,14 @@ def test_http_preledger_contract_is_required_and_never_trusted_after_execution(m
                 'message': 'registered Team Leader required'}
     def response(body):
         return urllib.error.HTTPError('http://own-fixture', 403, 'Forbidden', {}, io.BytesIO(json.dumps(body).encode()))
+    plan_rejected = {'ok': False, 'effect': 'none', 'error': 'invalid_task_plan_assignee',
+                     'message': 'Choose an independent registered Worker from your Team.'}
     for mode, body, correctable in [('begin', rejected, True), ('finish', rejected, False),
+                                    ('begin', plan_rejected, True), ('finish', plan_rejected, False),
                                     ('begin', {'message': 'Forbidden'}, False)]:
         with patch.object(guard.urllib.request, 'urlopen', side_effect=response(body)):
             if correctable:
-                assert guard.request({'mode': mode}) == rejected
+                assert guard.request({'mode': mode}) == body
             else:
                 try:
                     guard.request({'mode': mode})

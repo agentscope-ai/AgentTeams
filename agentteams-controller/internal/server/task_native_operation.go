@@ -75,7 +75,21 @@ func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Req
 			writeError(w, 409, "native process was replaced")
 			return "", scope, false
 		}
-
+		if input.Mode == "begin" && scope.Action == "plan" && caller.Role == authpkg.RoleTeamLeader {
+			nodes, _ := input.Arguments["nodes"].([]any)
+			for _, raw := range nodes {
+				node, _ := raw.(map[string]any)
+				assignee := strings.TrimPrefix(strings.TrimSpace(coordinationString(node, "assignedTo")), "user:")
+				if assignee == worker.Name || assignee == worker.Spec.EffectiveWorkerName(worker.Name) ||
+					(worker.Status.MatrixUserID != "" && assignee == worker.Status.MatrixUserID) {
+					httputil.WriteJSON(w, 403, map[string]any{
+						"ok": false, "effect": "none", "error": "invalid_task_plan_assignee",
+						"message": "Choose an independent registered Worker from your Team for the self-assigned node.",
+					})
+					return "", scope, false
+				}
+			}
+		}
 	}
 	if coordinationString(input.Arguments, "action") == "create" {
 		source := coordinationMap(input.Arguments, "_nativeSource")

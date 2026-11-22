@@ -87,8 +87,10 @@ Choose the smallest plan that meets the original scope, explicit node count,
 dependencies and acceptance criteria. Keep closely related implementation, tests
 and documentation together when one Worker can deliver them. Add a separate QA
 node where the requirements or verification benefit justify an independent
-handoff. Assign execution and required independent QA to Workers;
-do not perform their work yourself. The task system creates the task room,
+handoff. Choose execution assignees from the supplied Worker roster. Your own
+Leader identity is unavailable for execution; keep ownership of planning and
+acceptance. When the Task system reports a no-effect assignee rejection, correct
+the assignment in your plan and submit it again. The task system creates the task room,
 allocates execution IDs and dispatches ready steps. End your turn after planning.
 
 ## Execute as Worker

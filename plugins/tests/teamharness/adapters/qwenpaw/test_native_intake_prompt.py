@@ -63,6 +63,10 @@ class NativeIntakePromptTest(unittest.TestCase):
                 self.assertEqual(request.count("Different supplied input IDs are distinct Human message events"), 1)
                 self.assertIn("relatedInputIds", request)
                 self.assertIn("Use the common Task create action for managed Team work", request)
+                self.assertIn("Handle AgentTeams administration directly", request)
+                self.assertIn("you have verified that no suitable registered Team can take the work", request)
+                self.assertIn("Choose the best fit for the request", request)
+                self.assertIn("Leave decomposition and execution assignments to that Leader", request)
                 self.assertNotIn("Delegate using", request)
                 self.assertNotIn("GOAL AND ACCEPTANCE", request)
 

@@ -210,6 +210,8 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         async def on_system_prompt(self, agent: Any, current_prompt: str) -> str:
             contract = _team_prompt(agent)
             if contract and contract not in current_prompt:
+                if os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
+                    return contract + "\n\n" + current_prompt
                 return current_prompt + "\n\n" + contract
             return current_prompt
 

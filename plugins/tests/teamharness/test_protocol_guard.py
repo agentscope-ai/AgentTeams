@@ -131,6 +131,10 @@ TASK_ID = "w2-task-01"
 
 SUBMISSION_ID = "sub-w2-0001"
 
+# W2 decision answerability: a decision raised with the protocol switch on
+# must carry its option set (the human answer echoes an option id).
+DECISION_OPTIONS = [{"id": "a", "label": "Approve"}]
+
 
 def _call(tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
     response = server.call_tool(tool, arguments)
@@ -443,8 +447,11 @@ def _request_attention(
     resolved_via: str | None = None,
     resolved_by: str | None = None,
     resolve_evidence: dict[str, Any] | None = None,
+    options: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"taskId": TASK_ID, "kind": kind, "question": question}
+    if options is not None:
+        payload["options"] = options
     if resolved is not None:
         payload["resolved"] = resolved
     if resolved_via is not None:
@@ -912,7 +919,7 @@ def test_row8_stall_chain_escalates(
     _enforce_on(monkeypatch)
     _write_in_progress_task(tmp_path)
 
-    created = _request_attention(tmp_path)
+    created = _request_attention(tmp_path, options=DECISION_OPTIONS)
     assert created["ok"] is True
     record = created["task"]["attention"][0]
     assert record["stall_count"] == 0
@@ -920,7 +927,7 @@ def test_row8_stall_chain_escalates(
     assert record.get("eventId")
     assert created["task"].get("decision_status", constants.DEFAULT_DECISION_STATUS) == "open"
 
-    bumped = _request_attention(tmp_path)
+    bumped = _request_attention(tmp_path, options=DECISION_OPTIONS)
     assert bumped["ok"] is True
     assert bumped["attention"]["reused"] is True
     task = bumped["task"]
@@ -929,7 +936,7 @@ def test_row8_stall_chain_escalates(
     assert task.get("decision_status", constants.DEFAULT_DECISION_STATUS) == "open"
     assert "decision_status_history" not in task
 
-    blocked = _request_attention(tmp_path)
+    blocked = _request_attention(tmp_path, options=DECISION_OPTIONS)
     task = blocked["task"]
     assert task["attention"][0]["stall_count"] == constants.ATTENTION_STALL_BLOCKED
     assert task["decision_status"] == "blocked"
@@ -943,7 +950,7 @@ def test_row8_stall_chain_escalates(
         "source": "attention:decision",
     }
 
-    frozen = _request_attention(tmp_path)
+    frozen = _request_attention(tmp_path, options=DECISION_OPTIONS)
     task = frozen["task"]
     assert task["attention"][0]["stall_count"] == constants.ATTENTION_STALL_FROZEN
     assert task["decision_status"] == "frozen"
@@ -965,10 +972,10 @@ def test_row9_frozen_unfreeze_requires_approval(
     _write_in_progress_task(tmp_path)
 
     # Escalate the decision loop to frozen: create + 3 unanswered re-requests.
-    _request_attention(tmp_path)
-    _request_attention(tmp_path)
-    _request_attention(tmp_path)
-    frozen = _request_attention(tmp_path)
+    _request_attention(tmp_path, options=DECISION_OPTIONS)
+    _request_attention(tmp_path, options=DECISION_OPTIONS)
+    _request_attention(tmp_path, options=DECISION_OPTIONS)
+    frozen = _request_attention(tmp_path, options=DECISION_OPTIONS)
     assert frozen["task"]["decision_status"] == "frozen"
 
     # A non-approval answer cannot unfreeze a frozen task; the refusal
@@ -1620,11 +1627,11 @@ def test_r5_maintainer_chain_frozen_absorbing(
 
     # A second record stalls on the frozen task: the escalation
     # short-circuits — no demotion to blocked, no history churn.
-    _request_attention(tmp_path, kind="decision", question="Side decision.")
+    _request_attention(tmp_path, kind="decision", question="Side decision.", options=DECISION_OPTIONS)
     assert _task_meta(tmp_path)["decision_status"] == "frozen"
-    _request_attention(tmp_path, kind="decision")  # stall 1
+    _request_attention(tmp_path, kind="decision", options=DECISION_OPTIONS)  # stall 1
     assert _task_meta(tmp_path)["decision_status"] == "frozen"
-    _request_attention(tmp_path, kind="decision")  # stall 2: would target blocked
+    _request_attention(tmp_path, kind="decision", options=DECISION_OPTIONS)  # stall 2: would target blocked
     assert _task_meta(tmp_path)["decision_status"] == "frozen"
     assert _history_pairs(_task_meta(tmp_path)) == [
         ("open", "blocked"), ("blocked", "frozen")
@@ -1675,6 +1682,9 @@ def test_r5_absorbing_matrix(
     monkeypatch.setattr(server, "_runtime_role", lambda: "worker")
     _write_in_progress_task(tmp_path)
 
+    # Decision raises need the option set (answerability); other kinds do not.
+    opts = DECISION_OPTIONS if kind == "decision" else None
+
     def assert_frozen_clean() -> None:
         assert _task_meta(tmp_path)["decision_status"] == "frozen"
         assert _history_pairs(_task_meta(tmp_path)) == [
@@ -1683,17 +1693,17 @@ def test_r5_absorbing_matrix(
 
     # Drive the task to frozen through this kind's own chain:
     # create (stall 0) + re-requests 1, 2, 3.
-    created = _request_attention(tmp_path, kind=kind, question="Ask?")
+    created = _request_attention(tmp_path, kind=kind, question="Ask?", options=opts)
     assert created["ok"] is True
-    _request_attention(tmp_path, kind=kind)
-    _request_attention(tmp_path, kind=kind)
-    frozen = _request_attention(tmp_path, kind=kind)
+    _request_attention(tmp_path, kind=kind, options=opts)
+    _request_attention(tmp_path, kind=kind, options=opts)
+    frozen = _request_attention(tmp_path, kind=kind, options=opts)
     assert frozen["ok"] is True
     assert_frozen_clean()
     assert _task_meta(tmp_path)["attention"][0]["stall_count"] == 3
 
     # Raise the same kind again (reuse path, stall 4).
-    raised = _request_attention(tmp_path, kind=kind)
+    raised = _request_attention(tmp_path, kind=kind, options=opts)
     assert raised["ok"] is True
     assert raised["attention"]["reused"] is True
     assert _task_meta(tmp_path)["attention"][0]["stall_count"] == 4
@@ -1701,14 +1711,14 @@ def test_r5_absorbing_matrix(
 
     # Retry past both thresholds (stall 5, 6).
     for expected in (5, 6):
-        retried = _request_attention(tmp_path, kind=kind)
+        retried = _request_attention(tmp_path, kind=kind, options=opts)
         assert retried["ok"] is True
         assert _task_meta(tmp_path)["attention"][0]["stall_count"] == expected
         assert_frozen_clean()
 
     # Resolve the ordinary record: refused, frozen stays.
     if kind == "approval":
-        _request_attention(tmp_path, kind="decision", question="Side decision.")
+        _request_attention(tmp_path, kind="decision", question="Side decision.", options=DECISION_OPTIONS)
         resolved = _request_attention(tmp_path, kind="decision", resolved=True)
     else:
         resolved = _request_attention(tmp_path, kind=kind, resolved=True)
@@ -2393,6 +2403,407 @@ def test_attention_without_enforce_writes_no_protocol_fields(
     assert reused["attention"]["reused"] is True
     assert "stall_count" not in reused["task"]["attention"][0]
     assert "decision_status" not in reused["task"]
+
+
+# --- Decision answerability: kind=decision requires options[] --------------
+#
+# With the protocol switch on, a decision must arrive with the option set a
+# human answer echoes; the validation runs before any write, notification
+# or event (no half record). Switch off keeps the old behaviour.
+
+
+def test_decision_without_options_enforce_on_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    _write_in_progress_task(tmp_path)
+    events: list[Any] = []
+    notifies: list[Any] = []
+    monkeypatch.setattr(
+        server.taskflow,
+        "_emit_signal_event",
+        lambda *a, **k: events.append((a, k)) or True,
+    )
+    monkeypatch.setattr(
+        server.taskflow,
+        "_send_attention_notification",
+        lambda *a, **k: notifies.append((a, k))
+        or {"sent": True, "eventId": "$att-b1"},
+    )
+
+    result = _request_attention(tmp_path)
+
+    assert result["ok"] is False
+    assert "kind=decision" in result["error"]
+    assert "options[]" in result["error"]
+    # Rejected before any side effect: no record, no notification, no event.
+    task = _task_meta(tmp_path)
+    assert "attention" not in task
+    assert notifies == []
+    assert events == []
+
+
+def test_decision_with_options_enforce_on_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    _write_in_progress_task(tmp_path)
+
+    result = _request_attention(tmp_path, options=[{"id": "opt1", "label": "Go"}])
+
+    assert result["ok"] is True
+    record = result["task"]["attention"][0]
+    assert record["options"][0]["id"] == "opt1"
+    assert record["options"][0]["label"] == "Go"
+    assert _task_meta(tmp_path)["attention"][0]["options"][0]["id"] == "opt1"
+
+
+def test_approval_without_options_enforce_on_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    _write_in_progress_task(tmp_path)
+
+    result = _request_attention(tmp_path, kind="approval", question="Approve?")
+
+    assert result["ok"] is True
+    assert result["task"]["attention"][0]["kind"] == "approval"
+    assert "options" not in result["task"]["attention"][0]
+
+
+def test_decision_without_options_enforce_off_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _write_in_progress_task(tmp_path)
+
+    result = _request_attention(tmp_path)
+
+    assert result["ok"] is True
+    assert result["task"]["attention"][0]["kind"] == "decision"
+    assert "options" not in result["task"]["attention"][0]
+
+
+def test_decision_eleven_options_enforce_on_cap_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    _write_in_progress_task(tmp_path)
+    eleven = [{"id": f"o{i}", "label": f"Option {i}"} for i in range(11)]
+
+    result = _request_attention(tmp_path, options=eleven)
+
+    assert result["ok"] is False
+    assert "at most 10 entries" in result["error"]
+    assert "attention" not in _task_meta(tmp_path)
+
+
+# --- #1506: no-options contract and the legacy upgrade path ---------------
+#
+# Pinned contract (contracts/attention.json decision_options, v1.1.0;
+# docs/design/teamharness/attention-decision-options-contract.md):
+#
+#   switch: protocol.enforce, deployment default OFF (see switch.default);
+#     TEAMHARNESS_PROTOCOL_ENFORCE wins when set.
+#     on  -> a NEW decision raise must carry options[]
+#     off -> a NEW decision raise without options[] succeeds (pre-W2)
+#
+#   resolve: the explicit close (resolved=true) is exempt in BOTH switch
+#     states. A legacy record (unresolved, no options — raised switch-off
+#     or before the guard) is answered in place with free text; it is
+#     never migrated, marked, or options-backfilled.
+#
+# Both resolve surfaces converge on request_attention(resolved=true) with
+# a surface-specific resolvedVia: the Matrix room close (im_reply /
+# im_command) and the Dashboard TH-4 close (dashboard). These tests cover
+# the shared runtime choke point for each side — {Matrix, Dashboard} x
+# {enforce on, enforce off} x {legacy record, new record}.
+
+
+def _legacy_decision_record() -> dict[str, Any]:
+    """An unresolved decision record without options: raised with the
+    switch off or before the guard existed — the shape a pre-#1506
+    worker persists."""
+    return {
+        "kind": "decision",
+        "question": "Pick a stack.",
+        "attempt": 1,
+        "requestedAt": "2026-10-01T00:00:00+00:00",
+        "resolved": False,
+        "eventId": "$att-decision-1",
+    }
+
+
+def _seed_legacy_record(tmp_path: Path) -> None:
+    task = _task_meta(tmp_path)
+    task["attention"] = [_legacy_decision_record()]
+    _write_task_meta(tmp_path, task)
+
+
+def test_1506_matrix_enforce_on_legacy_record_free_text_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    _write_in_progress_task(tmp_path)
+    _seed_legacy_record(tmp_path)
+
+    # The legacy record (no options) is answered in place with free text
+    # through the Matrix room-reply close — no migration, no backfill.
+    result = _request_attention(
+        tmp_path,
+        resolved=True,
+        role="human",
+        account="approver",
+        resolved_via="im_reply",
+        resolved_by="human:@approver:example.test",
+        resolve_evidence={
+            "roomId": ROOM,
+            "messageId": "$legacy-1",
+            "text": "Postgres, obviously.",
+        },
+    )
+
+    assert result["ok"] is True
+    record = _task_meta(tmp_path)["attention"][0]
+    assert record["resolved"] is True
+    assert record["resolvedVia"] == "im_reply"
+    assert record["resolvedBy"] == "human:@approver:example.test"
+    assert record["resolveEvidence"]["messageId"] == "$legacy-1"
+    assert record["resolveEvidence"]["text"] == "Postgres, obviously."
+    assert record["resolvedAt"]
+    # Switch-on close provenance: the server-written actor marker.
+    assert record["resolvedActor"] == "human:approver"
+    assert "options" not in record, "a legacy record is never options-backfilled"
+
+
+def test_1506_dashboard_enforce_on_legacy_record_free_text_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    _write_in_progress_task(tmp_path)
+    _seed_legacy_record(tmp_path)
+
+    # TH-4: a legacy record can only be answered in free text; the close
+    # marks it with the freeform evidence and resolvedVia=dashboard.
+    result = _request_attention(
+        tmp_path,
+        resolved=True,
+        role="human",
+        account="approver",
+        resolved_via="dashboard",
+        resolved_by="human:@approver:example.test",
+        resolve_evidence={"freeform": True, "text": "Postgres, obviously."},
+    )
+
+    assert result["ok"] is True
+    record = _task_meta(tmp_path)["attention"][0]
+    assert record["resolved"] is True
+    assert record["resolvedVia"] == "dashboard"
+    assert record["resolvedBy"] == "human:@approver:example.test"
+    assert record["resolveEvidence"]["freeform"] is True
+    assert record["resolvedAt"]
+    assert record["resolvedActor"] == "human:approver"
+    assert "options" not in record, "a legacy record is never options-backfilled"
+
+
+def test_1506_matrix_enforce_on_new_record_option_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    _write_in_progress_task(tmp_path)
+
+    # Switch on: a new decision raise without options is rejected
+    # (no write), and the option-carrying raise is the only accepted form.
+    rejected = _request_attention(tmp_path)
+    assert rejected["ok"] is False
+    assert "kind=decision" in rejected["error"]
+    assert "options[]" in rejected["error"]
+    assert "attention" not in _task_meta(tmp_path)
+
+    created = _request_attention(tmp_path, options=DECISION_OPTIONS)
+    assert created["ok"] is True
+    assert created["task"]["attention"][0]["options"][0]["id"] == "a"
+
+    # The Matrix close echoes the option id in the room reply.
+    result = _request_attention(
+        tmp_path,
+        resolved=True,
+        role="human",
+        account="approver",
+        resolved_via="im_reply",
+        resolved_by="human:@approver:example.test",
+        resolve_evidence={"roomId": ROOM, "messageId": "$new-1", "optionId": "a"},
+    )
+
+    assert result["ok"] is True
+    record = _task_meta(tmp_path)["attention"][0]
+    assert record["resolved"] is True
+    assert record["resolvedVia"] == "im_reply"
+    assert record["resolveEvidence"]["optionId"] == "a"
+    assert record["resolvedAt"]
+    # The options the record was raised with stay untouched.
+    assert record["options"][0]["id"] == "a"
+
+
+def test_1506_dashboard_enforce_on_new_record_option_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    _write_in_progress_task(tmp_path)
+
+    created = _request_attention(tmp_path, options=DECISION_OPTIONS)
+    assert created["ok"] is True
+
+    # TH-4: resolution is the option id; the close is recorded with
+    # resolvedVia=dashboard and the echoed option in the evidence.
+    result = _request_attention(
+        tmp_path,
+        resolved=True,
+        role="human",
+        account="approver",
+        resolved_via="dashboard",
+        resolved_by="human:@approver:example.test",
+        resolve_evidence={"optionId": "a"},
+    )
+
+    assert result["ok"] is True
+    record = _task_meta(tmp_path)["attention"][0]
+    assert record["resolved"] is True
+    assert record["resolvedVia"] == "dashboard"
+    assert record["resolveEvidence"]["optionId"] == "a"
+    assert record["resolvedAt"]
+    assert record["options"][0]["id"] == "a"
+
+
+def test_1506_matrix_enforce_off_new_record_no_options_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _write_in_progress_task(tmp_path)
+
+    # Switch off (deployment default): a decision without options is
+    # accepted — pre-W2 backward compatibility.
+    created = _request_attention(tmp_path)
+    assert created["ok"] is True
+    assert "options" not in created["task"]["attention"][0]
+
+    # The answer arrives as free text in the room; the close carries the
+    # provenance. Role stays worker: 'human' is gated off with the switch.
+    result = _request_attention(
+        tmp_path,
+        resolved=True,
+        resolved_via="im_reply",
+        resolved_by="human:@approver:example.test",
+        resolve_evidence={
+            "roomId": ROOM,
+            "messageId": "$off-1",
+            "text": "Postgres, obviously.",
+        },
+    )
+
+    assert result["ok"] is True
+    record = _task_meta(tmp_path)["attention"][0]
+    assert record["resolved"] is True
+    assert record["resolvedVia"] == "im_reply"
+    assert record["resolveEvidence"]["text"] == "Postgres, obviously."
+    assert record["resolvedAt"]
+    assert "options" not in record
+    # Switch off: no protocol fields are written at all.
+    assert "stall_count" not in record
+    assert "resolvedActor" not in record
+
+
+def test_1506_dashboard_enforce_off_new_record_no_options_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _write_in_progress_task(tmp_path)
+
+    created = _request_attention(tmp_path)
+    assert created["ok"] is True
+    assert "options" not in created["task"]["attention"][0]
+
+    result = _request_attention(
+        tmp_path,
+        resolved=True,
+        resolved_via="dashboard",
+        resolved_by="human:@approver:example.test",
+        resolve_evidence={"freeform": True, "text": "Postgres, obviously."},
+    )
+
+    assert result["ok"] is True
+    record = _task_meta(tmp_path)["attention"][0]
+    assert record["resolved"] is True
+    assert record["resolvedVia"] == "dashboard"
+    assert record["resolveEvidence"]["freeform"] is True
+    assert record["resolvedAt"]
+    assert "options" not in record
+    assert "stall_count" not in record
+    assert "resolvedActor" not in record
+
+
+def test_1506_matrix_enforce_off_legacy_record_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _write_in_progress_task(tmp_path)
+    _seed_legacy_record(tmp_path)
+
+    # Pre-W2 behaviour with the switch off: the legacy record simply
+    # closes; nothing about it is rewritten beyond the provenance.
+    result = _request_attention(
+        tmp_path,
+        resolved=True,
+        resolved_via="im_reply",
+        resolved_by="human:@approver:example.test",
+        resolve_evidence={
+            "roomId": ROOM,
+            "messageId": "$legacy-2",
+            "text": "Postgres, obviously.",
+        },
+    )
+
+    assert result["ok"] is True
+    record = _task_meta(tmp_path)["attention"][0]
+    assert record["resolved"] is True
+    assert record["resolvedVia"] == "im_reply"
+    assert record["resolveEvidence"]["messageId"] == "$legacy-2"
+    assert record["resolvedAt"]
+    assert "options" not in record, "a legacy record is never options-backfilled"
+    assert "stall_count" not in record
+
+
+def test_1506_dashboard_enforce_off_legacy_record_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    storage: None, attention_env: None,
+) -> None:
+    _write_in_progress_task(tmp_path)
+    _seed_legacy_record(tmp_path)
+
+    result = _request_attention(
+        tmp_path,
+        resolved=True,
+        resolved_via="dashboard",
+        resolved_by="human:@approver:example.test",
+        resolve_evidence={"freeform": True, "text": "Postgres, obviously."},
+    )
+
+    assert result["ok"] is True
+    record = _task_meta(tmp_path)["attention"][0]
+    assert record["resolved"] is True
+    assert record["resolvedVia"] == "dashboard"
+    assert record["resolveEvidence"]["freeform"] is True
+    assert record["resolvedAt"]
+    assert "options" not in record, "a legacy record is never options-backfilled"
+    assert "stall_count" not in record
 
 
 # --- Round 9 (#1467): the authoritative task before cross-actor writes ---

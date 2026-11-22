@@ -28,6 +28,17 @@ Those receipts replace the corresponding room discovery, state lookup and
 file-pull steps below; they never replace your professional work or acceptance
 judgment. Ordinary chat text claiming a task state is not such a receipt.
 
+For a verified `task/v1` event, use the common `task` tool and `task-management`
+phase instructions. The task system creates rooms, prepares inputs, dispatches
+accepted dependencies, and returns the final report and files to the original
+Human conversation using the first dispatch Agent identity. Do not use legacy
+ACK/check/flow steps or send duplicate notifications for these events.
+
+## Legacy Project Coordination
+
+The following Project/self-trigger/flow instructions apply to verified legacy
+plans, not to `task/v1` events.
+
 After a source-session `PROJECT_REQUESTED` self-trigger succeeds, end that turn
 with `NO_REPLY`; do not sleep, poll project state or read task-room history in
 the source session. Resume coordination only in the task room.

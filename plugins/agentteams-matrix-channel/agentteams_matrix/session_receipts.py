@@ -62,9 +62,9 @@ class SessionReceipts:
                 self.pending[key].append(pending)
         self.wakeup.set()
 
-    async def complete(self, room_id, event_id):
+    async def complete(self, room_id, event_id, *, trace_context=None):
         if self._manager_outbox:
-            await asyncio.to_thread(self._manager_outbox.enqueue, room_id, event_id, "completed")
+            await asyncio.to_thread(self._manager_outbox.enqueue, room_id, event_id, "completed", trace_context=trace_context)
             self.wakeup.set()
 
     async def flush(self):
@@ -143,14 +143,63 @@ class SessionReceiptMiddleware(MiddlewareBase):
             yield item
 
     async def on_acting(self, agent, input_kwargs, next_handler):
+        admission = self.ctx.extras.get('agentteams_canonical_admit')
+        if admission:
+            await admission(agent)
         managed = await self._message_turn()
+        if not managed:
+            identity = (getattr(self.ctx.request, 'channel_meta', None) or {}).get('task_execution')
+            if identity:
+                channel = await self.ctx.workspace.channel_manager.get_channel('agentteams_matrix')
+                execution = channel._task_execution
+                await asyncio.to_thread(execution.verify, identity)
+                turn = self.ctx.extras.setdefault('agentteams_task_tool_turn',
+                    {'identity': identity, 'lock': asyncio.Lock()})
+                managed = execution.recovery, turn
         if managed:
-            from qwenpaw_message_execution import guarded_tool
-            stream = guarded_tool(*managed, input_kwargs["tool_call"], next_handler, input_kwargs)
+            call = input_kwargs["tool_call"]
+            if call.name == "run_tool_batch":
+                from agentscope.message import TextBlock
+                from agentscope.tool import ToolResponse
+
+                # Toolkit subcalls in this SDK bypass Agent acting middleware.
+                # Decline before opening a journal entry or invoking any child.
+                yield ToolResponse(state="error", content=[TextBlock(
+                    text="Batch execution is unavailable for this managed turn. Call each required tool directly.")])
+                return
+            from qwenpaw_message_execution import guarded_tool, read_only_registration
+            binding = self.ctx.extras.get('agentteams_task_registration')
+            registration = await binding(agent, call) if binding else None
+            read_only = call.name == "read_file" and await read_only_registration(agent, call)
+            stream = guarded_tool(*managed, call, next_handler, input_kwargs,
+                                  registration=registration, read_only=read_only)
         else:
             stream = next_handler(**input_kwargs)
         async for item in stream:
             yield item
+
+    async def on_model_call(self, agent, input_kwargs, next_handler):
+        admission = self.ctx.extras.get('agentteams_canonical_admit')
+        if admission:
+            await admission(agent)
+        managed = await self._message_turn()
+        identity = (getattr(self.ctx.request, 'channel_meta', None) or {}).get('task_execution')
+        if managed or identity:
+            from task_operation import admit
+
+        if managed:
+            matrix, turn = managed
+            snapshot = await asyncio.to_thread(matrix.message_current, turn['identity'])
+            admit(snapshot['execution'].get('checkpoint'))
+        elif identity:
+            channel = await self.ctx.workspace.channel_manager.get_channel('agentteams_matrix')
+            task = await asyncio.to_thread(channel._task_execution.recovery.tools_current, identity)
+            admit(task['execution'].get('checkpoint'))
+        if (managed or identity) and input_kwargs.get('tools'):
+            input_kwargs = {**input_kwargs, 'tools': [
+                schema for schema in input_kwargs['tools']
+                if (schema.get('function') or {}).get('name') != 'run_tool_batch']}
+        return await next_handler(**input_kwargs)
 
     async def on_reply(self, agent, input_kwargs, next_handler):
         checkpointed = False

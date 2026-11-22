@@ -1,14 +1,191 @@
 ---
 name: teamharness-task-management
-description: "Compatibility entry for Leader workspaces that still refer to task-management. Use the shared task-delegation and project-management skills."
+description: "Use the common Task protocol to plan, execute, review and complete tasks by Task and artifact IDs."
 ---
 
-# Leader Task Management Compatibility
+# Task Collaboration
 
-Use `task-delegation` for the current execution-task contract and
-`project-management` for taskflow start_task, acceptance and main-task completion.
-Preserve a main Task already registered by Manager. Ordinary team work does not
-require a Project; never create one merely to handle an external request.
+Use the common `task` tool, or `agt task` when a CLI is available. Your identity
+and permissions come from your runtime. Do not supply a different role, Project,
+source room, recipient or storage path. The task system preserves the original
+request, Human conversation and first dispatch Agent identity.
 
-This compatibility name contains no separate workflow. Follow the shared skills
-instead of old Project-first task-management references.
+When you receive Human input, interpret each supplied message in the conversation.
+A complete work request asks you to perform work; a question, amendment, answer
+or withdrawal can require no new Task. Determine that meaning before operating.
+
+Your framework identifies transport copies by their source event identity.
+Different supplied input IDs are distinct Human message events, even when their
+bodies match. Do not deduplicate complete work requests by text, infer a retry
+from similar wording, or fulfill several independently requested runs with one
+execution. Repeating a complete work request requests another run unless the
+Human relates it to existing work. You may combine requests only when the Human
+asks you to do so, rather than deciding that duplicate-looking text is redundant.
+Use only the Task operations available to your role.
+If the user withdraws a request before you have started creating its Task, do not
+create one merely to cancel it. For an existing Task, identify the intended Task
+and call `cancel` with its main `taskId` and an explicit `reason` when your role
+permits it; do not cancel unrelated work or claim
+that a running tool has stopped without confirmation. The framework supplies and
+checks input freshness; do not poll message history to reconstruct it yourself.
+
+### Manager intake
+
+Answer a straightforward question directly when the answer can be given in the
+conversation without carrying out work or producing a deliverable. Use your
+management tools for AgentTeams administration, including creating Teams and
+Humans.
+
+For all other business work, check the registered Team roster first. A request
+to produce or attach a file, transform data, or report the results of work is a
+business deliverable even when the result is short and the Human supplies all
+the inputs. When a suitable Team exists, call `create` with that Team's
+registered `leader` and a concise `title` before doing any business execution.
+Leave decomposition and execution assignments to the Leader. Let the Task
+system return the accepted deliverable to the original conversation.
+You may perform the work yourself only after you verify that no suitable
+registered Team can take it. Resolve an unavailable roster before using this
+exception.
+
+When the framework supplies multiple input references, choose the original
+request's `inputId` (CLI: `--input-id`) for each Task you decide to create.
+Confirm a request as registered only with a Task creation receipt for its exact
+source event. A Task from another input cannot satisfy the current request.
+Your framework maps stable `inputId` references to the verified messages shown
+as `[Message ...]`. Use the supplied references; do not compute or renumber them.
+Message references do not imply a required Task count. Before finishing your turn, address every genuinely independent request
+still pending in the supplied inputs. Creating one Task does not settle the others.
+Interpret their relationships first; do not bind all creations to the
+first message or turn a supplement/withdrawal into another Task.
+When later inputs amend the same request, keep the original `inputId` and
+supply `relatedInputIds` in conversation order (CLI: repeat `--related-input-id`).
+You can reference only supplied inputs from the same Human conversation. The
+system captures all selected original bodies; later Human corrections override
+earlier conflicting requirements. Use relatedInputIds only for a Human amendment
+or supplement to the selected request; equal text is not such a relationship.
+Do not turn an amendment into a separate Task.
+
+An `outcome: input_changed` control result means no new Task was registered: new Human input
+arrived before admission. Your framework adds the verified new input as a native Human user message
+and preserves its reference in the control receipt. It saves that context before
+acknowledging the input or continuing inference. Interpret it together with the earlier
+request before choosing an operation. This is a normal update, not a failed task; do not ask
+the Human to resubmit merely because new input arrived. A withdrawal may require zero Tasks. Do
+not blindly retry an obsolete create. The framework handles later queued copies
+of inputs you already interpreted.
+
+You do not need to copy the current request: the task system verifies its
+original Matrix message and preserves the complete text. Use optional `spec`
+only to supplement necessary earlier context. Original Human requirements take
+precedence over supplementary context and execution assignments.
+
+## Plan as Leader
+
+Preserve the main task already registered by Manager. Call `plan` once with
+`taskId` and the complete `nodes` array. Each node has a local `id`, registered
+`assignedTo`, full `spec` and explicit `dependsOn` local IDs. Use `[]` only for
+independent work. If a node consumes another node's outputs or verifies its
+result, include that upstream ID; mentioning the dependency in prose does not
+delay dispatch or prepare inputs. Check every required edge before planning.
+Choose the smallest plan that meets the original scope, explicit node count,
+dependencies and acceptance criteria. Keep closely related implementation, tests
+and documentation together when one Worker can deliver them. Add a separate QA
+node where the requirements or verification benefit justify an independent
+handoff. Choose execution assignees from the supplied Worker roster. Your own
+Leader identity is unavailable for execution; keep ownership of planning and
+acceptance. When the Task system reports a no-effect assignee rejection, correct
+the assignment in your plan and submit it again. The task system creates the task room,
+allocates execution IDs and dispatches ready steps. End your turn after planning.
+
+## Execute as Worker
+
+Use the framework-prepared `begin` context. If none is supplied, call `begin`
+with your execution Task ID. Use its spec, input previews and actual local
+paths. Do not ACK again, reconstruct paths, or download supplied inputs again.
+Inputs are read-only. Write deliverables in `outputDirectory` and temporary work
+in `scratchDirectory`. Use an isolated test directory. Remove only the exact
+scratch paths you created. Do not use wildcard cleanup in a shared temporary
+directory or delete upstream files.
+An input with `purpose: revisionBase` is the exact rejected candidate, with its
+saved rejection in `review`. Use it as the base for the requested correction;
+it is not an accepted dependency. Keep this supplied base read-only and publish
+your corrected files from your own output directory.
+
+When your task requires a self-contained runnable project, publish unchanged
+copies of required accepted input modules alongside your app. Load dependencies
+from the delivered project, not hardcoded runtime, Task or storage paths. Validate
+a clean snapshot containing only the files you will submit.
+When verifying such a project, use only its declared accepted input files; do
+not fetch undeclared producer-workspace files to hide a missing dependency.
+
+If a tool returns a running session handle, use that session's wait operation
+until it reports a final result. Wait before starting dependent work, submitting,
+or ending your turn. Do not rerun the original command to obtain its result.
+
+Call Task `submit` with `taskId`, a truthful `summary`, optional detailed
+`report` and `files` relative to your output directory. Use `agt task submit`
+if the native tool is unavailable. Do not invoke legacy `taskflow submit_task`
+through a tool, shell or MCP client for these executions. Use the actual result `status`;
+do not claim success when validation failed. Submission is a candidate, not
+Leader acceptance. End after a successful durable submission. The task system
+notifies your Leader; do not send another completion message or poll.
+
+## Review as Leader
+
+Use the prepared public candidate or call `get` with the execution Task ID.
+Check the task spec, `candidate.id`, business status, report and exact artifact
+references. Read more only when evidence is truncated, missing or inconsistent.
+A prepared candidate snapshot does not prove business acceptance. Check the
+published files of a runnable project for its required dependencies; producer
+workspace files and hardcoded runtime paths are not delivery evidence. Review the
+available test evidence through static inspection; execution belongs to Workers.
+Accepting this step releases its dependencies, not final acceptance of the whole
+request. Do not wait for downstream QA that depends on this step. Read missing
+evidence once; do not download files to assemble a test environment, repeat
+unchanged reads, edit outputs or rerun checks. This is a decision-only phase:
+use common Task operations, not batch execution, subagents or another workflow.
+If required proof is missing or inconsistent, reject with explicit correction
+requirements instead of executing the work yourself.
+Distinguish the Worker's recorded test results from your own artifact review;
+do not claim you ran checks that you only read. Call `accept` or `reject` with the exact `submissionId` and your evidence
+in `note`. If the same step needs correction, provide explicit `replacementSpec`
+in that rejection. The task system keeps the rejected attempt terminal, creates
+one replacement execution under the same main task and rewires unstarted
+consumers. Omit it when no replacement is intended. Do not reopen the rejected
+execution, replace the main task or bypass required Human approval.
+
+After acceptance the task system dispatches ready dependencies automatically.
+End this turn; do not assign them again or wait for their results.
+
+## Read artifacts
+
+Use `files_read` for bounded text and `files_get` for a verified local path.
+Prefer `artifactId` plus `version` from the candidate or accepted input. For a
+truncated report, use `candidate.reportFile`. Continue text reads with the returned
+version and next offset. Use `files_put` only for deliberate intermediate sharing;
+normal submission publishes the named output files. Never guess storage keys.
+
+## Complete as Leader
+
+On `main_task_ready`, use the prepared `acceptedResults` from `get` to verify
+whole-request coverage. Each result includes its actual execution `id`, exact
+candidate, saved review, report and artifact versions. Do not reread unchanged
+accepted files or rerun checks. For a concrete evidence gap, use the result's
+execution ID; a plan step alias and main Task ID do not own child files.
+Call `complete` with the main `taskId` and final Human report. By default the task
+system includes all accepted outputs; use `artifacts` only to select exact accepted
+IDs. It saves the final report and returns it with downloadable files to the
+original Human conversation using the first dispatch Agent identity.
+
+After a valid durable plan, submit, accept/reject or complete receipt,
+your framework records the fact and ends this phase without another model call.
+Do not repeat that operation or checkpoint after submission. Pending projection
+and delivery remain the task system's responsibility.
+A create receipt confirms only its selected request was registered; continue
+interpreting any other pending Human inputs before ending your turn.
+
+Framework-generated receipts enter your context automatically. Queued notification
+means pending delivery, not recipient acceptance. Do not send duplicate reports,
+forge delivery facts, inspect private session files or wake another model to relay
+results. Use legacy taskflow/projectflow only for a verified legacy plan that
+explicitly requires those operations, never for a `task/v1` event.

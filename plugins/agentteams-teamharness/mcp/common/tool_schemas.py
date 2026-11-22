@@ -1,9 +1,11 @@
-# TOOL_SCHEMAS registration table for the 8 MCP tools (W1-a2: real module)
+# TOOL_SCHEMAS registration table for the MCP tools.
 from __future__ import annotations
 
 from typing import Any
+from mcp.common.task_cli import TASK_SCHEMA
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    "task": TASK_SCHEMA,
     "health": {
         "description": (
             "Check TeamHarness MCP server availability and basic tool wiring. "
@@ -365,8 +367,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "projectflow": {
         "description": (
-"Create projects only when explicitly requested. Use taskflow start_task "
-            "for ordinary task requests, even when they involve multiple workers "
+            "Manage explicitly requested Project Work, never ordinary direct replies. "
+            "For ordinary task requests use task create/plan, including multiple workers "
             "or dependencies. Manage existing projects, including DAG and Loop "
             "plans, query ready nodes, and record loop iterations. "
             "start_project combines task-room creation, "
@@ -506,7 +508,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "taskflow": {
         "description": (
-            "Create ordinary team work with start_task (one main Task and executable subtasks); use complete_task for its final report. Project is optional existing membership, never created implicitly. "
+            "Compatibility operations for existing legacy tasks and attention governance. For new main-task collaboration use the task tool or agt task CLI. Project is optional existing membership, never created implicitly. "
             "For advance_task pass mainTaskId; for accept_task_result pass payload {mainTaskId, taskId, submissionId, resultStatus, accepted}. "
             "leader delegates and checks tasks; worker or remote-member "
             "acknowledges and submits results; a leader can also ACK and submit its own assigned subtasks. worker or leader raises in-flight "

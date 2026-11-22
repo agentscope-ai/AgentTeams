@@ -41,8 +41,9 @@ Two distribution paths exist:
   declare one.
 * Release tags are `<module>-v<semver>`; the tag, the manifest and the Millforge
   index entry must agree. Pre-releases use `-alpha.N` / `-beta.N` suffixes.
-* `plugins/agentteams-teamharness/` must stay byte-identical to
-  `plugins/teamharness/` (parity gates: drift tests + compatibility-copy tests).
+* `plugins/teamharness/` owns the shared Task protocol. The
+  `plugins/agentteams-teamharness/` bundle references the shared source and
+  materializes it in portable releases.
 
 ## Default Path: AgentTeams CLI
 

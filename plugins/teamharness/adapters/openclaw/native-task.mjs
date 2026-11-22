@@ -1,9 +1,10 @@
 // Native SDK mechanics only. The Python bridge owns Task protocol semantics.
 import { execFile, execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-const bridge = fileURLToPath(new URL("../../mcp/common/task_native.py", import.meta.url));
+const taskRoot = process.env.AGENTTEAMS_PLUGIN_DIR || "/opt/agentteams/plugins/teamharness";
+const bridge = join(taskRoot, "mcp/common/task_native.py");
 const options = { encoding: "utf8", maxBuffer: 2 * 1024 * 1024, timeout: 120000 };
 
 function invoke(request) {
@@ -29,7 +30,7 @@ export function registerNativeTask(api, native = {}) {
   const call = native.invoke || invoke;
   const turns = new Map();
   const role = process.env.AGENTTEAMS_AGENT_ROLE || "worker";
-  const skill = readFileSync(new URL("../../skills/team/task-management/SKILL.md", import.meta.url), "utf8");
+  const skill = readFileSync(join(taskRoot, "skills/team/task-management/SKILL.md"), "utf8");
   const schema = native.schema || JSON.parse(execFileSync("python3", [bridge], {
     ...options, input: JSON.stringify({ operation: "schema", role }),
   }));

@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { registerNativeTask } from "../../../../teamharness/adapters/openclaw/native-task.mjs";
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+process.env.AGENTTEAMS_PLUGIN_DIR = fileURLToPath(new URL("../../../../teamharness/", import.meta.url));
+const capture = mkdtempSync(join(tmpdir(), "openclaw-task-capture-"));
+const modulePath = join(capture, "native-task.mjs");
+copyFileSync(new URL("../../../../teamharness/adapters/openclaw/native-task.mjs", import.meta.url), modulePath);
+test.after(() => rmSync(capture, { recursive: true, force: true }));
+const { registerNativeTask } = await import(pathToFileURL(modulePath).href);
 
 function install(invoke) {
   const hooks = new Map();

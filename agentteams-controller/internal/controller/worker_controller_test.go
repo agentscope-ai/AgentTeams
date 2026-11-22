@@ -2734,3 +2734,77 @@ func TestOwningTeamSubagentModel(t *testing.T) {
 		t.Errorf("non-member worker: got %q, want empty", got)
 	}
 }
+
+func TestWorkerRegisteredCollaborationIdentityConverges(t *testing.T) {
+	ctx := context.Background()
+	worker := newWorker("member", v1beta1.WorkerSpec{Runtime: "qwenpaw", Image: "worker:v1"})
+	worker.Generation = 1
+	rig := newWorkerRig(t, worker)
+	out, _, err := rig.reconcile("member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	standaloneHash := out.Status.SpecHash
+	team := &v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{{Name: "member", Role: "team_leader"}}}}
+	if err := rig.client.Create(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	check := func(role, teamName string) string {
+		t.Helper()
+		rig.backend.ClearCalls()
+		var out *v1beta1.Worker
+		for i := 0; i < 2; i++ {
+			var err error
+			out, _, err = rig.reconcile("member")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		req, ok := rig.backend.LastCreateReq()
+		if !ok {
+			t.Fatal("membership change did not recreate runtime")
+		}
+		for _, key := range []string{"AGENTTEAMS_AGENT_ROLE", "AGENTTEAMS_WORKER_ROLE"} {
+			if req.Env[key] != role {
+				t.Fatalf("%s=%q, want %q", key, req.Env[key], role)
+			}
+		}
+		if req.Env["AGENTTEAMS_TEAM_NAME"] != teamName {
+			t.Fatalf("team env=%q, want %q", req.Env["AGENTTEAMS_TEAM_NAME"], teamName)
+		}
+		hash := out.Status.SpecHash
+		rig.backend.ClearCalls()
+		for i := 0; i < 2; i++ {
+			out, _, err = rig.reconcile("member")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		creates, deletes, _, _, _ := rig.backend.CallSnapshot()
+		if len(creates) != 0 || len(deletes) != 0 || out.Status.SpecHash != hash {
+			t.Fatalf("stable identity churned: creates=%v deletes=%v", creates, deletes)
+		}
+		return hash
+	}
+	leaderHash := check("team_leader", "team-a")
+	if leaderHash == standaloneHash {
+		t.Fatal("joining Team did not change startup identity hash")
+	}
+	if err := rig.client.Get(ctx, types.NamespacedName{Name: team.Name, Namespace: team.Namespace}, team); err != nil {
+		t.Fatal(err)
+	}
+	team.Spec.WorkerMembers[0].Role = "worker"
+	if err := rig.client.Update(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	if check("worker", "team-a") == leaderHash {
+		t.Fatal("Leader to Worker role did not change identity hash")
+	}
+	if err := rig.client.Delete(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	if check("standalone", "") != standaloneHash {
+		t.Fatal("leaving Team did not restore standalone identity hash")
+	}
+}

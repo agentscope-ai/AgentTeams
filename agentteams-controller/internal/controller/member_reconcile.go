@@ -89,6 +89,7 @@ type MemberContext struct {
 	TeamName    string // effective Team identity used for scoped storage access
 	Namespace   string
 	Role        MemberRole
+	AgentRole   MemberRole // registered collaboration role; infrastructure Role remains independent
 	Spec        v1beta1.WorkerSpec
 
 	// TeamSubagentModel is the Team.spec.subagentModel default for this
@@ -1011,8 +1012,12 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 	if m.ModelProviderInfo != nil && m.ModelProviderInfo.IntranetURL != "" {
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
 	}
-	workerEnv["AGENTTEAMS_WORKER_ROLE"] = m.Role.String()
-	workerEnv["AGENTTEAMS_AGENT_ROLE"] = m.Role.String()
+	agentRole := m.AgentRole
+	if agentRole == "" {
+		agentRole = m.Role
+	}
+	workerEnv["AGENTTEAMS_WORKER_ROLE"] = agentRole.String()
+	workerEnv["AGENTTEAMS_AGENT_ROLE"] = agentRole.String()
 	workerEnv["AGENTTEAMS_TEAM_NAME"] = m.TeamName
 	runtime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
 	if d.ObservabilityReader != nil && observability.SupportsRuntime(runtime) {

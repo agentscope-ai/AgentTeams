@@ -260,12 +260,6 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		teamLlmTuning = r.owningTeamLlmTuning(ctx, w)
 	}
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy, teamLlmTuning)
-	if targetHandoff == nil && r.RuntimeStore != nil && mctx.SpecChanged && effectiveSpec.DesiredContainerMan() && effectiveSpec.DesiredState() == "Running" && !isEdgeWorker(w) {
-		handled, err := r.beginDesiredRuntimeHandoff(ctx, w, mctx)
-		if err != nil || handled {
-			return reconcile.Result{RequeueAfter: handoffPoll}, err
-		}
-	}
 	mctx.TeamName, err = r.workerTeamName(ctx, w)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -273,6 +267,25 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	teamRole, inTeam, err := r.teamRoleForWorker(ctx, w.Namespace, w.Name)
 	if err != nil {
 		return reconcile.Result{}, err
+	}
+	// Runtime identity comes from registered Team membership, independently of
+	// the standalone infrastructure owner. Include startup-only identity in the
+	// applied hash so joining, changing role, and leaving converge once.
+	if inTeam {
+		mctx.AgentRole = teamRole
+		h := fnv.New64a()
+		data, _ := json.Marshal([]string{mctx.AppliedSpecHash, mctx.TeamName, teamRole.String()})
+		_, _ = h.Write(data)
+		mctx.AppliedSpecHash = fmt.Sprintf("%x", h.Sum64())
+	} else {
+		mctx.TeamName = ""
+	}
+	mctx.SpecChanged = w.Status.SpecHash != "" && w.Status.SpecHash != mctx.AppliedSpecHash
+	if targetHandoff == nil && r.RuntimeStore != nil && mctx.SpecChanged && effectiveSpec.DesiredContainerMan() && effectiveSpec.DesiredState() == "Running" && !isEdgeWorker(w) {
+		handled, err := r.beginDesiredRuntimeHandoff(ctx, w, mctx)
+		if err != nil || handled {
+			return reconcile.Result{RequeueAfter: handoffPoll}, err
+		}
 	}
 	effectiveRuntime := backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime)
 	configOwnedByTeam := inTeam && backend.UsesMemberRuntimeConfig(effectiveRuntime)

@@ -171,7 +171,45 @@ async def canonical_registration(agent, call, server_path):
     if toolkit is None:
         return None
     tool = await toolkit.get_tool(call.name)
-    if type(tool) is not MCPTool or getattr(tool._tool, 'name', None) != 'task':
+    if type(tool) is not MCPTool:
+        # QwenPaw 2.2 exposes builtin MCP through the native Driver adapter,
+        # rather than AgentScope's legacy MCPTool/tool_groups.mcps registry.
+        from qwenpaw.drivers.adapters.agentscope_tool import DriverCapabilityTool
+        from qwenpaw.drivers.capabilities import parse_capability_id
+        from qwenpaw.drivers.handlers.mcp import MCPDriverHandler
+        from qwenpaw.drivers.handlers.mcp_stateful_client import StdIOStatefulClient
+        from qwenpaw.drivers.manager import DriverManager
+
+        if type(tool) is not DriverCapabilityTool:
+            return None
+        invoker = tool._invoker
+        manager = getattr(invoker, '__self__', None)
+        if (type(manager) is not DriverManager
+                or getattr(invoker, '__func__', None) is not DriverManager.invoke_capability):
+            return None
+        protocol, driver, kind, action, name = parse_capability_id(tool._capability.capability_id)
+        if (protocol, kind, action, name) != ('mcp', 'tool', 'invoke', 'task'):
+            return None
+        handler = manager._handlers.get(driver)
+        if type(handler) is not MCPDriverHandler:
+            return None
+        client = handler._client
+        if (type(client) is not StdIOStatefulClient or not client.is_connected
+                or client.session is None or not handler.card.enabled):
+            return None
+        params = client.server_params
+        endpoint = handler.card.endpoint
+        if (endpoint.get('transport', 'stdio') != 'stdio'
+                or endpoint.get('command') != params.command
+                or endpoint.get('args', []) != params.args
+                or params.command not in {'python', 'python3', sys.executable,
+                    '/opt/venv/qwenpaw/bin/python', '/opt/venv/qwenpaw/bin/python3'}
+                or len(params.args) != 1
+                or Path(params.args[0]).resolve() != Path(server_path).resolve()):
+            return None
+        return {'origin': 'agentteams.common.task_native',
+                'entrypoint': '/opt/agentteams/plugins/teamharness/mcp/common/task_native.py'}
+    if getattr(tool._tool, 'name', None) != 'task':
         return None
     for group in toolkit.tool_groups:
         for client in group.mcps:

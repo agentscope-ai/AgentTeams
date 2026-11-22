@@ -465,6 +465,22 @@ func TestDockerStatus(t *testing.T) {
 	}
 }
 
+func TestDockerStatusReadsActualCollaborationIdentity(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"Config":{"Env":["UNRELATED=value","AGENTTEAMS_AGENT_ROLE=team_leader","AGENTTEAMS_TEAM_NAME=alpha"]},"State":{"Status":"running"}}`))
+	}))
+	defer srv.Close()
+	b := newTestDockerBackend(t, srv.URL)
+
+	result, err := b.Status(t.Context(), "leader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AgentRole != "team_leader" || result.TeamName != "alpha" {
+		t.Fatalf("collaboration identity = %q/%q, want team_leader/alpha", result.AgentRole, result.TeamName)
+	}
+}
+
 func TestDockerStatusReportsOOMKill(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"State":{"Status":"exited","OOMKilled":true,"ExitCode":137,"Pid":0,"Running":false}}`))

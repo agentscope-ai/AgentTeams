@@ -727,6 +727,7 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 		ID     string `json:"Id"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
+			Env    []string          `json:"Env"`
 		} `json:"Config"`
 		State struct {
 			Status    string `json:"Status"`
@@ -754,6 +755,16 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 			message = fmt.Sprintf("Container exited with code %d.", inspectResp.State.ExitCode)
 		}
 	}
+	var agentRole, teamName string
+	for _, entry := range inspectResp.Config.Env {
+		key, value, _ := strings.Cut(entry, "=")
+		switch key {
+		case "AGENTTEAMS_AGENT_ROLE":
+			agentRole = value
+		case "AGENTTEAMS_TEAM_NAME":
+			teamName = value
+		}
+	}
 	return &WorkerResult{
 		Name:                name,
 		Backend:             "docker",
@@ -763,6 +774,8 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 		ContainerID:         inspectResp.ID,
 		InstanceID:          instanceID,
 		Runtime:             inspectResp.Config.Labels[v1beta1.LabelRuntime],
+		AgentRole:           agentRole,
+		TeamName:            teamName,
 		HandoffLabel:        inspectResp.Config.Labels[RuntimeHandoffLabel],
 		HandoffSpecHash:     inspectResp.Config.Labels[RuntimeHandoffSpecLabel],
 		dockerProcessExited: inspectResp.State.PID != nil && *inspectResp.State.PID == 0 && inspectResp.State.Running != nil && !*inspectResp.State.Running,

@@ -138,3 +138,56 @@ def test_native_public_tool_checks_durable_admission_before_any_cli(monkeypatch)
                                  'context': {'role': 'worker', 'execution': 'T'}}, call=call)
     assert result == blocked
     call.assert_not_called()
+
+
+def test_verified_input_refresh_is_a_successful_control_result_not_unknown(monkeypatch):
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
+    source = {'eventId': '$old', 'roomId': '!own:test', 'userId': '@human:test'}
+    control = {'ok': True, 'outcome': 'input_changed', 'sourceEventId': '$old', 'noTaskRegistered': True,
+               'inputs': [{'eventId': '$new', 'roomId': '!own:test', 'userId': '@human:test', 'body': 'Cancel prior request'}]}
+    args = {'action': 'create', 'leader': 'lead', 'title': 'Own request', '_nativeSource': source}
+    ledger = Ledger()
+    assert guard.run(args, lambda _: control, rpc=ledger) == control
+    assert ledger.saved['state'] == 'verified'
+    assert guard.run(args, Mock(side_effect=AssertionError('replayed create')), rpc=ledger) == control
+
+
+def test_changed_or_unbound_input_refresh_is_not_success_authority(monkeypatch):
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
+    args = {'action': 'create', '_nativeSource': {'eventId': '$old', 'roomId': '!own:test', 'userId': '@human:test'}}
+    control = {'ok': True, 'outcome': 'input_changed', 'sourceEventId': '$different', 'noTaskRegistered': True,
+               'inputs': [{'eventId': '$new', 'roomId': '!own:test', 'userId': '@human:test', 'body': 'new input'}]}
+    assert not guard.confirmed(args, control)
+
+
+def test_normal_begin_revision_rejection_and_file_publication_are_preserved(monkeypatch, tmp_path):
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
+    monkeypatch.setenv('TEAMHARNESS_SHARED_DIR', str(tmp_path))
+    outputs = tmp_path / 'tasks/T/workspace'
+    outputs.mkdir(parents=True)
+    (outputs / 'artifact.txt').write_text('Own output')
+    cases = [
+        ({'action': 'begin', 'taskId': 'T'}, {'task': {'id': 'T', 'status': 'in_progress', 'assignmentId': 'assignment'},
+            'inputs': [{'purpose': 'revisionBase', 'taskId': 'prior', 'readOnly': True}]}),
+        ({'action': 'reject', 'taskId': 'T', 'submissionId': 'candidate', 'note': 'Fix', 'replacementSpec': 'Concrete correction'},
+         {'task': {'id': 'T', 'status': 'blocked', 'submissionId': 'candidate'},
+          'review': {'id': 'decision', 'submissionId': 'candidate', 'accepted': False, 'status': 'blocked'},
+          'mainProjection': 'applied', 'replacementTaskId': 'next-T'}),
+        ({'action': 'files_put', 'taskId': 'T', 'source': 'artifact.txt', 'name': 'artifact.txt'},
+         {'artifactId': 'artifact', 'version': 'a' * 64}),
+    ]
+    for args, result in cases:
+        ledger = Ledger()
+        assert guard.run(args, lambda _, result=result: result, rpc=ledger) == result
+        assert ledger.saved['state'] == 'verified'
+
+
+def test_incomplete_create_is_prevalidated_without_cli_or_ledger(monkeypatch):
+    import task_cli
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
+    monkeypatch.setattr(task_cli.shutil, 'which', lambda _: '/usr/local/bin/agt')
+    call, ledger = Mock(), Mock()
+    result = guard.run({'action': 'create', 'leader': 'lead'}, call, validate=task_cli.command, rpc=ledger)
+    assert result['effect'] == 'none'
+    call.assert_not_called()
+    ledger.assert_not_called()

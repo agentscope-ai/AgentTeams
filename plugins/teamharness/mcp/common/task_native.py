@@ -48,6 +48,12 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         raise ValueError("native bridge request must be an object")
     call = call or task_cli.run
     operation = payload.get("operation")
+    if operation == "canonical_receipts":
+        if __package__:
+            from . import task_canonical
+        else:
+            import task_canonical
+        return {'receipts': task_canonical.admission_receipts(payload.get('admission'), payload.get('taskId'))}
     if operation == "canonical_admit":
         if __package__:
             from . import task_canonical

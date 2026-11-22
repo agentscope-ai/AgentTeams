@@ -56,6 +56,10 @@ def receipt(arguments, result):
 def confirmed(arguments, result):
     if not isinstance(result, dict) or result.get('ok') is False:
         return False
+    if arguments['action'] == 'create':
+        source = arguments.get('_nativeSource') or {}
+        if source and receipts.refresh_creation_inputs(result, [source], source.get('eventId')):
+            return True  # Successful API control result explicitly registered no Task.
     if arguments['action'] in {'create', 'plan', 'submit', 'accept', 'reject', 'complete'}:
         return receipt(arguments, result) is not None
     task = result.get('task') or {}
@@ -142,11 +146,15 @@ def admit(context, *, rpc=None):
             return _failure()
         if admission.get('mode') != 'admitted':
             return _failure(admission.get('authority'))
-        if admission.get('result'):
-            original = {'action': admission.get('action'), 'taskId': arguments.get('taskId'),
-                        'submissionId': admission.get('submissionId'),
-                        '_nativeSource': {'eventId': admission.get('sourceEventId')}}
-            saved = receipt(original, admission['result'])
-            if saved:
-                facts.append({'receiptId': saved[0], 'fact': saved[1]})
+        facts.extend(admission_receipts(admission, arguments.get('taskId')))
     return {'ok': True, 'receipts': facts}
+
+
+def admission_receipts(admission, task_id=None):
+    if not isinstance(admission, dict) or not admission.get('result'):
+        return []
+    original = {'action': admission.get('action'), 'taskId': task_id,
+                'submissionId': admission.get('submissionId'),
+                '_nativeSource': {'eventId': admission.get('sourceEventId')}}
+    saved = receipt(original, admission['result'])
+    return [{'receiptId': saved[0], 'fact': saved[1]}] if saved else []

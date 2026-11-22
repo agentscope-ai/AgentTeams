@@ -247,6 +247,11 @@ func (h *ProjectHandler) NativeTaskOperation(w http.ResponseWriter, r *http.Requ
 		if saved.State != "verified" {
 			saved.State = "unknown"
 		}
+	} else if input.Result["outcome"] == "input_changed" {
+		if !h.nativeInputRefreshReceipt(w, r, saved, input) {
+			return
+		}
+		saved.State, saved.Result = "verified", input.Result
 	} else {
 		task := coordinationMap(input.Result, "task")
 		if input.Result == nil || input.Result["ok"] == false {
@@ -318,4 +323,45 @@ func (h *ProjectHandler) NativeTaskOperation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	httputil.WriteJSON(w, 200, map[string]any{"mode": saved.State, "operationId": saved.ID})
+}
+
+// A successful input refresh is explicit no-effect authority, not a CLI error.
+// Reuse the same Matrix frontier reader as CreateTask and verify the returned
+// prefix; a concurrently newer message need not invalidate the earlier receipt.
+func (h *ProjectHandler) nativeInputRefreshReceipt(w http.ResponseWriter, r *http.Request, saved canonicalNativeOperation, input canonicalNativeRequest) bool {
+	if saved.Action != "create" || input.Result["ok"] != true || input.Result["noTaskRegistered"] != true || coordinationString(input.Result, "sourceEventId") != saved.SourceEventID {
+		writeError(w, 409, "verified input refresh control result required")
+		return false
+	}
+	if _, err := h.oss.GetObject(r.Context(), saved.TaskKey); !errors.Is(err, os.ErrNotExist) {
+		writeError(w, 409, "source Task absence is not verified")
+		return false
+	}
+	source := coordinationMap(input.Arguments, "_nativeSource")
+	frontier := coordinationString(source, "frontierEventId")
+	if frontier == "" {
+		frontier = saved.SourceEventID
+	}
+	manager, err := h.coordination.manager(r.Context(), authpkg.CallerFromContext(r.Context()).Username)
+	if err != nil {
+		writeError(w, 503, "source identity unavailable")
+		return false
+	}
+	updates, status := h.coordination.taskNewerInputs(r.Context(), manager.Name, coordinationString(source, "roomId"), coordinationString(source, "userId"), frontier)
+	if status != 0 {
+		writeError(w, status, "source frontier authority unavailable")
+		return false
+	}
+	returned, ok := input.Result["inputs"].([]any)
+	if !ok || len(returned) == 0 || len(returned) > len(updates) {
+		writeError(w, 409, "input refresh identities changed")
+		return false
+	}
+	expected, _ := json.Marshal(updates[:len(returned)])
+	actual, _ := json.Marshal(returned)
+	if !sameJSONValue(expected, actual) {
+		writeError(w, 409, "input refresh source content changed")
+		return false
+	}
+	return true
 }

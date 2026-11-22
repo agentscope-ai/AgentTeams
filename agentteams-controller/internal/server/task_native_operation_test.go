@@ -5,6 +5,7 @@ import (
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -171,5 +172,49 @@ func TestNativeOperationRejectsReplacedProcessBeforeRecordingIntent(t *testing.T
 	_, accepted := callNativeOperation(h, caller, input)
 	if accepted["mode"] != "execute" {
 		t.Fatal("replaced process poisoned current ledger", accepted)
+	}
+}
+
+func TestNativeOperationInputRefreshPreservesTheSuccessfulNoTaskControlResult(t *testing.T) {
+	h, _ := taskCreateFixture(t)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}
+	event := func(id, body string) map[string]any {
+		return map[string]any{"event_id": id, "room_id": "!source:test", "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": body}}
+	}
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/messages") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"chunk": []any{event("$new", "Cancel pending request"), event("$original", "Build a report")}})
+		} else {
+			_ = json.NewEncoder(w).Encode(event("$original", "Build a report"))
+		}
+	}))
+	defer source.Close()
+	h.coordination.deps.MatrixConfig.ServerURL = source.URL
+	args := map[string]any{"action": "create", "leader": "lead-cr", "title": "Report", "_nativeSource": map[string]any{"eventId": "$original", "roomId": "!source:test", "userId": "@human:test"}}
+	w, started := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	response := callTaskCreate(h, caller, "$original", `{"title":"Report","leader":"lead-cr"}`)
+	var control map[string]any
+	_ = json.Unmarshal(response.Body.Bytes(), &control)
+	if control["outcome"] != "input_changed" || control["noTaskRegistered"] != true {
+		t.Fatal(response.Body.String())
+	}
+	w, _ = callNativeOperation(h, caller, map[string]any{"mode": "finish", "arguments": args, "operationId": started["operationId"], "result": control})
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	_, cached := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+	result, _ := cached["result"].(map[string]any)
+	if cached["mode"] != "recovered" || result["outcome"] != "input_changed" {
+		t.Fatal("normal refresh became unknown", cached)
+	}
+	// Once the framework checkpoints the newer input, its frontier is a new
+	// intent and does not keep returning the stale cached refresh forever.
+	args["_nativeSource"].(map[string]any)["frontierEventId"] = "$new"
+	_, next := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+	if next["mode"] != "execute" {
+		t.Fatal(next)
 	}
 }

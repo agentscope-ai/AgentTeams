@@ -15,7 +15,6 @@ from urllib.parse import unquote
 
 from opentelemetry import baggage, context, trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.openai import OpenAIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan, SpanLimits, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
@@ -431,7 +430,14 @@ def configure(*, local_only=False):
         provider.add_span_processor(RuntimeLogProcessor())
     os.environ["TRACELOOP_TRACE_CONTENT"] = os.getenv("AGENTTEAMS_OTEL_CAPTURE_CONTENT", "true")
     if os.getenv("AGENTTEAMS_OTEL_RUNTIME") != "qwenpaw":
-        OpenAIInstrumentor().instrument()
+        try:
+            from opentelemetry.instrumentation.openai import OpenAIInstrumentor
+        except ModuleNotFoundError as error:
+            # Native runtimes can use the shared tracing helpers without the OpenAI SDK.
+            if error.name != "openai":
+                raise
+        else:
+            OpenAIInstrumentor().instrument()
     from at_runtime_adapters import install
     install()
     _provider = provider

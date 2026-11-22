@@ -830,8 +830,10 @@ async def _prepare_delivery_context(ctx: Any) -> None:
     if not isinstance(middle, dict):
         return
     ctx.extras["delivery_context_prepared"] = True
+    input_text = "\n".join(message.get_text_content() for message in ctx.input_msgs or []
+                           if message.role == "user")
     facts, acknowledgements = await asyncio.to_thread(
-        _receipt_module().delivery_context, middle, _room_id(ctx.request), _controller_json)
+        _receipt_module().delivery_context, middle, _room_id(ctx.request), _controller_json, input_text=input_text)
     for fact in facts:
         ctx.inject_context(fact, source="teamharness_sent_delivery")
     if acknowledgements:

@@ -80,9 +80,11 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         return json.loads(json.dumps(task_context.prepare_event(payload.get("event"), call), default=str))
     if operation == "delivery_context":
         room, middle = payload.get("room"), payload.get("middle")
-        if not isinstance(room, str) or not room.startswith("!") or not isinstance(middle, dict):
+        input_text = payload.get("inputText", "")
+        if (not isinstance(room, str) or not room.startswith("!") or not isinstance(middle, dict)
+                or not isinstance(input_text, str)):
             raise ValueError("native room and persisted delivery context required")
-        facts, acknowledgements = receipts.delivery_context(middle, room, get_json or controller_json)
+        facts, acknowledgements = receipts.delivery_context(middle, room, get_json or controller_json, input_text=input_text)
         return {"facts": facts, "acknowledgements": acknowledgements}
     if operation == "ack_delivery_context":
         middle, acknowledgements = payload.get("middle"), payload.get("acknowledgements")

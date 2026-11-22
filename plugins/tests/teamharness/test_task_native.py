@@ -203,6 +203,23 @@ def test_delivery_acknowledgement_is_returned_without_mutating_native_state(brid
     assert repeated['facts'] == [] and repeated['acknowledgements'] == {}
 
 
+def test_delivery_followup_rehydrates_seen_task_in_the_current_turn(bridge):
+    task = 'task-' + 'a' * 32
+    room = '!room:test'
+    old = {'eventId': 'seen', 'status': 'completed', 'roomId': room, 'taskId': task,
+           'reportMessageId': '$old', 'report': 'CSV report with 12 passing tests', 'artifacts': []}
+    new = dict(old, eventId='new', taskId='task-' + 'b' * 32, report='Unrelated report',
+               reportMessageId='$new', deliveredAt='2026-11-22T02:00:00Z')
+    other_room = dict(old, eventId='outside', roomId='!outside:test', report='Unrelated private report')
+    result = bridge.invoke({'operation': 'delivery_context', 'room': room,
+                            'middle': {'teamharness.sent_deliveries': {room: {'seen': True}}},
+                            'inputText': 'What was delivered for ' + task + '?'},
+                           get_json=lambda _: {'deliveries': [new, other_room, old]})
+    assert 'CSV report with 12 passing tests' in result['facts'][0]
+    assert all('Unrelated private report' not in fact for fact in result['facts'])
+    assert result['acknowledgements'] == {'new': room}
+
+
 @pytest.mark.parametrize('direct,configured,expected_path', [
     ('direct-token', None, None), ('', '/fixture/worker-token', '/fixture/worker-token'),
     ('', None, '/var/run/secrets/agentteams/token'),

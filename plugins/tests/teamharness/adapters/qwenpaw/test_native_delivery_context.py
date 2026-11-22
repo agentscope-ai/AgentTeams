@@ -31,7 +31,8 @@ class NativeDeliveryContextTest(unittest.TestCase):
         spec=importlib.util.spec_from_file_location("native_delivery_plugin",path)
         plugin=importlib.util.module_from_spec(spec);spec.loader.exec_module(plugin)
         testcase=self;manager=[None];reads=[]
-        row={"eventId":"completion","taskId":"main","status":"completed","roomId":"!source:test","reportMessageId":"$report","report":"Accepted report.","artifacts":[{"taskId":"child","name":"app.py","artifactId":"a1","messageId":"$file"}]}
+        task_id = "task-" + "a" * 32
+        row={"eventId":"completion","taskId":task_id,"status":"completed","roomId":"!source:test","reportMessageId":"$report","report":"Accepted report.","artifacts":[{"taskId":"child","name":"app.py","artifactId":"a1","messageId":"$file"}]}
 
         class Parameters(BaseModel):pass
         class Model(ChatModelBase):
@@ -51,8 +52,8 @@ class NativeDeliveryContextTest(unittest.TestCase):
             reads.append(path);testcase.assertEqual(path,"task-deliveries?roomId=%21source%3Atest")
             return {"deliveries":[row]}
 
-        def hook_context(agent):
-            return HookContext(request=SimpleNamespace(channel_meta={"room_id":"!source:test"}),session_id="original-room",agent_id="default",root_session_id="original-room",root_agent_id="default",workspace_dir=None,workspace=None,app_services=None,agent=agent,input_msgs=[Msg(name="Human",role="user",content=[TextBlock(text="Did you deliver?")])])
+        def hook_context(agent, question="Did you deliver?"):
+            return HookContext(request=SimpleNamespace(channel_meta={"room_id":"!source:test"}),session_id="original-room",agent_id="default",root_session_id="original-room",root_agent_id="default",workspace_dir=None,workspace=None,app_services=None,agent=agent,input_msgs=[Msg(name="Human",role="user",content=[TextBlock(text=question)])])
 
         async def run():
             model=Model();agent=Agent("Manager","Handle requests.",model,middlewares=[plugin._sanitizer_factory(None,None)]);manager[0]=agent
@@ -73,7 +74,15 @@ class NativeDeliveryContextTest(unittest.TestCase):
                 testcase.assertEqual(next_ctx.context_injections,[])
                 await restored.reply(next_ctx.input_msgs)
             testcase.assertEqual(restored_model.calls,1)
-            testcase.assertEqual(len(reads),2) # One common read per real user turn, no background model turn or tool.
+            followup = hook_context(restored, "What did you deliver for " + task_id + "?")
+            with patch.object(plugin, "_controller_json", side_effect=get):
+                await plugin._prepare_delivery_context(followup)
+                testcase.assertEqual(len(followup.context_injections), 1)
+                testcase.assertNotIn("delivery_ack_token", followup.extras)
+                Runtime._apply_context_injections(followup)
+                await restored.reply(followup.input_msgs)
+            testcase.assertEqual(restored_model.calls, 2)
+            testcase.assertEqual(len(reads), 3) # One common read per actual Human turn.
         with patch.dict(os.environ,{"AGENTTEAMS_AGENT_ROLE":"manager"}):asyncio.run(run())
 
 

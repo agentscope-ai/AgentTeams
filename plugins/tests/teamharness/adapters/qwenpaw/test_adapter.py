@@ -328,6 +328,37 @@ def test_manager_shared_intake_contract_does_not_require_legacy_switch(monkeypat
     assert contract in module._team_prompt(None)
 
 
+@pytest.mark.parametrize("tool_name", ["teamharness__task", "mcp__teamharness__task", None])
+def test_managed_phase_uses_the_registered_task_tool(tool_name):
+    module = load_plugin()
+    injected = []
+    removed = []
+
+    async def schemas():
+        names = ["teamharness__taskflow", "execute_shell_command"]
+        if tool_name:
+            names.append(tool_name)
+        return [{"function": {"name": name}} for name in names]
+
+    async def remove(name):
+        removed.append(name)
+
+    toolkit = types.SimpleNamespace(get_tool_schemas=schemas, remove_tool=remove)
+    context = types.SimpleNamespace(
+        agent=types.SimpleNamespace(toolkit=toolkit),
+        inject_context=lambda text, **kwargs: injected.append(text),
+    )
+    if not tool_name:
+        with pytest.raises(ValueError, match="Task tool is unavailable"):
+            asyncio.run(module._prepare_public_task_event(context, {"kind": "handoff"}))
+        assert not injected and not removed
+        return
+
+    asyncio.run(module._prepare_public_task_event(context, {"kind": "handoff"}))
+    assert any(f"`{tool_name}`" in text for text in injected)
+    assert removed == ["teamharness__taskflow", "execute_shell_command"]
+
+
 def test_roster_injection_cannot_replace_the_shared_intake_protocol(monkeypatch):
     from types import SimpleNamespace
     module = load_plugin()

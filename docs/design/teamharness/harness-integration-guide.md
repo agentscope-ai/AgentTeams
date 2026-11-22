@@ -56,6 +56,8 @@ Worker 使用实际启动入口调用 `POST /api/v1/runtime/matrix` 登记 `acti
 
 托管回合通过受信注册的原生 Task 工具执行状态变更。通用 shell 会在运行前登记待核验操作，使用 shell 调用 `agt task submit` 会和提交所需的 active 执行状态互斥。独立 CLI 入口需要继承当前 Worker 的有效运行身份。
 
+从当前 SDK 的工具列表读取 Task 工具的完整名称，包含运行时添加的命名空间，并把它放进当前回合上下文。核对模型收到的工具 schema、上下文里的名称与实际执行的名称一致。托管回合缺少该工具时应报告接入异常，保留原阶段状态。
+
 提交的 `files` 使用相对输出目录的 JSON 数组，单文件也使用数组。完成时默认交付已验收产物。显式选择时使用已验收结果中的 `artifactId`，版本哈希用于校验内容。公共工具在登记变更前核对显式选择。
 
 基于 `task_native.py` 的 `schema` 和 `task` 接入，复用公共角色 schema 及 CLI 语义。注册时调用 `{"operation":"schema","role":"leader"}` 取得角色 schema。调用工具时传 `operation="task"`、模型参数对象 `arguments` 和框架对象 `context`，后者包含真实 `role`、当前阶段作用域及建单所需的来源绑定。固定工具的身份须关联实际 SDK 注册与受信桥接进程。它使用任务系统已有权限。Shell、其他 MCP 和文件工具依原有权限执行。托管执行和协调回合限制旧 TaskFlow、ProjectFlow、FileSync，普通消息能力用于沟通。

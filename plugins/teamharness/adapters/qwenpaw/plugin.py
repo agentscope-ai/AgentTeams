@@ -839,6 +839,11 @@ def _reset_public_task_io(ctx: Any) -> None:
 async def _prepare_public_task_event(ctx: Any, event: dict) -> None:
     """Bind a verified common-protocol event to the native public tool/context."""
     kind = event.get("kind")
+    toolkit = ctx.agent.toolkit
+    names = [schema["function"]["name"] for schema in await toolkit.get_tool_schemas()]
+    task_tool_name = next((name for name in names if _is_task_tool(name)), None)
+    if not task_tool_name:
+        raise ValueError("Native Task tool is unavailable for this managed phase")
     spec = importlib.util.spec_from_file_location("teamharness_task_context", ASSET_DIR / "mcp/common/task_context.py")
     common = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(common)
@@ -856,13 +861,14 @@ async def _prepare_public_task_event(ctx: Any, event: dict) -> None:
                 ctx.extras[key] = variable.set(prepared[field])
         ctx.inject_context(prepared["fact"] + "\n" + json.dumps(prepared["context"], ensure_ascii=False), source="teamharness_public_task_prepared")
     _load_phase_skill(ctx, "task-management")
-    for tool in await ctx.agent.toolkit.get_tool_schemas():
-        name = tool["function"]["name"]
+    ctx.inject_context(f"Call the native Task tool named `{task_tool_name}` directly for Task operations in this turn.",
+                       source="teamharness_public_task_tool")
+    for name in names:
         short = name.split("__")[-1].lower()
         legacy = short in {"taskflow", "projectflow", "filesync"}
         restricted = kind in common.COORDINATION_PHASES and not _is_task_tool(name)
         if legacy or restricted:
-            await ctx.agent.toolkit.remove_tool(name)
+            await toolkit.remove_tool(name)
 
 
 def _load_phase_skill(ctx: Any, name: str) -> None:

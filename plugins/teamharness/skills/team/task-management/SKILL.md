@@ -5,10 +5,15 @@ description: "Use the common Task protocol to plan, execute, review and complete
 
 # Task Collaboration
 
-Use the common `task` tool, or `agt task` when a CLI is available. Your identity
-and permissions come from your runtime. Do not supply a different role, Project,
-source room, recipient or storage path. The task system preserves the original
-request, Human conversation and first dispatch Agent identity.
+In a runtime-backed turn, call the native Task tool using its exact name in
+the callable tool list, including any namespace. For example, use
+`teamharness__task` when the list shows that name. If a call reports an unknown
+tool name, correct the name from that list. Use `agt task` in a direct CLI
+session. Do not run it through a shell tool to operate on a managed Task.
+Your identity and permissions come from your runtime. Do not supply a
+different role, Project, source room, recipient or storage path. The task
+system preserves the original request, Human conversation and first dispatch
+Agent identity.
 
 ## Manager intake
 

@@ -83,11 +83,11 @@ Preserve the main task already registered by Manager. Call `plan` once with
 independent work. If a node consumes another node's outputs or verifies its
 result, include that upstream ID; mentioning the dependency in prose does not
 delay dispatch or prepare inputs. Check every required edge before planning.
-Keep the original scope, explicit execution-node count, dependency requirements
-and acceptance criteria. When the request groups implementation, tests and
-documentation into one execution node, keep them together. Arrange separate
-independent QA when the request requires it; do not add it as a mandatory extra
-node for every task. Assign execution and required independent QA to Workers;
+Choose the smallest plan that meets the original scope, explicit node count,
+dependencies and acceptance criteria. Keep closely related implementation, tests
+and documentation together when one Worker can deliver them. Add a separate QA
+node where the requirements or verification benefit justify an independent
+handoff. Assign execution and required independent QA to Workers;
 do not perform their work yourself. The task system creates the task room,
 allocates execution IDs and dispatches ready steps. End your turn after planning.
 
@@ -97,7 +97,9 @@ Use the framework-prepared `begin` context. If none is supplied, call `begin`
 with your execution Task ID. Use its spec, input previews and actual local
 paths. Do not ACK again, reconstruct paths, or download supplied inputs again.
 Inputs are read-only. Write deliverables in `outputDirectory` and temporary work
-in `scratchDirectory`. Use an isolated test directory; do not delete upstream files.
+in `scratchDirectory`. Use an isolated test directory. Remove only the exact
+scratch paths you created. Do not use wildcard cleanup in a shared temporary
+directory or delete upstream files.
 An input with `purpose: revisionBase` is the exact rejected candidate, with its
 saved rejection in `review`. Use it as the base for the requested correction;
 it is not an accepted dependency. Keep this supplied base read-only and publish
@@ -110,8 +112,10 @@ a clean snapshot containing only the files you will submit.
 When verifying such a project, use only its declared accepted input files; do
 not fetch undeclared producer-workspace files to hide a missing dependency.
 
-Call `submit` with `taskId`, a truthful `summary`, optional detailed `report`,
-and `files` relative to your output directory. Use the actual result `status`;
+Call Task `submit` with `taskId`, a truthful `summary`, optional detailed
+`report` and `files` relative to your output directory. Use `agt task submit`
+if the native tool is unavailable. Do not invoke legacy `taskflow submit_task`
+through a tool, shell or MCP client for these executions. Use the actual result `status`;
 do not claim success when validation failed. Submission is a candidate, not
 Leader acceptance. End after a successful durable submission. The task system
 notifies your Leader; do not send another completion message or poll.

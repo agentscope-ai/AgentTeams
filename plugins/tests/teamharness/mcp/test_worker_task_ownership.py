@@ -33,6 +33,32 @@ def test_checkpoint_unavailable_does_not_terminate_the_tool_server(monkeypatch):
     assert json.loads(health["result"]["content"][0]["text"])["ok"] is True
 
 
+def test_legacy_submit_rejects_controller_planned_execution_without_writing(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.example.test")
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
+    monkeypatch.setattr(server, "_pull_task", lambda *args, **kwargs: True)
+    task_id = "exec-" + "a" * 32
+    task_path = tmp_path / "shared" / "tasks" / task_id / "meta.json"
+    server._write_json(task_path, {
+        "task_id": task_id, "task_kind": "execution", "main_task_id": "main",
+        "task_plan_id": "b" * 64, "status": "in_progress", "assigned_to": "alice",
+    })
+    before = task_path.read_bytes()
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("legacy submit must not change a Controller-planned execution")
+
+    monkeypatch.setattr(server, "_write_task", unexpected_write)
+    monkeypatch.setattr(server, "_sync_task", unexpected_write)
+    monkeypatch.setattr(server, "_publish_task_artifacts", unexpected_write)
+    result = server.call_tool("taskflow", {"action": "submit_task", "workspaceDir": str(tmp_path),
+        "payload": {"taskId": task_id, "summary": "Ready", "status": "SUCCESS"}})
+    response = json.loads(result["content"][0]["text"])
+    assert not response["ok"] and "Task submit" in response["error"]
+    assert task_path.read_bytes() == before
+
+
 @pytest.mark.parametrize("progress_delivery", [None, "delivered", "pending"])
 @pytest.mark.parametrize("runtime_role", ["worker", "leader"])
 def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supplied(tmp_path, monkeypatch, progress_delivery, runtime_role):

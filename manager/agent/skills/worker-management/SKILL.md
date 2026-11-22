@@ -48,7 +48,7 @@ this path, and Edge onboarding uses its separate flow.
 
 - **Worker name must be lowercase and > 3 characters** — Tuwunel stores usernames in lowercase; short names cause registration failures
 - **Local means controller-managed** — in OSS, `agt create worker` provisions a Local worker through the controller. Do not map "local mode" to Remote/pip worker flags.
-- **`file-sync`, `task-progress`, `project-participation` are default skills** — always included, cannot be removed
+- **Use `task-execution` for task collaboration**. The controller installs it as a builtin Worker skill.
 - **Use `agentteams-find-worker` only for Nacos-backed market imports or Worker discovery during task assignment** — generic Worker creation and lifecycle changes stay in this skill
 - **Peer mentions cause loops if not briefed** — after enabling, explicitly tell Workers to only @mention peers for blocking info, never for acknowledgments
 - **Stop repeated diagnostics** — if the same lifecycle/status command returns empty, identical, or malformed output twice, stop and report what is known. Do not keep retrying `copaw channels list` or similar room probes after Worker deletion.

@@ -145,6 +145,7 @@ OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE)
 .PHONY: stage-agent-assets
 stage-agent-assets: ## Assemble shared role prompts and skills for Controller images
 	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -RP ./plugins ./agentteams-controller/plugins
+	@rm -rf ./agentteams-controller/plugins/agentteams-teamharness ./agentteams-controller/plugins/tests
 	@mkdir -p ./agentteams-controller/agent/manager-agent
 	@cp ./plugins/teamharness/prompts/manager/*.md ./agentteams-controller/agent/manager-agent/
 	@cp -r ./plugins/teamharness/skills/manager ./agentteams-controller/agent/manager-agent/skills

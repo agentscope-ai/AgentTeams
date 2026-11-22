@@ -55,7 +55,7 @@ agt get workers -o json | jq '.workers[] | {name, skills}'
 
 ## 注意
 
-- 内置 skills（`file-sync`、`task-progress`、`project-participation`、`mcporter`、`find-skills`）由 Worker 镜像自动分配，无需通过此目录管理
+- 内置 skills（`task-execution`、`mcporter`、`find-skills`）由 Controller 自动分配，无需通过此目录管理
 - 此目录中的 skills 由 Manager 统一维护，Worker 不能修改自己的 skills
 - Worker 的 on-demand skill 分配记录在 Worker CR 的 `spec.skills`
 
@@ -64,8 +64,7 @@ agt get workers -o json | jq '.workers[] | {name, skills}'
 | Skill | 说明 |
 |-------|------|
 | `file-sync` | Worker 与 MinIO 的文件同步 |
-| `task-progress` | 任务执行进度跟踪 |
-| `project-participation` | 多 Worker 项目协作 |
+| `task-execution` | 任务接收、执行与提交 |
 | `mcporter` | MCP Server 工具调用 |
 | `find-skills` | 从 Agent Skills 生态系统发现和安装技能 |
 

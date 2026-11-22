@@ -43,7 +43,8 @@ Two distribution paths exist:
   index entry must agree. Pre-releases use `-alpha.N` / `-beta.N` suffixes.
 * `plugins/teamharness/` owns the shared Task protocol. The
   `plugins/agentteams-teamharness/` bundle references the shared source and
-  materializes it in portable releases.
+  materializes it in portable releases. Controller and Embedded images ship
+  the canonical `plugins/teamharness/` tree.
 
 ## Default Path: AgentTeams CLI
 

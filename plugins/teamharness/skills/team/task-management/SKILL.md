@@ -114,6 +114,10 @@ a clean snapshot containing only the files you will submit.
 When verifying such a project, use only its declared accepted input files; do
 not fetch undeclared producer-workspace files to hide a missing dependency.
 
+If a tool returns a running session handle, use that session's wait operation
+until it reports a final result. Wait before starting dependent work, submitting,
+or ending your turn. Do not rerun the original command to obtain its result.
+
 Call Task `submit` with `taskId`, a truthful `summary`, optional detailed
 `report` and `files` relative to your output directory. Use `agt task submit`
 if the native tool is unavailable. Do not invoke legacy `taskflow submit_task`

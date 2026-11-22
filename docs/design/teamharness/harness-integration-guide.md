@@ -48,6 +48,8 @@ Worker 使用实际启动入口调用 `POST /api/v1/runtime/matrix` 登记 `acti
 
 执行恢复使用 Controller 领取返回的 `task_id/team_id/instance_id/process_id/generation` 和条件写入版本。重启、重复投递、旧执行代次、传输失败及工具结果未知都通过公共恢复检查处理。已保存回复走仅投递路径。批量或嵌套工具只有在子调用逐一经过准入并保存回执时启用。
 
+支持异步工具的 Harness 要保留原始调用 ID。工具返回运行句柄时，框架继续使用同一次调用的等待机制，直到取得结束状态并为原操作保存回执。后续工具和任务提交遵循现有准入规则。接入验证需让真实原生工具跨过首次等待窗口，检查后续等待能够取得终态、回执关联原调用、任务继续推进。进程中断后缺少终态证据时，仍走公共核验流程。
+
 ## 三、模型可见的 Task 工具
 
 基于 `task_native.py` 的 `schema` 和 `task` 接入，复用公共角色 schema 及 CLI 语义。注册时调用 `{"operation":"schema","role":"leader"}` 取得角色 schema。调用工具时传 `operation="task"`、模型参数对象 `arguments` 和框架对象 `context`，后者包含真实 `role`、当前阶段作用域及建单所需的来源绑定。固定工具的身份须关联实际 SDK 注册与受信桥接进程。它使用任务系统已有权限。Shell、其他 MCP 和文件工具依原有权限执行。托管执行和协调回合限制旧 TaskFlow、ProjectFlow、FileSync，普通消息能力用于沟通。
@@ -65,7 +67,7 @@ Worker 使用实际启动入口调用 `POST /api/v1/runtime/matrix` 登记 `acti
 | `files_read`、`files_get` | 按角色权限 | `taskId` 加 `name` 或 `artifactId` | `version`；`files_read` 支持 `offset/limit` |
 | `files_put` | Worker | 执行 `taskId`、`source`、`name` | `kind=output/intermediate` |
 
-只有任务 ID 存在歧义且接口明确要求时才传 `team`。计划依赖引用局部步骤 ID，实际执行 Task ID 由 Controller 分配。文件提交使用准备好的输出目录下的相对路径。`files_read` 返回有边界的文本，`files_get` 返回经过校验的本地路径。
+只有任务 ID 存在歧义且接口明确要求时才传 `team`。计划依赖引用局部步骤 ID，实际执行 Task ID 由 Controller 分配。Leader 向本团队独立注册的 Worker 指派执行节点。收到 `invalid_task_plan_assignee` 且 `effect=none` 时，可以更正指派后重提同一任务的计划。文件提交使用准备好的输出目录下的相对路径。`files_read` 返回有边界的文本，`files_get` 返回经过校验的本地路径。
 
 ## 四、回执、交付与可观测性
 

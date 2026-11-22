@@ -157,11 +157,20 @@ class SessionReceiptMiddleware(MiddlewareBase):
                     {'identity': identity, 'lock': asyncio.Lock()})
                 managed = execution.recovery, turn
         if managed:
+            call = input_kwargs["tool_call"]
+            if call.name == "run_tool_batch":
+                from agentscope.message import TextBlock
+                from agentscope.tool import ToolResponse
+
+                # Toolkit subcalls in this SDK bypass Agent acting middleware.
+                # Decline before opening a journal entry or invoking any child.
+                yield ToolResponse(state="error", content=[TextBlock(
+                    text="Batch execution is unavailable for this managed turn. Call each required tool directly.")])
+                return
             from qwenpaw_message_execution import guarded_tool
             binding = self.ctx.extras.get('agentteams_task_registration')
-            registration = await binding(agent, input_kwargs['tool_call']) if binding else None
-            stream = guarded_tool(*managed, input_kwargs["tool_call"], next_handler, input_kwargs,
-                                  registration=registration)
+            registration = await binding(agent, call) if binding else None
+            stream = guarded_tool(*managed, call, next_handler, input_kwargs, registration=registration)
         else:
             stream = next_handler(**input_kwargs)
         async for item in stream:
@@ -173,16 +182,19 @@ class SessionReceiptMiddleware(MiddlewareBase):
         if admission:
             await admission(agent)
         managed = await self._message_turn()
+        identity = (getattr(self.ctx.request, 'channel_meta', None) or {}).get('task_execution')
         if managed:
             matrix, turn = managed
             snapshot = await asyncio.to_thread(matrix.message_current, turn['identity'])
             admit(snapshot['execution'].get('checkpoint'))
-        else:
-            identity = (getattr(self.ctx.request, 'channel_meta', None) or {}).get('task_execution')
-            if identity:
-                channel = await self.ctx.workspace.channel_manager.get_channel('agentteams_matrix')
-                task = await asyncio.to_thread(channel._task_execution.recovery.tools_current, identity)
-                admit(task['execution'].get('checkpoint'))
+        elif identity:
+            channel = await self.ctx.workspace.channel_manager.get_channel('agentteams_matrix')
+            task = await asyncio.to_thread(channel._task_execution.recovery.tools_current, identity)
+            admit(task['execution'].get('checkpoint'))
+        if (managed or identity) and input_kwargs.get('tools'):
+            input_kwargs = {**input_kwargs, 'tools': [
+                schema for schema in input_kwargs['tools']
+                if (schema.get('function') or {}).get('name') != 'run_tool_batch']}
         return await next_handler(**input_kwargs)
 
     async def on_reply(self, agent, input_kwargs, next_handler):

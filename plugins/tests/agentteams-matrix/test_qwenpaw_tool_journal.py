@@ -73,6 +73,43 @@ def test_task_owned_tool_checkpoints_before_effect_and_after_complete_stream(out
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize('scope', ['task', 'message', 'unmanaged'])
+def test_composite_tool_does_not_enter_a_managed_journal_without_child_admission(scope):
+    managed = scope != 'unmanaged'
+    identity = {'event_key': 'M'} if scope == 'message' else {'task_id': 'T', 'team_id': 'team'}
+    def start_batch(*_):
+        pytest.fail('Composite tool was journaled as a single operation')
+    recovery = SimpleNamespace(tools_current=lambda _: {'execution': {}}, begin_tools=start_batch)
+    matrix = SimpleNamespace(message_current=lambda _: {'execution': {}}, message_begin_tools=start_batch)
+    messages = SimpleNamespace(matrix=matrix, turns={'M': {'identity': identity}})
+    channel = SimpleNamespace(_task_execution=SimpleNamespace(recovery=recovery, messages=messages, verify=lambda _: None))
+    meta = {scope + '_execution': identity} if managed else {}
+    ctx = SimpleNamespace(extras={}, request=SimpleNamespace(channel_meta=meta),
+        workspace=SimpleNamespace(channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel))))
+    hook = middleware(ctx)
+    tools = [{'function': {'name': name}} for name in ['run_tool_batch', 'write_file']]
+    batch = ToolCallBlock(id='batch', name='run_tool_batch', input='{}')
+    native_invoked = False
+
+    async def native(**kwargs):
+        nonlocal native_invoked
+        native_invoked = True
+        yield ToolResponse(state='success', content=[TextBlock(text='native')])
+
+    async def scenario():
+        model = AsyncMock()
+        await hook.on_model_call(None, {'tools': tools}, model)
+        visible = model.await_args.kwargs['tools']
+        assert [schema['function']['name'] for schema in visible] == (
+            ['write_file'] if managed else ['run_tool_batch', 'write_file'])
+        assert len(tools) == 2
+        results = [item async for item in hook.on_acting(None, {'tool_call': batch}, native)]
+        assert len(results) == 1
+        assert native_invoked == (not managed)
+        assert results[0].state == ('error' if managed else 'success')
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('scope', ['task', 'message'])
 def test_unconfirmed_operation_blocks_actual_model_boundary(scope):
     identity = ({'event_key': 'key'} if scope == 'message' else {'task_id': 'T', 'team_id': 'team'})

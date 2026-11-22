@@ -110,6 +110,7 @@ class NativeTaskToolTest(unittest.TestCase):
         def load(name,path):
             spec=importlib.util.spec_from_file_location(name,path)
             module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
+        sys.path.insert(0,str(root/"plugins/teamharness/mcp/common"))
         plugin=load("native_task_tool_plugin",root/"plugins/teamharness/adapters/qwenpaw/plugin.py")
         bridge=load("native_task_bridge",root/"plugins/teamharness/mcp/common/task_cli.py")
         testcase=self;requests=[];tool_calls=[]
@@ -141,9 +142,17 @@ class NativeTaskToolTest(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body=json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                requests.append((urlsplit(self.path).path,body,dict(self.headers)))
+                # This fixture checks SDK/CLI transport; the native ledger's
+                # authority and CAS are covered by real Go HTTP tests separately.
+                if urlsplit(self.path).path == "/api/v1/tasks/native-operations":
+                    mode=body["mode"]
+                    response=({"mode":"execute","operationId":"fixture-operation"} if mode=="begin"
+                              else {"mode":"verified"} if mode=="finish" else {"mode":"admitted"})
+                else:
+                    requests.append((urlsplit(self.path).path,body,dict(self.headers)))
+                    response=result
                 self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers()
-                self.wfile.write(json.dumps(result).encode())
+                self.wfile.write(json.dumps(response).encode())
             def log_message(self,*args):pass
 
         class Session:

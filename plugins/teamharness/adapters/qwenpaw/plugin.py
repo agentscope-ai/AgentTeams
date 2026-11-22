@@ -131,6 +131,19 @@ def _phase_module():
     return module
 
 
+@lru_cache(maxsize=1)
+def _canonical_module():
+    import importlib
+    import sys
+    from types import ModuleType
+    package = '_agentteams_qwen_task_common'
+    if package not in sys.modules:
+        module = ModuleType(package)
+        module.__path__ = [str(ASSET_DIR / 'mcp/common')]
+        sys.modules[package] = module
+    return importlib.import_module(package + '.task_canonical')
+
+
 def _record_phase_error(result: Any) -> None:
     phase = _phase_retry.get()
     if phase is not None and isinstance(result, dict) and result.get("ok") is False and result.get("retryable") is True:
@@ -149,6 +162,31 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
         async def registration(agent, call):
             return await canonical_registration(agent, call, ASSET_DIR / 'mcp/server.py')
         _ctx.extras['agentteams_task_registration'] = registration
+        async def admit_canonical(agent):
+            if not os.getenv('AGENTTEAMS_CONTROLLER_URL'):
+                return
+            sources = _creation_sources.get()
+            if sources is None and _source_event.get() and _requester_route.get():
+                route = _requester_route.get()
+                sources = [{'eventId': _source_event.get(), 'roomId': route['target_session'],
+                            'userId': route['target_user']}]
+            identity = _request_meta(_ctx.request).get('task_execution') or {}
+            context = {'role': os.getenv('AGENTTEAMS_AGENT_ROLE'), 'sources': sources or [],
+                       'execution': _execution_task.get(), 'planning': list(_planning_tasks.get()),
+                       'review': _review_task.get(), 'completion': _completion_task.get(),
+                       'team': identity.get('team_id') or os.getenv('AGENTTEAMS_TEAM_ID')}
+            result = await asyncio.to_thread(_canonical_module().admit, context)
+            if result.get('ok') is not True:
+                from task_recovery import RecoveryConflict
+                raise RecoveryConflict(result.get('message') or 'Canonical Task outcome requires verification')
+            from agentscope.message import Msg
+            seen = agent.state.middle_context.setdefault('teamharness.canonical_receipts', {})
+            for receipt in result.get('receipts', []):
+                if receipt['receiptId'] not in seen:
+                    agent.state.context.append(Msg(name=agent.name, role='assistant',
+                        content=[{'type': 'text', 'text': receipt['fact']}]))
+                    seen[receipt['receiptId']] = True
+        _ctx.extras['agentteams_canonical_admit'] = admit_canonical
 
     def source_for(input_id, related_inputs=None):
         sources = _creation_sources.get()

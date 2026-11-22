@@ -143,6 +143,9 @@ class SessionReceiptMiddleware(MiddlewareBase):
             yield item
 
     async def on_acting(self, agent, input_kwargs, next_handler):
+        admission = self.ctx.extras.get('agentteams_canonical_admit')
+        if admission:
+            await admission(agent)
         managed = await self._message_turn()
         if not managed:
             identity = (getattr(self.ctx.request, 'channel_meta', None) or {}).get('task_execution')
@@ -166,6 +169,9 @@ class SessionReceiptMiddleware(MiddlewareBase):
 
     async def on_model_call(self, agent, input_kwargs, next_handler):
         from task_operation import admit
+        admission = self.ctx.extras.get('agentteams_canonical_admit')
+        if admission:
+            await admission(agent)
         managed = await self._message_turn()
         if managed:
             matrix, turn = managed

@@ -111,3 +111,50 @@ def test_only_actual_builtin_mcp_connection_delegates(variation):
         tool_groups=[SimpleNamespace(mcps=[client])]))
     result = asyncio.run(canonical_registration(agent, SimpleNamespace(name=tool.name), server))
     assert (result is not None) == (variation == 'valid')
+
+
+def test_canonical_unknown_stops_before_generic_start_and_model():
+    calls = []
+    async def admission(agent):
+        calls.append('canonical')
+        raise RecoveryConflict('canonical unknown')
+    ctx = SimpleNamespace(extras={'agentteams_canonical_admit': admission},
+        request=SimpleNamespace(channel_meta={}))
+    async def native(**kwargs):
+        calls.append('native')
+        yield 'response'
+    async def scenario():
+        hook = middleware(ctx)
+        for entry in [hook.on_acting, hook.on_model_call]:
+            with pytest.raises(RecoveryConflict, match='canonical unknown'):
+                async for _ in entry(None, {}, native):
+                    pass
+        assert calls == ['canonical', 'canonical']
+    asyncio.run(scenario())
+
+
+def test_canonical_cached_receipt_enters_native_context_once(monkeypatch):
+    path = ROOT / 'plugins/teamharness/adapters/qwenpaw/plugin.py'
+    spec = importlib.util.spec_from_file_location('_qwen_canonical_context', path)
+    plugin = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plugin)
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
+    monkeypatch.setenv('AGENTTEAMS_AGENT_ROLE', 'worker')
+    contexts = []
+    def admit(context):
+        contexts.append(context)
+        return {'ok': True, 'receipts': [{'receiptId': 'receipt-one', 'fact': 'Task T submitted; downstream notification confirmed.'}]}
+    monkeypatch.setattr(plugin, '_canonical_module', lambda: SimpleNamespace(admit=admit))
+    ctx = SimpleNamespace(extras={}, request=SimpleNamespace(channel_meta={'task_execution': {'team_id': 'team'}}))
+    plugin._sanitizer_factory(ctx, None)
+    plugin._execution_task.set('T')
+    agent = SimpleNamespace(name='Worker', state=SimpleNamespace(middle_context={}, context=[]))
+    async def scenario():
+        await ctx.extras['agentteams_canonical_admit'](agent)
+        await ctx.extras['agentteams_canonical_admit'](agent)
+    asyncio.run(scenario())
+    assert all(c['execution'] == 'T' and c['team'] == 'team' for c in contexts)
+    assert len(agent.state.context) == 1
+    assert agent.state.context[0].role == 'assistant'
+    assert 'downstream notification confirmed' in agent.state.context[0].content[0].text
+    assert agent.state.middle_context['teamharness.canonical_receipts'] == {'receipt-one': True}

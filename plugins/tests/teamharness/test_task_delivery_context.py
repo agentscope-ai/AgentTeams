@@ -38,6 +38,16 @@ def test_wrong_room_or_incomplete_receipt_cannot_claim_sent():
         assert receipts.delivery_context(state,"!source:test",get)==([],{})
     assert receipts.delivery_context(state,"!source:test",lambda p:{"deliveries":[delivery()]})[0]
 
+
+def test_delivery_fact_cannot_dispose_of_a_later_input():
+    receipts = module()
+    historical = delivery()
+    historical["sourceEventId"] = "$previous"
+    facts, _ = receipts.delivery_context({}, "!source:test", lambda _: {"deliveries": [historical]})
+    assert "This record fulfills only the request identified by sourceEventId." in facts[0]
+    assert "Decide how to handle each current input on its own." in facts[0]
+    assert '"sourceEventId":"$previous"' in facts[0]
+
 def test_creation_response_is_not_required_and_pagination_is_not_polling():
     receipts=module();state={};calls=[]
     def get(path):

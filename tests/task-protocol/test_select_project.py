@@ -69,6 +69,23 @@ class ProjectSelectionTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 select_project("simple-csv", nodes, root, planning_policy="leader_decides")
 
+    def test_leader_defined_plan_selects_integration_over_its_input_projects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write(root, "draft-a/app.py", "working copy")
+            self.write(root, "draft-b/app.py", "alternate working copy")
+            self.write(root, "integration/app.py", "final delivery")
+            nodes = [
+                {"task_id": "draft-a"},
+                {"task_id": "draft-b"},
+                {"task_id": "prep", "depends_on": ["draft-b"]},
+                {"task_id": "integration", "depends_on": ["draft-a", "prep"]},
+                {"task_id": "review", "depends_on": ["integration"]},
+            ]
+            project, evidence = select_project("complex-settlement", nodes, root, planning_policy="leader_decides")
+            self.assertEqual(project, root / "integration")
+            self.assertEqual(evidence["ownerTaskId"], "integration")
+
 
 if __name__ == "__main__":
     unittest.main()

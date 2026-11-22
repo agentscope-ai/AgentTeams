@@ -6,17 +6,28 @@ from pathlib import Path
 def select_project(case, nodes, delivered, *, planning_policy=None):
     delivered = Path(delivered)
     if planning_policy == "leader_decides":
-        accepted_ids = {node["task_id"] for node in nodes}
-        entries = [entry for entry in delivered.glob("*/**/app.py")
-                   if entry.relative_to(delivered).parts[0] in accepted_ids]
-        if len(entries) != 1:
-            raise ValueError("accepted deliverables must identify one project entry")
-        primary = entries[0]
+        dependencies = {node["task_id"]: node.get("depends_on", []) for node in nodes}
+        entries = [(entry.relative_to(delivered).parts[0], entry)
+                   for entry in delivered.glob("*/**/app.py")
+                   if entry.relative_to(delivered).parts[0] in dependencies]
+        upstream = set()
+        for owner, _ in entries:
+            pending = list(dependencies[owner])
+            seen = set()
+            while pending:
+                dependency = pending.pop()
+                if dependency not in seen:
+                    seen.add(dependency)
+                    pending.extend(dependencies.get(dependency, []))
+            upstream.update(seen)
+        final_entries = [(owner, entry) for owner, entry in entries if owner not in upstream]
+        if len(final_entries) != 1:
+            raise ValueError("accepted deliverables must identify one final project entry")
+        owner, primary = final_entries[0]
         if not primary.resolve().is_relative_to(delivered.resolve()):
             raise ValueError("invalid delivered project entry")
-        return primary.parent, {"ownerTaskId": primary.relative_to(delivered).parts[0],
-                                "root": str(primary.parent),
-                                "selection": "single project entry in accepted delivered artifacts"}
+        return primary.parent, {"ownerTaskId": owner, "root": str(primary.parent),
+                                "selection": "unique downstream project entry in accepted artifacts"}
 
     if case == "simple-csv":
         if len(nodes) != 1:

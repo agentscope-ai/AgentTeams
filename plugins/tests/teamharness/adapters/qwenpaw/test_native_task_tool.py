@@ -28,7 +28,7 @@ def native_available():
 @unittest.skipUnless(native_available(), "native SDK and candidate agt required")
 class NativeTaskToolTest(unittest.TestCase):
     def test_accept_works_after_shell_pruning_without_tool_authorization(self):
-        self.run_task("accept")
+        self.run_task("accept", use_prepared_submission=True)
 
     def test_reject_dispatches_explicit_replacement_and_injects_receipt(self):
         self.run_task("reject")
@@ -95,7 +95,7 @@ class NativeTaskToolTest(unittest.TestCase):
         finally:
             server.shutdown();server.server_close();thread.join()
 
-    def run_task(self, action, invalid_source=False, no_spec=False, stale_input=False):
+    def run_task(self, action, invalid_source=False, no_spec=False, stale_input=False, use_prepared_submission=False):
         from agentscope.agent import Agent
         from agentscope.model import ChatModelBase, ChatResponse
         from agentscope.message import Msg, ToolCallBlock, TextBlock
@@ -116,6 +116,8 @@ class NativeTaskToolTest(unittest.TestCase):
         testcase=self;requests=[];tool_calls=[]
         if action in {"accept", "reject"}:
             arguments={"action":action,"taskId":"execution-a","submissionId":"s1","note":"Independent business checks passed"}
+            if use_prepared_submission:
+                arguments.pop("submissionId")
             result={"task":{"id":"execution-a","status":"completed","submissionId":"s1"},
                     "review":{"id":"review-one","submissionId":"s1","accepted":True,"status":"completed"},
                     "mainProjection":"applied","dispatchStatus":"ready",
@@ -257,6 +259,8 @@ class NativeTaskToolTest(unittest.TestCase):
             path,body,headers=requests[0]
             testcase.assertEqual(headers.get("Authorization"),"Bearer fixture-token")
             testcase.assertEqual({key.lower():value for key,value in headers.items()}["traceparent"],env["AT_OTEL_TRACEPARENT"])
+            if action in {"accept", "reject"}:
+                testcase.assertEqual(body["submissionId"], "s1")
             if action=="reject": testcase.assertEqual(body["replacementSpec"],"Fix exact cents")
             if action=="create":
                 testcase.assertEqual(path,"/api/v1/tasks")

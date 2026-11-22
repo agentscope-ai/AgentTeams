@@ -149,6 +149,21 @@ def test_wrong_scope_or_model_private_fields_never_reach_cli(bridge, arguments, 
                       call=lambda _: pytest.fail('unbound operation executed'))
 
 
+@pytest.mark.parametrize('action', ['accept', 'reject'])
+def test_review_uses_prepared_submission_when_model_omits_it(bridge, action):
+    arguments = {'action': action, 'taskId': 't1', 'note': 'Verified the file.'}
+    calls = []
+
+    def call(bound):
+        calls.append(bound)
+        return {'ok': False, 'effect': 'none'}
+
+    bridge.invoke({'operation': 'task', 'arguments': arguments,
+                   'context': {'role': 'leader', 'review': ['t1', 'current']}}, call=call)
+    assert calls == [{**arguments, 'submissionId': 'current'}]
+    assert 'submissionId' not in arguments
+
+
 def test_create_keeps_source_binding_per_call_and_does_not_end_human_turn(bridge):
     original = {'inputId': 'ref', 'eventId': '$source', 'roomId': '!room:test', 'userId': '@human:test'}
     calls = []

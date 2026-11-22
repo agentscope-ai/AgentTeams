@@ -201,6 +201,19 @@ def creation_coverage_context(sources: list[dict], registered: set[str]) -> str:
     )
 
 
+def prepared_submission_id(arguments: dict, review: list | tuple | None) -> str:
+    if not isinstance(review, (list, tuple)) or len(review) != 2:
+        raise ValueError("no prepared candidate in the current Task review")
+    task_id, submission_id = review
+    if arguments.get("taskId") != task_id:
+        raise ValueError(f"review the prepared candidate for Task {task_id}")
+    if not isinstance(submission_id, str) or not submission_id:
+        raise ValueError("the prepared Task review has no submission identity")
+    if arguments.get("submissionId", submission_id) != submission_id:
+        raise ValueError("submissionId does not match the prepared candidate; omit it to use the current candidate")
+    return submission_id
+
+
 def task_receipt(result: object, task_id: str, action: str) -> tuple[str, str] | None:
     """Return a deduplication identity and code-generated fact, or no receipt.
 

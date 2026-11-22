@@ -114,9 +114,8 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         raise ValueError("task plan does not match the admitted handoff")
     if action == "complete" and (not context.get("completion") or identity != context["completion"]):
         raise ValueError("task completion does not match the accepted main task")
-    if action in {"accept", "reject"} and (not isinstance(review, (list, tuple)) or len(review) != 2
-            or [identity, arguments.get("submissionId")] != list(review)):
-        raise ValueError("task review does not match the exact prepared candidate")
+    if action in {"accept", "reject"}:
+        arguments["submissionId"] = receipts.prepared_submission_id(arguments, review)
     source = ""
     sources = context.get("sources") or []
     if action == "create":

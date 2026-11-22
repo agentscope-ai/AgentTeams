@@ -512,6 +512,14 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             task_tool = _is_task_tool(str(getattr(call, "name", "")))
             if task_tool and isinstance(args, dict):
                 args.pop("_nativeSource", None)
+                review = _review_task.get()
+                if review and args.get("action") in {"accept", "reject"}:
+                    try:
+                        args["submissionId"] = receipts.prepared_submission_id(args, review)
+                    except ValueError as error:
+                        from agentscope.tool import ToolResponse
+                        yield ToolResponse(state="error", content=[{"type": "text", "text": str(error)}])
+                        return
                 if args.get("action") == "create" and os.getenv("AGENTTEAMS_AGENT_ROLE") == "manager":
                     if self._creation_refresh_pending:
                         from agentscope.tool import ToolResponse

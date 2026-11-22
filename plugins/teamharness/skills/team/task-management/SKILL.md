@@ -160,8 +160,11 @@ use common Task operations, not batch execution, subagents or another workflow.
 If required proof is missing or inconsistent, reject with explicit correction
 requirements instead of executing the work yourself.
 Distinguish the Worker's recorded test results from your own artifact review;
-do not claim you ran checks that you only read. Call `accept` or `reject` with the exact `submissionId` and your evidence
-in `note`. If the same step needs correction, provide explicit `replacementSpec`
+do not claim you ran checks that you only read. Call `accept` or `reject` with
+the execution Task ID and your evidence in `note`. In a prepared native review,
+omit `submissionId` to use the candidate bound by the framework. When using
+the CLI, pass the exact `submissionId` you reviewed. Use `reject` only for a
+business review decision. If the same step needs correction, provide explicit `replacementSpec`
 in that rejection. The task system keeps the rejected attempt terminal, creates
 one replacement execution under the same main task and rewires unstarted
 consumers. Omit it when no replacement is intended. Do not reopen the rejected

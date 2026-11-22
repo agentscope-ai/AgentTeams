@@ -2735,6 +2735,25 @@ func TestOwningTeamSubagentModel(t *testing.T) {
 	}
 }
 
+func TestTeamWorkerReconcileRequests(t *testing.T) {
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "team-ns"},
+		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{
+			{Name: "leader", Role: "team_leader"},
+			{Name: "reviewer", Role: "worker"},
+		}},
+	}
+	requests := teamWorkerRequests(context.Background(), team)
+	if len(requests) != 2 || requests[0].Name != "leader" || requests[1].Name != "reviewer" {
+		t.Fatalf("expected both registered members, got %v", requests)
+	}
+	for _, request := range requests {
+		if request.Namespace != team.Namespace {
+			t.Fatalf("reconcile namespace = %q, want %q", request.Namespace, team.Namespace)
+		}
+	}
+}
+
 func TestWorkerRegisteredCollaborationIdentityConverges(t *testing.T) {
 	ctx := context.Background()
 	worker := newWorker("member", v1beta1.WorkerSpec{Runtime: "qwenpaw", Image: "worker:v1"})

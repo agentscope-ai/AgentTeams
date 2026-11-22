@@ -993,6 +993,11 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Contro
 	// the new Human object alone no longer names a removed grant.
 	bldr = bldr.Watches(&v1beta1.Human{}, handler.EnqueueRequestsFromMapFunc(r.humanToWorkerRequests))
 
+	// Team updates can change a running Worker's role without editing its spec.
+	// The handler maps both versions on update, including removed members.
+	bldr = bldr.Watches(&v1beta1.Team{}, handler.EnqueueRequestsFromMapFunc(teamWorkerRequests),
+		builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+
 	if r.Backend != nil {
 		ctx := context.Background()
 		// Watch Pods when the K8s ("pod") backend is registered & available.
@@ -1024,6 +1029,18 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Contro
 	}
 
 	return bldr.Build(r)
+}
+
+func teamWorkerRequests(_ context.Context, obj client.Object) []reconcile.Request {
+	team := obj.(*v1beta1.Team)
+	requests := make([]reconcile.Request, 0, len(team.Spec.WorkerMembers))
+	for _, member := range team.Spec.WorkerMembers {
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKey{
+			Namespace: team.Namespace,
+			Name:      member.Name,
+		}})
+	}
+	return requests
 }
 
 // WorkerPodMapFunc returns a MapFunc for routing Pod events to Worker reconcile

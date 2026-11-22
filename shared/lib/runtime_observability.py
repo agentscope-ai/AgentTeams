@@ -7,6 +7,7 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 
 _lock = threading.Lock()
@@ -72,7 +73,8 @@ def event(name, **fields):
               'event': name, **fields}
     try:
         serialized = redact(json.dumps(record, ensure_ascii=False))
-        print('[agentteams-event] ' + serialized, flush=True)
+        # Native subprocesses reserve stdout for protocol replies.
+        print('[agentteams-event] ' + serialized, file=sys.stderr, flush=True)
         write_record('events.jsonl', serialized)
         states = {'startup.begin': 'starting', 'startup.stage': 'starting', 'runtime.launch': 'starting',
                   'runtime.live': 'live', 'runtime.ready': 'ready', 'startup.timeout': 'timeout', 'startup.failed': 'failed',

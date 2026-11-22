@@ -498,6 +498,16 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 			logger.Info("worker joined own room", "name", workerName, "roomID", roomID)
 		}
 	}
+	// A standalone Worker room is also the Manager-to-Leader handoff route
+	// when that Worker later leads a Team. Accept the configured authority's
+	// existing invitation using its own token before a Task can use the room.
+	if authorityID == managerMatrixID && p.managerEnabled {
+		if token, err := p.AgentMatrixToken(ctx, "manager", "default"); err == nil {
+			if err := p.matrix.JoinRoom(ctx, roomID, token); err != nil {
+				logger.Error(err, "failed to join Manager into its Worker room (non-fatal)", "name", workerName, "roomID", roomID)
+			}
+		}
+	}
 
 	// Step 5: Gateway consumer and authorization
 	logger.Info("creating gateway consumer", "consumer", consumerName)
@@ -1552,6 +1562,11 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 
 	if err := p.matrix.SetRoomState(ctx, roomID, roomMetaEventType, "", managerMeta, ""); err != nil {
 		return nil, fmt.Errorf("set manager admin DM room meta: %w", err)
+	}
+	if userCreds.AccessToken != "" {
+		if err := p.matrix.JoinRoom(ctx, roomID, userCreds.AccessToken); err != nil {
+			logger.Error(err, "failed to join Manager into its Admin DM (non-fatal)", "name", managerName, "roomID", roomID)
+		}
 	}
 
 	if err := p.creds.Save(ctx, managerName, creds); err != nil {

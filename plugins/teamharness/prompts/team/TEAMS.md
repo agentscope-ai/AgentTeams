@@ -106,6 +106,11 @@ Answer in the current session for ordinary Direct Reply. Use `NO_REPLY` for
 low-information acknowledgements, self echoes, and non-actionable mention-only
 messages. Do not let acknowledgements create ping-pong between rooms or agents.
 
+In a `task/v1` room, use `NO_REPLY` for room-join notices, duplicate
+acknowledgements, and status chatter that asks you to take no action. The task
+system already sends assignments and results. When a person asks for status,
+refer to a Worker by a plain name without a leading `@`.
+
 ### Long Matrix Messages
 
 Matrix rooms are for concise coordination, decisions, and summaries. Do not send

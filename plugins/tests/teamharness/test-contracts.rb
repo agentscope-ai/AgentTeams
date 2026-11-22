@@ -113,6 +113,9 @@ assert(manager_prompts == expected_manager_prompts, "unexpected manager prompts:
 
 team_prompt = read(plugin_root / prompts.fetch("team"))
 assert(team_prompt.include?("stable collaboration"), "team prompt must define stable collaboration rules")
+assert(normalized(team_prompt).include?("room-join notices, duplicate acknowledgements") &&
+       normalized(team_prompt).include?('a plain name without a leading `@`'),
+       "Managed task-room guidance must prevent passive messages from waking Workers")
 assert(team_prompt.include?("Request Modes"), "team prompt must define request modes")
 assert(team_prompt.include?("Direct Reply"), "team prompt must allow ordinary direct replies")
 assert(!team_prompt.include?("Lightweight Action"), "team prompt must not keep the old lightweight action mode")

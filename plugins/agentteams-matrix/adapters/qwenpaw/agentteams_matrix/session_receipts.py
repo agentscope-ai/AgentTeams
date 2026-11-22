@@ -183,8 +183,7 @@ class SessionReceiptMiddleware(MiddlewareBase):
                 channel = await self.ctx.workspace.channel_manager.get_channel('agentteams_matrix')
                 task = await asyncio.to_thread(channel._task_execution.recovery.tools_current, identity)
                 admit(task['execution'].get('checkpoint'))
-        async for item in next_handler(**input_kwargs):
-            yield item
+        return await next_handler(**input_kwargs)
 
     async def on_reply(self, agent, input_kwargs, next_handler):
         checkpointed = False

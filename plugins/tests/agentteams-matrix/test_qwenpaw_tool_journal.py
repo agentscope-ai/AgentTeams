@@ -86,11 +86,10 @@ def test_unconfirmed_operation_blocks_actual_model_boundary(scope):
     calls = []
     async def model(**kwargs):
         calls.append('model')
-        yield 'generation'
+        return 'generation'
     async def scenario():
         with pytest.raises(RecoveryConflict, match='unconfirmed'):
-            async for _ in middleware(ctx).on_model_call(None, {}, model):
-                pass
+            await middleware(ctx).on_model_call(None, {}, model)
         assert calls == []
     asyncio.run(scenario())
 
@@ -125,10 +124,11 @@ def test_canonical_unknown_stops_before_generic_start_and_model():
         yield 'response'
     async def scenario():
         hook = middleware(ctx)
-        for entry in [hook.on_acting, hook.on_model_call]:
-            with pytest.raises(RecoveryConflict, match='canonical unknown'):
-                async for _ in entry(None, {}, native):
-                    pass
+        with pytest.raises(RecoveryConflict, match='canonical unknown'):
+            async for _ in hook.on_acting(None, {}, native):
+                pass
+        with pytest.raises(RecoveryConflict, match='canonical unknown'):
+            await hook.on_model_call(None, {}, native)
         assert calls == ['canonical', 'canonical']
     asyncio.run(scenario())
 
@@ -158,3 +158,49 @@ def test_canonical_cached_receipt_enters_native_context_once(monkeypatch):
     assert agent.state.context[0].role == 'assistant'
     assert 'downstream notification confirmed' in agent.state.context[0].content[0].text
     assert agent.state.middle_context['teamharness.canonical_receipts'] == {'receipt-one': True}
+
+
+@pytest.mark.parametrize('scope', ['unmanaged', 'task', 'message', 'canonical'])
+@pytest.mark.parametrize('blocked', [False, True])
+def test_real_agent_awaits_model_admission_before_provider(scope, blocked):
+    from agentscope.model import ChatModelBase, ChatResponse
+    from agentscope.message import Msg
+    from agentscope.formatter import OpenAIChatFormatter
+    from pydantic import BaseModel
+    class Parameters(BaseModel):
+        pass
+    class Model(ChatModelBase):
+        def __init__(self):
+            super().__init__(None, 'native-model-admission-fixture', Parameters(), stream=False)
+            self.formatter = OpenAIChatFormatter()
+            self.calls = 0
+        async def __call__(self, *args, **kwargs):
+            self.calls += 1
+            return ChatResponse(content=[TextBlock(text='Done.')], is_last=True)
+    identity = {'event_key': 'key'} if scope == 'message' else {'task_id': 'T', 'team_id': 'team'}
+    checkpoint = {'operation': {'state': 'unknown'}} if blocked else {}
+    snapshot = {'execution': {'checkpoint': checkpoint}}
+    channel = SimpleNamespace(_task_execution=SimpleNamespace(
+        messages=SimpleNamespace(matrix=SimpleNamespace(message_current=lambda _: snapshot),
+                                 turns={'key': {'identity': identity}}),
+        assignments=SimpleNamespace(before_reasoning=AsyncMock()),
+        recovery=SimpleNamespace(tools_current=lambda _: snapshot)))
+    meta = {scope + '_execution': identity} if scope in {'task', 'message'} else {}
+    extras = {}
+    if scope == 'canonical':
+        extras['agentteams_canonical_admit'] = AsyncMock(
+            side_effect=RecoveryConflict('canonical unknown') if blocked else None)
+    ctx = SimpleNamespace(extras=extras, request=SimpleNamespace(channel_meta=meta),
+        workspace=SimpleNamespace(channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel))))
+    model = Model()
+    agent = Agent('Worker', 'Answer briefly.', model, middlewares=[middleware(ctx)])
+    async def scenario():
+        inputs = [Msg(name='Human', role='user', content=[TextBlock(text='Reply done.')])]
+        if blocked and scope != 'unmanaged':
+            with pytest.raises(RecoveryConflict):
+                await agent.reply(inputs)
+            assert model.calls == 0
+        else:
+            await agent.reply(inputs)
+            assert model.calls == 1
+    asyncio.run(scenario())

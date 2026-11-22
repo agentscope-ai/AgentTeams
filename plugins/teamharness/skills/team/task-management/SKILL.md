@@ -135,10 +135,10 @@ If a tool returns a running session handle, use that session's wait operation
 until it reports a final result. Wait before starting dependent work, submitting,
 or ending your turn. Do not rerun the original command to obtain its result.
 
-Call Task `submit` with `taskId`, a truthful `summary`, optional detailed
-`report` and `files` relative to your output directory. Use `agt task submit`
-if the native tool is unavailable. Do not invoke legacy `taskflow submit_task`
-through a tool, shell or MCP client for these executions. Use the actual result `status`;
+Call the native Task tool with `action: submit`, `taskId`, a truthful
+`summary`, optional detailed `report` and `files` as a JSON array of paths
+relative to your output directory, even for one file. Keep Task mutations on
+this tool during a managed Task turn. Use the actual result `status`;
 do not claim success when validation failed. Submission is a candidate, not
 Leader acceptance. End after a successful durable submission. The task system
 notifies your Leader; do not send another completion message or poll.

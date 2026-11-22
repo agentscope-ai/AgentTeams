@@ -60,8 +60,8 @@ TASK_SCHEMA = {
             "summary": {"type": "string", "description": "For submit: actual result and validation summary."},
             "report": {"type": "string", "description": "For submit: optional detailed report; for complete: verified final human report."},
             "status": {"type": "string", "enum": ["SUCCESS", "SUCCESS_WITH_NOTES", "REVISION_NEEDED", "BLOCKED", "INTERRUPTED"]},
-            "files": {"type": "array", "items": {"type": "string"}, "description": "For submit: files relative to this task's prepared output directory."},
-            "artifacts": {"type": "array", "items": {"type": "string"}, "description": "For complete: optional exact accepted artifact IDs; default all accepted outputs."},
+            "files": {"type": "array", "items": {"type": "string"}, "description": "For submit: JSON array of filenames relative to this task's prepared output directory, even for one file."},
+            "artifacts": {"type": "array", "items": {"type": "string"}, "description": "For complete: omit to deliver all accepted outputs. To select a subset, use the accepted artifactId values."},
             "submissionId": {"type": "string", "description": "For accept/reject: exact candidate ID from the task system."},
             "replacementSpec": {"type": "string", "description": "For reject only: optional explicit corrections to dispatch a new execution of the same step, preserving the rejected attempt."},
             "note": {"type": "string", "description": "For accept/reject: your independent business validation evidence or rejection reason."},
@@ -240,6 +240,25 @@ def _run(arguments: dict) -> dict:
                 "retryable": isinstance(error, subprocess.TimeoutExpired), "effect": failure_effect}
 
 
+def _validate_mutation(arguments: dict) -> None:
+    command(arguments)
+    selectors = arguments.get("artifacts")
+    if arguments["action"] != "complete" or not selectors:
+        return
+    lookup = {"action": "get", "taskId": arguments["taskId"]}
+    if "team" in arguments:
+        lookup["team"] = arguments["team"]
+    task = _run(lookup).get("task")
+    if not isinstance(task, dict) or task.get("id") != arguments["taskId"]:
+        raise ValueError("Could not read the accepted Task results. Retry before completing.")
+    if "acceptedResults" not in task and not task.get("planId"):
+        return  # Older main tasks do not expose the saved accepted-result projection.
+    accepted = {artifact["artifactId"] for result in task.get("acceptedResults", [])
+                for artifact in result["candidate"]["artifacts"]}
+    if len(selectors) != len(set(selectors)) or any(ref not in accepted for ref in selectors):
+        raise ValueError("Use distinct accepted artifactId values, or omit artifacts to deliver all accepted outputs.")
+
+
 def run(arguments: dict) -> dict:
     if not os.getenv("AGENTTEAMS_CONTROLLER_URL"):
         return _run(arguments)
@@ -247,4 +266,4 @@ def run(arguments: dict) -> dict:
         from . import task_canonical
     else:
         import task_canonical
-    return task_canonical.run(arguments, _run, validate=command)
+    return task_canonical.run(arguments, _run, validate=_validate_mutation)

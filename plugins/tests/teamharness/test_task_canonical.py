@@ -71,6 +71,38 @@ def test_cli_nonzero_or_malformed_result_keeps_unknown_marker(monkeypatch):
         assert ledger.saved['state'] == 'unknown'
 
 
+def test_completion_rejects_version_hash_before_starting_a_mutation(monkeypatch):
+    import task_cli
+
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://own-fixture")
+    monkeypatch.setattr(task_cli.shutil, "which", lambda _: "/usr/bin/agt")
+    artifact_id, version = "a" * 64, "b" * 64
+    accepted = {"task": {"id": "main", "acceptedResults": [{"candidate": {"artifacts": [
+        {"artifactId": artifact_id, "version": version, "name": "result.json"},
+    ]}}]}}
+    completed = {"task": {"id": "main", "status": "completed", "completionId": "closed"},
+                 "notification": {"status": "queued", "recipient": "manager", "eventId": "notice"}}
+    calls = []
+
+    def cli(arguments):
+        calls.append(arguments)
+        return accepted if arguments["action"] == "get" else completed
+
+    ledger = Ledger()
+    monkeypatch.setattr(task_cli, "_run", cli)
+    monkeypatch.setattr(guard, "request", ledger)
+    args = {"action": "complete", "taskId": "main", "team": "alpha",
+            "report": "Verified", "artifacts": [version]}
+    rejected = task_cli.run(args)
+    assert rejected["effect"] == "none" and "artifactId" in rejected["message"]
+    assert not ledger.calls
+    assert calls == [{"action": "get", "taskId": "main", "team": "alpha"}]
+
+    assert task_cli.run(dict(args, artifacts=[artifact_id])) == completed
+    assert [call["mode"] for call in ledger.calls] == ["begin", "finish"]
+    assert [call["action"] for call in calls] == ["get", "get", "complete"]
+
+
 def test_unknown_complete_retains_cli_status_without_exposing_stderr(monkeypatch):
     monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
     ledger = Ledger()

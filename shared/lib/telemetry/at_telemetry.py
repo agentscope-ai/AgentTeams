@@ -42,8 +42,11 @@ def sanitize(value):
             decoded = None
         if isinstance(decoded, (dict, list)):
             return json.dumps(sanitize(decoded), ensure_ascii=False, default=str)
-        for key, secret in os.environ.items():
-            if _secret_key.search(key) and len(secret) >= 8:
+        for key in os.environ:
+            if not _secret_key.search(key):
+                continue
+            secret = os.environ.get(key, "")
+            if len(secret) >= 8:
                 value = value.replace(secret, "[REDACTED]")
                 if key in ("OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"):
                     for header in secret.split(","):

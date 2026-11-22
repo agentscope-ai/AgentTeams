@@ -58,6 +58,10 @@ leader_guidance = [plugin_root / "prompts/agent/leader.md", plugin_root / "promp
 assert(!leader_guidance.match?(/^\s*agt worker (wake|sleep|ensure-ready)\b/), "Leader guidance must not prescribe resource lifecycle writes")
 assert(leader_guidance.include?("Manager or platform Admin"), "Leader runtime blockers must name the resource authority")
 
+task_skill = normalized(read(plugin_root / "skills/team/task-management/SKILL.md"))
+assert(task_skill.include?("distinct Worker identities") && task_skill.include?("every required upstream result"),
+       "Leader planning must preserve explicit independent assignees and all required inputs to aggregation")
+
 runtime_design = read(runtime_design_doc)
 assert(runtime_design.include?("submission_id") && runtime_design.include?("submitted_at") && runtime_design.include?("不透明、不可变提交身份"), "runtime design must define opaque immutable submission identity")
 assert(runtime_design.include?("teamharness.task-result.v1") && runtime_design.include?("canonical_json"), "runtime design must define the cross-runtime result digest domain and canonical payload")
@@ -117,7 +121,10 @@ assert(team_prompt.include?("Project Work"), "team prompt must reserve project/t
 assert(team_prompt.include?("Request Modes And Standard Flow"), "team prompt must merge request modes and standard flow")
 assert(!team_prompt.include?("Project Wake-Up Recovery"), "team prompt must not keep project wake-up as a standalone chapter")
 assert(normalized(team_prompt).include?("resolve project context"), "team prompt must resolve project context before result handling")
-assert(normalized(team_prompt).include?('For ordinary delegated work, use `taskflow start_task` in the source session.'), "team prompt must route ordinary delegation to start_task")
+assert(normalized(team_prompt).include?('For a verified `task/v1` event, use the common `task` tool'),
+       "team prompt must route managed delegation to the common task tool")
+assert(!"#{team_prompt}\n#{leader_guidance}".match?(/\b(?:start_task|start_project)\b/),
+       "Keep legacy start commands in the project-management skill, outside default team and Leader prompts")
 assert(team_prompt.include?("task request message"), "team prompt must route task-room handoff as a task request message")
 assert(team_prompt.include?("roomflow create_task_room"), "team prompt must create task rooms through roomflow")
 assert(!team_prompt.include?("Load `teamharness-team-coordination` if the boundary is unclear"), "team prompt quick task flow must not re-run mode selection")
@@ -171,10 +178,10 @@ assert(
 assert(remote_prompt.include?("current room/session"), "remote prompt must avoid message tool for current-session reports")
 assert(remote_prompt.include?("must leave"), "remote prompt must scope message tool to cross-session routing")
 leader_prompt = read(plugin_root / agent_prompts.fetch("leader"))
-assert(leader_prompt.include?("Accept each submitted") && leader_prompt.include?("submissionId") && leader_prompt.include?("complete_task"), "leader prompt must fence subtask acceptance and explicit main completion")
-assert(leader_prompt.include?("Request Intake"), "leader prompt must define request intake")
-assert(leader_prompt.include?("Do not create a task, Project, DAG, Loop or assignment for Direct Reply"), "leader prompt must avoid durable state for direct replies")
-assert(leader_prompt.include?("taskflow start_task") && leader_prompt.include?("Project is not a prerequisite") && leader_prompt.include?("stored source route"), "leader prompt must use Task-first intake and preserve requester routing")
+assert(normalized(leader_prompt).include?("`accept` or `reject` the exact submission ID") &&
+       normalized(leader_prompt).include?("`complete` the main Task"), "leader prompt must fence subtask acceptance and explicit main completion")
+assert(normalized(leader_prompt).include?("without creating a Task, Project or assignment"), "leader prompt must avoid durable state for direct replies")
+assert(normalized(leader_prompt).include?("original Task ID, spec, requester and reply route"), "leader prompt must preserve existing requester routing")
 manager_prompt = read(plugin_root / manager_prompts.fetch("agents"))
 assert(manager_prompt.include?("control-plane"), "manager prompt must state the control-plane boundary")
 

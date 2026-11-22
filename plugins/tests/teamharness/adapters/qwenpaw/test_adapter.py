@@ -337,9 +337,11 @@ def test_roster_injection_cannot_replace_the_shared_intake_protocol(monkeypatch)
         return ({"teams":[{"name":"team","leaderName":"lead"}]} if path=="teams" else
                 {"workers":[{"name":"lead","matrixUserID":"@lead:test"}]})
     monkeypatch.setattr(module,"_controller_json",read)
-    injected=[]
-    ctx=SimpleNamespace(inject_context=lambda text,**kwargs:injected.append(text))
+    injected = []
+    ctx = SimpleNamespace(extras={}, inject_context=lambda text, **kwargs: injected.append(text))
     asyncio.run(module._prepare_manager_roster(ctx))
-    assert injected and '"leader": "lead"' in injected[0]
-    assert "spec:<complete original" not in injected[0]
-    assert "protocol and registered" not in injected[0]
+    roster = ctx.extras["teamharness_manager_roster_context"]
+    assert injected == [roster]
+    assert '"leader": "lead"' in roster
+    assert "spec:<complete original" not in roster
+    assert "protocol and registered" not in roster

@@ -60,47 +60,11 @@ Human conversation using the first dispatch Agent identity. Do not send
 assignments, repeat notifications, poll, or use legacy flow/file synchronization
 tools for these events. Framework-generated receipts enter your context.
 
-## Legacy Request Intake
+## Direct Replies and Existing Work
 
-Use the following lifecycle only for existing non-managed Task/Project plans;
-for `task/v1`, use the common protocol above.
-
-
-Classify each incoming message before choosing tools:
-
-- Direct Reply: answer ordinary questions, clarifications, readiness checks, or
-  explicit short-answer requests directly.
-- Lightweight Action: perform one-off message routing, file/MCP/tool checks, or
-  reply-route updates without durable project state.
-- Task Work: coordinate durable deliverables and acceptance through one main
-  Task and executable Worker subtasks. Use `taskflow start_task` with the original
-  spec, owners and real dependencies. Project is not a prerequisite.
-- Explicit Project Work: create a Project only when the user explicitly requests
-  one. Existing Projects can optionally group main Tasks. Automatic cross-team
-  Project creation is not implemented; do not guess that authorization.
-
-Do not create a task, Project, DAG, Loop or assignment for Direct Reply or
-Lightweight Action. For ordinary team tasks, start_task creates the room, stores
-its complete plan and delegates ready subtasks in one operation. End the source
-turn after success; do not poll, create a hidden Project or send duplicate work.
-
-When Manager already registered a planned main Task, preserve that exact taskId,
-original spec, requester and reply routes; attach your plan with start_task on
-that same Task. Do not create a replacement Task or Project. A coordinating main
-Task recovery does not change your Leader role into a Worker execution role.
-
-The task's stored source route identifies the requester. Accept each submitted
-subtask using taskflow accept_task_result with mainTaskId and the exact
-submissionId. Verify that every required deliverable and check is evidenced;
-a blocked report or missing required files cannot be accepted as SUCCESS.
-When acceptance returns mainTaskReady/nextAction, continue from
-that receipt directly; otherwise resume on main_task_ready. Verify the whole
-request and call taskflow complete_task with taskId and report. Finish this main Task independently of
-other main Tasks in the same optional Project. A successful requesterNotification
-already sent the report; do not send a second one.
-
-Existing Project DAG/Loop workflows retain their normal projectflow operations.
-Do not turn a Loop into a finite task merely to use automatic completion.
-
-Use `communication` for direct replies and routing. Use `team-coordination`,
-`project-management`, and `task-delegation` only after selecting durable Task or explicit Project work.
+Use `communication` for questions, clarifications, and one-off coordination
+without creating a Task, Project or assignment. Load `project-management`
+only for verified legacy work, sources outside the common Task protocol, or
+explicitly requested Projects. When continuing existing work, preserve the
+original Task ID, spec, requester and reply route. Use the common Task Protocol
+above for `task/v1` events.

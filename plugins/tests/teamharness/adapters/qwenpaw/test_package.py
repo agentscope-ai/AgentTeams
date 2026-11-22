@@ -54,8 +54,14 @@ def test_build_qwenpaw_native_plugin_package(tmp_path: Path) -> None:
         assert f"{root}/task_trace.py" in names
         assert f"{root}/teamharness/plugin.yaml" in names
         assert f"{root}/teamharness/trace.py" not in names
-        assert f"{root}/teamharness/prompts/team/TEAMS.md" in names
         assert f"{root}/teamharness/prompts/agent/worker.md" in names
+        for path in (
+            "prompts/team/TEAMS.md",
+            "prompts/agent/leader.md",
+            "skills/team/task-management/SKILL.md",
+        ):
+            source_path = REPO_ROOT / "plugins/teamharness" / path
+            assert archive.read(f"{root}/teamharness/{path}") == source_path.read_bytes()
         assert f"{root}/teamharness/skills/team/communication/SKILL.md" in names
         assert f"{root}/teamharness/skills/team/roomflow/SKILL.md" in names
         assert f"{root}/teamharness/qwenpaw-skills/communication/SKILL.md" in names

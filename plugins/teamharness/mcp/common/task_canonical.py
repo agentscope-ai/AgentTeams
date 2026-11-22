@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import urllib.request
+import urllib.error
 
 if __package__:
     from . import task_receipt as receipts
@@ -27,8 +28,18 @@ def request(payload):
     req = urllib.request.Request(target, data=json.dumps(payload).encode(), method='POST',
         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json',
                  'X-AgentTeams-Process-ID': os.getenv('AGENTTEAMS_PROCESS_ID', '')})
-    with urllib.request.urlopen(req, timeout=15) as response:
-        result = json.load(response)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        # Only this Controller's explicit pre-ledger rejection is correctable.
+        # A status code alone says nothing about an earlier durable operation.
+        if payload.get('mode') == 'begin' and error.code in {403, 409}:
+            result = json.load(error)
+            if (isinstance(result, dict) and result.get('ok') is False
+                    and result.get('effect') == 'none' and result.get('error') == 'invalid_task_handoff'):
+                return result
+        raise
     if not isinstance(result, dict):
         raise ValueError('invalid canonical operation ledger response')
     return result
@@ -100,6 +111,8 @@ def run(arguments, call, *, validate=None, rpc=None):
         admission = rpc(dict(payload, mode='begin'))
     except (OSError, ValueError):
         return _failure()
+    if admission.get('effect') == 'none' and admission.get('ok') is False:
+        return admission
     if admission.get('mode') == 'recovered':
         result = admission.get('result')
         return result if confirmed(arguments, result) else _failure()

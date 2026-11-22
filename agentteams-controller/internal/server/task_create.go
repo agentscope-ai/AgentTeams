@@ -57,28 +57,12 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "task handoff unavailable")
 		return
 	}
-	leader, err := h.coordination.worker(r.Context(), input.Leader)
-	if err != nil {
-		writeError(w, 403, "registered Team Leader required")
+	resolved, handoffStatus, message := h.resolveTaskHandoff(r.Context(), caller, input.Leader, source, room, user, input.Spec)
+	if handoffStatus != 0 {
+		writeError(w, handoffStatus, message)
 		return
 	}
-	_, err = h.coordination.memberTeam(r.Context(), leader.Name, "team_leader", "")
-	if err != nil {
-		writeError(w, 403, "Leader must identify one owning Team")
-		return
-	}
-	// Worker.Status.RoomID is the registered Manager/Worker conversation.
-	// Team.LeaderDMRoomID is private to the Leader and Team Admin.
-	if !strings.HasPrefix(leader.Status.RoomID, "!") {
-		writeError(w, 409, "Manager and Team Leader handoff room is not ready")
-		return
-	}
-	event := coordinationEvent{Kind: "handoff", Recipient: leader.Name, OriginEventID: source, RoomID: leader.Status.RoomID, Text: input.Spec, SourceRoute: map[string]any{"channel": "matrix", "target_session": room, "target_user": user}}
-	resolved, err := h.coordination.resolve(r.Context(), event, caller)
-	if err != nil {
-		writeError(w, 403, "task source or Leader route unavailable")
-		return
-	}
+	event := resolved
 	original, sourceStatus := h.coordination.taskSourceRequest(r.Context(), resolved.ActorName, room, source, user)
 	if sourceStatus != 0 {
 		writeError(w, sourceStatus, "original request could not be verified; no new task was registered")
@@ -181,6 +165,28 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		Notification  taskNotificationStatus `json:"notification"`
 		NextAction    string                 `json:"nextAction"`
 	}{source, publicTaskResource(id, resolved.StorageTeam, task), notification, "Task system has registered the original request and queued its handoff to the Team Leader. Do not send another handoff message."})
+}
+
+// Resolve the same registered handoff route for creation and its native guard.
+func (h *ProjectHandler) resolveTaskHandoff(ctx context.Context, caller *authpkg.CallerIdentity, leaderName, source, room, user, spec string) (coordinationEvent, int, string) {
+	leader, err := h.coordination.worker(ctx, leaderName)
+	if err != nil {
+		return coordinationEvent{}, 403, "registered Team Leader required"
+	}
+	if _, err = h.coordination.memberTeam(ctx, leader.Name, "team_leader", ""); err != nil {
+		return coordinationEvent{}, 403, "Leader must identify one owning Team"
+	}
+	// Worker.Status.RoomID is the registered Manager/Worker conversation.
+	// Team.LeaderDMRoomID is private to the Leader and Team Admin.
+	if !strings.HasPrefix(leader.Status.RoomID, "!") {
+		return coordinationEvent{}, 409, "Manager and Team Leader handoff room is not ready"
+	}
+	event := coordinationEvent{Kind: "handoff", Recipient: leader.Name, OriginEventID: source, RoomID: leader.Status.RoomID, Text: spec, SourceRoute: map[string]any{"channel": "matrix", "target_session": room, "target_user": user}}
+	resolved, err := h.coordination.resolve(ctx, event, caller)
+	if err != nil {
+		return coordinationEvent{}, 403, "task source or Leader route unavailable"
+	}
+	return resolved, 0, ""
 }
 
 // Read the immutable incoming message using the registered dispatch identity.

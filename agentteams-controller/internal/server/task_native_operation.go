@@ -99,9 +99,9 @@ func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Req
 		actor = append(actor, "source", room, user, event)
 		scope.SourceEventID = event
 		if input.Mode == "begin" {
-			resolved, err := h.coordination.resolve(r.Context(), coordinationEvent{Kind: "handoff", Recipient: coordinationString(input.Arguments, "leader"), OriginEventID: event, RoomID: room, SourceRoute: map[string]any{"target_session": room, "target_user": user}}, caller)
-			if err != nil {
-				writeError(w, 403, "registered Leader required")
+			resolved, status, message := h.resolveTaskHandoff(r.Context(), caller, coordinationString(input.Arguments, "leader"), event, room, user, "")
+			if status != 0 {
+				httputil.WriteJSON(w, status, map[string]any{"ok": false, "effect": "none", "error": "invalid_task_handoff", "message": message})
 				return "", scope, false
 			}
 			identity, _ := json.Marshal([]string{resolved.ActorName, resolved.StorageTeam, resolved.RecipientName, event})

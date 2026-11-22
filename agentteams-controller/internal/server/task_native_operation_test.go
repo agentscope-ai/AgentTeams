@@ -218,3 +218,38 @@ func TestNativeOperationInputRefreshPreservesTheSuccessfulNoTaskControlResult(t 
 		t.Fatal(next)
 	}
 }
+
+func TestNativeCreateRouteRejectsUnknownLeaderWithoutFencingCorrectedHandoff(t *testing.T) {
+	h, store := taskCreateFixture(t)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "manager"}
+	deps := h.coordination.deps
+	deps.AuthMw = authpkg.NewMiddleware(&roleAuthenticator{identity: caller}, authpkg.NewCREnricher(deps.Client, "default"), authpkg.NewAuthorizer(), deps.Client, "default")
+	srv := NewHTTPServer(":0", deps)
+	t.Cleanup(srv.coordinationCancel)
+	post := func(leader string) (*httptest.ResponseRecorder, map[string]any) {
+		data, _ := json.Marshal(map[string]any{"mode": "begin", "arguments": map[string]any{"action": "create", "leader": leader, "title": "Own request", "_nativeSource": map[string]any{"eventId": "$source", "roomId": "!source:test", "userId": "@human:test"}}})
+		r := httptest.NewRequest("POST", "/api/v1/tasks/native-operations", strings.NewReader(string(data)))
+		r.Header.Set("Authorization", "Bearer own-manager-token")
+		w := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(w, r)
+		var body map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		return w, body
+	}
+	w, rejected := post("not-a-registered-leader")
+	if w.Code != 403 || rejected["effect"] != "none" || rejected["error"] != "invalid_task_handoff" {
+		t.Fatalf("pre-ledger rejection: %d %s", w.Code, w.Body.String())
+	}
+	keys, err := store.ListObjects(t.Context(), "control/task-native/")
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("rejected proposal left a canonical fence: %v %v", keys, err)
+	}
+	w, corrected := post("lead-cr")
+	if w.Code != 200 || corrected["mode"] != "execute" {
+		t.Fatalf("corrected registered Leader: %d %s", w.Code, w.Body.String())
+	}
+	resolved, status, message := h.resolveTaskHandoff(t.Context(), caller, "lead-cr", "$source", "!source:test", "@human:test", "")
+	if status != 0 || resolved.RoomID != "!manager-leader:test" || coordinationString(resolved.SourceRoute, "target_session") != "!source:test" || resolved.Recipient != "@lead:test" {
+		t.Fatalf("handoff and Human source room must stay distinct: %+v %d %s", resolved, status, message)
+	}
+}

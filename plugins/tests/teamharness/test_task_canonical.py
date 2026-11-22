@@ -191,3 +191,37 @@ def test_incomplete_create_is_prevalidated_without_cli_or_ledger(monkeypatch):
     assert result['effect'] == 'none'
     call.assert_not_called()
     ledger.assert_not_called()
+
+
+def test_controller_preledger_handoff_rejection_is_correctable_and_never_runs_cli(monkeypatch):
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
+    rejected = {'ok': False, 'effect': 'none', 'error': 'invalid_task_handoff',
+                'message': 'registered Team Leader required'}
+    call = Mock()
+    rpc = Mock(return_value=rejected)
+    assert guard.run({'action': 'create'}, call, rpc=rpc) == rejected
+    call.assert_not_called()
+    assert rpc.call_count == 1
+
+
+def test_http_preledger_contract_is_required_and_never_trusted_after_execution(monkeypatch):
+    import io
+    import urllib.error
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
+    monkeypatch.setenv('AGENTTEAMS_AUTH_TOKEN', 'own-fixture-token')
+    rejected = {'ok': False, 'effect': 'none', 'error': 'invalid_task_handoff',
+                'message': 'registered Team Leader required'}
+    def response(body):
+        return urllib.error.HTTPError('http://own-fixture', 403, 'Forbidden', {}, io.BytesIO(json.dumps(body).encode()))
+    for mode, body, correctable in [('begin', rejected, True), ('finish', rejected, False),
+                                    ('begin', {'message': 'Forbidden'}, False)]:
+        with patch.object(guard.urllib.request, 'urlopen', side_effect=response(body)):
+            if correctable:
+                assert guard.request({'mode': mode}) == rejected
+            else:
+                try:
+                    guard.request({'mode': mode})
+                except urllib.error.HTTPError:
+                    pass
+                else:
+                    raise AssertionError('unproven or post-execution HTTP error became no-effect')

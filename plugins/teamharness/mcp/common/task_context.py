@@ -6,6 +6,20 @@ import re
 COORDINATION_PHASES = frozenset({"handoff", "task_submitted", "main_task_ready"})
 
 
+def task_write_path_allowed(file_path, output_directory, scratch_directory):
+    """Check a native file write against the prepared writable directories."""
+    if not isinstance(file_path, str) or not file_path:
+        return False
+    try:
+        output = Path(output_directory).resolve()
+        scratch = Path(scratch_directory).resolve()
+        target = (output / Path(file_path).expanduser()).resolve()
+        return any(target != directory and target.is_relative_to(directory)
+                   for directory in (output, scratch))
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def prepare_event(event, call):
     """Prepare a trusted notification using the common Task operation once."""
     if not isinstance(event, dict):

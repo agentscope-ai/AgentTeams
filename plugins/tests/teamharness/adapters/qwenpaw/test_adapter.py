@@ -328,6 +328,38 @@ def test_manager_shared_intake_contract_does_not_require_legacy_switch(monkeypat
     assert contract in module._team_prompt(None)
 
 
+@pytest.mark.parametrize("name", ["write_file", "edit_file"])
+def test_managed_native_file_tools_reject_wrong_task_paths(monkeypatch, tmp_path, name):
+    module = load_plugin()
+    monkeypatch.setitem(sys.modules, "agentscope.middleware", types.SimpleNamespace(MiddlewareBase=object))
+    monkeypatch.setitem(sys.modules, "agentscope.tool", types.SimpleNamespace(ToolResponse=types.SimpleNamespace))
+    middleware = module._sanitizer_factory(None, None)
+    output = tmp_path / "tasks" / "t1" / "workspace"
+    scratch = output / "scratch"
+    outside = str(tmp_path / "tasks" / "t11" / "workspace" / "report.json")
+    calls = []
+
+    async def action(path):
+        async def handler(**kwargs):
+            calls.append(kwargs["tool_call"].input["file_path"])
+            yield types.SimpleNamespace(state="success", content=[])
+        call = types.SimpleNamespace(name=name, input={"file_path": path})
+        return [r async for r in middleware.on_acting(None, {"tool_call": call}, handler)][0]
+
+    async def run():
+        token = module._task_write_dirs.set((output, scratch))
+        try:
+            assert (await action(outside)).state == "error"
+            assert (await action("report.json")).state == "success"
+            assert (await action(str(scratch / "test.log"))).state == "success"
+        finally:
+            module._task_write_dirs.reset(token)
+        assert (await action(outside)).state == "success"
+
+    asyncio.run(run())
+    assert calls == ["report.json", str(scratch / "test.log"), outside]
+
+
 @pytest.mark.parametrize("tool_name", ["teamharness__task", "mcp__teamharness__task", None])
 def test_managed_phase_uses_the_registered_task_tool(tool_name):
     module = load_plugin()

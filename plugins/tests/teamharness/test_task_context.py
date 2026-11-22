@@ -43,6 +43,19 @@ def test_invalid_prepared_directory_fails_closed(field, value):
         context.prepare("task_assigned", event, result)
 
 
+def test_managed_file_writes_use_prepared_directories(tmp_path):
+    output = tmp_path / "tasks" / "t1" / "workspace"
+    scratch = tmp_path / "tasks" / "t1" / "scratch"
+    output.mkdir(parents=True)
+    neighbor = tmp_path / "tasks" / "t11"
+    (output / "outside").symlink_to(neighbor)
+
+    for path in ("report.json", str(output / "nested" / "report.json"), str(scratch / "test.log")):
+        assert context.task_write_path_allowed(path, output, scratch)
+    for path in ("", "../inputs/orders.json", str(neighbor / "report.json"), "outside/report.json"):
+        assert not context.task_write_path_allowed(path, output, scratch)
+
+
 def test_review_binds_exact_public_candidate_and_does_not_claim_business_validation():
     event = {"task_id": "t1", "main_task_id": "main", "submission_id": "s1"}
     result = {"task": {"id": "t1", "mainTaskId": "main", "status": "submitted", "submissionId": "s1",

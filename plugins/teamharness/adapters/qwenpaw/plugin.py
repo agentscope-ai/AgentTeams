@@ -29,6 +29,7 @@ _completion_task: ContextVar[str] = ContextVar("teamharness_completion_task", de
 _planning_tasks: ContextVar[frozenset[str]] = ContextVar("teamharness_planning_tasks", default=frozenset())
 _review_task: ContextVar[tuple[str, str] | None] = ContextVar("teamharness_review_task", default=None)
 _ack_scope: ContextVar[tuple | None] = ContextVar("teamharness_ack_scope", default=None)
+_task_write_dirs: ContextVar[tuple[Path, Path] | None] = ContextVar("teamharness_task_write_dirs", default=None)
 _current_deliveries: ContextVar[tuple[str, ...]] = ContextVar("teamharness_current_deliveries", default=())
 _delivery_ack: ContextVar[dict | None] = ContextVar("teamharness_delivery_ack", default=None)
 _approval_status_records: dict[str, dict[str, Any]] = {}
@@ -121,6 +122,14 @@ def _receipt_module():
     receipts = importlib.util.module_from_spec(receipt_spec)
     receipt_spec.loader.exec_module(receipts)
     return receipts
+
+
+@lru_cache(maxsize=1)
+def _task_context_module():
+    spec = importlib.util.spec_from_file_location("teamharness_task_context", ASSET_DIR / "mcp/common/task_context.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @lru_cache(maxsize=1)
@@ -489,6 +498,15 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                     args = json.loads(args)
                 except ValueError:
                     args = {}
+            write_dirs = _task_write_dirs.get()
+            if (write_dirs and getattr(call, "name", "") in {"write_file", "edit_file"} and isinstance(args, dict)
+                    and not _task_context_module().task_write_path_allowed(args.get("file_path"), *write_dirs)):
+                from agentscope.tool import ToolResponse
+                yield ToolResponse(state="error", content=[{
+                    "type": "text",
+                    "text": "Use a relative filename under the prepared outputDirectory, or an exact path inside outputDirectory or scratchDirectory.",
+                }])
+                return
             route = _requester_route.get()
             coordinator = _coordinator_route.get()
             name = str(getattr(call, "name", "")).split("__")[-1]
@@ -824,7 +842,9 @@ def _bind_public_task_io(ctx: Any, prepared: dict) -> None:
 
     root = prepared["ack"][1]
     output = Path(prepared["context"]["outputDirectory"]).resolve()
-    values = ((context.current_project_dir, output),
+    scratch = Path(prepared["context"]["scratchDirectory"]).resolve()
+    values = ((_task_write_dirs, (output, scratch)),
+              (context.current_project_dir, output),
               (context.current_project_dirs, (ResolvedProjectDir(output), ResolvedProjectDir(root / "inputs"))),
               (context.current_project_dir_source, "request"))
     for variable, value in values:
@@ -844,9 +864,7 @@ async def _prepare_public_task_event(ctx: Any, event: dict) -> None:
     task_tool_name = next((name for name in names if _is_task_tool(name)), None)
     if not task_tool_name:
         raise ValueError("Native Task tool is unavailable for this managed phase")
-    spec = importlib.util.spec_from_file_location("teamharness_task_context", ASSET_DIR / "mcp/common/task_context.py")
-    common = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(common)
+    common = _task_context_module()
     if kind != "handoff":
         task_id = event.get("main_task_id") if kind == "main_task_ready" else event.get("task_id")
         result = await _prepare_task_context(ctx, "begin" if kind == "task_assigned" else "get", task_id)

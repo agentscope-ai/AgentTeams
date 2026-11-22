@@ -33,6 +33,8 @@ As Manager, after deciding that a new Task is needed, call `create` with the
 registered `leader` and a concise `title`.
 When the framework supplies multiple input references, choose the original
 request's `inputId` (CLI: `--input-id`) for each Task you decide to create.
+Confirm a request as registered only with a Task creation receipt for its exact
+source event. A Task from another input cannot satisfy the current request.
 Your framework maps stable `inputId` references to the verified messages shown
 as `[Message ...]`. Use the supplied references; do not compute or renumber them.
 Message references do not imply a required Task count. Before finishing your turn, address every genuinely independent request

@@ -174,7 +174,8 @@ def creation_receipt(result: object, source: str) -> tuple[str, str] | None:
         return None
     key = json.dumps(["create", source, identity, event], separators=(",", ":"))
     return key, (f'[Task system receipt]\nTask {identity} is {task["status"]}. Task system has registered '
-                 f'the original request and queued its handoff to "{recipient}". Do not send another handoff message.')
+                 f'Human source event {source} and queued its handoff to "{recipient}". '
+                 'This receipt confirms only this input. Do not send another handoff message.')
 
 
 def task_receipt(result: object, task_id: str, action: str) -> tuple[str, str] | None:
@@ -420,16 +421,18 @@ def refresh_creation_inputs(result: object, sources: list[dict], source_event: s
 
 def input_refresh_context(result: dict, refreshed: list[dict], sources: list[dict]) -> str:
     """Format the common control result without duplicating Human bodies."""
-    return ("[Task input refresh]\nNo new Task was registered. This is a normal input update, not a failed task. "
+    source = result["sourceEventId"]
+    attempted = next(item["inputId"] for item in sources if item["eventId"] == source)
+    return (f"[Task input refresh]\nNo new Task was registered for {attempted} (source event {source}). "
+            "Only a creation receipt for this exact source can confirm its Task. A Task ID from another input is not its receipt. "
             "Your framework adds the verified Human messages to your native user inputs before the next reasoning step. "
-            "This attempt did not register its selected earlier request; new messages do not automatically replace it. "
+            "This is a normal input update. New messages do not automatically replace the earlier request. "
             "Interpret all supplied inputs together before choosing an operation. "
             "Transport copies are deduplicated by source event identity in your framework, not by matching Human text. "
             "Distinct complete work requests ask for distinct runs even when their bodies match; fulfill each unless the Human relates it to existing work. "
             "A question or withdrawal may need no new Task. Bind only actual Human amendments using relatedInputIds; never use it to merge duplicate-looking work requests. "
             "Address every independent request before ending your turn; do not ask the Human to resubmit merely because inputs changed.\n"
-            + json.dumps({**result, "attemptedInputId": next(source["inputId"] for source in sources
-                                                               if source["eventId"] == result["sourceEventId"]),
+            + json.dumps({**result, "attemptedInputId": attempted,
                           "inputReferences": [{key: source[key] for key in ("inputId", "eventId")} for source in sources],
                           "inputs": [{key: value for key, value in source.items() if key != "body"}
                                                 for source in refreshed]}, ensure_ascii=False))

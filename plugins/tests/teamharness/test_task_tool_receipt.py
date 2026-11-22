@@ -113,6 +113,8 @@ def test_creation_binds_native_source_without_agent_route_parameters():
     result={"sourceEventId":"$request","task":{"id":"main","kind":"main","status":"planned"},"notification":{"status":"queued","eventId":"handoff","recipient":"lead"}}
     receipt=module().creation_receipt(result,"$request")
     assert receipt and "registered" in receipt[1] and "lead" in receipt[1] and "Do not send another" in receipt[1]
+    assert "source event $request" in receipt[1]
+    assert "confirms only this input" in receipt[1]
     assert module().creation_receipt(result,"$other-request") is None
 
 
@@ -222,6 +224,9 @@ def test_input_change_is_a_nonfatal_control_outcome_not_a_creation_receipt():
     refreshed = public.refresh_creation_inputs(result,sources,"$original")
     assert refreshed and refreshed[0]["eventId"] == "$independent"
     assert public.creation_receipt(result,"$original") is None
+    fact = public.input_refresh_context(result, refreshed, [*sources, *refreshed])
+    assert "input-1 (source event $original)" in fact
+    assert "Only a creation receipt for this exact source can confirm its Task" in fact
 
 
 def test_input_references_survive_batch_order_and_late_transport_copies():

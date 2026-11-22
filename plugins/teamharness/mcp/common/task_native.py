@@ -157,7 +157,11 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
             planned = sorted(set(context.get("planned") or []) | {identity})
             response["contextUpdate"] = {"planned": planned}
             response["phaseComplete"] = set(context["planning"]).issubset(planned)
-        elif action != "create":
+        elif action == "create":
+            registered = sorted(set(context.get("registeredInputs") or []) | {source, *selected.get("relatedSources", [])})
+            response["fact"] += receipts.creation_coverage_context(sources, set(registered))
+            response["contextUpdate"] = {"registeredInputs": registered}
+        else:
             response["phaseComplete"] = True
     return response
 

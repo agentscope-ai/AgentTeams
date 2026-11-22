@@ -213,7 +213,10 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 return current_prompt + "\n\n" + contract
             return current_prompt
 
-        def _inject_task_receipt(self, item: Any, tool_name: str, args: Any, creation_source: str = "") -> None:
+        def _inject_task_receipt(
+            self, item: Any, tool_name: str, args: Any, creation_source: str = "",
+            related_sources: list[str] | None = None,
+        ) -> None:
             if tool_name not in {"execute_shell_command", "task"} or not isinstance(args, dict):
                 return
             if not creation_source:
@@ -254,6 +257,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 sources = _creation_sources.get()
                 refreshed = receipts.refresh_creation_inputs(result, sources or [], creation_source)
                 if refreshed:
+                    self._record_intake_outcome(creation_source, "input_changed")
                     sources.extend({key: entry[key] for key in ("inputId", "eventId", "roomId", "userId")} for entry in refreshed)
                     self._refreshed_inputs = getattr(self, "_refreshed_inputs", set()) | {entry["eventId"] for entry in refreshed}
                     self._creation_refresh_pending = True
@@ -271,11 +275,14 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
             # Native Agent orchestration saves this final ToolResponse in the
             # current tool context after on_acting. Keep the fact before any
             # truncation while preserving the original result blocks.
-            item.content.insert(0, TextBlock(text=receipt[1] + "\n"))
+            fact = receipt[1]
+            if creation_source:
+                self._record_intake_outcome(creation_source, "registered")
+                self._registered_inputs = getattr(self, "_registered_inputs", set()) | {creation_source, *(related_sources or [])}
+                fact += receipts.creation_coverage_context(_creation_sources.get() or [], self._registered_inputs)
+            item.content.insert(0, TextBlock(text=fact + "\n"))
             self._task_receipt_ids = seen | {receipt[0]}
             if creation_source:
-                # A saved creation does not settle the whole Human input.
-                # Let the Agent consider other requests, amendments or withdrawal.
                 return
             if not creation_source and action == "plan":
                 planned = getattr(self, "_planned_tasks", set()) | {task_id}
@@ -283,6 +290,20 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 if _planning_tasks.get() - planned:
                     return
             self._finished_phase_receipt = receipt[1]
+
+        def _record_intake_outcome(self, event_id: str, outcome: str) -> None:
+            if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() != "true":
+                return
+            try:
+                import at_telemetry
+                from opentelemetry import trace
+            except ImportError:
+                return
+            span = at_telemetry._active_turn.get() or trace.get_current_span()
+            outcomes = getattr(self, "_intake_outcomes", [])
+            outcomes.append({"sourceEventId": event_id, "outcome": outcome})
+            self._intake_outcomes = outcomes
+            span.set_attribute("agentteams.task.intake_outcomes", json.dumps(outcomes, separators=(",", ":")))
 
         async def _allow_task_output_change(self, command: str, cwd: str | None) -> bool:
             if not self._task_scope:
@@ -483,7 +504,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                             args["payload"]["replyRoute"] = coordinator
                 if json_input:
                     call.input = json.dumps(args, ensure_ascii=False)
-            creation_source = ""
+            creation_source, related_sources = "", None
             task_tool = _is_task_tool(str(getattr(call, "name", "")))
             if task_tool and isinstance(args, dict):
                 args.pop("_nativeSource", None)
@@ -499,6 +520,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                         yield ToolResponse(state="error", content=[{"type": "text", "text": str(error)}])
                         return
                     creation_source = selected["eventId"]
+                    related_sources = selected.get("relatedSources")
                     args["_nativeSource"] = selected
                 if json_input:
                     call.input = json.dumps(args, ensure_ascii=False)
@@ -516,6 +538,7 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                         yield ToolResponse(state="error", content=[{"type": "text", "text": str(error)}])
                         return
                     creation_source = selected["eventId"]
+                    related_sources = selected.get("relatedSources")
                     bound = receipts.creation_command_env(args.get("command"), creation_source, selected["userId"], selected["roomId"], input_id=requested or None, related_sources=selected.get("relatedSources"), frontier=selected.get("frontierEventId"))
                     args["command"] = bound
                     if json_input:
@@ -537,9 +560,9 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                         _record_phase_error(json.loads(text))
                     except (TypeError, ValueError):
                         pass
-                    self._inject_task_receipt(item, "task", args, creation_source)
+                    self._inject_task_receipt(item, "task", args, creation_source, related_sources)
                 if getattr(call, "name", "") == "execute_shell_command" and (_execution_task.get() or _completion_task.get() or _planning_tasks.get() or _review_task.get() or creation_source):
-                    self._inject_task_receipt(item, name, args, creation_source)
+                    self._inject_task_receipt(item, name, args, creation_source, related_sources)
                 if name in {"projectflow", "taskflow"} and args.get("action") == "accept_task_result" and _review_task.get():
                     for block in getattr(item, "content", []):
                         text = block.get("text", "") if isinstance(block, dict) else getattr(block, "text", "")

@@ -178,6 +178,21 @@ def creation_receipt(result: object, source: str) -> tuple[str, str] | None:
                  'This receipt confirms only this input. Do not send another handoff message.')
 
 
+
+def creation_coverage_context(sources: list[dict], registered: set[str]) -> str:
+    """Report unbound inputs using the native references, without inferring intent."""
+    pending = [item["inputId"] for item in sources if item["eventId"] not in registered]
+    if not pending:
+        return ""
+    return (
+        "\n[Task input coverage]\nNo creation receipt covers these supplied input IDs: "
+        + json.dumps(pending, ensure_ascii=False)
+        + ". Before ending this turn, handle each remaining input according to its own intent. "
+        "Create a separate Task for each independent work request, even when its text matches another. "
+        "Answer questions or handle withdrawals as appropriate. A Task receipt for another input cannot cover these IDs."
+    )
+
+
 def task_receipt(result: object, task_id: str, action: str) -> tuple[str, str] | None:
     """Return a deduplication identity and code-generated fact, or no receipt.
 

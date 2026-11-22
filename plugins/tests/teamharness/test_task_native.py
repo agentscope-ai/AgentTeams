@@ -66,6 +66,37 @@ def test_phase_admission_reuses_the_public_lifecycle_without_model(bridge):
     assert len(calls) == 1
 
 
+def test_creation_coverage_tracks_exact_sources_without_forcing_a_task_for_questions(bridge):
+    sources = [
+        {"inputId": "input-a", "eventId": "$first", "roomId": "!room:test", "userId": "@human:test"},
+        {"inputId": "input-b", "eventId": "$second", "roomId": "!room:test", "userId": "@human:test"},
+    ]
+    context = {"role": "manager", "sources": sources}
+
+    def call(arguments):
+        return {"sourceEventId": arguments["_nativeSource"]["eventId"],
+                "task": {"id": "main", "kind": "main", "status": "planned"},
+                "notification": {"status": "queued", "recipient": "lead", "eventId": "notice"}}
+
+    args = {"action": "create", "leader": "lead", "title": "Same business request", "inputId": "input-b"}
+    second = bridge.invoke({"operation": "task", "arguments": args, "context": context}, call=call)
+    assert 'supplied input IDs: ["input-a"]' in second["fact"]
+    assert "Answer questions or handle withdrawals" in second["fact"]
+    assert second["contextUpdate"] == {"registeredInputs": ["$second"]}
+    assert second["phaseComplete"] is False
+
+    first = bridge.invoke({"operation": "task", "arguments": {**args, "inputId": "input-a"},
+                           "context": {**context, **second["contextUpdate"]}}, call=call)
+    assert "[Task input coverage]" not in first["fact"]
+    assert first["contextUpdate"] == {"registeredInputs": ["$first", "$second"]}
+
+    amendment = bridge.invoke({"operation": "task",
+                               "arguments": {**args, "inputId": "input-a", "relatedInputIds": ["input-b"]},
+                               "context": context}, call=call)
+    assert "[Task input coverage]" not in amendment["fact"]
+    assert amendment["contextUpdate"] == first["contextUpdate"]
+
+
 def test_handoff_uses_only_admitted_ids_without_another_task_call(bridge):
     def unexpected(_):
         pytest.fail('handoff must not call the Task CLI')

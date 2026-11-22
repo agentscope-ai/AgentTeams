@@ -210,8 +210,24 @@ func TestDockerCreateProjectsAuthTokenFileBeforeStart(t *testing.T) {
 	var createPayload dockerCreatePayload
 	var projectedName string
 	var projectedToken string
+	var projectedOwner [3]int
 	var events []string
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"Config":{"User":"runtime"}}`)
+	})
+	mux.HandleFunc("GET /containers/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("path") != "/etc/passwd" {
+			t.Errorf("unexpected archive path: %s", r.URL.Query().Get("path"))
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		data := "root:x:0:0:root:/root:/bin/sh\nruntime:x:10001:10002::/home/runtime:/bin/sh\n"
+		archive := tar.NewWriter(w)
+		_ = archive.WriteHeader(&tar.Header{Name: "passwd", Mode: 0644, Size: int64(len(data))})
+		_, _ = io.WriteString(archive, data)
+		_ = archive.Close()
+	})
 	mux.HandleFunc("GET /images/", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "sha256-worker"})
 	})
@@ -241,6 +257,7 @@ func TestDockerCreateProjectsAuthTokenFileBeforeStart(t *testing.T) {
 			t.Fatalf("read projected token header: %v", err)
 		}
 		projectedName = hdr.Name
+		projectedOwner = [3]int{hdr.Uid, hdr.Gid, int(hdr.Mode)}
 		content, err := io.ReadAll(tr)
 		if err != nil {
 			t.Fatalf("read projected token: %v", err)
@@ -272,6 +289,9 @@ func TestDockerCreateProjectsAuthTokenFileBeforeStart(t *testing.T) {
 	if projectedName != "token" || projectedToken != "secret-token" {
 		t.Fatalf("projected file=%q content=%q", projectedName, projectedToken)
 	}
+	if projectedOwner != ([3]int{10001, 10002, 0400}) {
+		t.Fatalf("token UID/GID/mode = %v", projectedOwner)
+	}
 	env := strings.Join(createPayload.Env, "\n")
 	if strings.Contains(env, "AGENTTEAMS_AUTH_TOKEN=secret-token") {
 		t.Fatalf("create env contains plaintext token: %v", createPayload.Env)
@@ -287,9 +307,26 @@ func TestDockerCreateProjectsAuthTokenFileBeforeStart(t *testing.T) {
 func TestDockerProjectAuthTokenAtomicallyReplacesRunningWorkerFile(t *testing.T) {
 	var projectedName string
 	var projectedToken string
+	var projectedOwner [3]int
 	var execCommand []string
+	var execUser string
 	var events []string
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"Config":{"User":"runtime"}}`)
+	})
+	mux.HandleFunc("GET /containers/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("path") != "/etc/passwd" {
+			t.Errorf("unexpected archive path: %s", r.URL.Query().Get("path"))
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		data := "root:x:0:0:root:/root:/bin/sh\nruntime:x:10001:10002::/home/runtime:/bin/sh\n"
+		archive := tar.NewWriter(w)
+		_ = archive.WriteHeader(&tar.Header{Name: "passwd", Mode: 0644, Size: int64(len(data))})
+		_, _ = io.WriteString(archive, data)
+		_ = archive.Close()
+	})
 	mux.HandleFunc("PUT /containers/{id}/archive", func(w http.ResponseWriter, r *http.Request) {
 		events = append(events, "project-next")
 		tr := tar.NewReader(r.Body)
@@ -298,6 +335,7 @@ func TestDockerProjectAuthTokenAtomicallyReplacesRunningWorkerFile(t *testing.T)
 			t.Fatalf("read projected token header: %v", err)
 		}
 		projectedName = hdr.Name
+		projectedOwner = [3]int{hdr.Uid, hdr.Gid, int(hdr.Mode)}
 		content, err := io.ReadAll(tr)
 		if err != nil {
 			t.Fatalf("read projected token: %v", err)
@@ -308,12 +346,13 @@ func TestDockerProjectAuthTokenAtomicallyReplacesRunningWorkerFile(t *testing.T)
 	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
 		events = append(events, "create-exec")
 		var payload struct {
-			Cmd []string `json:"Cmd"`
+			Cmd  []string `json:"Cmd"`
+			User string   `json:"User"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode exec payload: %v", err)
 		}
-		execCommand = payload.Cmd
+		execCommand, execUser = payload.Cmd, payload.User
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]string{"Id": "exec-id"})
 	})
@@ -335,6 +374,9 @@ func TestDockerProjectAuthTokenAtomicallyReplacesRunningWorkerFile(t *testing.T)
 	if projectedName != "token.next" || projectedToken != "rotated-token" {
 		t.Fatalf("projected file=%q content=%q", projectedName, projectedToken)
 	}
+	if projectedOwner != ([3]int{10001, 10002, 0400}) {
+		t.Fatalf("token UID/GID/mode = %v", projectedOwner)
+	}
 	// ProjectAuthToken writes via writeContainerFileWithMode directly
 	// (NOT WriteFile), so no parent mkdir runs — the sequence is
 	// archive PUT (token.next) → mv (exec). The Create path projects the
@@ -343,7 +385,10 @@ func TestDockerProjectAuthTokenAtomicallyReplacesRunningWorkerFile(t *testing.T)
 	if strings.Join(events, ",") != "project-next,create-exec,start-exec,inspect-exec" {
 		t.Fatalf("events=%v", events)
 	}
-	wantCommand := "/bin/sh,-c,mv -f /var/run/secrets/agentteams/token.next /var/run/secrets/agentteams/token"
+	if execUser != "0:0" {
+		t.Fatalf("rename user = %q, want root in the container", execUser)
+	}
+	wantCommand := "mv,-f,/var/run/secrets/agentteams/token.next,/var/run/secrets/agentteams/token"
 	if strings.Join(execCommand, ",") != wantCommand {
 		t.Fatalf("exec command=%v, want %s", execCommand, wantCommand)
 	}

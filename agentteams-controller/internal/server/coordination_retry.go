@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"slices"
 	"time"
@@ -11,6 +13,23 @@ import (
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 )
+
+func (h *CoordinationHandler) completionRequiresVerification(ctx context.Context, e coordinationEvent) (bool, error) {
+	key := canonicalNativeLedgerKey([]string{h.deps.Namespace, "worker", e.RecipientName, "task", e.StorageTeam, e.MainTaskID})
+	data, err := h.deps.OSS.GetObject(ctx, key)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var operation canonicalNativeOperation
+	if err := json.Unmarshal(data, &operation); err != nil {
+		return false, err
+	}
+	return operation.Action == "complete" && operation.State == "unknown" &&
+		operation.TaskID == e.MainTaskID && operation.Team == e.StorageTeam, nil
+}
 
 // retryAfterNativeFailure is called only after the framework has ended a turn
 // with a retryable Task-tool error. Polling an unfinished task is not this fact.

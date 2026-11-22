@@ -160,6 +160,51 @@ func TestCoordinationSlowActiveTurnNeverRetriesWithoutCompletionCallback(t *test
 	}
 }
 
+func TestCoordinationCompletionWithUnknownEffectEndsNativeAdmission(t *testing.T) {
+	h, store := coordinationFixture(t)
+	putProject(store, "teams/alpha/shared/tasks/main/meta.json", map[string]any{
+		"task_id": "main", "task_kind": "main", "team_id": "alpha", "status": "in_progress", "room_id": "!task:test",
+		"task_plan": map[string]any{"id": "plan"},
+		"tasks":     []any{map[string]any{"task_id": "t1", "status": "completed"}},
+	})
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"}
+	event, err := h.resolve(t.Context(), coordinationEvent{Kind: "main_task_ready", MainTaskID: "main"}, caller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := service.WorkerStart{InstanceID: "instance", ProcessID: "process", Runtime: "openhuman"}
+	matrixStore := service.WorkerMatrixStore{Storage: store}
+	if _, _, err := matrixStore.Start(t.Context(), "lead-runtime", start, ""); err != nil {
+		t.Fatal(err)
+	}
+	operationKey := "control/task-native/" + canonicalNativeHash([]string{"default", "worker", "lead-cr", "task", "alpha", "main"}) + ".json"
+	putProject(store, operationKey, map[string]any{
+		"id": "operation", "team": "alpha", "task_id": "main", "action": "complete", "state": "unknown",
+	})
+	delivery := coordinationDelivery{Event: event, Transport: "matrix", Status: "running",
+		NativeID: "matrix:$ready", NativeStart: &start}
+	h.advance(t.Context(), &delivery, func() error { return nil })
+	if delivery.Status != "failed" || delivery.Replays != 0 || delivery.NativeID != "matrix:$ready" {
+		t.Fatalf("an unresolved completion was left eligible for replay: %+v", delivery)
+	}
+	data, _ := json.Marshal(delivery)
+	if err := store.PutObject(t.Context(), coordinationDone+event.ID+".json", data); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/phase", strings.NewReader(`{"action":"begin","native_event_id":"$ready","process_id":"process"}`))
+	r.SetPathValue("id", event.ID)
+	r.Header.Set("X-AgentTeams-Process-ID", "process")
+	w := httptest.NewRecorder()
+	h.NativePhase(w, withCaller(r, caller))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"active":false`) || !strings.Contains(w.Body.String(), `"failed":true`) {
+		t.Fatalf("terminal native admission %d: %s", w.Code, w.Body.String())
+	}
+	row, err := h.read(t.Context(), "teams/alpha/shared/tasks/main/meta.json")
+	if err != nil || row["status"] != "in_progress" {
+		t.Fatalf("terminating the receipt changed the main task: %v %v", row, err)
+	}
+}
+
 func TestCoordinationHandoffWaitsForAllDurablePlans(t *testing.T) {
 	h, store := coordinationFixture(t)
 	event, err := h.resolve(t.Context(), coordinationEvent{Kind: "handoff", Recipient: "@lead:test",

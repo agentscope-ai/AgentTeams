@@ -191,6 +191,18 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 		d.Error = "canonical state unavailable"
 		return
 	}
+	if e.Protocol == "task/v1" && e.Kind == "main_task_ready" && d.NativeID != "" && d.Transport == "matrix" {
+		pendingVerification, err := h.completionRequiresVerification(ctx, e)
+		if err != nil {
+			d.Error = "completion operation ledger unavailable"
+			return
+		}
+		if pendingVerification {
+			d.Status = "failed"
+			d.Error = "Task completion outcome requires verification before continuing"
+			return
+		}
+	}
 	if d.NativeStart != nil {
 		recovered, err := h.recoverChangedNativeStart(ctx, d)
 		if err != nil {

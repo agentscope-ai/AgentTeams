@@ -162,9 +162,10 @@ End this turn; do not assign them again or wait for their results.
 ## Read artifacts
 
 Use `files_read` for bounded text and `files_get` for a verified local path.
-Prefer `artifactId` plus `version` from the candidate or accepted input. For a
-truncated report, use `candidate.reportFile`. Continue text reads with the returned
-version and next offset. Use `files_put` only for deliberate intermediate sharing;
+Use the owning Task ID with the `artifactId` and `version` from the candidate or
+accepted input. For a child candidate, pass its execution Task ID as `taskId`.
+For a truncated report, use `candidate.reportFile`. Continue text reads with the
+returned version and next offset. Use `files_put` only for deliberate intermediate sharing;
 normal submission publishes the named output files. Never guess storage keys.
 
 ## Complete as Leader

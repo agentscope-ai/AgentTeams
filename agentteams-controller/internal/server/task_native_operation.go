@@ -46,6 +46,10 @@ func canonicalNativeHash(value any) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func canonicalNativeLedgerKey(actor []string) string {
+	return "control/task-native/" + canonicalNativeHash(actor) + ".json"
+}
+
 func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Request, input canonicalNativeRequest) (string, canonicalNativeOperation, bool) {
 	caller := authpkg.CallerFromContext(r.Context())
 	scope := canonicalNativeOperation{Action: coordinationString(input.Arguments, "action"), SubmissionID: coordinationString(input.Arguments, "submissionId")}
@@ -153,7 +157,7 @@ func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Req
 		scope.Generation = task.Execution.Generation
 		actor = append(actor, "task", team, id)
 	}
-	return "control/task-native/" + canonicalNativeHash(actor) + ".json", scope, true
+	return canonicalNativeLedgerKey(actor), scope, true
 }
 
 func (h *ProjectHandler) nativeOperationAuthority(r *http.Request, operation canonicalNativeOperation) (map[string]any, error) {

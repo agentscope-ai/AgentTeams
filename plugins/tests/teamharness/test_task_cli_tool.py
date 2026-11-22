@@ -54,6 +54,28 @@ def test_cli_validation_and_unconfirmed_execution_have_distinct_effects(monkeypa
     assert tool.run({"action": "submit", "taskId": "t1", "summary": "done"})["effect"] == "unknown"
 
 
+@pytest.mark.parametrize("action", ["get", "files_list", "files_read", "files_get"])
+@pytest.mark.parametrize("failure", ["http", "timeout", "invalid_receipt"])
+def test_read_failures_leave_the_task_turn_usable(monkeypatch, action, failure):
+    tool = load(monkeypatch)
+    arguments = {"action": action, "taskId": "t1"}
+    if action in {"files_read", "files_get"}:
+        arguments["name"] = "output.txt"
+
+    def run(argv, **kwargs):
+        if failure == "timeout":
+            raise tool.subprocess.TimeoutExpired(argv, 120)
+        if failure == "invalid_receipt":
+            return tool.subprocess.CompletedProcess(argv, 0, "[]", "")
+        return tool.subprocess.CompletedProcess(argv, 1, "", "Error: HTTP 404: task artifact not found")
+
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    result = tool.run(arguments)
+    assert result["ok"] is False
+    assert result["effect"] == ("unknown" if action == "files_get" else "none")
+    assert result["retryable"] is (failure == "timeout")
+
+
 def test_create_carries_a_framework_selected_input_reference(monkeypatch):
     tool = load(monkeypatch)
     argv, env = tool.command({"action": "create", "leader": "lead", "title": "Second request", "inputId": "input-2",

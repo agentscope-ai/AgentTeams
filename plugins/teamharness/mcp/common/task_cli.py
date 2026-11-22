@@ -29,6 +29,7 @@ _ACTIONS = {
 }
 _FLAGS = {"submissionId": "submission", "artifactId": "artifact", "replacementSpec": "replacement-spec", "inputId": "input-id"}
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_READ_ONLY_ACTIONS = {"get", "files_list", "files_read"}
 
 TASK_SCHEMA = {
     "description": (
@@ -194,7 +195,7 @@ def retryable_cli_error(message: str) -> bool:
 
 
 def _run(arguments: dict) -> dict:
-    started = False
+    failure_effect = "none"
     try:
         argv, env = command(arguments)
         if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in {"true", "1"}:
@@ -208,18 +209,20 @@ def _run(arguments: dict) -> dict:
                 for name in ("traceparent", "tracestate", "baggage"):
                     if carrier.get(name):
                         env["AT_OTEL_" + name.upper()] = carrier[name]
-        started = True
+        if arguments["action"] not in _READ_ONLY_ACTIONS:
+            failure_effect = "unknown"
         process = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
         if process.returncode:
             return {"ok": False, "error": "task_operation_failed", "exitCode": process.returncode,
-                    "message": process.stderr.strip()[:2048], "retryable": retryable_cli_error(process.stderr), "effect": "unknown"}
+                    "message": process.stderr.strip()[:2048], "retryable": retryable_cli_error(process.stderr),
+                    "effect": failure_effect}
         result = json.loads(process.stdout)
         if not isinstance(result, dict):
             raise ValueError("task CLI returned an invalid receipt")
         return result
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         return {"ok": False, "error": "task_operation_unavailable", "message": str(error)[:2048],
-                "retryable": isinstance(error, subprocess.TimeoutExpired), "effect": "unknown" if started else "none"}
+                "retryable": isinstance(error, subprocess.TimeoutExpired), "effect": failure_effect}
 
 
 def run(arguments: dict) -> dict:

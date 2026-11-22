@@ -112,6 +112,10 @@ func (h *CoordinationHandler) NativePhase(w http.ResponseWriter, r *http.Request
 			httputil.WriteJSON(w, 200, map[string]any{"active": false, "settled": true})
 			return
 		}
+		if delivery.Status == "failed" {
+			httputil.WriteJSON(w, 200, map[string]any{"active": false, "failed": true})
+			return
+		}
 		if archived {
 			writeError(w, 409, "legacy phase was archived before its durable outcome")
 			return

@@ -167,10 +167,12 @@ class SessionReceiptMiddleware(MiddlewareBase):
                 yield ToolResponse(state="error", content=[TextBlock(
                     text="Batch execution is unavailable for this managed turn. Call each required tool directly.")])
                 return
-            from qwenpaw_message_execution import guarded_tool
+            from qwenpaw_message_execution import guarded_tool, read_only_registration
             binding = self.ctx.extras.get('agentteams_task_registration')
             registration = await binding(agent, call) if binding else None
-            stream = guarded_tool(*managed, call, next_handler, input_kwargs, registration=registration)
+            read_only = call.name == "read_file" and await read_only_registration(agent, call)
+            stream = guarded_tool(*managed, call, next_handler, input_kwargs,
+                                  registration=registration, read_only=read_only)
         else:
             stream = next_handler(**input_kwargs)
         async for item in stream:

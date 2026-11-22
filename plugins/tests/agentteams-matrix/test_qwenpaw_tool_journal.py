@@ -1,6 +1,7 @@
 """Exercise Task-owned native tools and trusted MCP delegation with real SDK types."""
 import asyncio
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -70,6 +71,59 @@ def test_task_owned_tool_checkpoints_before_effect_and_after_complete_stream(out
                 async for _ in Agent._acting(agent, call):
                     pass
             assert order == ['owned', 'started', 'effect']
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('registered_builtin', [True, False])
+def test_missing_file_response_settles_only_the_registered_native_reader(tmp_path, registered_builtin):
+    pytest.importorskip('qwenpaw')
+    from qwenpaw.agents.tools.file_io import read_file
+    from qwenpaw.governance import PolicyGuardedTool
+
+    async def other_reader(file_path):
+        return await read_file(file_path)
+
+    tool = PolicyGuardedTool(read_file if registered_builtin else other_reader, name='read_file')
+    identity = dict(task_id='T', team_id='team', generation=2, process_id='p', instance_id='i')
+    file_path = str(tmp_path / 'missing.py')
+    call = ToolCallBlock(id='read', name='read_file', input=json.dumps({'file_path': file_path}))
+    begin, finish = [], []
+
+    def start(actual, calls):
+        assert actual == identity
+        begin.extend(calls)
+        return 'op'
+
+    def complete(actual, operation, results):
+        assert (actual, operation) == (identity, 'op')
+        finish.extend(results)
+        return {'execution': {'checkpoint': {'version': 2}}}
+
+    recovery = SimpleNamespace(begin_tools=start, finish_tools=complete)
+    channel = SimpleNamespace(_task_execution=SimpleNamespace(recovery=recovery, verify=lambda _: None))
+    ctx = SimpleNamespace(extras={}, request=SimpleNamespace(channel_meta={'task_execution': identity}),
+        workspace=SimpleNamespace(channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel))))
+    agent = SimpleNamespace(toolkit=SimpleNamespace(get_tool=AsyncMock(return_value=tool)))
+
+    async def invoke(tool_call):
+        chunk = await read_file(file_path)
+        yield ToolResponse(state=chunk.state, content=chunk.content)
+
+    async def scenario():
+        async def collect():
+            return [item async for item in middleware(ctx).on_acting(agent, {'tool_call': call}, invoke)]
+
+        if registered_builtin:
+            response, = await collect()
+            assert response.state == 'error'
+            assert begin[0]['read_only'] is True
+            assert finish[0]['effect'] == 'none' and finish[0]['status'] == 'error'
+        else:
+            with pytest.raises(RecoveryConflict, match='verification'):
+                await collect()
+            assert 'read_only' not in begin[0]
+            assert not finish
+
     asyncio.run(scenario())
 
 

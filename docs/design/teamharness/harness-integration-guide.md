@@ -50,6 +50,8 @@ Worker 使用实际启动入口调用 `POST /api/v1/runtime/matrix` 登记 `acti
 
 支持异步工具的 Harness 要保留原始调用 ID。工具返回运行句柄时，框架继续使用同一次调用的等待机制，直到取得结束状态并为原操作保存回执。后续工具和任务提交遵循现有准入规则。接入验证需让真实原生工具跨过首次等待窗口，检查后续等待能够取得终态、回执关联原调用、任务继续推进。进程中断后缺少终态证据时，仍走公共核验流程。
 
+框架能确认原生注册工具只读时，在准入日志为该次调用记录 `read_only: true`。收到同一调用的终态错误后，用 `status: error` 和 `effect: none` 保存错误回执并恢复后续工具准入。核对真实 SDK 注册身份及调用 ID，工具参数和输出文字不参与只读能力判断。缺少可信终态或副作用未知时保留公共核验。
+
 ## 三、模型可见的 Task 工具
 
 基于 `task_native.py` 的 `schema` 和 `task` 接入，复用公共角色 schema 及 CLI 语义。注册时调用 `{"operation":"schema","role":"leader"}` 取得角色 schema。调用工具时传 `operation="task"`、模型参数对象 `arguments` 和框架对象 `context`，后者包含真实 `role`、当前阶段作用域及建单所需的来源绑定。固定工具的身份须关联实际 SDK 注册与受信桥接进程。它使用任务系统已有权限。Shell、其他 MCP 和文件工具依原有权限执行。托管执行和协调回合限制旧 TaskFlow、ProjectFlow、FileSync，普通消息能力用于沟通。

@@ -19,6 +19,9 @@ def begin(checkpoint, anchor, calls):
         raise RecoveryConflict('Tool operation already completed')
     expected = [{'id': call['id'], 'name': call['name'],
                  'arguments_sha256': Recovery.digest(call['arguments'])} for call in calls]
+    for call, evidence in zip(calls, expected):
+        if call.get('read_only') is True:
+            evidence['read_only'] = True
     cp.update(version=cp.get('version', 0) + 1,
               operation={'id': operation, 'state': 'started', 'evidence': json.dumps(expected)})
     return operation, cp
@@ -35,8 +38,12 @@ def pending(checkpoint, operation):
 def result_bytes(checkpoint, operation, results):
     cp = pending(checkpoint, operation)
     expected = json.loads(cp['operation']['evidence'])
+    read_only = {call['id'] for call in expected if call.get('read_only') is True}
     if (not isinstance(results, list) or any(not isinstance(result, dict) or 'id' not in result
-            or 'content' not in result or result.get('effect') in {'unknown', 'none'} for result in results)
+            or 'content' not in result or result.get('effect') == 'unknown'
+            or (result.get('effect') == 'none'
+                and (result.get('status') != 'error' or result['id'] not in read_only))
+            for result in results)
             or sorted(result['id'] for result in results) != sorted(call['id'] for call in expected)):
         raise RecoveryConflict('Native tool receipts differ from the admitted calls or remain unconfirmed')
     return json.dumps({'calls': expected, 'results': results}, ensure_ascii=False).encode()

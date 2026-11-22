@@ -228,8 +228,21 @@ async def canonical_registration(agent, call, server_path):
     return None
 
 
-async def guarded_tool(owner, turn, call, next_handler, kwargs, *, registration=None):
-    """Only the final successful AgentScope ToolResponse proves completion."""
+async def read_only_registration(agent, call):
+    """Recognize only the installed native file reader, including its guard."""
+    from agentscope.tool import FunctionTool
+    from qwenpaw.agents.tools.file_io import read_file
+    from qwenpaw.governance.tool_adapter import _policy_tool_call
+
+    toolkit = getattr(agent, 'toolkit', None)
+    tool = await toolkit.get_tool(call.name) if toolkit else None
+    return (isinstance(tool, FunctionTool) and type(tool).call is FunctionTool.call
+            and type(tool).__call__ in {FunctionTool.__call__, _policy_tool_call}
+            and tool._func is read_file)
+
+
+async def guarded_tool(owner, turn, call, next_handler, kwargs, *, registration=None, read_only=False):
+    """Save the terminal response of the exact admitted SDK call."""
     from agentscope.tool import ToolResponse
     from task_operation import tool_policy
 
@@ -246,22 +259,26 @@ async def guarded_tool(owner, turn, call, next_handler, kwargs, *, registration=
         message = 'event_key' in identity
         begin = owner.message_begin_tools if message else owner.begin_tools
         finish = owner.message_finish_tools if message else owner.finish_tools
-        operation = await asyncio.to_thread(begin, identity, [
-            {"id": call_id, "name": call.name, "arguments": arguments}])
+        request = {"id": call_id, "name": call.name, "arguments": arguments}
+        if read_only:
+            request["read_only"] = True
+        operation = await asyncio.to_thread(begin, identity, [request])
         final = None
         async for item in next_handler(**kwargs):
             if final is not None:
                 raise RecoveryConflict("Native tool emitted output after its final result")
             if isinstance(item, ToolResponse):
-                if item.state != "success":
+                if item.state != "success" and not (read_only and item.state == "error"):
                     raise RecoveryConflict("Native tool outcome requires verification")
                 final = item
             else:
                 yield item
         if final is None:
             raise RecoveryConflict("Native tool closed without a confirmed result")
-        saved = await asyncio.to_thread(finish, identity, operation, [
-            {"id": call_id, "content": final.model_dump(mode="json")["content"]}])
+        result = {"id": call_id, "content": final.model_dump(mode="json")["content"]}
+        if final.state == "error":
+            result.update(effect="none", status="error")
+        saved = await asyncio.to_thread(finish, identity, operation, [result])
         turn["checkpoint_digest"] = (saved["checkpoint_digest"] if message else
                                       Recovery.digest(saved['execution'].get('checkpoint')))
         yield final

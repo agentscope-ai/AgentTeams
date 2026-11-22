@@ -145,6 +145,22 @@ class NativePolicyTest(unittest.TestCase):
 class OperationAdmissionTest(unittest.TestCase):
     setUp = OperationTest.setUp
     transport = OperationTest.transport
+
+    def test_read_only_terminal_error_allows_followup_under_same_identity(self):
+        calls = [dict(self.calls[0], read_only=True)]
+        failed = [dict(self.results[0], effect='none', status='error')]
+        op = self.recovery.begin_tools(self.identity, calls)
+        with patch('task_recovery.subprocess.run'):
+            self.recovery.finish_tools(self.identity, op, failed)
+        self.assertEqual(self.recovery.tools_current(self.identity)['execution']['state'], 'active')
+        self.recovery.begin_tools(self.identity, [dict(calls[0], id='followup')])
+
+    def test_read_only_claim_inside_model_arguments_cannot_settle_error(self):
+        calls = [dict(self.calls[0], arguments={'read_only': True})]
+        op = self.recovery.begin_tools(self.identity, calls)
+        with self.assertRaises(RecoveryConflict):
+            self.recovery.finish_tools(self.identity, op,
+                                       [dict(self.results[0], effect='none', status='error')])
     def test_generic_and_canonical_calls_share_the_same_post_restart_admission(self):
         with patch.object(rpc, 'enabled', return_value=True), patch.object(rpc, 'Recovery', return_value=self.recovery):
             self.assertEqual(rpc.execute(dict(action='admit_tools', identity=self.identity))['task']['task_id'], 'T')

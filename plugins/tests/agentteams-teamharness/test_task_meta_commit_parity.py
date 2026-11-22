@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-BUNDLE_MCP_DIR = REPO_ROOT / "plugins" / "agentteams-teamharness" / "mcp"
+BUNDLE_MCP_DIR = (REPO_ROOT / "plugins" / "agentteams-teamharness" / "mcp").resolve()
 LEGACY_MCP_DIR = REPO_ROOT / "plugins" / "teamharness" / "mcp"
 LEGACY_TASK_META = REPO_ROOT / "plugins" / "tests" / "teamharness" / "test_task_meta_commit.py"
 

@@ -23,6 +23,13 @@ class ProtocolVerdictTests(unittest.TestCase):
                 changed[field] = True if field == 'manualIntervention' else False
                 self.assertFalse(protocol_passed(changed))
 
+    def test_leader_defined_plan_uses_delivery_and_acceptance(self):
+        record = self.record(planningPolicy='leader_decides')
+        del record['requiredGraphVerified']
+        self.assertTrue(protocol_passed(record))
+        record['leaderAcceptedVerified'] = False
+        self.assertFalse(protocol_passed(record))
+
     def test_late_delivery_does_not_change_original_timeout(self):
         record = self.record(status='timeout', withinFrozenBudget=False)
         self.assertTrue(protocol_passed(record))

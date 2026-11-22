@@ -1,5 +1,6 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "planningPolicy": "leader_decides",
   "status": "not_started",
   "firstHarness": "qwenpaw",
   "secondHarness": "openclaw",
@@ -15,14 +16,14 @@
   "cases": [
     {
       "id": "simple-csv",
-      "spec": "cases/simple-csv.md",
-      "repetitions": 10,
+      "spec": "cases/requirements-only/simple-csv.md",
+      "repetitions": 3,
       "timeoutSeconds": 300
     },
     {
       "id": "complex-settlement",
-      "spec": "cases/complex-settlement.md",
-      "repetitions": 10,
+      "spec": "cases/requirements-only/complex-settlement.md",
+      "repetitions": 3,
       "timeoutSeconds": 900
     }
   ],

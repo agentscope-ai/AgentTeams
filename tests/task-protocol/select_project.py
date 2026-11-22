@@ -1,10 +1,23 @@
-"""Select the specified implementation owner, never a more favourable copy."""
+"""Locate the project using the frozen case policy and downloaded artifacts."""
 import hashlib
 from pathlib import Path
 
 
-def select_project(case, nodes, delivered):
+def select_project(case, nodes, delivered, *, planning_policy=None):
     delivered = Path(delivered)
+    if planning_policy == "leader_decides":
+        accepted_ids = {node["task_id"] for node in nodes}
+        entries = [entry for entry in delivered.glob("*/**/app.py")
+                   if entry.relative_to(delivered).parts[0] in accepted_ids]
+        if len(entries) != 1:
+            raise ValueError("accepted deliverables must identify one project entry")
+        primary = entries[0]
+        if not primary.resolve().is_relative_to(delivered.resolve()):
+            raise ValueError("invalid delivered project entry")
+        return primary.parent, {"ownerTaskId": primary.relative_to(delivered).parts[0],
+                                "root": str(primary.parent),
+                                "selection": "single project entry in accepted delivered artifacts"}
+
     if case == "simple-csv":
         if len(nodes) != 1:
             raise ValueError("simple task requires one implementation owner")

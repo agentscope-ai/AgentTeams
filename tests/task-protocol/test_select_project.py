@@ -54,6 +54,21 @@ class ProjectSelectionTest(unittest.TestCase):
             project, _ = select_project("simple-csv", [{"task_id": "execution"}], root)
             self.assertEqual(project, root / "execution")
 
+    def test_leader_defined_plan_selects_the_unique_delivered_project(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write(root, "implementation/project/app.py", "implementation")
+            self.write(root, "verification/check.py", "verification")
+            nodes = [{"task_id": "implementation"}, {"task_id": "verification"}]
+            for case in ("simple-csv", "complex-settlement"):
+                with self.subTest(case=case):
+                    project, evidence = select_project(case, nodes, root, planning_policy="leader_decides")
+                    self.assertEqual(project, root / "implementation/project")
+                    self.assertEqual(evidence["ownerTaskId"], "implementation")
+            self.write(root, "verification/app.py", "different result")
+            with self.assertRaises(ValueError):
+                select_project("simple-csv", nodes, root, planning_policy="leader_decides")
+
 
 if __name__ == "__main__":
     unittest.main()

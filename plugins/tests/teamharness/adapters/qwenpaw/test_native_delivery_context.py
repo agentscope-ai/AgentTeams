@@ -45,6 +45,9 @@ class NativeDeliveryContextTest(unittest.TestCase):
                 testcase.assertIn("[Task system delivery record]",text)
                 testcase.assertIn("Accepted report.",text);testcase.assertIn("app.py",text)
                 testcase.assertIn("$report",text);testcase.assertIn("$file",text)
+                if any("What did you deliver for " in row.get("content", [{}])[0].get("text", "")
+                       for row in messages if row.get("role") == "user" and row.get("content")):
+                    testcase.assertIn("verified terminal delivery is current", text)
                 testcase.assertTrue(manager[0].state.middle_context["teamharness.sent_deliveries"]["!source:test"]["completion"])
                 return ChatResponse(content=[TextBlock(text="Delivery is already recorded.")],is_last=True)
 
@@ -77,10 +80,14 @@ class NativeDeliveryContextTest(unittest.TestCase):
             followup = hook_context(restored, "What did you deliver for " + task_id + "?")
             with patch.object(plugin, "_controller_json", side_effect=get):
                 await plugin._prepare_delivery_context(followup)
-                testcase.assertEqual(len(followup.context_injections), 1)
+                testcase.assertEqual(followup.context_injections, [])
                 testcase.assertNotIn("delivery_ack_token", followup.extras)
-                Runtime._apply_context_injections(followup)
-                await restored.reply(followup.input_msgs)
+                # The terminal record must reach the actual model even when the
+                # runtime compacts or drops previous turn injections.
+                try:
+                    await restored.reply(followup.input_msgs)
+                finally:
+                    plugin._current_deliveries.reset(followup.extras.pop("current_deliveries_token"))
             testcase.assertEqual(restored_model.calls, 2)
             testcase.assertEqual(len(reads), 3) # One common read per actual Human turn.
         with patch.dict(os.environ,{"AGENTTEAMS_AGENT_ROLE":"manager"}):asyncio.run(run())

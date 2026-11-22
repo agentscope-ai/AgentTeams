@@ -216,8 +216,8 @@ def test_delivery_followup_rehydrates_seen_task_in_the_current_turn(bridge):
                             'inputText': 'What was delivered for ' + task + '?'},
                            get_json=lambda _: {'deliveries': [new, other_room, old]})
     assert 'CSV report with 12 passing tests' in result['facts'][0]
-    assert all('Unrelated private report' not in fact for fact in result['facts'])
-    assert result['acknowledgements'] == {'new': room}
+    assert len(result['facts']) == 1
+    assert result['acknowledgements'] == {}
 
 
 @pytest.mark.parametrize('direct,configured,expected_path', [

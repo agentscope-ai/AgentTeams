@@ -29,6 +29,7 @@ _completion_task: ContextVar[str] = ContextVar("teamharness_completion_task", de
 _planning_tasks: ContextVar[frozenset[str]] = ContextVar("teamharness_planning_tasks", default=frozenset())
 _review_task: ContextVar[tuple[str, str] | None] = ContextVar("teamharness_review_task", default=None)
 _ack_scope: ContextVar[tuple | None] = ContextVar("teamharness_ack_scope", default=None)
+_current_deliveries: ContextVar[tuple[str, ...]] = ContextVar("teamharness_current_deliveries", default=())
 _delivery_ack: ContextVar[dict | None] = ContextVar("teamharness_delivery_ack", default=None)
 _approval_status_records: dict[str, dict[str, Any]] = {}
 _phase_retry: ContextVar[dict | None] = ContextVar("teamharness_phase_retry", default=None)
@@ -402,6 +403,22 @@ def _sanitizer_factory(_ctx: Any, _agent_config: Any):
                 yield item
 
         async def on_model_call(self, agent, input_kwargs, next_handler):
+            facts = _current_deliveries.get()
+            if facts:
+                from agentscope.message import Msg, TextBlock
+
+                messages = list(input_kwargs["messages"])
+                first = messages[0] if messages and messages[0].role == "system" else None
+                rules = (
+                    "For any Task ID below, the verified terminal delivery is current. "
+                    "Use it to answer this turn even if the conversation archive contains an earlier status."
+                )
+                current = TextBlock(text=rules + "\n\n" + "\n\n".join(facts))
+                if first is None:
+                    messages.insert(0, Msg(name="Task system", role="system", content=[current]))
+                else:
+                    messages[0] = first.model_copy(update={"content": [*first.get_content_blocks(), current]})
+                input_kwargs = {**input_kwargs, "messages": messages}
             sources = _creation_sources.get()
             if sources and os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() == "true":
                 try:
@@ -832,10 +849,14 @@ async def _prepare_delivery_context(ctx: Any) -> None:
     ctx.extras["delivery_context_prepared"] = True
     input_text = "\n".join(message.get_text_content() for message in ctx.input_msgs or []
                            if message.role == "user")
+    receipts = _receipt_module()
     facts, acknowledgements = await asyncio.to_thread(
-        _receipt_module().delivery_context, middle, _room_id(ctx.request), _controller_json, input_text=input_text)
-    for fact in facts:
-        ctx.inject_context(fact, source="teamharness_sent_delivery")
+        receipts.delivery_context, middle, _room_id(ctx.request), _controller_json, input_text=input_text)
+    if receipts.requested_delivery_tasks(input_text):
+        ctx.extras["current_deliveries_token"] = _current_deliveries.set(tuple(facts))
+    else:
+        for fact in facts:
+            ctx.inject_context(fact, source="teamharness_sent_delivery")
     if acknowledgements:
         ctx.extras["delivery_ack_token"] = _delivery_ack.set(acknowledgements)
 
@@ -1126,6 +1147,9 @@ def _register_coordination_hook(api: Any) -> None:
             token = ctx.extras.pop("planning_tasks_token", None)
             if token is not None:
                 _planning_tasks.reset(token)
+            token = ctx.extras.pop("current_deliveries_token", None)
+            if token is not None:
+                _current_deliveries.reset(token)
             token = ctx.extras.pop("delivery_ack_token", None)
             if token is not None:
                 _delivery_ack.reset(token)

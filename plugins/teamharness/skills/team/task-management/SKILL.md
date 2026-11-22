@@ -19,6 +19,12 @@ suitable Team must receive the request through `task create` with its registered
 The Leader chooses the plan and assignees. The task system delivers the accepted
 result to the original conversation.
 
+A request to reply here, attach a file in this conversation, or make the result
+downloadable here specifies where to deliver the result. For delegated work,
+the Task system fulfills that request in this conversation. Create the Task
+for the suitable Team and let that delivery return here. A file you previously
+created in your own workspace does not satisfy a new independent request.
+
 A request to count or transform supplied data and produce a file is a business
 deliverable. The size of the input, the ease of calculation, and your ability
 to produce the file do not make it a question you can answer directly. When

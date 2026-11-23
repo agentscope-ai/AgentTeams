@@ -66,6 +66,8 @@ def prepare(kind, event, result):
                 or not output.resolve().is_relative_to(root.resolve()) or not scratch.resolve().is_relative_to(root.resolve())):
             raise ValueError("task begin receipt does not match this assignment")
         return {"fact": "Your assignment is acknowledged and inputs are prepared. Do not repeat begin or download supplied inputs. "
+                        "Use the original request for context and produce only the deliverables assigned to your node. "
+                        "Prefer native file tools for simple reads and writes. Use shell or patch tools when the assignment needs them. "
                         "Write each deliverable using the exact absolute outputDirectory below plus its filename. "
                         "Use scratchDirectory for temporary work. Pass files as a JSON array of paths relative to outputDirectory. "
                         "Once you have produced and checked your deliverables, use the native Task tool to submit before ending your turn.",

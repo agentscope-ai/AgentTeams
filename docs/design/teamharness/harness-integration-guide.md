@@ -62,6 +62,8 @@ Worker 使用实际启动入口调用 `POST /api/v1/runtime/matrix` 登记 `acti
 
 执行通知给出本次任务的 `outputDirectory` 和 `scratchDirectory`。原生写入、编辑工具的相对路径从 `outputDirectory` 解析，写入前核对其解析后的目标位于这两个目录之一。错误路径直接返回可纠正的工具错误，不能先在别的任务目录落盘，再让临时删除走审批。
 
+透传公共任务上下文的执行说明。Worker 用原始需求理解上下文，按当前节点的委派范围交付。简单读写优先使用原生文件工具，节点需要运行命令或补丁时由对应工具执行并按其风险策略审批。
+
 基于 `task_native.py` 的 `schema` 和 `task` 接入，复用公共角色 schema 及 CLI 语义。注册时调用 `{"operation":"schema","role":"leader"}` 取得角色 schema。调用工具时传 `operation="task"`、模型参数对象 `arguments` 和框架对象 `context`，后者包含真实 `role`、当前阶段作用域及建单所需的来源绑定。固定工具的身份须关联实际 SDK 注册与受信桥接进程。它使用任务系统已有权限。Shell、其他 MCP 和文件工具依原有权限执行。托管执行和协调回合限制旧 TaskFlow、ProjectFlow、FileSync，普通消息能力用于沟通。
 
 | 操作 | 角色 | 必填 / 条件必填 | 可选 |

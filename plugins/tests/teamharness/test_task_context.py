@@ -25,6 +25,8 @@ def test_prepared_assignment_uses_backend_canonical_identity():
     assert "submit before ending your turn" in prepared["fact"]
     assert "native Task tool" in prepared["fact"]
     assert "JSON array" in prepared["fact"]
+    assert "only the deliverables assigned to your node" in prepared["fact"]
+    assert "Prefer native file tools for simple reads and writes" in prepared["fact"]
 
 
 @pytest.mark.parametrize("field,value", [("id", "other"), ("assignmentId", "stale"), ("status", "submitted"), ("mainTaskId", "other")])

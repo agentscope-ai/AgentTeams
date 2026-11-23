@@ -1,7 +1,7 @@
 #!/bin/bash
 # test-03-assign-task.sh - Case 3: Assign task in Room, Worker completes
-# Verifies: Manager acknowledges the current task, and Worker publishes the
-#           requested README with its unique task marker in shared storage.
+# Verifies: Manager sends the current task to the Worker, and the Worker
+#           publishes the README with its unique task marker in shared storage.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/test-helpers.sh"
@@ -64,14 +64,35 @@ else
     log_fail "Task README missing from shared storage"
 fi
 
-if matrix_read_messages "${ADMIN_TOKEN}" "${ALICE_ROOM}" 50 | jq -e \
-    --arg worker "@alice:${TEST_MATRIX_DOMAIN}" --arg manager "${MANAGER_USER}" --arg marker "${TASK_ID}" '
-    any(.chunk[]?; .type == "m.room.message" and .sender == $manager and
-        ((.content["m.mentions"].user_ids // []) | index($worker)) != null and
-        ((.content["org.agentteams.report"].text // .content.body // "") | contains($marker)))' >/dev/null; then
+ALICE_USER="@alice:${TEST_MATRIX_DOMAIN}"
+assignment_received() {
+    local token="$1" room="$2" require_mention="$3"
+    matrix_read_messages "${token}" "${room}" 50 | jq -e \
+        --arg worker "${ALICE_USER}" --arg manager "${MANAGER_USER}" \
+        --arg marker "${TASK_ID}" --arg path "${RESULT_PATH}" \
+        --argjson require_mention "${require_mention}" '
+        any(.chunk[]?; .type == "m.room.message" and .sender == $manager and
+            (if $require_mention then ((.content["m.mentions"].user_ids // []) | index($worker)) != null else true end) and
+            ((.content["org.agentteams.report"].text // .content.body // "") | contains($marker) and contains($path)))' >/dev/null
+}
+
+if assignment_received "${ADMIN_TOKEN}" "${ALICE_ROOM}" true; then
     log_pass "Manager assigned the task in Alice's registered Worker room"
 else
-    log_fail "No task assignment mention reached Alice's registered Worker room"
+    # The standalone message tool also supports user targets, which resolve to
+    # a two-member DM. Verify its event as Alice because the admin is not a member.
+    ALICE_TOKEN=$(docker exec "$(worker_container_name alice)" printenv AGENTTEAMS_WORKER_MATRIX_TOKEN 2>/dev/null || true)
+    ALICE_MANAGER_DM=""
+    if [ -n "${ALICE_TOKEN}" ]; then
+        ALICE_MANAGER_DM=$(matrix_find_dm_room "${ALICE_TOKEN}" "${MANAGER_USER}" 2>/dev/null || true)
+    fi
+    if [ -n "${ALICE_MANAGER_DM}" ] && [ "${ALICE_MANAGER_DM}" != "${DM_ROOM}" ] && \
+        [ "${ALICE_MANAGER_DM}" != "${ALICE_ROOM}" ] && \
+        assignment_received "${ALICE_TOKEN}" "${ALICE_MANAGER_DM}" false; then
+        log_pass "Manager assigned the task in its direct room with Alice"
+    else
+        log_fail "No task assignment reached Alice's registered Worker room or direct room with Manager"
+    fi
 fi
 
 log_section "Collect Metrics"

@@ -15,7 +15,7 @@ import (
 )
 
 func (h *AssistantHandler) contextState(ctx context.Context, route assistantRoute) (assistantContext, error) {
-	state := assistantContext{Enabled: true, EverySeconds: 86400}
+	state := assistantContext{Enabled: true, EverySeconds: assistantDefaultInterval}
 	err := h.read(ctx, path.Join(route.prefix, "context.json"), &state)
 	if errors.Is(err, os.ErrNotExist) {
 		err = nil
@@ -24,7 +24,11 @@ func (h *AssistantHandler) contextState(ctx context.Context, route assistantRout
 }
 
 func assistantRequestID(state assistantContext) string {
-	return "after-" + assistantHash(state.LastMessageID)
+	checkpoint := state.LastMessageID
+	if state.LastRun != "" {
+		checkpoint += "\x00" + state.LastRun
+	}
+	return "after-" + assistantHash(checkpoint)
 }
 
 // Use the existing Controller outbox and Teams carrier. No Harness timer,
@@ -110,10 +114,10 @@ func (h *CoordinationHandler) resolveAssistant(ctx context.Context, e coordinati
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return e, err
 	}
-	if e.OriginEventID != assistantRequestID(state) && receipt.MessageID == "" {
+	if e.OriginEventID != assistantRequestID(state) && receipt.MessageID == "" && receipt.Status != "skipped" {
 		return e, errCoordinationRejected
 	}
-	if receipt.MessageID == "" && state.LastRun != "" {
+	if receipt.MessageID == "" && receipt.Status != "skipped" && state.LastRun != "" {
 		last, parseErr := time.Parse(time.RFC3339, state.LastRun)
 		if parseErr != nil || time.Since(last) < time.Duration(state.EverySeconds)*time.Second {
 			return e, errCoordinationRejected
@@ -148,6 +152,7 @@ func (h *CoordinationHandler) resolveAssistant(ctx context.Context, e coordinati
 		scope = " --manager " + route.name + " --user " + route.human
 	}
 	e.Text = fmt.Sprintf("ASSISTANT_DIGEST_DUE\nYou are handling an AgentTeams scheduled assistant reminder. Read `agt assistant context%s` for the Controller-owned private context, shared businessSummary and recent conversation. Use only this user's authorized team facts and sources you can verify; distinguish verified news dates from uncertain information and never invent facts when retrieval fails. Page older user messages with `agt assistant conversation --before <end>` using the same scope when recent context is incomplete; preserve the last processed event reference in private notes. Read `agt assistant receipt %s%s` first; keep pending text, summary, requestId and contextRevision unchanged, but use the current owner below. Otherwise collect relevant information, then save a JSON file with owner=%q, requestId=%q, contextRevision (the revision read before inference), text (the user-facing reminder with source dates/links), and summary (updated private continuity notes). Submit it with `agt assistant send%s --file <file>`. Maintain shared business facts separately with `agt assistant business` and `agt assistant remember-business`, using the same scope and exact owner/revision; never copy personal interests or private chat into shared business. Treat the returned Matrix messageId as sent, never as read. Do not create a Task or Project, delegate, change task state, use private Harness memory/cron, or send a second chat reply. End after the public send receipt. If ownership changed or the schedule is disabled, stop.", scope, e.OriginEventID, scope, route.owner, e.OriginEventID, scope)
+	e.Text += fmt.Sprintf("\nNotify only when you have usable, verified NEW information in your own domain and this user's interests within context.windowStart..windowEnd (default: the past three hours). Compare the prior conversation and private summary; do not repeat unchanged business facts. A 404 from the receipt command means no previous outcome for this cycle, not a need to search for other receipt commands. If nothing usable is new, including unavailable retrieval, save owner, requestId, contextRevision, reason and summary in a JSON file and call `agt assistant skip%s --file <file>` instead of send. A skipped receipt records this check without sending a reminder or notification; never invent a messageId. For either outcome, end immediately after its receipt, do not clean up scratch files, and use NO_REPLY for the native final response.", scope)
 	return e, nil
 }
 
@@ -168,7 +173,14 @@ func (h *CoordinationHandler) advanceAssistant(ctx context.Context, d *coordinat
 	}
 	var receipt assistantReceipt
 	err = h.assistant.read(ctx, path.Join(route.prefix, "receipts", e.OriginEventID+".json"), &receipt)
-	if err == nil && receipt.MessageID != "" {
+	if err == nil && (receipt.MessageID != "" || receipt.Status == "skipped") {
+		if err = h.assistant.reconcileState(ctx, route, receipt, func() bool {
+			current, err := h.assistant.routeForRecipient(ctx, &authpkg.CallerIdentity{Role: e.ActorRole, Username: e.ActorName}, e.Team, coordinationString(e.SourceRoute, "manager"), coordinationString(e.SourceRoute, "user"))
+			return err == nil && current.owner == route.owner && current.room == route.room && current.prefix == route.prefix
+		}); err != nil {
+			d.Error = "assistant checkpoint reconciliation pending"
+			return
+		}
 		d.Status, d.Error, d.UserEventID = "completed", "", receipt.MessageID
 		return
 	}

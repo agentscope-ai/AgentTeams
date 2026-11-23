@@ -32,7 +32,7 @@ func assistantCmd() *cobra.Command {
 	cmd.AddCommand(&cobra.Command{Use: "receipt <request-id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		return projectWrite("GET", endpoint("messages/"+url.PathEscape(args[0])), nil)
 	}})
-	for _, action := range []string{"send", "remember", "remember-business"} {
+	for _, action := range []string{"send", "skip", "remember", "remember-business"} {
 		var file string
 		sub := &cobra.Command{Use: action, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			b, err := os.ReadFile(file)
@@ -44,6 +44,9 @@ func assistantCmd() *cobra.Command {
 				return err
 			}
 			method, resource := "POST", "messages"
+			if action == "skip" {
+				body["skip"] = true
+			}
 			if action == "remember" {
 				method, resource = "PUT", "context"
 			}

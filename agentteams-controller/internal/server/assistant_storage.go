@@ -92,31 +92,42 @@ func (h *AssistantHandler) Business(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AssistantHandler) reconcileContext(r *http.Request, route assistantRoute, receipt assistantReceipt) error {
+	return h.reconcileState(r.Context(), route, receipt, func() bool { return h.sameRoute(r, route) })
+}
+
+func (h *AssistantHandler) reconcileState(ctx context.Context, route assistantRoute, receipt assistantReceipt, current func() bool) error {
 	for range 5 {
-		state := assistantContext{Enabled: true, EverySeconds: 86400}
+		state := assistantContext{Enabled: true, EverySeconds: assistantDefaultInterval}
 		key := path.Join(route.prefix, "context.json")
-		revision, err := h.load(r.Context(), key, &state)
+		revision, err := h.load(ctx, key, &state)
 		if err != nil {
 			return err
 		}
-		if !h.sameRoute(r, route) {
+		if !current() {
 			return fmt.Errorf("role changed before context reconciliation: %w", oss.ErrPreconditionFailed)
 		}
 		last, _ := time.Parse(time.RFC3339Nano, state.LastRun)
-		sent, err := time.Parse(time.RFC3339Nano, receipt.SentAt)
+		completedAt := receipt.SentAt
+		if receipt.Status == "skipped" {
+			completedAt = receipt.SkippedAt
+		}
+		sent, err := time.Parse(time.RFC3339Nano, completedAt)
 		if err != nil {
 			return fmt.Errorf("invalid delivery timestamp")
 		}
-		if last.After(sent) {
+		if !last.Before(sent) {
 			return nil
 		}
-		state.LastRun, state.LastMessageID = receipt.SentAt, receipt.MessageID
+		state.LastRun = completedAt
+		if receipt.MessageID != "" {
+			state.LastMessageID = receipt.MessageID
+		}
 		// Message delivery must preserve a concurrent Human edit. The Agent
 		// updates ongoing notes separately with their exact public revision.
 		if revision == receipt.ContextRevision {
 			state.Summary = receipt.Summary
 		}
-		_, err = h.save(r.Context(), key, state, revision)
+		_, err = h.save(ctx, key, state, revision)
 		if !errors.Is(err, oss.ErrPreconditionFailed) {
 			return err
 		}

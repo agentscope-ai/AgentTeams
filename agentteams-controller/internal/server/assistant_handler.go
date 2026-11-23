@@ -34,6 +34,8 @@ type assistantContext struct {
 	LastMessageID string `json:"lastMessageId,omitempty"`
 }
 
+const assistantDefaultInterval = 3 * 60 * 60
+
 type assistantReceipt struct {
 	RequestID       string    `json:"requestId"`
 	Text            string    `json:"text"`
@@ -47,6 +49,9 @@ type assistantReceipt struct {
 	SentAt          string    `json:"sentAt,omitempty"`
 	Sender          string    `json:"sender,omitempty"`
 	LeaseUntil      time.Time `json:"leaseUntil,omitempty"`
+	Skip            bool      `json:"skip,omitempty"`
+	Reason          string    `json:"reason,omitempty"`
+	SkippedAt       string    `json:"skippedAt,omitempty"`
 }
 
 func NewAssistantHandler(deps ServerDeps) *AssistantHandler {
@@ -86,7 +91,7 @@ func (h *AssistantHandler) Context(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, 403, err.Error())
 		return
 	}
-	state := assistantContext{Enabled: true, EverySeconds: 86400}
+	state := assistantContext{Enabled: true, EverySeconds: assistantDefaultInterval}
 	key := path.Join(route.prefix, "context.json")
 	revision, err := h.load(r.Context(), key, &state)
 	if err != nil {
@@ -139,7 +144,12 @@ func (h *AssistantHandler) Context(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, 503, "business context unavailable")
 		return
 	}
-	view := map[string]any{"owner": route.owner, "revision": revision, "roomId": route.room, "recipient": route.user, "assistant": route.label, "context": state, "businessSummary": business.Summary}
+	windowEnd := time.Now().UTC()
+	windowStart := windowEnd.Add(-time.Duration(state.EverySeconds) * time.Second)
+	if last, err := time.Parse(time.RFC3339Nano, state.LastRun); err == nil && last.After(windowStart) {
+		windowStart = last
+	}
+	view := map[string]any{"owner": route.owner, "revision": revision, "roomId": route.room, "recipient": route.user, "assistant": route.label, "context": state, "businessSummary": business.Summary, "windowStart": windowStart, "windowEnd": windowEnd}
 	if r.Method == http.MethodGet && h.deps.Provisioner != nil && h.deps.MatrixConfig.ServerURL != "" {
 		messages, err := h.history(r.Context(), route, 12)
 		if err != nil {
@@ -180,8 +190,8 @@ func (h *AssistantHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input assistantReceipt
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&input) != nil || !coordinationSafeID.MatchString(input.RequestID) || strings.TrimSpace(input.Text) == "" {
-		httputil.WriteError(w, 400, "requestId and text required")
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&input) != nil || !coordinationSafeID.MatchString(input.RequestID) || !input.Skip && strings.TrimSpace(input.Text) == "" || input.Skip && input.Text != "" {
+		httputil.WriteError(w, 400, "requestId and either reminder text or a skip outcome required")
 		return
 	}
 	if input.Owner != route.owner {

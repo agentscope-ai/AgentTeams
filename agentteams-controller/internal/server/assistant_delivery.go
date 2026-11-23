@@ -23,16 +23,16 @@ func (h *AssistantHandler) deliver(r *http.Request, route assistantRoute, input 
 	}
 	if revision == "" {
 		receipt = assistantReceipt{RequestID: input.RequestID, Text: input.Text, Summary: input.Summary, ContextRevision: input.ContextRevision,
-			Owner: route.owner, RoomID: route.room, Title: route.label, Sender: route.agent, Status: "prepared"}
+			Owner: route.owner, RoomID: route.room, Title: route.label, Sender: route.agent, Status: "prepared", Skip: input.Skip, Reason: input.Reason}
 		revision, err = h.save(ctx, key, receipt, "")
 		if err != nil {
 			return receipt, err
 		}
 	}
-	if receipt.Text != input.Text || receipt.Summary != input.Summary || receipt.ContextRevision != input.ContextRevision || receipt.RoomID != route.room {
+	if receipt.Text != input.Text || receipt.Summary != input.Summary || receipt.ContextRevision != input.ContextRevision || receipt.RoomID != route.room || receipt.Skip != input.Skip || receipt.Reason != input.Reason {
 		return receipt, assistantConflict("requestId already has different content or room")
 	}
-	if receipt.MessageID != "" {
+	if receipt.MessageID != "" || receipt.Status == "skipped" {
 		return receipt, h.reconcileContext(r, route, receipt)
 	}
 	state, err := h.contextState(ctx, route)
@@ -41,6 +41,13 @@ func (h *AssistantHandler) deliver(r *http.Request, route assistantRoute, input 
 	}
 	if !state.Enabled || !h.sameRoute(r, route) {
 		return receipt, assistantConflict("assistant ownership or schedule changed")
+	}
+	if receipt.Skip {
+		receipt.Owner, receipt.Status, receipt.SkippedAt = route.owner, "skipped", time.Now().UTC().Format(time.RFC3339Nano)
+		if _, err = h.save(ctx, key, receipt, revision); err != nil {
+			return receipt, err
+		}
+		return receipt, h.reconcileContext(r, route, receipt)
 	}
 	if receipt.LeaseUntil.After(time.Now()) {
 		return receipt, assistantConflict("delivery is already in progress; retry the same requestId later")

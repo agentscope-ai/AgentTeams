@@ -43,7 +43,7 @@ assert_not_empty "${ALICE_ROOM}" "Alice's registered Worker room found"
 METRICS_BASELINE=$(snapshot_baseline "alice")
 TASK_ID="test03-$(date +%s)-$$"
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Please assign Alice task ${TASK_ID}: Create shared/tasks/${TASK_ID}/README.md for a hello-world project. Include project name, description, usage instructions, and the exact marker ${TASK_ID}. Use the file-sharing tools supported by Alice's runtime to publish the file to shared storage and verify the remote file before reporting completion. Delegate by sending an explicit Matrix mention of @alice:${TEST_MATRIX_DOMAIN} in Alice's registered Worker room ${ALICE_ROOM}. Use that room and mention rather than creating a new direct room. Mention ${TASK_ID} in your acknowledgement."
+    "Send this one-line request verbatim using Matrix target room:${ALICE_ROOM}, then acknowledge with marker ${TASK_ID}. This is a standalone Worker request with no separate Task record. Message: @alice:${TEST_MATRIX_DOMAIN} Write a hello-world README with name, description, usage and marker ${TASK_ID}; publish and verify shared/tasks/${TASK_ID}/README.md using your shared-file tool."
 
 log_info "Waiting for Manager to process task..."
 REPLY=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" "${TASK_ID}" 180)
@@ -68,7 +68,7 @@ if matrix_read_messages "${ADMIN_TOKEN}" "${ALICE_ROOM}" 50 | jq -e \
     --arg worker "@alice:${TEST_MATRIX_DOMAIN}" --arg manager "${MANAGER_USER}" --arg marker "${TASK_ID}" '
     any(.chunk[]?; .type == "m.room.message" and .sender == $manager and
         ((.content["m.mentions"].user_ids // []) | index($worker)) != null and
-        ((.content.body // "") | contains($marker)))' >/dev/null; then
+        ((.content["org.agentteams.report"].text // .content.body // "") | contains($marker)))' >/dev/null; then
     log_pass "Manager assigned the task in Alice's registered Worker room"
 else
     log_fail "No task assignment mention reached Alice's registered Worker room"

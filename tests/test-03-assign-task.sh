@@ -44,7 +44,7 @@ METRICS_BASELINE=$(snapshot_baseline "alice")
 TASK_ID="test03-$(date +%s)-$$"
 RESULT_PATH="shared/test-fixtures/${TASK_ID}/README.md"
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Send this one-line request verbatim using Matrix target room:${ALICE_ROOM}, then acknowledge with marker ${TASK_ID}. This is a standalone Worker request with no separate Task record. Message: @alice:${TEST_MATRIX_DOMAIN} Write a hello-world README with name, description, usage and marker ${TASK_ID} at ${RESULT_PATH} in your workspace. Run filesync push then filesync stat for ${RESULT_PATH}. Confirm the remote file exists before replying."
+    "Send this one-line request verbatim using Matrix target room:${ALICE_ROOM}, then acknowledge with marker ${TASK_ID}. This is a standalone Worker request with no separate Task record. Message: @alice:${TEST_MATRIX_DOMAIN} Write a hello-world README with name, description, usage and marker ${TASK_ID} at ${RESULT_PATH} in your workspace. Call the TeamHarness filesync tool with action=push and path=${RESULT_PATH}, then with action=stat and the same path. If the native tool is unavailable, run: mcporter call --stdio python3 --stdio-arg /opt/agentteams/plugins/teamharness/mcp/server.py filesync --args '{\"action\":\"push\",\"path\":\"${RESULT_PATH}\"}' --output json. Repeat with action stat. Use the TeamHarness shared storage result to verify completion. Bulk worker workspace sync writes to a private location and cannot deliver this file."
 
 log_info "Waiting for Manager to process task..."
 REPLY=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" "${TASK_ID}" 180)

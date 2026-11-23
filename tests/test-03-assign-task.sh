@@ -42,8 +42,9 @@ ALICE_ROOM=$(get_worker_room_id "alice")
 assert_not_empty "${ALICE_ROOM}" "Alice's registered Worker room found"
 METRICS_BASELINE=$(snapshot_baseline "alice")
 TASK_ID="test03-$(date +%s)-$$"
+RESULT_PATH="shared/test-fixtures/${TASK_ID}/README.md"
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Send this one-line request verbatim using Matrix target room:${ALICE_ROOM}, then acknowledge with marker ${TASK_ID}. This is a standalone Worker request with no separate Task record. Message: @alice:${TEST_MATRIX_DOMAIN} Write a hello-world README with name, description, usage and marker ${TASK_ID}; publish and verify shared/tasks/${TASK_ID}/README.md using your shared-file tool."
+    "Send this one-line request verbatim using Matrix target room:${ALICE_ROOM}, then acknowledge with marker ${TASK_ID}. This is a standalone Worker request with no separate Task record. Message: @alice:${TEST_MATRIX_DOMAIN} Write a hello-world README with name, description, usage and marker ${TASK_ID} at ${RESULT_PATH} in your workspace. Run filesync push then filesync stat for ${RESULT_PATH}. Confirm the remote file exists before replying."
 
 log_info "Waiting for Manager to process task..."
 REPLY=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" "${TASK_ID}" 180)
@@ -55,7 +56,6 @@ log_section "Verify Task in MinIO"
 minio_setup
 
 log_info "Waiting for this task's actual README in MinIO..."
-RESULT_PATH="shared/tasks/${TASK_ID}/README.md"
 if minio_wait_for_file "${RESULT_PATH}" 300 "${TASK_ID}"; then
     log_pass "Task README exists in shared storage"
     RESULT=$(minio_read_file "${RESULT_PATH}")

@@ -2,7 +2,7 @@
 
 Refs https://github.com/agentscope-ai/AgentTeams/issues/1683
 
-本实现基于 AT、Dashboard 和六种 Harness 的 main。Controller 管理角色工作区、用户上下文、定时调度和发送回执；Agent 通过 AT 的 Teams 消息／@ 唤起。Harness 不维护另一套业务上下文、定时器或私有 HTTP 唤醒入口。所有相关 PR 保持 Draft，暂不合并、不启用自动合并。
+本实现基于 AT、Dashboard 和六种 Harness 的 main。Controller 管理角色工作区、用户上下文、定时调度和发送回执；Agent 通过 AT 的 Teams 消息／@ 唤起。Harness 不维护另一套业务上下文、定时器或私有 HTTP 唤醒入口。实跑证据与未覆盖场景记录在总 Issue，源码合并不代表已发布。
 
 ## 上下文与交接
 

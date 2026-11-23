@@ -8,6 +8,7 @@ import (
 
 	v1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -92,7 +93,7 @@ func (h *AssistantHandler) routeForRecipient(ctx context.Context, caller *authpk
 		out.rolePrefix, out.owner = path.Join("teams", team.Name, "roles/leader"), string(worker.UID)+":"+worker.Name
 		out.room, out.name, out.kind, out.agent = team.Status.LeaderDMRoomID, worker.Name, "worker", worker.Status.MatrixUserID
 		out.label, out.human = team.Spec.EffectiveTeamName(team.Name)+"助手", team.Spec.Admin.Name
-		if h.deps.Backend != nil {
+		if h.deps.Backend != nil && caller.Role == authpkg.RoleTeamLeader {
 			instance, _, err := NewTaskRecoveryHandler(nil, h.deps).runningWorkerInstance(ctx, worker)
 			if err != nil {
 				return out, err
@@ -129,6 +130,25 @@ func (h *AssistantHandler) routeForRecipient(ctx context.Context, caller *authpk
 		}
 		out.rolePrefix = path.Join("manager/roles", manager.Name)
 		out.owner = fmt.Sprintf("%s:%s:%d", manager.UID, manager.Name, manager.Generation)
+		if h.deps.Backend != nil && caller.Role == authpkg.RoleManager {
+			wb := h.deps.Backend.DetectWorkerBackend(ctx)
+			switch b := wb.(type) {
+			case *backend.DockerBackend:
+				wb = b.WithPrefix("")
+			case *backend.K8sBackend:
+				wb = b.WithPrefix("")
+			case *backend.SandboxBackend:
+				wb = b.WithPrefix("")
+			}
+			if wb == nil {
+				return out, fmt.Errorf("Manager backend unavailable")
+			}
+			status, err := wb.Status(ctx, authpkg.ResourcePrefix(h.deps.ResourcePrefix).ManagerPodName(manager.Name))
+			if err != nil || status == nil || status.InstanceID == "" || (status.Status != backend.StatusRunning && status.Status != backend.StatusReady && status.Status != backend.StatusStarting) {
+				return out, fmt.Errorf("current Manager start cannot be verified")
+			}
+			out.owner += ":" + wb.Name() + "/" + status.InstanceID
+		}
 		out.room, out.name, out.kind, out.label, out.agent = manager.Status.RoomID, manager.Name, "manager", "AT助手", manager.Status.MatrixUserID
 		if humanName == "" {
 			humanName = h.deps.MatrixConfig.AdminUser

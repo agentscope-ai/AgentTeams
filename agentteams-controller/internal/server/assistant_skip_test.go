@@ -6,7 +6,61 @@ import (
 	"path"
 	"testing"
 	"time"
+
+	v1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/test/testutil/mocks"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestAssistantHumanCanDisableOfflineLeader(t *testing.T) {
+	h, _, _ := assistantFixture(t, "qwenpaw")
+	b := mocks.NewMockWorkerBackend()
+	b.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+		return &backend.WorkerResult{Status: backend.StatusStopped}, nil
+	}
+	h.assistant.deps.Backend = backend.NewRegistry([]backend.WorkerBackend{b})
+	user := &authpkg.CallerIdentity{Role: authpkg.RoleAdmin, Username: "alice", MatrixUserID: "@alice:test"}
+	w := assistantCall(h.assistant, user, "GET", "context?team=alpha", nil)
+	var view map[string]any
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &view) != nil {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	w = assistantCall(h.assistant, user, "PUT", "context?team=alpha", map[string]any{"owner": view["owner"], "revision": view["revision"], "enabled": false})
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestAssistantManagerRestartFencesOldExecutionWithoutSpecChange(t *testing.T) {
+	h, _ := coordinationFixture(t)
+	human := &v1.Human{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "default"}, Spec: v1.HumanSpec{PermissionLevel: 1}, Status: v1.HumanStatus{MatrixUserID: "@alice:test", ManagerRooms: map[string]string{"default": "!alice:test"}}}
+	if err := h.deps.Client.Create(t.Context(), human); err != nil {
+		t.Fatal(err)
+	}
+	b := mocks.NewMockWorkerBackend()
+	instance := "first-start"
+	b.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+		return &backend.WorkerResult{Status: backend.StatusRunning, InstanceID: instance, Runtime: "qwenpaw"}, nil
+	}
+	h.deps.Backend = backend.NewRegistry([]backend.WorkerBackend{b})
+	assistant := NewAssistantHandler(h.deps)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleManager, Username: "default"}
+	before, err := assistant.routeForRecipient(t.Context(), caller, "", "default", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance = "second-start"
+	after, err := assistant.routeForRecipient(t.Context(), caller, "", "default", "alice")
+	if err != nil || before.owner == after.owner || before.room != after.room || before.prefix != after.prefix {
+		t.Fatal(before, after, err)
+	}
+	w := assistantCall(assistant, caller, "PUT", "context?manager=default&user=alice", map[string]any{"owner": before.owner, "revision": "", "enabled": false})
+	if w.Code != 409 {
+		t.Fatal("restarted Manager accepted previous executor", w.Code, w.Body.String())
+	}
+}
 
 func TestAssistantDefaultsToThreeHoursAndReturnsFreshnessWindow(t *testing.T) {
 	h, caller, _ := assistantFixture(t, "qwenpaw")

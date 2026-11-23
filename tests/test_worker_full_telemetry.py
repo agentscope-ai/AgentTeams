@@ -46,7 +46,7 @@ def test_qwenpaw_api_turn_uses_coordination_metadata(monkeypatch):
 
 
 @pytest.mark.parametrize('event_id,expected', [
-    ('recovery:team-a/task-1:3', ('team-a', 'task-1', 3)),
+    ('recovery:team-a/task-1:3', None),
     ('$matrix-event:server', None),
     ('recovery:team-a/task-1:0', None),
     ('recovery:team-a/task-1:not-a-generation', None),
@@ -59,7 +59,7 @@ def test_hermes_recovery_trace_retains_task_and_execution_generation(monkeypatch
     monkeypatch.setattr(adapters.wrapt, 'wrap_function_wrapper', lambda module, name, callback: callbacks.append(callback))
     monkeypatch.setattr(adapters, 'start_turn', lambda fields, request: captured.append(fields) or trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT))
     monkeypatch.setattr(adapters, 'enrich_task', lambda fields, workspace: fields)
-    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(remember_reply=lambda *args: None))
+    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(remember_reply=lambda *args: None, incoming=lambda *args: {}))
     adapters.hermes_turn(object())
     result = callbacks[0](lambda *args, **kwargs: {'ok': True},
                           SimpleNamespace(session_id='native-session', _chat_id='!task:server'),
@@ -277,6 +277,44 @@ def test_matrix_carrier_links_workers_without_reusing_session(monkeypatch):
     assert "agentteams.session.id" not in received
     assert "agentteams.task.id" not in received
     assert telemetry._correlation.get() == {}
+
+
+def test_delayed_receipt_preserves_origin_trace_across_failure_and_restart(monkeypatch, tmp_path):
+    from at_trace_transport import remember_reply
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'shared/lib'))
+    from agentteams_receipts import Receipts
+    monkeypatch.setenv('AGENTTEAMS_OTEL_ENABLED', 'true')
+    provider = TracerProvider()
+    turn = provider.get_tracer('fixture').start_span('actual model turn')
+    metadata = {'otel_delivery': {}}
+    remember_reply(turn, {'agentteams.turn.id': 'actual-turn'}, metadata)
+    turn.end()
+    outbox = Receipts(tmp_path)
+    outbox.enqueue('!room:test', '$input', 'completed', trace_context=metadata['otel_delivery'])
+    seen = []
+    def failed(*args):
+        seen.append((args, trace.get_current_span().get_span_context().trace_id))
+        raise OSError('own synthetic transport failure')
+    with provider.get_tracer('fixture').start_as_current_span('unrelated configuration request') as ambient:
+        outbox.flush(failed)
+        Receipts(tmp_path).flush(lambda *args: seen.append((args, trace.get_current_span().get_span_context().trace_id)))
+        assert trace.get_current_span().get_span_context().trace_id == ambient.get_span_context().trace_id
+    assert len(seen) == 2 and seen[0] == seen[1]
+    assert seen[0][1] == turn.get_span_context().trace_id
+
+
+def test_receipt_without_origin_does_not_inherit_background_request(monkeypatch, tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'shared/lib'))
+    from agentteams_receipts import Receipts
+    monkeypatch.setenv('AGENTTEAMS_OTEL_ENABLED', 'true')
+    outbox = Receipts(tmp_path)
+    outbox.enqueue('!room:test', '$input', 'read')
+    provider = TracerProvider()
+    seen = []
+    with provider.get_tracer('fixture').start_as_current_span('unrelated configuration request') as ambient:
+        outbox.flush(lambda *args: seen.append(trace.get_current_span().get_span_context().is_valid))
+        assert trace.get_current_span().get_span_context().trace_id == ambient.get_span_context().trace_id
+    assert seen == [False]
 
 
 def test_export_normalizes_returned_tool_error_and_redacts(monkeypatch):
@@ -508,3 +546,29 @@ def test_task_identity_arriving_after_turn_start_reaches_children_and_carrier(tm
         telemetry._correlation.reset(correlation)
         root.end()
         provider.shutdown()
+
+
+@pytest.mark.parametrize('generation', [None, 4])
+def test_hermes_native_trace_uses_verified_current_frame(monkeypatch, generation):
+    from types import SimpleNamespace
+    import at_runtime_adapters as adapters
+    callbacks, captured = [], []
+    metadata = {'room_id': '!canonical:test', 'event_id': '$canonical-event', 'task_id': 'task-actual',
+        'team_id': 'team-actual', 'teamharness_coordination': {'id': 'a' * 32, 'kind': 'task_assigned'}}
+    if generation is not None:
+        metadata['execution_generation'] = generation
+    monkeypatch.setitem(sys.modules, 'hermes_matrix.public_tasks', SimpleNamespace(
+        current_turn=SimpleNamespace(get=lambda: SimpleNamespace(trace_metadata=lambda: metadata))))
+    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(remember_reply=lambda *a: None, incoming=lambda *a: {}))
+    monkeypatch.setattr(adapters.wrapt, 'wrap_function_wrapper', lambda module, name, callback: callbacks.append(callback))
+    monkeypatch.setattr(adapters, 'start_turn', lambda fields, request: captured.append(fields) or trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT))
+    monkeypatch.setattr(adapters, 'enrich_task', lambda fields, workspace: fields)
+    adapters.hermes_turn(object())
+    callbacks[0](lambda *a, **kw: {'ok': True}, SimpleNamespace(session_id='opaque:other-task:999'), (), {})
+    actual = captured[0]
+    assert actual['agentteams.task.id'] == 'task-actual'
+    assert actual['agentteams.event.id'] == '$canonical-event'
+    assert actual['agentteams.room.id'] == '!canonical:test'
+    assert actual['agentteams.coordination.id'] == 'a' * 32
+    assert actual['agentteams.coordination.kind'] == 'task_assigned'
+    assert actual.get('agentteams.execution.generation') == generation

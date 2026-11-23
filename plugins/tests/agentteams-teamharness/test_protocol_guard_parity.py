@@ -44,7 +44,7 @@ from typing import Any
 import pytest
 
 
-MCP_DIR = Path(__file__).resolve().parents[2] / "agentteams-teamharness" / "mcp"
+MCP_DIR = (Path(__file__).resolve().parents[2] / "agentteams-teamharness" / "mcp").resolve()
 LEGACY_MCP_DIR = Path(__file__).resolve().parents[2] / "teamharness" / "mcp"
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))

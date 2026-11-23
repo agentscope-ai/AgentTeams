@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,26 +13,33 @@ import (
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 )
 
 const coordinationPending = "control/coordination/pending/"
 const coordinationDone = "control/coordination/completed/"
 
 type coordinationDelivery struct {
-	Transport      string            `json:"transport,omitempty"`
-	Approvals      map[string]string `json:"approvals,omitempty"`
-	Event          coordinationEvent `json:"event"`
-	Status         string            `json:"status"`
-	NativeID       string            `json:"native_id,omitempty"`
-	Created        time.Time         `json:"created"`
-	NextAttempt    time.Time         `json:"next_attempt"`
-	LeaseUntil     time.Time         `json:"lease_until"`
-	Attempts       int               `json:"attempts"`
-	Error          string            `json:"error,omitempty"`
-	MatrixEventID  string            `json:"matrix_event_id,omitempty"`
-	AckEventID     string            `json:"ack_event_id,omitempty"`
-	UserEventID    string            `json:"user_event_id,omitempty"`
-	FailureEventID string            `json:"failure_event_id,omitempty"`
+	DeliveredAt       time.Time            `json:"delivered_at,omitempty"`
+	ReportSnapshot    string               `json:"report_snapshot,omitempty"`
+	ArtifactEvents    map[string]string    `json:"artifact_events,omitempty"`
+	Transport         string               `json:"transport,omitempty"`
+	Approvals         map[string]string    `json:"approvals,omitempty"`
+	Event             coordinationEvent    `json:"event"`
+	Status            string               `json:"status"`
+	NativeID          string               `json:"native_id,omitempty"`
+	PreviousNativeIDs []string             `json:"previous_native_ids,omitempty"`
+	Replays           int                  `json:"replays,omitempty"`
+	NativeStart       *service.WorkerStart `json:"native_start,omitempty"`
+	Created           time.Time            `json:"created"`
+	NextAttempt       time.Time            `json:"next_attempt"`
+	LeaseUntil        time.Time            `json:"lease_until"`
+	Attempts          int                  `json:"attempts"`
+	Error             string               `json:"error,omitempty"`
+	MatrixEventID     string               `json:"matrix_event_id,omitempty"`
+	AckEventID        string               `json:"ack_event_id,omitempty"`
+	UserEventID       string               `json:"user_event_id,omitempty"`
+	FailureEventID    string               `json:"failure_event_id,omitempty"`
 }
 
 // PostEvent acknowledges durable queue admission, not delivery or acceptance.
@@ -48,76 +54,22 @@ func (h *CoordinationHandler) PostEvent(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, "invalid coordination event")
 		return
 	}
-	// Authority facts are rebuilt from authenticated identity and canonical state.
-	event.ActorName = ""
-	event.ActorRole = ""
-	event.Team = ""
-	event.StorageTeam = ""
-	event.ID = ""
-	event.External = false
-	event.EligibleAssignees = nil
-	resolved, err := h.resolve(r.Context(), event, authpkg.CallerFromContext(r.Context()))
+	admission, err := h.enqueue(r.Context(), event, authpkg.CallerFromContext(r.Context()))
 	if err != nil {
-		if errors.Is(err, errCoordinationRejected) {
-			writeError(w, 403, "coordination event rejected")
+		var failure *coordinationAdmissionError
+		if errors.As(err, &failure) {
+			writeError(w, failure.Status, failure.Message)
 		} else {
-			writeError(w, 503, "coordination routing unavailable")
+			writeError(w, 503, "coordination admission unavailable")
 		}
 		return
 	}
-	if resolved.External {
-		httputil.WriteJSON(w, 200, map[string]any{"external": true})
-		return
+	status := 202
+	if admission.External {
+		status = 200
 	}
-	for _, prefix := range []string{coordinationDone, coordinationPending} {
-		data, err := h.deps.OSS.GetObject(r.Context(), prefix+resolved.ID+".json")
-		if err == nil {
-			var old coordinationDelivery
-			if json.Unmarshal(data, &old) != nil {
-				writeError(w, 503, "invalid coordination record")
-				return
-			}
-			// A retry cannot replace the payload associated with this execution fence.
-			previous, _ := json.Marshal(old.Event)
-			current, _ := json.Marshal(resolved)
-			if !bytes.Equal(previous, current) {
-				writeError(w, 409, "coordination identity already has a different payload")
-				return
-			}
-			if prefix == coordinationPending {
-				h.wakeRunner()
-			}
-			httputil.WriteJSON(w, 202, map[string]any{"accepted": true, "event_id": resolved.ID, "reused": true})
-			return
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			writeError(w, 503, "coordination storage unavailable")
-			return
-		}
-	}
-	if err := h.registerHandoffTasks(r.Context(), resolved); err != nil {
-		if errors.Is(err, errCoordinationRejected) {
-			writeError(w, 400, "invalid main task requests")
-		} else if errors.Is(err, oss.ErrPreconditionFailed) {
-			writeError(w, 409, "main task ID already belongs to another request")
-		} else {
-			writeError(w, 503, "main task registration unavailable")
-		}
-		return
-	}
-	delivery := coordinationDelivery{Event: resolved, Status: "queued", Created: time.Now().UTC()}
-	delivery.Transport = coordinationTransport(resolved.Kind, resolved.RecipientRuntime)
-	data, _ := json.Marshal(delivery)
-	if err := h.deps.OSS.PutObjectIfAbsent(r.Context(), coordinationPending+resolved.ID+".json", data); err != nil {
-		if errors.Is(err, oss.ErrPreconditionFailed) {
-			writeError(w, 409, "coordination admission raced; retry unchanged event")
-			return
-		}
-		writeError(w, 503, "coordination queue unavailable")
-		return
-	}
-	h.wakeRunner()
-	httputil.WriteJSON(w, 202, map[string]any{"accepted": true, "event_id": resolved.ID})
+	httputil.WriteJSON(w, status, admission)
+
 }
 
 // The durable queue remains authoritative; this local hint only avoids waiting
@@ -134,7 +86,12 @@ func (h *CoordinationHandler) wakeRunner() {
 func (h *CoordinationHandler) Run(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	var nextTaskScan time.Time
 	for {
+		if h.taskNotifications != nil && time.Now().After(nextTaskScan) {
+			h.taskNotifications.recoverTaskNotifications(ctx)
+			nextTaskScan = time.Now().Add(15 * time.Second)
+		}
 		h.drain(ctx)
 		select {
 		case <-ctx.Done():
@@ -224,6 +181,9 @@ func (h *CoordinationHandler) step(ctx context.Context, key string) {
 			return nil
 		})
 	}
+	if d.Status == "completed" && d.DeliveredAt.IsZero() {
+		d.DeliveredAt = time.Now().UTC()
+	}
 	d.LeaseUntil = time.Time{}
 	if d.Status == "failed" && d.FailureEventID == "" {
 		id, err := h.projectEvent(ctx, d.Event, d.Event.ActorRole, d.Event.ActorName, d.Event.RoomID,
@@ -289,11 +249,15 @@ func (h *CoordinationHandler) GetEvent(w http.ResponseWriter, r *http.Request) {
 			worker, lookupErr := h.worker(r.Context(), caller.Username)
 			recipient = lookupErr == nil && worker.Name == d.Event.RecipientName && worker.Status.MatrixUserID == d.Event.Recipient
 		}
+		if d.Event.RecipientKind == "manager" && caller.Role == authpkg.RoleManager {
+			manager, lookupErr := h.manager(r.Context(), caller.Username)
+			recipient = lookupErr == nil && manager.Name == d.Event.RecipientName && manager.Status.MatrixUserID == d.Event.Recipient
+		}
 		if caller.Role != authpkg.RoleAdmin && (caller.Username != d.Event.ActorName || caller.Role != d.Event.ActorRole) && !recipient {
 			writeError(w, 404, "coordination receipt not found")
 			return
 		}
-		httputil.WriteJSON(w, 200, map[string]any{"event_id": id, "kind": d.Event.Kind, "project_id": d.Event.ProjectID, "main_task_id": d.Event.MainTaskID, "task_id": d.Event.TaskID, "status": d.Status, "created": d.Created, "error": d.Error, "native_id": d.NativeID, "user_event_id": d.UserEventID, "failure_event_id": d.FailureEventID, "actor": d.Event.Actor, "recipient": d.Event.Recipient, "delivery_id": d.Event.DeliveryID, "submission_id": d.Event.SubmissionID, "room_id": d.Event.RoomID, "transport": d.Transport, "control": coordinationPayload(d.Event)})
+		httputil.WriteJSON(w, 200, map[string]any{"protocol": d.Event.Protocol, "event_id": id, "kind": d.Event.Kind, "project_id": d.Event.ProjectID, "main_task_id": d.Event.MainTaskID, "task_id": d.Event.TaskID, "status": d.Status, "created": d.Created, "error": d.Error, "native_id": d.NativeID, "previous_native_ids": d.PreviousNativeIDs, "replays": d.Replays, "user_event_id": d.UserEventID, "artifact_events": d.ArtifactEvents, "artifacts": d.Event.Artifacts, "requester_room_id": coordinationString(d.Event.RequesterRoute, "target_session"), "failure_event_id": d.FailureEventID, "actor": d.Event.Actor, "recipient": d.Event.Recipient, "delivery_id": d.Event.DeliveryID, "submission_id": d.Event.SubmissionID, "room_id": d.Event.RoomID, "transport": d.Transport, "control": coordinationPayload(d.Event)})
 		return
 	}
 	writeError(w, 404, "coordination receipt not found")

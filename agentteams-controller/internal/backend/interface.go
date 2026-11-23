@@ -315,6 +315,8 @@ type WorkerResult struct {
 	HandoffLabel    string `json:"handoff_label,omitempty"`
 	InstanceID      string `json:"instance_id,omitempty"`
 	Runtime         string `json:"runtime,omitempty"` // Runtime recorded on the actual backend instance.
+	AgentRole       string `json:"-"`                 // Role from the actual container environment, when available.
+	TeamName        string `json:"-"`
 	AppID           string `json:"app_id,omitempty"`
 	RawStatus       string `json:"raw_status,omitempty"`
 	ConsoleHostPort string `json:"console_host_port,omitempty"`

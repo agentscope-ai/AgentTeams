@@ -1,0 +1,9 @@
+{
+  "id": "agentteams-teamharness",
+  "name": "TeamHarness",
+  "version": "0.1.0",
+  "description": "Native binding to the common Task CLI/API and prepared Task inputs.",
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["task"] },
+  "configSchema": { "type": "object", "properties": { "team": { "type": "string" } }, "additionalProperties": false }
+}

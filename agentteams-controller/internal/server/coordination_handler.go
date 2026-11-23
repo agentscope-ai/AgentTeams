@@ -24,43 +24,47 @@ import (
 // Coordination delivers control events; the project/task documents remain the
 // only business state machine. Callers never supply an Agent network address.
 type CoordinationHandler struct {
-	deps         ServerDeps
-	wake         chan struct{}
-	http         *http.Client
-	workerURL    func(string, map[string]string) string
-	managerURL   func(string) string
-	projectEvent func(context.Context, coordinationEvent, string, string, string, string, string) (string, error)
+	deps              ServerDeps
+	wake              chan struct{}
+	http              *http.Client
+	workerURL         func(string, map[string]string) string
+	managerURL        func(string) string
+	projectEvent      func(context.Context, coordinationEvent, string, string, string, string, string) (string, error)
+	projectArtifact   func(context.Context, coordinationEvent, taskFinalArtifact, string, string) (string, error)
+	taskNotifications *ProjectHandler
 }
 
 type coordinationEvent struct {
-	Tasks             []mainTaskRequest `json:"tasks,omitempty"`
-	Kind              string            `json:"kind"`
-	Actor             string            `json:"actor"`
-	Recipient         string            `json:"recipient"`
-	MainTaskID        string            `json:"main_task_id,omitempty"`
-	ProjectID         string            `json:"project_id,omitempty"`
-	TaskID            string            `json:"task_id,omitempty"`
-	DeliveryID        string            `json:"delivery_id,omitempty"`
-	SubmissionID      string            `json:"submission_id,omitempty"`
-	OriginEventID     string            `json:"origin_event_id,omitempty"`
-	RoomID            string            `json:"room_id,omitempty"`
-	Text              string            `json:"text"`
-	SourceRoute       map[string]any    `json:"source_route,omitempty"`
-	RequesterRoute    map[string]any    `json:"requester_route,omitempty"`
-	ID                string            `json:"id"`
-	Team              string            `json:"team"`
-	StorageTeam       string            `json:"storage_team"`
-	ActorName         string            `json:"actor_name"`
-	ActorRole         string            `json:"actor_role"`
-	RecipientName     string            `json:"recipient_name"`
-	RecipientKind     string            `json:"recipient_kind"`
-	TargetURL         string            `json:"-"`
-	RecipientRuntime  string            `json:"-"`
-	External          bool              `json:"external,omitempty"`
-	EligibleAssignees []string          `json:"eligible_assignees,omitempty"`
-	FinalReport       string            `json:"final_report,omitempty"`
-	PlanType          string            `json:"-"`
-	DispatchMode      string            `json:"-"`
+	Protocol          string              `json:"protocol,omitempty"`
+	Artifacts         []taskFinalArtifact `json:"artifacts,omitempty"`
+	Tasks             []mainTaskRequest   `json:"tasks,omitempty"`
+	Kind              string              `json:"kind"`
+	Actor             string              `json:"actor"`
+	Recipient         string              `json:"recipient"`
+	MainTaskID        string              `json:"main_task_id,omitempty"`
+	ProjectID         string              `json:"project_id,omitempty"`
+	TaskID            string              `json:"task_id,omitempty"`
+	DeliveryID        string              `json:"delivery_id,omitempty"`
+	SubmissionID      string              `json:"submission_id,omitempty"`
+	OriginEventID     string              `json:"origin_event_id,omitempty"`
+	RoomID            string              `json:"room_id,omitempty"`
+	Text              string              `json:"text"`
+	SourceRoute       map[string]any      `json:"source_route,omitempty"`
+	RequesterRoute    map[string]any      `json:"requester_route,omitempty"`
+	ID                string              `json:"id"`
+	Team              string              `json:"team"`
+	StorageTeam       string              `json:"storage_team"`
+	ActorName         string              `json:"actor_name"`
+	ActorRole         string              `json:"actor_role"`
+	RecipientName     string              `json:"recipient_name"`
+	RecipientKind     string              `json:"recipient_kind"`
+	TargetURL         string              `json:"-"`
+	RecipientRuntime  string              `json:"-"`
+	External          bool                `json:"external,omitempty"`
+	EligibleAssignees []string            `json:"eligible_assignees,omitempty"`
+	FinalReport       string              `json:"final_report,omitempty"`
+	PlanType          string              `json:"-"`
+	DispatchMode      string              `json:"-"`
 }
 
 var coordinationSafeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -80,6 +84,7 @@ func NewCoordinationHandler(deps ServerDeps) *CoordinationHandler {
 		return fmt.Sprintf("http://%s:18799", authpkg.ResourcePrefix(deps.ResourcePrefix).ManagerPodName(name))
 	}
 	h.projectEvent = h.project
+	h.projectArtifact = h.projectTaskArtifact
 	return h
 }
 
@@ -181,6 +186,8 @@ func (h *CoordinationHandler) targetWorker(e *coordinationEvent, w *v1beta1.Work
 }
 
 func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, caller *authpkg.CallerIdentity) (coordinationEvent, error) {
+	e.Protocol = ""   // Rebuild protocol authority from registered tasks, never caller input.
+	e.Artifacts = nil // Final file authority is rebuilt from the completed Task snapshot.
 	reject := func() (coordinationEvent, error) { return e, errCoordinationRejected }
 	if caller == nil || (caller.Role != authpkg.RoleManager && caller.Role != authpkg.RoleTeamLeader && caller.Role != authpkg.RoleWorker) {
 		return reject()
@@ -189,6 +196,9 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 	e.ActorRole = caller.Role
 	var fence string
 	if e.Kind == "handoff" {
+		if len(e.Tasks) > 0 {
+			e.Protocol = "task/v1"
+		}
 		if caller.Role != authpkg.RoleManager || e.OriginEventID == "" || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_session"), "!") || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_user"), "@") {
 			return reject()
 		}
@@ -274,6 +284,9 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		}
 		if !identityMatches || (coordinationString(project, "team_id") != tm.Name && coordinationString(project, "team_id") != e.StorageTeam) {
 			return reject()
+		}
+		if e.MainTaskID != "" && project["task_plan"] != nil {
+			e.Protocol = "task/v1"
 		}
 		e.RoomID = coordinationString(project, "room_id")
 		e.PlanType = coordinationString(project, "plan_type")
@@ -381,14 +394,34 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			e.Text = string(details)
 			fence = coordinationScopeID(e)
 		case "project_completed", "main_task_completed":
+			e.OriginEventID = coordinationString(coordinationMap(project, "task_origin"), "event_id")
 			if caller.Role != authpkg.RoleTeamLeader || coordinationString(project, "status") != "completed" || (e.Kind == "main_task_completed") != (e.MainTaskID != "") {
 				return reject()
 			}
-			report, readErr := h.deps.OSS.GetObject(ctx, coordinationPlanPath(e, "result.md"))
+			reportKey := coordinationPlanPath(e, "result.md")
+			var reportDigest string
+			if saved, exists := project["task_completion"]; exists {
+				data, _ := json.Marshal(saved)
+				var completion taskCompletion
+				if json.Unmarshal(data, &completion) != nil || !validArtifactDigest(completion.ReportSHA256) {
+					return reject()
+				}
+				e.Artifacts = completion.Artifacts
+				reportDigest = completion.ReportSHA256
+				reportKey = coordinationPlanPath(e, "artifacts/"+reportDigest)
+			}
+			report, readErr := h.deps.OSS.GetObject(ctx, reportKey)
+			if reportDigest != "" {
+				sum := sha256.Sum256(report)
+				if readErr != nil || hex.EncodeToString(sum[:]) != reportDigest {
+					return e, errors.New("saved final report unavailable or changed")
+				}
+			}
 			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 				return e, readErr
 			}
 			e.FinalReport = strings.TrimSpace(string(report))
+
 			route := coordinationMap(project, "reply_route")
 			target := coordinationString(route, "target_user")
 			var managers v1beta1.ManagerList

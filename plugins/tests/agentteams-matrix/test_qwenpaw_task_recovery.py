@@ -1084,7 +1084,7 @@ def test_qwenpaw_native_tool_hook_holds_unknown_effects(native_channel, outcome)
     matrix = SimpleNamespace(message_begin_tools=begin, message_finish_tools=finish)
     messages = SimpleNamespace(matrix=matrix, turns={"key": turn})
     channel = SimpleNamespace(_task_execution=SimpleNamespace(messages=messages))
-    ctx = SimpleNamespace(request=SimpleNamespace(channel_meta={"message_execution": identity}),
+    ctx = SimpleNamespace(extras={}, request=SimpleNamespace(channel_meta={"message_execution": identity}),
         workspace=SimpleNamespace(channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel))))
     async def invoke(_call):
         assert _call is call
@@ -1146,7 +1146,7 @@ def test_ordinary_message_cache_requires_native_bytes_and_latest_shared_version(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("phase", ["closed", "active", "stale", "lost_descriptor_ack"])
+@pytest.mark.parametrize("phase", ["closed", "active", "active_started", "active_unknown", "stale", "lost_descriptor_ack"])
 def test_late_assignment_is_observed_in_existing_task_session(adapter, native_channel, tmp_path, monkeypatch, phase):
     import nio
     from unittest.mock import Mock
@@ -1183,14 +1183,17 @@ def test_late_assignment_is_observed_in_existing_task_session(adapter, native_ch
     order = []
     def commit(source_key, _, native_ref, native_digest):
         assert source_key == key and native_ref == session
-        assert phase == "active" or authority.cache["native_digest"] == native_digest
+        assert phase.startswith("active") or authority.cache["native_digest"] == native_digest
         record["native_commit"] = {"native_ref": native_ref, "native_digest": native_digest,
                                    "start": {"process_id": authority.process}}
         order.append("native fact")
     execution.matrix.native_committed = Mock(side_effect=commit)
     channel._session_receipts.submit.side_effect = lambda *_: order.append("read")
     canonical = {"text": "Canonical assigned Task T", "meta": {"teamharness_coordination": {"kind": "task_assigned", "task_id": "T"}}}
-    monkeypatch.setattr("task_coordination.notification", lambda *_: canonical)
+    def notification(*_args, event_id):
+        assert event_id == record["event_id"]
+        return canonical
+    monkeypatch.setattr("task_coordination.notification", notification)
     channel._user_id = "@worker:hs"
     runner = ManagedNioSync(channel, execution)
     snapshot = {"state": {"pending": [key], "rooms": {room: {}}}}
@@ -1205,8 +1208,15 @@ def test_late_assignment_is_observed_in_existing_task_session(adapter, native_ch
         original = await store.get_session_state_dict(**address)
         view = execution.sessions.load(work)
         execution.sessions.remember(work, view, identity, session, Recovery.digest(original), int(time.time()) + 1800)
-        if phase == "active":
+        if phase.startswith("active"):
             execution.native_active.add(admission)
+            if phase != "active":
+                task["execution"]["state"] = "needs_verification"
+                task["execution"]["checkpoint"]["operation"] = {
+                    "id": "op-before-late-assignment", "state": "started" if phase == "active_started" else "unknown"}
+                # A new execution still cannot enter on an unresolved effect.
+                with pytest.raises(RecoveryConflict):
+                    execution.verify(identity)
         elif phase == "stale":
             authority.cache["native_digest"] = "wrong"
         elif phase == "lost_descriptor_ack":
@@ -1219,9 +1229,19 @@ def test_late_assignment_is_observed_in_existing_task_session(adapter, native_ch
                 return remember(*args)
             execution.sessions.remember = reject_first
         await runner.dispatch(snapshot)  # empty process-local waiting cache, no new Matrix event
-        if phase == "active":
+        if phase.startswith("active"):
             assert not order
             ctx = SimpleNamespace(session_id=session, request=SimpleNamespace(channel_meta={"task_execution": identity}), mode_state={})
+            if phase == "active_unknown":
+                with pytest.raises(RecoveryConflict):
+                    await execution.assignments.before_reasoning(ctx, agent)
+                assert not order
+                assert await store.get_session_state_dict(**address) == original
+                channel.enqueue_recovered_task.assert_not_awaited()
+                authority.claim.assert_not_called()
+                model.assert_not_called()
+                await client.close()
+                return
             await execution.assignments.before_reasoning(ctx, agent)
         elif phase == "lost_descriptor_ack":
             assert not order
@@ -1247,3 +1267,44 @@ def test_late_assignment_is_observed_in_existing_task_session(adapter, native_ch
         model.assert_not_called()
         await client.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("save_fails", [False, True])
+def test_qwenpaw_verified_input_refresh_is_saved_before_read_and_inference(native_channel, save_fails):
+    path = Path(native_channel.__file__).with_name("session_receipts.py")
+    spec = importlib.util.spec_from_file_location("_refreshed_human_checkpoint", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    async def scenario():
+        order = []
+        state = {"state": {"middle_context": {}, "context": [
+            {"role": "user", "metadata": {"agentteams.event.id": "$new"}, "content": "Updated Human request"}]}}
+        agent = SimpleNamespace(state=SimpleNamespace(middle_context=state["state"]["middle_context"]), state_dict=lambda: state)
+        async def save(**kwargs):
+            snapshot = kwargs["agent"].state_dict()
+            assert snapshot["state"]["context"][0]["role"] == "user"
+            assert snapshot["state"]["context"][0]["metadata"]["agentteams.event.id"] == "$new"
+            order.append("save")
+            if save_fails:
+                raise OSError("synthetic unavailable storage")
+        delivery = SimpleNamespace(submit=AsyncMock(side_effect=lambda *_: order.append("read")))
+        channel = SimpleNamespace(_session_receipts=delivery)
+        ctx = SimpleNamespace(extras={}, session_id="fixture", mode_state={},
+            request=SimpleNamespace(channel="agentteams_matrix", user_id="!r", channel_meta={"room_id": "!r", "session_source_event_ids": ["$original"]}),
+            workspace=SimpleNamespace(session=SimpleNamespace(save_session_state=save),
+                channel_manager=SimpleNamespace(get_channel=AsyncMock(return_value=channel))))
+        module.session_receipt_middleware(ctx, None)
+        async def infer():
+            await ctx.extras["agentteams_checkpoint_inputs"](agent, [{"roomId": "!r", "eventId": "$new"}])
+            order.append("model")
+        if save_fails:
+            with pytest.raises(OSError, match="unavailable storage"):
+                await infer()
+            assert order == ["save"]
+            delivery.submit.assert_not_awaited()
+        else:
+            await infer()
+            assert order == ["save", "read", "model"]
+            delivery.submit.assert_awaited_once_with("!r", ["$original", "$new"], state["state"]["middle_context"][module.PENDING_KEY])
+    asyncio.run(scenario())

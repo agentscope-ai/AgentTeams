@@ -19,7 +19,7 @@ func TestNewWorkerContainerReadsControllerTracingDefaults(t *testing.T) {
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	for _, runtime := range []string{"qwenpaw", "hermes", "openclaw"} {
+	for _, runtime := range []string{"qwenpaw", "hermes", "openclaw", "deepseek-harness", "codex", "openhuman"} {
 		for _, enabled := range []bool{true, false} {
 			data, _ := json.Marshal(map[string]any{"revision": "central-revision", "enabled": enabled, "captureContent": true, "collectorEndpoint": "http://collector:4318", "collectorHeaders": "Authorization=Bearer%20ingest", "secretKey": "query-secret-never-worker"})
 			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: observability.SecretName, Namespace: "default"}, Data: map[string][]byte{"config.json": data}}

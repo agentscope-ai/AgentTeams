@@ -482,17 +482,13 @@ fi
 log_section "Verify Containers"
 
 for w in "${TEST_LEADER}" "${TEST_W1}" "${TEST_W2}"; do
-    RUNNING=$(docker ps --format '{{.Names}}' 2>/dev/null | grep "$(worker_container_name "${w}")" || echo "")
-    if [ -n "${RUNNING}" ]; then
+    MANAGED=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${w}" '.workers[] | select(.name == $w) | .containerManaged')
+    if [ "${MANAGED}" = "false" ]; then
+        log_pass "Agent ${w} registered in remote mode"
+    elif wait_for_worker_container "${w}" 120; then
         log_pass "Container running: $(worker_container_name "${w}")"
     else
-        MANAGED=$(echo "${WORKERS_RESOURCE}" | jq -r --arg w "${w}" '.workers[] | select(.name == $w) | .containerManaged')
-        if [ "${MANAGED}" = "false" ]; then
-            log_pass "Agent ${w} registered in remote mode"
-        else
-            dump_diagnostics worker "${w}"
-            log_fail "Container not running: $(worker_container_name "${w}")"
-        fi
+        log_fail "Container not running: $(worker_container_name "${w}")"
     fi
 done
 

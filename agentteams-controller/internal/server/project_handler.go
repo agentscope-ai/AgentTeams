@@ -54,6 +54,7 @@ type ProjectHandler struct {
 	matrix       matrix.Client // for intervention notifications; nil to skip
 	taskAssigned func()        // local queue hint after a durable assignment commit
 	recovery     *TaskRecoveryHandler
+	coordination *CoordinationHandler
 }
 
 // NewProjectHandler creates a handler reading project state from object storage.
@@ -111,6 +112,7 @@ type projectMeta struct {
 
 type projectTaskMeta struct {
 	TaskID       string                    `json:"task_id"`
+	RevisionOf   string                    `json:"revision_of,omitempty"`
 	ParentTaskID string                    `json:"parent_task_id,omitempty"`
 	Title        string                    `json:"title"`
 	AssignedTo   string                    `json:"assigned_to"`

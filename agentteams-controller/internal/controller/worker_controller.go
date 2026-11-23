@@ -260,12 +260,6 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		teamLlmTuning = r.owningTeamLlmTuning(ctx, w)
 	}
 	mctx := r.workerMemberContextWithSpec(w, effectiveSpec, resourceSpec, updateStrategy, teamLlmTuning)
-	if targetHandoff == nil && r.RuntimeStore != nil && mctx.SpecChanged && effectiveSpec.DesiredContainerMan() && effectiveSpec.DesiredState() == "Running" && !isEdgeWorker(w) {
-		handled, err := r.beginDesiredRuntimeHandoff(ctx, w, mctx)
-		if err != nil || handled {
-			return reconcile.Result{RequeueAfter: handoffPoll}, err
-		}
-	}
 	mctx.TeamName, err = r.workerTeamName(ctx, w)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -273,6 +267,25 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	teamRole, inTeam, err := r.teamRoleForWorker(ctx, w.Namespace, w.Name)
 	if err != nil {
 		return reconcile.Result{}, err
+	}
+	// Runtime identity comes from registered Team membership, independently of
+	// the standalone infrastructure owner. Include startup-only identity in the
+	// applied hash so joining, changing role, and leaving converge once.
+	if inTeam {
+		mctx.AgentRole = teamRole
+		h := fnv.New64a()
+		data, _ := json.Marshal([]string{mctx.AppliedSpecHash, mctx.TeamName, teamRole.String()})
+		_, _ = h.Write(data)
+		mctx.AppliedSpecHash = fmt.Sprintf("%x", h.Sum64())
+	} else {
+		mctx.TeamName = ""
+	}
+	mctx.SpecChanged = w.Status.SpecHash != "" && w.Status.SpecHash != mctx.AppliedSpecHash
+	if targetHandoff == nil && r.RuntimeStore != nil && mctx.SpecChanged && effectiveSpec.DesiredContainerMan() && effectiveSpec.DesiredState() == "Running" && !isEdgeWorker(w) {
+		handled, err := r.beginDesiredRuntimeHandoff(ctx, w, mctx)
+		if err != nil || handled {
+			return reconcile.Result{RequeueAfter: handoffPoll}, err
+		}
 	}
 	effectiveRuntime := backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime)
 	configOwnedByTeam := inTeam && backend.UsesMemberRuntimeConfig(effectiveRuntime)
@@ -980,6 +993,11 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Contro
 	// the new Human object alone no longer names a removed grant.
 	bldr = bldr.Watches(&v1beta1.Human{}, handler.EnqueueRequestsFromMapFunc(r.humanToWorkerRequests))
 
+	// Team updates can change a running Worker's role without editing its spec.
+	// The handler maps both versions on update, including removed members.
+	bldr = bldr.Watches(&v1beta1.Team{}, handler.EnqueueRequestsFromMapFunc(teamWorkerRequests),
+		builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+
 	if r.Backend != nil {
 		ctx := context.Background()
 		// Watch Pods when the K8s ("pod") backend is registered & available.
@@ -1011,6 +1029,18 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Contro
 	}
 
 	return bldr.Build(r)
+}
+
+func teamWorkerRequests(_ context.Context, obj client.Object) []reconcile.Request {
+	team := obj.(*v1beta1.Team)
+	requests := make([]reconcile.Request, 0, len(team.Spec.WorkerMembers))
+	for _, member := range team.Spec.WorkerMembers {
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKey{
+			Namespace: team.Namespace,
+			Name:      member.Name,
+		}})
+	}
+	return requests
 }
 
 // WorkerPodMapFunc returns a MapFunc for routing Pod events to Worker reconcile

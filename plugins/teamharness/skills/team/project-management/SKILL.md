@@ -1,6 +1,6 @@
 ---
 name: teamharness-project-management
-description: "Use as Leader to start ordinary team work with taskflow start_task, accept subtasks and complete the main Task. Project creation is explicit-user-only; also covers existing Project DAG and Loop operations."
+description: "Use as Leader for explicitly requested Projects, existing Project DAG and Loop work, and legacy Task flows. For managed task/v1 work, use the Task Collaboration skill."
 ---
 
 # Project Management

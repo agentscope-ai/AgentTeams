@@ -38,7 +38,7 @@ python_test = <<~PY
       "params": {},
   })["result"]["tools"]
   names = [tool["name"] for tool in tools]
-  expected = ["health", "message", "roomflow", "filesync", "artifact", "projectflow", "taskflow", "build_review_context"]
+  expected = ["health", "message", "roomflow", "filesync", "artifact", "projectflow", "taskflow", "build_review_context", "task"]
   if names != expected:
       raise AssertionError(f"unexpected tools: {names!r}")
 
@@ -55,7 +55,7 @@ python_test = <<~PY
   os.environ["AGENTTEAMS_AGENT_ROLE"] = "manager"
   manager_tools = handle_request({"id": 4, "method": "tools/list"})["result"]["tools"]
   manager_names = [tool["name"] for tool in manager_tools]
-  if manager_names != ["health", "message", "filesync", "artifact"]:
+  if manager_names != ["health", "message", "filesync", "artifact", "task"]:
       raise AssertionError(f"Manager must not load team workflow tools: {manager_names!r}")
   message_schema = next(tool for tool in manager_tools if tool["name"] == "message")
   if "type" in message_schema["inputSchema"]["properties"]:

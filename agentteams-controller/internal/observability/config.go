@@ -14,6 +14,15 @@ import (
 
 const SecretName = "agentteams-observability"
 
+func SupportsRuntime(runtime string) bool {
+	switch runtime {
+	case "qwenpaw", "hermes", "openclaw", "deepseek-harness", "codex", "openhuman":
+		return true
+	default:
+		return false
+	}
+}
+
 // WorkerSettings contains collection settings, never backend query credentials.
 type WorkerSettings struct {
 	Revision          string `json:"revision"`

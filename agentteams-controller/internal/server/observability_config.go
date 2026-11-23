@@ -261,8 +261,8 @@ func (h *ProjectHandler) ApplyObservabilityConfig(w http.ResponseWriter, r *http
 		worker := &v1beta1.Worker{}
 		if err := h.client.Get(r.Context(), client.ObjectKey{Namespace: h.namespace, Name: name}, worker); err != nil {
 			result["message"] = "Worker not found"
-		} else if (worker.Spec.Runtime != "qwenpaw" && worker.Spec.Runtime != "hermes" && worker.Spec.Runtime != "openclaw") || !worker.Spec.DesiredContainerMan() {
-			result["message"] = "requires a managed QwenPaw, Hermes or OpenClaw Worker"
+		} else if !observability.SupportsRuntime(worker.Spec.Runtime) || !worker.Spec.DesiredContainerMan() {
+			result["message"] = "requires a managed Worker with native tracing support"
 		} else {
 			base := worker.DeepCopy()
 			if worker.Spec.Env == nil {

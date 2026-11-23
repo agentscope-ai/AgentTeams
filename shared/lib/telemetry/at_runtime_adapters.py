@@ -219,16 +219,22 @@ def hermes_turn(module):
             "room_id": getattr(instance, "_chat_id", ""),
             "event_id": kwargs.get("persist_user_platform_id", ""),
         }
-        # Internal recovery admissions retain this ID through the native SDK.
-        # Decode it for tracing only; execution authority stays in Task tools.
-        admission = re.fullmatch(r"recovery:([^/:]+)/([^/:]+):([1-9][0-9]*)", metadata["event_id"] or "")
-        if admission:
-            metadata.update(team_id=admission[1], task_id=admission[2], execution_generation=int(admission[3]))
+        # Read the runtime's current verified frame; native session IDs are opaque.
+        try:
+            from hermes_matrix.public_tasks import current_turn
+        except ImportError:
+            current = None
+        else:
+            current = current_turn.get()
+        if current is not None:
+            metadata.update(current.trace_metadata())
         fields = telemetry.turn_fields(str(getattr(instance, "session_id", "")), metadata=metadata)
         if kwargs.get("task_id"):
             fields["agentteams.runtime.task_id"] = str(kwargs["task_id"])
         if getattr(instance, "_parent_session_id", None):
             fields["agentteams.runtime.parent_session_id"] = str(instance._parent_session_id)
+        from at_trace_transport import incoming
+        fields.update(incoming({"com.agentteams.trace": metadata.get("otel_carrier", {})}))
         fields = enrich_task(fields, os.getenv("AGENTTEAMS_WORKER_HOME") or os.getenv("HOME"))
         with bind(fields):
             with trace.use_span(start_turn(fields, {"message": args[0] if args else kwargs.get("user_message"),

@@ -49,6 +49,10 @@ def test_controller_image_context_contains_manager_diagnosis(tmp_path, target):
     shutil.copy(ROOT / "Makefile", tmp_path / "Makefile")
     shutil.copytree(ROOT / "manager/agent", tmp_path / "manager/agent")
     shutil.copytree(ROOT / "plugins/teamharness", tmp_path / "plugins/teamharness")
+    compatibility = tmp_path / "plugins/agentteams-teamharness"
+    compatibility.mkdir()
+    (compatibility / "plugin.yaml").write_text("compatibility plugin")
+    (tmp_path / "plugins/tests").mkdir()
     (tmp_path / "agentteams-controller").mkdir()
     (tmp_path / "hack").mkdir()
     shutil.copy(ROOT / "hack/versions.env", tmp_path / "hack/versions.env")
@@ -66,6 +70,13 @@ if sys.argv[1:2] == ['build'] or sys.argv[1:3] == ['buildx', 'build']:
     assert (root / 'resource-management/SKILL.md').is_file()
     leader = Path('agentteams-controller/agent/team-leader-agent')
     public = Path('plugins/teamharness')
+    assert Path('agentteams-controller/plugins/teamharness/plugin.yaml').is_file()
+    assert not Path('agentteams-controller/plugins/agentteams-teamharness').exists()
+    assert not Path('agentteams-controller/plugins/tests').exists()
+    for template in ['worker-agent', 'hermes-worker-agent', 'openhuman-worker-agent', 'copaw-worker-agent']:
+        skills = Path('agentteams-controller/agent') / template / 'skills'
+        for retired in ['task-progress', 'project-participation', 'task-management']:
+            assert not (skills / retired).exists()
     assert (leader / 'AGENTS.md').read_bytes() == (public / 'prompts/agent/leader.md').read_bytes()
     for group, names in {
         'team': ['communication', 'file-sharing', 'roomflow', 'team-coordination',
@@ -90,6 +101,8 @@ if sys.argv[1:2] == ['build'] or sys.argv[1:3] == ['buildx', 'build']:
 
 def test_embedded_uses_the_assembled_controller_leader_assets():
     dockerfile = (ROOT / "agentteams-controller/Dockerfile.embedded").read_text()
+    assert "COPY --from=agentteams-controller /opt/agentteams/plugins/ /opt/agentteams/plugins/" in dockerfile
+    assert "COPY plugins/ /opt/agentteams/plugins/" not in dockerfile
     for template in ["team-leader-agent", "worker-agent", "hermes-worker-agent", "copaw-worker-agent"]:
         assert f"COPY --from=agentteams-controller /opt/agentteams/agent/{template}/ /opt/agentteams/agent/{template}/" in dockerfile
         assert f"COPY manager/agent/{template}/" not in dockerfile

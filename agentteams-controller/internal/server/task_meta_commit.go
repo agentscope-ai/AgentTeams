@@ -191,6 +191,18 @@ func (h *ProjectHandler) resolveTaskMetaCommitKey(
 			}
 		}
 		hits = filtered
+	} else if caller != nil && (caller.Role == authpkg.RoleWorker || caller.Role == authpkg.RoleTeamLeader) && caller.Team != "" {
+		// A managed member already has one trusted Team scope. Repeated IDs in
+		// other Teams must not force the Agent to reconstruct deployment facts.
+		filtered := hits[:0]
+		for _, candidate := range hits {
+			if callerMatchesStorageTeam(caller, candidate.team, crToEffective) {
+				filtered = append(filtered, candidate)
+			}
+		}
+		if len(filtered) > 0 {
+			hits = filtered
+		}
 	}
 	switch len(hits) {
 	case 0:
@@ -353,6 +365,12 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ifNoneMatch == "*" {
+		if !validateTaskCancellationCommit(w, nil, body) || !validateTaskPlanCommit(w, nil, body) || !validateTaskReviewCommit(w, nil, body) || !validateTaskNotificationsCommit(w, nil, body) || !validateTaskSubmissionCommit(w, nil, body) || !validateTaskCompletionCommit(w, nil, body) || !validateTaskOriginCommit(w, nil, body) {
+			return
+		}
+		if !validateTaskFileIndexCommit(w, nil, body) {
+			return
+		}
 		h.putTaskMetaCreateIfAbsent(w, r, taskID, body)
 		return
 	}
@@ -383,6 +401,12 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	currentStatus, currentStatusPresent, _ := exactTaskStatus(current)
+	if !validateTaskCancellationCommit(w, current, body) || !validateTaskPlanCommit(w, current, body) || !validateTaskReviewCommit(w, current, body) || !validateTaskNotificationsCommit(w, current, body) || !validateTaskSubmissionCommit(w, current, body) || !validateTaskCompletionCommit(w, current, body) || !validateTaskOriginCommit(w, current, body) {
+		return
+	}
+	if !validateTaskFileIndexCommit(w, current, body) {
+		return
+	}
 	if !h.validateExecutionCommit(w, r, current, body) {
 		return
 	}

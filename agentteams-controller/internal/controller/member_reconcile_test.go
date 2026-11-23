@@ -310,6 +310,40 @@ func TestCreateMemberContainerPassesMemberRoleEnv(t *testing.T) {
 	}
 }
 
+func TestReconcileMemberContainerRepairsDockerRoleAfterStatusConflict(t *testing.T) {
+	for _, got := range []struct {
+		name, role, team string
+		remove           bool
+	}{
+		{"created before team registration", "standalone", "", true},
+		{"assigned to a different team", "team_leader", "old-team", true},
+		{"already configured", "team_leader", "alpha", false},
+		{"legacy container without role environment", "", "", false},
+	} {
+		t.Run(got.name, func(t *testing.T) {
+			wb := mocks.NewMockWorkerBackend()
+			wb.NameOverride = "docker"
+			wb.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+				return &backend.WorkerResult{Status: backend.StatusRunning, AgentRole: got.role, TeamName: got.team}, nil
+			}
+			member := MemberContext{
+				Name: "alice", Role: RoleStandalone, AgentRole: RoleTeamLeader, TeamName: "alpha",
+				AppliedSpecHash: "current-desired-hash", CurrentSpecHash: "current-desired-hash",
+			}
+			state := &MemberState{ProvResult: &service.WorkerProvisionResult{}}
+			_, err := ReconcileMemberContainer(t.Context(), MemberDeps{
+				Backend: backend.NewRegistry([]backend.WorkerBackend{wb}),
+			}, member, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if deleted := len(wb.Calls.Delete) > 0; deleted != got.remove {
+				t.Fatalf("container removed = %t, want %t", deleted, got.remove)
+			}
+		})
+	}
+}
+
 func TestReconcileMemberContainerSpecChangedDeletesRunningSandboxWithoutHash(t *testing.T) {
 	wb := mocks.NewMockWorkerBackend()
 	wb.NameOverride = "sandbox"

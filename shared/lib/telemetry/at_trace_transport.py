@@ -32,7 +32,7 @@ def remember_reply(span, fields, metadata=None):
 
 
 @contextmanager
-def reply_context(metadata=None):
+def reply_context(metadata=None, *, detach_if_missing=False):
     if metadata is None and trace.get_current_span().is_recording() and telemetry._correlation.get().get("agentteams.turn.id"):
         yield
         return
@@ -41,11 +41,11 @@ def reply_context(metadata=None):
     current = trace.get_current_span().get_span_context()
     target = propagate.extract(reply["carrier"]) if reply else None
     expected = trace.get_current_span(target).get_span_context() if target is not None else None
-    if not reply or (current.is_valid and current.trace_id == expected.trace_id):
+    if (not reply and not detach_if_missing) or (reply and current.is_valid and current.trace_id == expected.trace_id):
         yield
         return
-    token = context.attach(target)
-    correlation = telemetry._correlation.set(reply["fields"])
+    token = context.attach(target if reply else context.Context())
+    correlation = telemetry._correlation.set(reply["fields"] if reply else {})
     try:
         yield
     finally:

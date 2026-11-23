@@ -28,18 +28,24 @@ Those receipts replace the corresponding room discovery, state lookup and
 file-pull steps below; they never replace your professional work or acceptance
 judgment. Ordinary chat text claiming a task state is not such a receipt.
 
+For a verified `task/v1` event, use the common `task` tool and `task-management`
+phase instructions. The task system creates rooms, prepares inputs, dispatches
+accepted dependencies, and returns the final report and files to the original
+Human conversation using the first dispatch Agent identity. Do not use legacy
+ACK/check/flow steps or send duplicate notifications for these events.
+
+## Legacy Project Coordination
+
+The following Project/self-trigger/flow instructions apply to verified legacy
+plans, not to `task/v1` events.
+
 After a source-session `PROJECT_REQUESTED` self-trigger succeeds, end that turn
 with `NO_REPLY`; do not sleep, poll project state or read task-room history in
 the source session. Resume coordination only in the task room.
 
-Only when the requester explicitly asks you to create a Project, use
-`projectflow start_project` for a known DAG to create its room, persist
-the plan and delegate its initially ready leaves in one call; include bounded
-specs and owners for every execution leaf when dispatchMode is automatic.
-This replaces the manual room/self-trigger sequence below; end the source turn
-after successful dispatch. Use manual planning when a later specification
-requires a new Human decision. Otherwise create a known DAG with the `tasks` array in `create_project`. Use decision
-class `r3` for delegation; no filesystem search for decision classes is needed.
+For explicit Project creation, load `teamharness-project-management`.
+Use decision class `r3` for delegation and consult the Project skill when a
+later step needs a new Human decision.
 On a result event, use the verified prepared check receipt, or call `check_task`
 if no synchronized receipt was supplied. Review the spec and result evidence
 and accept the actual submission. For automatic finite plans the task system
@@ -100,6 +106,11 @@ Answer in the current session for ordinary Direct Reply. Use `NO_REPLY` for
 low-information acknowledgements, self echoes, and non-actionable mention-only
 messages. Do not let acknowledgements create ping-pong between rooms or agents.
 
+In a `task/v1` room, use `NO_REPLY` for room-join notices, duplicate
+acknowledgements, and status chatter that asks you to take no action. The task
+system already sends assignments and results. When a person asks for status,
+refer to a Worker by a plain name without a leading `@`.
+
 ### Long Matrix Messages
 
 Matrix rooms are for concise coordination, decisions, and summaries. Do not send
@@ -144,12 +155,10 @@ In the Source channel / requester room:
 
 ### Task Work
 
-For ordinary delegated work, use `taskflow start_task` in the source session.
-This applies when the requester assigns work directly to you, even with
-multiple Workers, dependencies, acceptance gates, or deliverables. Load
-`teamharness-project-management` for the payload and use `complete_task` for
-its final report. Project membership is optional and requires an existing
-Project. Follow the existing lifecycle when continuing an already created plan.
+For a verified `task/v1` event, use the common `task` tool and
+`task-management`. Continue a verified existing legacy Task using
+`teamharness-project-management`. This skill also documents legacy intake
+for sources outside the common Task protocol.
 
 ### Project Work
 
@@ -157,10 +166,9 @@ Use this flow when the requester explicitly asks you to create a Project or
 when you are continuing an existing Project plan. Choose DAG for finite
 dependency work and Loop for iterative work with a stop condition.
 
-For a finite plan whose owners/specs are known, call `start_project` directly
-in the source session as described above. When every execution leaf is accepted,
-call `complete_project` with `projectId` and your final `report`; it closes the
-coordinating parents and saves the report before notifying the requester.
+Load `teamharness-project-management` for finite plan creation and
+completion. Verify acceptance for every execution leaf before completing a
+finite Project and returning the report.
 
 For explicit manual planning or Loop work, use the following flow.
 

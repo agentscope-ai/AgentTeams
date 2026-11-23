@@ -53,14 +53,16 @@ def test_register_uses_qwenpaw_2_public_extension_points(monkeypatch):
         "_register_trace_hooks",
         lambda api: api.calls.append(("trace", (), {})),
     )
+    monkeypatch.setattr(module, "_register_coordination_hook",
+                        lambda api: api.calls.append(("coordination", (), {})))
     api = FakeApi()
     module.plugin.register(api)
     names = [call[0] for call in api.calls]
     assert names == [
-        "register_prompt_section",
         "register_skill_provider",
         "register_middleware",
         "trace",
+        "coordination",
         "register_http_router",
     ]
 
@@ -281,3 +283,128 @@ def test_planning_preload_keeps_start_contract_and_references_full_manual_skill(
     assert "Manual and Loop reference" not in texts[0]
     assert "read the complete skill" in texts[0]
     assert len(texts[0]) < len((module.ASSET_DIR / "skills/team/project-management/SKILL.md").read_text()) / 2
+
+
+def test_task_cli_receipt_is_injected_only_for_final_success_and_current_task(monkeypatch):
+    import json
+    module = load_plugin()
+    monkeypatch.setitem(sys.modules, "agentscope.middleware", types.SimpleNamespace(MiddlewareBase=object))
+    class ToolResponse:
+        def __init__(self, content, state="success"):
+            self.content, self.state = content, state
+    class TextBlock:
+        def __init__(self, text): self.text = text
+    monkeypatch.setitem(sys.modules, "agentscope.tool", types.SimpleNamespace(ToolResponse=ToolResponse))
+    monkeypatch.setitem(sys.modules, "agentscope.message", types.SimpleNamespace(TextBlock=TextBlock))
+    middleware = module._sanitizer_factory(None, None)
+    token = module._execution_task.set("t1")
+    payload = {"task":{"id":"t1","status":"submitted","submissionId":"s1"},"notification":{"status":"queued","eventId":"e1","recipient":"leader-a"}}
+    async def run(tool="execute_shell_command", command='agt task submit t1 --summary "Done"', state="success", final=True):
+        block = TextBlock(json.dumps(payload))
+        response = ToolResponse([block], state) if final else types.SimpleNamespace(content=[block], state=state)
+        async def handler(**_kwargs): yield response
+        result = [item async for item in middleware.on_acting(None, {"tool_call":types.SimpleNamespace(name=tool,input={"command":command})}, handler)]
+        return result[0].content
+    try:
+        assert len(asyncio.run(run(state="error"))) == 1
+        assert len(asyncio.run(run(final=False))) == 1
+        assert len(asyncio.run(run(command="cat result.json"))) == 1
+        assert len(asyncio.run(run(command="agt task submit other --summary Done"))) == 1
+        content = asyncio.run(run())
+        assert len(content) == 2 and "[Task system receipt]" in content[0].text
+        assert "leader-a" in content[0].text and "Do not resend" in content[0].text
+        assert json.loads(content[1].text) == payload
+        assert len(asyncio.run(run())) == 1  # Same receipt, same current conversation.
+    finally:
+        module._execution_task.reset(token)
+
+
+def test_manager_shared_intake_contract_does_not_require_legacy_switch(monkeypatch):
+    module = load_plugin()
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE","manager")
+    monkeypatch.delenv("TEAMHARNESS_COORDINATION_URL", raising=False)
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller:8090")
+    contract=(ROOT/"plugins/teamharness/skills/team/task-management/SKILL.md").read_text().partition("## Plan as Leader")[0].strip()
+    assert contract in module._team_prompt(None)
+
+
+@pytest.mark.parametrize("name", ["write_file", "edit_file"])
+def test_managed_native_file_tools_reject_wrong_task_paths(monkeypatch, tmp_path, name):
+    module = load_plugin()
+    monkeypatch.setitem(sys.modules, "agentscope.middleware", types.SimpleNamespace(MiddlewareBase=object))
+    monkeypatch.setitem(sys.modules, "agentscope.tool", types.SimpleNamespace(ToolResponse=types.SimpleNamespace))
+    middleware = module._sanitizer_factory(None, None)
+    output = tmp_path / "tasks" / "t1" / "workspace"
+    scratch = output / "scratch"
+    outside = str(tmp_path / "tasks" / "t11" / "workspace" / "report.json")
+    calls = []
+
+    async def action(path):
+        async def handler(**kwargs):
+            calls.append(kwargs["tool_call"].input["file_path"])
+            yield types.SimpleNamespace(state="success", content=[])
+        call = types.SimpleNamespace(name=name, input={"file_path": path})
+        return [r async for r in middleware.on_acting(None, {"tool_call": call}, handler)][0]
+
+    async def run():
+        token = module._task_write_dirs.set((output, scratch))
+        try:
+            assert (await action(outside)).state == "error"
+            assert (await action("report.json")).state == "success"
+            assert (await action(str(scratch / "test.log"))).state == "success"
+        finally:
+            module._task_write_dirs.reset(token)
+        assert (await action(outside)).state == "success"
+
+    asyncio.run(run())
+    assert calls == ["report.json", str(scratch / "test.log"), outside]
+
+
+@pytest.mark.parametrize("tool_name", ["teamharness__task", "mcp__teamharness__task", None])
+def test_managed_phase_uses_the_registered_task_tool(tool_name):
+    module = load_plugin()
+    injected = []
+    removed = []
+
+    async def schemas():
+        names = ["teamharness__taskflow", "execute_shell_command"]
+        if tool_name:
+            names.append(tool_name)
+        return [{"function": {"name": name}} for name in names]
+
+    async def remove(name):
+        removed.append(name)
+
+    toolkit = types.SimpleNamespace(get_tool_schemas=schemas, remove_tool=remove)
+    context = types.SimpleNamespace(
+        agent=types.SimpleNamespace(toolkit=toolkit),
+        inject_context=lambda text, **kwargs: injected.append(text),
+    )
+    if not tool_name:
+        with pytest.raises(ValueError, match="Task tool is unavailable"):
+            asyncio.run(module._prepare_public_task_event(context, {"kind": "handoff"}))
+        assert not injected and not removed
+        return
+
+    asyncio.run(module._prepare_public_task_event(context, {"kind": "handoff"}))
+    assert any(f"`{tool_name}`" in text for text in injected)
+    assert removed == ["teamharness__taskflow", "execute_shell_command"]
+
+
+def test_roster_injection_cannot_replace_the_shared_intake_protocol(monkeypatch):
+    from types import SimpleNamespace
+    module = load_plugin()
+    monkeypatch.delenv("TEAMHARNESS_COORDINATION_URL", raising=False)
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller:8090")
+    def read(path):
+        return ({"teams":[{"name":"team","leaderName":"lead"}]} if path=="teams" else
+                {"workers":[{"name":"lead","matrixUserID":"@lead:test"}]})
+    monkeypatch.setattr(module,"_controller_json",read)
+    injected = []
+    ctx = SimpleNamespace(extras={}, inject_context=lambda text, **kwargs: injected.append(text))
+    asyncio.run(module._prepare_manager_roster(ctx))
+    roster = ctx.extras["teamharness_manager_roster_context"]
+    assert injected == [roster]
+    assert '"leader": "lead"' in roster
+    assert "spec:<complete original" not in roster
+    assert "protocol and registered" not in roster

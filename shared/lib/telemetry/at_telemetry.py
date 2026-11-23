@@ -15,7 +15,6 @@ from urllib.parse import unquote
 
 from opentelemetry import baggage, context, trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.openai import OpenAIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan, SpanLimits, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
@@ -43,8 +42,11 @@ def sanitize(value):
             decoded = None
         if isinstance(decoded, (dict, list)):
             return json.dumps(sanitize(decoded), ensure_ascii=False, default=str)
-        for key, secret in os.environ.items():
-            if _secret_key.search(key) and len(secret) >= 8:
+        for key in os.environ:
+            if not _secret_key.search(key):
+                continue
+            secret = os.environ.get(key, "")
+            if len(secret) >= 8:
                 value = value.replace(secret, "[REDACTED]")
                 if key in ("OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"):
                     for header in secret.split(","):
@@ -225,8 +227,13 @@ def turn_fields(session_id, *, user_id="", metadata=None):
             fields["agentteams.message.received_at_ns"] = value
         if key == "execution_generation" and isinstance(value, int):
             fields["agentteams.execution.generation"] = value
-        if key in ("room_id", "task_id", "team_id", "project_id", "event_id") and value:
+        if key in ("room_id", "task_id", "team_id", "project_id", "event_id", "coordination_id") and value:
             fields[f"agentteams.{key[:-3] if key.endswith('_id') else key}.id"] = str(value)
+    coordination = (metadata or {}).get("teamharness_coordination")
+    if isinstance(coordination, dict) and coordination.get("id"):
+        fields["agentteams.coordination.id"] = str(coordination["id"])
+        if coordination.get("kind"):
+            fields["agentteams.coordination.kind"] = str(coordination["kind"])
     received = fields.get("agentteams.message.received_at_ns")
     if received:
         fields["agentteams.message.dispatch_delay_ms"] = max(0, (time.time_ns() - int(received)) / 1_000_000)
@@ -426,7 +433,14 @@ def configure(*, local_only=False):
         provider.add_span_processor(RuntimeLogProcessor())
     os.environ["TRACELOOP_TRACE_CONTENT"] = os.getenv("AGENTTEAMS_OTEL_CAPTURE_CONTENT", "true")
     if os.getenv("AGENTTEAMS_OTEL_RUNTIME") != "qwenpaw":
-        OpenAIInstrumentor().instrument()
+        try:
+            from opentelemetry.instrumentation.openai import OpenAIInstrumentor
+        except ModuleNotFoundError as error:
+            # Native runtimes can use the shared tracing helpers without the OpenAI SDK.
+            if error.name != "openai":
+                raise
+        else:
+            OpenAIInstrumentor().instrument()
     from at_runtime_adapters import install
     install()
     _provider = provider

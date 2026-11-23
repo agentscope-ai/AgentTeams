@@ -1,5 +1,8 @@
 import json
+import errno
+import io
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +16,53 @@ from runtime_observability import event, redact, write_record
 
 
 class RuntimeLogTests(unittest.TestCase):
+    def test_file_failure_propagates_without_stderr_under_shared_lock(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'AGENTTEAMS_LOG_DIR': tmp}):
+            stderr = io.StringIO()
+            with patch('sys.stderr', stderr), patch('logging.StreamHandler.flush',
+                    side_effect=OSError(errno.ENOSPC, 'disk full')):
+                with self.assertRaises(OSError) as raised:
+                    write_record('runtime.log', 'test')
+            self.assertEqual(raised.exception.errno, errno.ENOSPC)
+            self.assertEqual(stderr.getvalue(), '')
+            write_record('runtime.log', 'recovered')
+            self.assertIn('recovered', (Path(tmp) / 'runtime.log').read_text())
+
+    def test_disk_full_cannot_deadlock_child_pipe_and_supervisor_log_lock(self):
+        child = '''
+import errno, os
+from pathlib import Path
+from unittest.mock import patch
+from runtime_observability import event
+Path(os.environ['TEST_CHILD_PID']).write_text(str(os.getpid()))
+def fail_flush(*args):
+    print('holding-log-lock', flush=True)
+    raise OSError(errno.ENOSPC, 'disk full ' + 'x' * 262144)
+with patch('logging.StreamHandler.flush', fail_flush):
+    event('test.disk_full')
+print('child-finished', flush=True)
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            process = subprocess.Popen([sys.executable, str(ROOT / 'shared/lib/runtime_supervisor.py'),
+                '--runtime', 'codex', '--', sys.executable, '-c', child],
+                env={**os.environ, 'AGENTTEAMS_LOG_DIR': tmp, 'TEST_CHILD_PID': str(Path(tmp) / 'child.pid')},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                stdout, stderr = process.communicate(timeout=8)
+            except subprocess.TimeoutExpired:
+                pid_file = Path(tmp) / 'child.pid'
+                if pid_file.exists():
+                    try:
+                        os.killpg(int(pid_file.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.kill()
+                process.communicate(timeout=5)
+                self.fail('child stderr blocked behind supervisor waiting for the shared log lock')
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertIn('child-finished', stdout)
+            self.assertNotIn('--- Logging error ---', stdout + stderr)
+
     def test_redacts_environment_and_json_credentials(self):
         with patch.dict(os.environ, {'MODEL_API_KEY': 'secret-12345'}):
             result = redact('secret-12345 Bearer abcdef {"access_token":"abc123", "password":"pass"}')

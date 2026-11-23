@@ -1,0 +1,86 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+// The real Python Recovery client crosses the real Go execution API. Only the
+// object storage backend and mc upload transport use isolated test fixtures.
+func TestNativeRecoveryPythonJournalRoundTrip(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("Python native bridge unavailable")
+	}
+	store := ossfake.NewMemory()
+	project := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-dev", "status": "in_progress", "execution": map[string]any{"generation": 1, "instance_id": "instance", "process_id": "process", "state": "active"}}))
+	recovery := NewTaskRecoveryHandler(project, ServerDeps{})
+	recovery.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
+		return "instance", "openclaw", nil
+	}
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/tasks/recoverable", func(w http.ResponseWriter, r *http.Request) { recovery.ListRecoverableTasks(w, withCaller(r, caller)) })
+	mux.HandleFunc("POST /api/v1/tasks/{id}/execution", func(w http.ResponseWriter, r *http.Request) { recovery.UpdateExecution(w, withCaller(r, caller)) })
+	mux.HandleFunc("POST /fixture-artifact", func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		if err := store.PutObject(r.Context(), r.Header.Get("X-Fixture-Key"), data); err != nil {
+			t.Error(err)
+			w.WriteHeader(500)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	token := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(token, []byte("own-fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	library, err := filepath.Abs("../../../shared/lib")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `import os,sys,urllib.request
+from unittest.mock import patch
+sys.path.insert(0,sys.argv[1])
+from task_recovery import Recovery,RecoveryConflict
+r=Recovery()
+i=dict(task_id='t1',team_id='alpha-team',generation=1,instance_id='instance',process_id='process')
+op=r.begin_tools(i,[dict(id='call',name='exec',arguments=dict(command='own synthetic command'))])
+assert r.current('t1','alpha-team')['execution']['state']=='needs_verification'
+try:
+ r.tools_current(i)
+ raise AssertionError('normal admission passed unverified side effects')
+except RecoveryConflict:
+ pass
+def save(command,**kwargs):
+ key=command[-1].removeprefix('storage/')
+ req=urllib.request.Request(os.environ['AGENTTEAMS_CONTROLLER_URL']+'/fixture-artifact',data=kwargs['input'],headers={'X-Fixture-Key':key},method='POST')
+ with urllib.request.urlopen(req) as response: assert response.status==200
+with patch('task_recovery.subprocess.run',side_effect=save):
+ r.finish_tools(i,op,[dict(id='call',content=[dict(type='text',text='confirmed output')])])
+assert r.tools_current(i)['execution']['state']=='active'
+`
+	command := exec.Command(python, "-c", script, library)
+	command.Env = append(os.Environ(), "AGENTTEAMS_PROCESS_ID=process", "AGENTTEAMS_CONTROLLER_URL="+server.URL, "AGENTTEAMS_AUTH_TOKEN_FILE="+token, "AGENTTEAMS_STORAGE_PREFIX=storage")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("Python/Go journal boundary: %v\n%s", err, output)
+	}
+	data, _ := store.GetObject(t.Context(), taskMetaKey)
+	var task map[string]json.RawMessage
+	_ = json.Unmarshal(data, &task)
+	var execution taskExecution
+	_ = json.Unmarshal(task["execution"], &execution)
+	if execution.State != "active" || execution.Checkpoint.Operation.State != "verified" {
+		t.Fatalf("unfinished checkpoint: %+v", execution)
+	}
+}

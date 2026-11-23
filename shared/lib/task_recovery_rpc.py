@@ -1,6 +1,7 @@
 """JSON/stdin bridge for native Harnesses using the shared recovery contract."""
 import json
 import sys
+import subprocess
 
 from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable, enabled
 
@@ -24,7 +25,25 @@ def native_reply_plan(checkpoint, request, bind):
     return {'mode': mode, 'reply_txn': checkpoint['reply_txn'], 'legacy': not checkpoint.get('reply_attempt')}
 
 
+def canonical_receipts(admission, task_id):
+    if admission.get('action') not in {'create', 'plan', 'submit', 'accept', 'reject', 'complete'} or not admission.get('result'):
+        return []
+    try:
+        process = subprocess.run([sys.executable, '/opt/agentteams/plugins/teamharness/mcp/common/task_native.py'],
+            input=json.dumps({'operation': 'canonical_receipts', 'admission': admission, 'taskId': task_id}),
+            capture_output=True, text=True, timeout=20, check=True)
+        result = json.loads(process.stdout)
+        if not isinstance(result.get('receipts'), list):
+            raise ValueError('invalid canonical receipt projection')
+        return result['receipts']
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise RecoveryUnavailable('Canonical receipt projection unavailable; do not enter normal inference') from error
+
+
 def execute(request):
+    if request.get('action') == 'tool_policy':
+        from task_operation import tool_policy
+        return tool_policy(request.get('registration'))
     if not enabled():
         raise RecoveryConflict('Worker process recovery is not configured')
     recovery = Recovery(device_delivery=request.get("device_delivery") is True)
@@ -136,6 +155,22 @@ def execute(request):
                 'checkpoint_digest': Recovery.digest(task['execution'].get('checkpoint'))}
     identity = request['identity']
     task = owned(recovery, identity)
+    if action == 'admit_tools':
+        from task_operation import admit
+        task = recovery.tools_current(identity)
+        admit(task['execution'].get('checkpoint'))
+        receipts = []
+        if task.get('task_plan_id'):
+            canonical = recovery.request('POST', 'tasks/native-operations', {
+                'mode': 'admit', 'arguments': {'action': 'get', 'taskId': identity['task_id'], 'team': identity['team_id']}})
+            if canonical.get('mode') != 'admitted':
+                raise RecoveryConflict('Canonical Task outcome requires authoritative verification; do not replay')
+            receipts = canonical_receipts(canonical, identity['task_id'])
+        return {'task': task, 'checkpoint_digest': Recovery.digest(task['execution'].get('checkpoint')), 'receipts': receipts}
+    if action == 'begin_tools':
+        return recovery.begin_tools(identity, request['calls'])
+    if action == 'finish_tools':
+        return recovery.finish_tools(identity, request['operation_id'], request['results'])
     if action == 'current':
         return {'task': task, 'checkpoint_digest': Recovery.digest(task['execution'].get('checkpoint'))}
     if action == 'plan_reply':

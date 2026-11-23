@@ -159,29 +159,126 @@ class MessageExecution:
                                     Recovery.digest(native), int(time.time()) + 86400)
 
 
-async def guarded_tool(matrix, turn, call, next_handler, kwargs):
-    """Only the final successful AgentScope ToolResponse proves completion."""
+async def canonical_registration(agent, call, server_path):
+    """Bind delegation to the registered native MCP session and builtin file."""
+    from pathlib import Path
+    import sys
+    from agentscope.mcp import MCPClient
+    from agentscope.mcp._config import StdioMCPConfig
+    from agentscope.tool import MCPTool
+
+    toolkit = getattr(agent, 'toolkit', None)
+    if toolkit is None:
+        return None
+    tool = await toolkit.get_tool(call.name)
+    if type(tool) is not MCPTool:
+        # QwenPaw 2.2 exposes builtin MCP through the native Driver adapter,
+        # rather than AgentScope's legacy MCPTool/tool_groups.mcps registry.
+        from qwenpaw.drivers.adapters.agentscope_tool import DriverCapabilityTool
+        from qwenpaw.drivers.capabilities import parse_capability_id
+        from qwenpaw.drivers.handlers.mcp import MCPDriverHandler
+        from qwenpaw.drivers.handlers.mcp_stateful_client import StdIOStatefulClient
+        from qwenpaw.drivers.manager import DriverManager
+
+        if type(tool) is not DriverCapabilityTool:
+            return None
+        invoker = tool._invoker
+        manager = getattr(invoker, '__self__', None)
+        if (type(manager) is not DriverManager
+                or getattr(invoker, '__func__', None) is not DriverManager.invoke_capability):
+            return None
+        protocol, driver, kind, action, name = parse_capability_id(tool._capability.capability_id)
+        if (protocol, kind, action, name) != ('mcp', 'tool', 'invoke', 'task'):
+            return None
+        handler = manager._handlers.get(driver)
+        if type(handler) is not MCPDriverHandler:
+            return None
+        client = handler._client
+        if (type(client) is not StdIOStatefulClient or not client.is_connected
+                or client.session is None or not handler.card.enabled):
+            return None
+        params = client.server_params
+        endpoint = handler.card.endpoint
+        if (endpoint.get('transport', 'stdio') != 'stdio'
+                or endpoint.get('command') != params.command
+                or endpoint.get('args', []) != params.args
+                or params.command not in {'python', 'python3', sys.executable,
+                    '/opt/venv/qwenpaw/bin/python', '/opt/venv/qwenpaw/bin/python3'}
+                or len(params.args) != 1
+                or Path(params.args[0]).resolve() != Path(server_path).resolve()):
+            return None
+        return {'origin': 'agentteams.common.task_native',
+                'entrypoint': '/opt/agentteams/plugins/teamharness/mcp/common/task_native.py'}
+    if getattr(tool._tool, 'name', None) != 'task':
+        return None
+    for group in toolkit.tool_groups:
+        for client in group.mcps:
+            if not isinstance(client, MCPClient) or not client.is_stateful:
+                continue
+            config = client.mcp_config
+            args = getattr(config, 'args', None)
+            if (getattr(config, 'command', None) not in {'python', 'python3', sys.executable,
+                    '/opt/venv/qwenpaw/bin/python', '/opt/venv/qwenpaw/bin/python3'}
+                    or not isinstance(config, StdioMCPConfig) or not isinstance(args, list)
+                    or len(args) != 1 or Path(args[0]).resolve() != Path(server_path).resolve()
+                    or client._session is None or tool._session is not client._session):
+                continue
+            return {'origin': 'agentteams.common.task_native',
+                    'entrypoint': '/opt/agentteams/plugins/teamharness/mcp/common/task_native.py'}
+    return None
+
+
+async def read_only_registration(agent, call):
+    """Recognize only the installed native file reader, including its guard."""
+    from agentscope.tool import FunctionTool
+    from qwenpaw.agents.tools.file_io import read_file
+    from qwenpaw.governance.tool_adapter import _policy_tool_call
+
+    toolkit = getattr(agent, 'toolkit', None)
+    tool = await toolkit.get_tool(call.name) if toolkit else None
+    return (isinstance(tool, FunctionTool) and type(tool).call is FunctionTool.call
+            and type(tool).__call__ in {FunctionTool.__call__, _policy_tool_call}
+            and tool._func is read_file)
+
+
+async def guarded_tool(owner, turn, call, next_handler, kwargs, *, registration=None, read_only=False):
+    """Save the terminal response of the exact admitted SDK call."""
     from agentscope.tool import ToolResponse
+    from task_operation import tool_policy
 
     identity = turn["identity"]
     async with turn["lock"]:
+        if tool_policy(registration)['mode'] == 'delegate':
+            # The public Task bridge owns its transaction and unknown fence.
+            # A generic started operation would block its own submit call.
+            async for item in next_handler(**kwargs):
+                yield item
+            return
         call_id = call.id
         arguments = json.loads(call.input) if isinstance(call.input, str) else call.input
-        operation = await asyncio.to_thread(matrix.message_begin_tools, identity, [
-            {"id": call_id, "name": call.name, "arguments": arguments}])
+        message = 'event_key' in identity
+        begin = owner.message_begin_tools if message else owner.begin_tools
+        finish = owner.message_finish_tools if message else owner.finish_tools
+        request = {"id": call_id, "name": call.name, "arguments": arguments}
+        if read_only:
+            request["read_only"] = True
+        operation = await asyncio.to_thread(begin, identity, [request])
         final = None
         async for item in next_handler(**kwargs):
             if final is not None:
                 raise RecoveryConflict("Native tool emitted output after its final result")
             if isinstance(item, ToolResponse):
-                if item.state != "success":
+                if item.state != "success" and not (read_only and item.state == "error"):
                     raise RecoveryConflict("Native tool outcome requires verification")
                 final = item
             else:
                 yield item
         if final is None:
             raise RecoveryConflict("Native tool closed without a confirmed result")
-        saved = await asyncio.to_thread(matrix.message_finish_tools, identity, operation, [
-            {"id": call_id, "content": final.model_dump(mode="json")["content"]}])
-        turn["checkpoint_digest"] = saved["checkpoint_digest"]
+        result = {"id": call_id, "content": final.model_dump(mode="json")["content"]}
+        if final.state == "error":
+            result.update(effect="none", status="error")
+        saved = await asyncio.to_thread(finish, identity, operation, [result])
+        turn["checkpoint_digest"] = (saved["checkpoint_digest"] if message else
+                                      Recovery.digest(saved['execution'].get('checkpoint')))
         yield final

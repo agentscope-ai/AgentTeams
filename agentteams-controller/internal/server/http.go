@@ -101,6 +101,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/coordination/events", mw.Authenticate(http.HandlerFunc(s.coordination.PostEvent)))
 	mux.Handle("POST /api/v1/teams/{name}/task-rooms/{roomId}/join-humans", mw.Authenticate(http.HandlerFunc(s.coordination.JoinTaskRoomHumans)))
 	mux.Handle("GET /api/v1/coordination/events/{id}", mw.Authenticate(http.HandlerFunc(s.coordination.GetEvent)))
+	mux.Handle("POST /api/v1/coordination/events/{id}/phase", mw.Authenticate(http.HandlerFunc(s.coordination.NativePhase)))
 
 	// Container-level telemetry is restricted to administrator/Manager
 	// identities; scoped Humans, Leaders and Workers cannot read host logs.
@@ -303,8 +304,13 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 
 	// --- Projects (workflow inspection; read from object storage) ---
 	projh := NewProjectHandler(deps.Client, deps.Namespace, deps.OSS, deps.MatrixClient)
+	projh.coordination = s.coordination
+	s.coordination.taskNotifications = projh
 	recovery := NewTaskRecoveryHandler(projh, deps)
 	projh.recovery = recovery
+	mux.Handle("GET /api/v1/task-deliveries", mw.Authenticate(http.HandlerFunc(s.coordination.ListTaskDeliveries)))
+	mux.Handle("POST /api/v1/tasks/native-operations", mw.Authenticate(http.HandlerFunc(projh.NativeTaskOperation)))
+	mux.Handle("POST /api/v1/tasks", mw.Authenticate(http.HandlerFunc(projh.CreateTask)))
 	mux.Handle("GET /api/v1/tasks/recoverable", mw.Authenticate(http.HandlerFunc(recovery.ListRecoverableTasks)))
 	mux.Handle("POST /api/v1/tasks/{id}/execution", mw.Authenticate(http.HandlerFunc(recovery.UpdateExecution)))
 	workerMatrix := NewWorkerMatrixHandler(deps, recovery)
@@ -540,6 +546,16 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// enforces the team boundary (the middleware cannot resolve task -> team)
 	// and refuses to release the Controller's cancellation.
 	taskNameFn := func(r *http.Request) string { return r.PathValue("id") }
+	mux.Handle("GET /api/v1/tasks/{id}", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskResource)))
+	mux.Handle("GET /api/v1/tasks/{id}/files", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskFiles)))
+	mux.Handle("POST /api/v1/tasks/{id}/files", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PublishTaskFile)))
+	mux.Handle("POST /api/v1/tasks/{id}/complete", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.CompleteTask)))
+	mux.Handle("POST /api/v1/tasks/{id}/cancel", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.CancelMainTask)))
+	mux.Handle("POST /api/v1/tasks/{id}/accept", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(projh.ReviewTask(true)))
+	mux.Handle("POST /api/v1/tasks/{id}/plan", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PlanTask)))
+	mux.Handle("POST /api/v1/tasks/{id}/reject", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(projh.ReviewTask(false)))
+	mux.Handle("POST /api/v1/tasks/{id}/submit", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.SubmitTask)))
+	mux.Handle("POST /api/v1/tasks/{id}/begin", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.BeginTask)))
 	mux.Handle("GET /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskMeta)))
 	mux.Handle("PUT /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PutTaskMeta)))
 

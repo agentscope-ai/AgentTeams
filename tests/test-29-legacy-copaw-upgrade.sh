@@ -111,7 +111,19 @@ _get_higress_consumers_or_fail() {
 # ============================================================
 log_section "Pull Fixed Legacy CoPaw Image"
 
-if docker pull "${LEGACY_IMAGE}" >/dev/null 2>&1; then
+LEGACY_PULL_OK=false
+for attempt in 1 2 3; do
+    if docker pull "${LEGACY_IMAGE}"; then
+        LEGACY_PULL_OK=true
+        break
+    fi
+    if [ "${attempt}" -lt 3 ]; then
+        log_info "Legacy CoPaw image pull attempt ${attempt} failed; retrying"
+        sleep 5
+    fi
+done
+
+if [ "${LEGACY_PULL_OK}" = "true" ]; then
     log_pass "Legacy CoPaw image pulled: ${LEGACY_IMAGE}"
 elif [ "${COPAW_LEGACY_IMAGE_OPTIONAL:-0}" = "1" ]; then
     # Fork PR runs receive no registry credentials and may be unable to reach

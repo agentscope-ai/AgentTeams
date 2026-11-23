@@ -89,6 +89,7 @@ type MemberContext struct {
 	TeamName    string // effective Team identity used for scoped storage access
 	Namespace   string
 	Role        MemberRole
+	AgentRole   MemberRole // registered collaboration role; infrastructure Role remains independent
 	Spec        v1beta1.WorkerSpec
 
 	// TeamSubagentModel is the Team.spec.subagentModel default for this
@@ -652,6 +653,12 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	// doc). Both Worker and Team paths fill this boolean with their own
 	// equivalence check so this phase stays agnostic of the upstream CR.
 	specChanged := m.SpecChanged
+	// A conflicting status write can lose the hash recorded at container creation.
+	// Compare observed collaboration identity so a stale Docker process cannot
+	// adopt the desired hash while still dispatching tools with the old role.
+	if role := m.collaborationRole().String(); role != "" && result.AgentRole != "" {
+		specChanged = specChanged || result.AgentRole != role || result.TeamName != m.TeamName
+	}
 	if specChanged && result.Status != backend.StatusNotFound {
 		logger.Info("spec changed, deleting stale backend resource before recreate",
 			"name", m.Name,
@@ -998,6 +1005,13 @@ func refreshSandboxSetWorkerDeps(ctx context.Context, d MemberDeps, m MemberCont
 	return requeueAfter, message, err
 }
 
+func (m MemberContext) collaborationRole() MemberRole {
+	if m.AgentRole != "" {
+		return m.AgentRole
+	}
+	return m.Role
+}
+
 func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, prov *service.WorkerProvisionResult) (map[string]string, error) {
 	if d.EnvBuilder == nil {
 		return nil, fmt.Errorf("worker env builder is not configured")
@@ -1011,11 +1025,12 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 	if m.ModelProviderInfo != nil && m.ModelProviderInfo.IntranetURL != "" {
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
 	}
-	workerEnv["AGENTTEAMS_WORKER_ROLE"] = m.Role.String()
-	workerEnv["AGENTTEAMS_AGENT_ROLE"] = m.Role.String()
+	agentRole := m.collaborationRole()
+	workerEnv["AGENTTEAMS_WORKER_ROLE"] = agentRole.String()
+	workerEnv["AGENTTEAMS_AGENT_ROLE"] = agentRole.String()
 	workerEnv["AGENTTEAMS_TEAM_NAME"] = m.TeamName
 	runtime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
-	if d.ObservabilityReader != nil && (runtime == "qwenpaw" || runtime == "hermes" || runtime == "openclaw") {
+	if d.ObservabilityReader != nil && observability.SupportsRuntime(runtime) {
 		config, _, err := observability.Read(ctx, d.ObservabilityReader, m.Namespace)
 		if err != nil {
 			return nil, fmt.Errorf("read Worker observability configuration: %w", err)

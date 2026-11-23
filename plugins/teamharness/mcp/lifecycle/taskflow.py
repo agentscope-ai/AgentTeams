@@ -913,6 +913,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # from the authoritative copy (a stale cache would drop a peer's
             # freeze or approval record). Fail closed on a failed pull.
             task = _load_authoritative_task(arguments, task_id)
+            if task.get("task_kind") == "execution" and task.get("task_plan_id"):
+                raise ValueError("Use Task submit or agt task submit for this Controller-planned execution.")
             _require_task_assignee(task)
             _require_task_mutable(arguments, task, task_id, action, to_status="submitted")
             # Controller-backed Workers may submit only after a durable ACK.

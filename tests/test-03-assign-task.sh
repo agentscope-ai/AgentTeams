@@ -1,7 +1,7 @@
 #!/bin/bash
 # test-03-assign-task.sh - Case 3: Assign task in Room, Worker completes
-# Verifies: Manager acknowledges the current task, and Worker publishes the
-#           requested README with its unique task marker in shared storage.
+# Verifies: Manager sends the current task to the Worker, and the Worker
+#           publishes the README with its unique task marker in shared storage.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/test-helpers.sh"
@@ -38,10 +38,13 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
 
 # Alice container should be running from test-02; wait to ensure it's up before snapshot
 wait_for_worker_container "alice" 60
+ALICE_ROOM=$(get_worker_room_id "alice")
+assert_not_empty "${ALICE_ROOM}" "Alice's registered Worker room found"
 METRICS_BASELINE=$(snapshot_baseline "alice")
 TASK_ID="test03-$(date +%s)-$$"
+RESULT_PATH="shared/test-fixtures/${TASK_ID}/README.md"
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Please assign Alice task ${TASK_ID}: Create shared/tasks/${TASK_ID}/README.md for a hello-world project. Include project name, description, usage instructions, and the exact marker ${TASK_ID}. Use the file-sharing tools supported by Alice's runtime to publish the file to shared storage and verify the remote file before reporting completion. Delegate the work to Alice and mention ${TASK_ID} in your acknowledgement."
+    "Send this one-line request verbatim using Matrix target room:${ALICE_ROOM}, then acknowledge with marker ${TASK_ID}. This is a standalone Worker request with no separate Task record. Message: @alice:${TEST_MATRIX_DOMAIN} Write a hello-world README with name, description, usage and marker ${TASK_ID} at ${RESULT_PATH} in your workspace. Call the TeamHarness filesync tool with action=push and path=${RESULT_PATH}, then with action=stat and the same path. If the native tool is unavailable, run: mcporter call --stdio python3 --stdio-arg /opt/agentteams/plugins/teamharness/mcp/server.py filesync --args '{\"action\":\"push\",\"path\":\"${RESULT_PATH}\"}' --output json. Repeat with action stat. Use the TeamHarness shared storage result to verify completion. Bulk worker workspace sync writes to a private location and cannot deliver this file."
 
 log_info "Waiting for Manager to process task..."
 REPLY=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" "${TASK_ID}" 180)
@@ -53,13 +56,43 @@ log_section "Verify Task in MinIO"
 minio_setup
 
 log_info "Waiting for this task's actual README in MinIO..."
-RESULT_PATH="shared/tasks/${TASK_ID}/README.md"
 if minio_wait_for_file "${RESULT_PATH}" 300 "${TASK_ID}"; then
     log_pass "Task README exists in shared storage"
     RESULT=$(minio_read_file "${RESULT_PATH}")
     assert_contains "${RESULT}" "${TASK_ID}" "Task README contains the current task marker"
 else
     log_fail "Task README missing from shared storage"
+fi
+
+ALICE_USER="@alice:${TEST_MATRIX_DOMAIN}"
+assignment_received() {
+    local token="$1" room="$2" require_mention="$3"
+    matrix_read_messages "${token}" "${room}" 50 | jq -e \
+        --arg worker "${ALICE_USER}" --arg manager "${MANAGER_USER}" \
+        --arg marker "${TASK_ID}" --arg path "${RESULT_PATH}" \
+        --argjson require_mention "${require_mention}" '
+        any(.chunk[]?; .type == "m.room.message" and .sender == $manager and
+            (if $require_mention then ((.content["m.mentions"].user_ids // []) | index($worker)) != null else true end) and
+            ((.content["org.agentteams.report"].text // .content.body // "") | contains($marker) and contains($path)))' >/dev/null
+}
+
+if assignment_received "${ADMIN_TOKEN}" "${ALICE_ROOM}" true; then
+    log_pass "Manager assigned the task in Alice's registered Worker room"
+else
+    # The standalone message tool also supports user targets, which resolve to
+    # a two-member DM. Verify its event as Alice because the admin is not a member.
+    ALICE_TOKEN=$(docker exec "$(worker_container_name alice)" printenv AGENTTEAMS_WORKER_MATRIX_TOKEN 2>/dev/null || true)
+    ALICE_MANAGER_DM=""
+    if [ -n "${ALICE_TOKEN}" ]; then
+        ALICE_MANAGER_DM=$(matrix_find_dm_room "${ALICE_TOKEN}" "${MANAGER_USER}" 2>/dev/null || true)
+    fi
+    if [ -n "${ALICE_MANAGER_DM}" ] && [ "${ALICE_MANAGER_DM}" != "${DM_ROOM}" ] && \
+        [ "${ALICE_MANAGER_DM}" != "${ALICE_ROOM}" ] && \
+        assignment_received "${ALICE_TOKEN}" "${ALICE_MANAGER_DM}" false; then
+        log_pass "Manager assigned the task in its direct room with Alice"
+    else
+        log_fail "No task assignment reached Alice's registered Worker room or direct room with Manager"
+    fi
 fi
 
 log_section "Collect Metrics"

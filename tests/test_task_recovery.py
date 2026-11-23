@@ -184,5 +184,13 @@ class RecoveryTests(unittest.TestCase):
         save.assert_not_called()
 
 
+
+    def test_managed_resume_uses_common_protocol_without_changing_legacy_guidance(self):
+        managed = {**self.task, 'task_plan_id': 'current-plan'}
+        self.assertIn('common task protocol', Recovery.resume_text(managed))
+        self.assertNotIn('taskflow.checkpoint_task', Recovery.resume_text(managed))
+        self.assertIn('taskflow.checkpoint_task', Recovery.resume_text(self.task))
+
+
 if __name__ == "__main__":
     unittest.main()

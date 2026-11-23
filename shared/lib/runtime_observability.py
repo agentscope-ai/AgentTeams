@@ -7,9 +7,17 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 
 _lock = threading.Lock()
+
+
+class _RuntimeFileHandler(RotatingFileHandler):
+    def handleError(self, record):
+        # stderr feeds the supervisor, which also needs the file lock. Let callers
+        # handle disk errors after releasing it instead of blocking that pipe.
+        raise
 
 
 def redact(text):
@@ -46,7 +54,7 @@ def write_record(filename, text):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     with _lock, (directory / '.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        handler = RotatingFileHandler(directory / filename,
+        handler = _RuntimeFileHandler(directory / filename,
             maxBytes=int(os.getenv('AGENTTEAMS_LOG_MAX_BYTES', str(10 * 1024 * 1024))),
             backupCount=int(os.getenv('AGENTTEAMS_LOG_BACKUPS', '3')), encoding='utf-8')
         os.chmod(directory / filename, 0o600)
@@ -65,7 +73,8 @@ def event(name, **fields):
               'event': name, **fields}
     try:
         serialized = redact(json.dumps(record, ensure_ascii=False))
-        print('[agentteams-event] ' + serialized, flush=True)
+        # Native subprocesses reserve stdout for protocol replies.
+        print('[agentteams-event] ' + serialized, file=sys.stderr, flush=True)
         write_record('events.jsonl', serialized)
         states = {'startup.begin': 'starting', 'startup.stage': 'starting', 'runtime.launch': 'starting',
                   'runtime.live': 'live', 'runtime.ready': 'ready', 'startup.timeout': 'timeout', 'startup.failed': 'failed',

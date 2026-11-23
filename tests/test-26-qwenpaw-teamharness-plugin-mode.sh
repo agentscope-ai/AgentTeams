@@ -927,8 +927,8 @@ _assert_runtime_yaml_has_no_secret_values "${LEADER_RUNTIME_YAML}${WORKER_RUNTIM
 
 LEADER_ENV="$(_container_env "${LEADER_CONTAINER}")"
 WORKER_ENV="$(_container_env "${WORKER_CONTAINER}")"
-assert_eq "standalone" "$(_env_value "${LEADER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Leader Worker runtime role remains standalone"
-assert_eq "standalone" "$(_env_value "${WORKER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Member Worker runtime role remains standalone"
+assert_eq "team_leader" "$(_env_value "${LEADER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Leader runtime receives the team_leader role"
+assert_eq "worker" "$(_env_value "${WORKER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Member runtime receives the worker role"
 
 # ============================================================
 # Section 4: QwenPaw plugin-mode install and TeamHarness assets
@@ -1409,8 +1409,10 @@ Required leader steps:
 Task spec to delegate:
 # Task: Write TeamHarness plugin-mode readiness note
 
-First call taskflow ack_task for task ${TASK_ID}. Use the returned spec as the
-execution contract.
+First call taskflow ack_task for task ${TASK_ID}. Continue only when the
+returned acknowledgement has ok=true and synced=true. If acknowledgement
+sync failed, retry the same ack_task. Use the returned spec as the execution
+contract.
 
 Create shared/tasks/${TASK_ID}/workspace/readiness-note.txt with this exact
 line:
@@ -1423,9 +1425,11 @@ Then call taskflow submit_task with status SUCCESS, a summary containing
 ${MARKER}, and both shared/tasks/${TASK_ID}/result.md and
 shared/tasks/${TASK_ID}/workspace/readiness-note.txt as deliverables.
 
-After submit_task succeeds, its automatic completion notification
-must reach the same Team Room and notify the leader. Do not send a duplicate
-completion notification.
+Treat submission as complete only when taskflow submit_task returns
+ok=true and synced=true. If shared-storage sync fails, retry that same call
+with the same status, summary and ordered deliverables. Do not switch task
+tools or report completion based on a local state. The successful submission
+automatically notifies the leader in the Team Room.
 EOF
 )
 

@@ -230,7 +230,7 @@ def _load_mcp_server(module_name: str):
     # bundle's package.
     bound = sys.modules.get("mcp")
     bound_file = str(getattr(bound, "__file__", "") or "")
-    if bound is not None and not bound_file.startswith(str(BUNDLE / "mcp")):
+    if bound is not None and not Path(bound_file).resolve().is_relative_to((BUNDLE / "mcp").resolve()):
         for name in [n for n in sys.modules if n == "mcp" or n.startswith("mcp.")]:
             del sys.modules[name]
     spec = importlib.util.spec_from_file_location(module_name, MCP_SERVER_PY)

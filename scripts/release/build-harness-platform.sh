@@ -39,6 +39,9 @@ case "$runtime" in
   openhuman) docker run --rm --platform "$platform" --entrypoint openhuman-core "$image" --help ;;
   opencode)
     docker run --rm --platform "$platform" --entrypoint python3 "$image" -c 'import agentteams_opencode.bridge'
+    docker run --rm --platform "$platform" --network none --env AGENTTEAMS_OTEL_ENABLED=false --env XDG_DATA_HOME=/tmp/at-search-fresh --entrypoint bun \
+      -v "$PWD/opencode-harness/tests/image-search-smoke.ts:/opt/agentteams/opencode/tests/image-search-smoke.ts:ro" \
+      "$image" /opt/agentteams/opencode/tests/image-search-smoke.ts
     docker run --rm --platform "$platform" --entrypoint bun "$image" -e 'import { OpenCode } from "@opencode/sdk"; const host=await OpenCode.create({database:{path:":memory:"},models:{fetch:false},config:{project:false,content:"{}"}}); await host.close();'
     ;;
   codex)

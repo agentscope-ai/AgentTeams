@@ -16,9 +16,16 @@ func TestOpenCodeRuntimeContract(t *testing.T) {
 }
 
 func TestOpenCodeRequiresItsOwnImage(t *testing.T) {
-	backend := NewDockerBackend(DockerConfig{WorkerImage: "openclaw:latest"}, "agentteams-worker-")
-	_, err := backend.Create(context.Background(), CreateRequest{Name: "test", Runtime: "opencode"})
-	if err == nil || !strings.Contains(err.Error(), "OPENCODE_WORKER_IMAGE") {
-		t.Fatalf("must fail before Docker calls rather than launch another Harness: %v", err)
+	for name, create := range map[string]func(context.Context, CreateRequest) (*WorkerResult, error){
+		"docker":  NewDockerBackend(DockerConfig{WorkerImage: "openclaw:latest"}, "agentteams-worker-").Create,
+		"k8s":     NewK8sBackendWithClient(newFakeK8sCoreClient(), K8sConfig{Namespace: "agentteams", WorkerImage: "openclaw:latest"}, "agentteams-worker-", nil).Create,
+		"sandbox": (&SandboxBackend{config: SandboxConfig{WorkerImage: "openclaw:latest"}}).Create,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := create(context.Background(), CreateRequest{Name: "test", Runtime: "opencode"})
+			if err == nil || !strings.Contains(err.Error(), "OPENCODE_WORKER_IMAGE") {
+				t.Fatalf("must require an OpenCode image rather than launch another Harness: %v", err)
+			}
+		})
 	}
 }

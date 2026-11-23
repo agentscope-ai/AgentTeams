@@ -1,6 +1,6 @@
 # Task 协议分阶段认证与对照验证
 
-> 本文保留 1.2.9 验证过程与当时的取样口径。新 Harness 使用[接入指南中的准入标准](harness-integration-guide.md#六新-harness-准入验收)。
+> 本文保留 1.2.9 验证过程与当时的取样口径。新 Harness 使用[接入指南中的准入标准](../harness-integration-guide.md#七新-harness-准入验收)。
 
 状态：基线对照已停止，转入新协议真实任务验证；候选尚未认证。协议见 [task-cli-protocol.md](task-cli-protocol.md)。
 本文件定义通过标准，不代表已经获得认证。所有候选只在独立分支、本地隔离团队验证。

@@ -1,6 +1,27 @@
-# Harness 接入 Task 协作协议
+# AgentTeams Harness 接入与准入标准
 
-适用于接入新的 Manager、Leader 或 Worker 运行时，以 AgentTeams 1.2.9 候选分支的 `task/v1` 为准。Controller 管理任务、权限、依赖、产物与通知。Harness 将可信入站事件、原生模型上下文和工具执行接到公共 Task 实现。先声明支持的角色，按角色完成接入和验收。[协议细节](task-cli-protocol.md) · [认证场景](task-cli-certification.md)
+本指南定义 Harness 接入 AgentTeams（AT）的能力要求和准入标准，覆盖运行时启动、Task 协作、会话与回执、重启续跑和 Worker 跨 Harness 切换。Task 协作使用公共协议 `task/v1`。Harness 是承载模型交互、原生工具和会话的运行时。接入时先声明支持的角色（Manager、Leader、Worker）和部署模式，按声明范围验收。外部纳管模式复用同一协作语义，按自身部署方式提供身份、会话和执行证据。托管镜像的启动变量见下一节。
+
+## 接入边界
+
+| 位置 | 维护内容 |
+| --- | --- |
+| Core | 公共状态机与权限、任务及文件 API、CLI 和原生桥接、角色提示词与技能、测试用例和判定器。这里维护接入指南、运行时注册与构建引用 |
+| 独立 Harness 仓库 | 原生 SDK/工具注册、Matrix 或受信通道适配、会话和回执注入、启动入口、镜像构建及原生回归 |
+
+Core 中的 `worker/`、`qwenpaw/`、`hermes/`、`deepseek-harness/`、`openhuman/` 是对应独立仓库的 Git 子模块路径。Codex Harness 由发布工作流独立检出。原生适配的改动提交到所属仓库，再在 Core 更新对应引用。能复用同一镜像的多个角色使用同一构建产物，由启动配置选择角色。[子模块定义](../../.gitmodules) · [Harness 发布工作流](../../.github/workflows/publish-harnesses.yml)
+
+在启动入口读取 Controller 投影的成员配置，加载模型、工具、技能和通道，绑定稳定的成员身份并报告实际可用状态。Native SDK 的配置和会话数据由 Harness 维护，公共配置及持久状态以 Core 的契约为准。
+
+一次任务从 Human 原会话进入。Manager 用 `create` 绑定原始请求和 Leader；Leader 在同一主任务上用 `plan` 自主决定节点、分工和依赖；Worker 经 `begin` 领取并准备输入，完成后用 `submit` 保存候选和产物。Leader 用精确 `submissionId` 验收或退回，Controller 根据已验收结果推进依赖。Leader 用 `complete` 完成主任务，框架将最终报告和确定版本的附件投递回原会话，并把交付事实同步到派单 Agent 的上下文。取消、重试和恢复也沿用同一套任务身份、状态及回执。
+
+接入按顺序完成三件事。
+
+1. 在 Harness 仓库实现正式启动入口和角色配置，接入公共 Task 工具、可信入站、原生回执和恢复。以真实 SDK 注册、实际模型请求和进程环境为证据。
+2. 在 Core 对接运行时注册与构建引用。使用同一候选的 Core 和 Harness 版本构建或部署，验证实际加载的公共资产、角色、运行时身份和镜像摘要。
+3. 用真实会话跑完下述准入验证。组合间发现协议缺口时，在公共契约或产生不合约事实的一侧修复。
+
+[公共协议与 CLI](teamharness/task-cli-protocol.md) · [成员运行时配置](member-runtime-config-contract.md)
 
 ## 一、启动配置与打包
 
@@ -90,7 +111,18 @@ SDK 能以结构化错误证明在任何副作用前拒绝时，框架可在准�
 - **来源追踪。** 模型和工具保留实际 session/turn ID，导出通过真实模型输入核验的 `agentteams.input.event_ids`、协调 `agentteams.coordination.id/kind`、执行 `agentteams.execution.generation`，以及实际事件、房间、角色和任务关联。W3C 追踪载体随单次调用与延迟回执保存。合批共享的生成和工具 span 在组级去重。
 - **异常处置。** 区分明确失败、尚在执行、结果未知、已提交待回告。用公共状态与真实回执核对，避免按文案或相似任务补单。可恢复的传输错误沿用相同已登记身份；遇到权限、过期进程或未知副作用先核验权威状态。
 
-## 五、接入验收与已遇问题
+## 五、重启续跑与跨 Harness 切换
+
+Worker 接入必须支持同一 Harness 重启续跑，以及从已有 Harness 切入和向已有 Harness 切出。这里的切换是同一个 Worker 替换执行运行时，有实际停机和接管边界。异构 Leader、Worker 同时协作在第七节单独验证。
+
+1. **启动时自动发现。** 从公共配置恢复 Worker 身份、团队及通道，读取已接受但未处理的输入，主动发现已分配的可恢复 Task。即使房间没有新消息，启动入口也要完成发现和接管。中断前保存的进度、文件和回执由公共存储提供。
+2. **切换时隔离旧执行。** 通过受支持的生命周期入口停止源实例的新执行，核实其进程和工具状态，再启动目标 Harness。用目标实际实例、进程及新执行代次领取同一 Task。源实例的迟到工具、提交或回告不能覆盖新代次。
+3. **按检查点决策。** 已确认完成的步骤和产物保持不变，只续做剩余工作。已保存结果但尚未投递时，沿用原投递标识重试回告。工具结果或外部副作用不明确时进入待核验，获得可信结果后再继续。
+4. **回切时校验旧会话。** 原生会话和 Matrix 同步游标属于各 Harness 的运行时数据。回切保留旧数据作为验收条件，只有未过期且与当前权威检查点及身份匹配的会话才能复用。其余情况下从公共状态重建上下文，继续使用原 Worker、Task 和房间。
+
+历史恢复验证记录了六种 Harness 的重启和 30 个有向切换组合。记录中的通过结论适用于各次测试使用的版本和环境。接入新 Harness 或替换候选时，按本指南复验实际声明的角色和部署模式。[公共启动与恢复边界](member-runtime-config-contract.md#common-startup-and-consumption-boundary-1631) · [恢复验收记录](../development/runtime-recovery-1631.md) · [恢复实跑驱动](../../tests/runtime_recovery_e2e.py)
+
+## 六、常见接入问题
 
 | 实跑症状 | 首查 | 验收证据 |
 | --- | --- | --- |
@@ -102,11 +134,47 @@ SDK 能以结构化错误证明在任何副作用前拒绝时，框架可在准�
 | 回告已发，追问仍回答排队 | 原始会话是否与路由一致，已确认的终态事实是否进了压缩后的模型调用 | 在原会话追问真实交付文件或结果，核对回复和公开 Trace |
 | Trace 全无或角色标签错误 | 运行时 OTLP 出口、网络 DNS、适配器字段、关闭正文采集 | Collector 回查实际模型、工具和对应 Task/Matrix 事件 |
 
-1. 用正式启动入口验证环境和原生 SDK 绑定，确认当前提示词、角色 schema、严格桥接响应和真实 Trace 可见。测试夹具应使用入口派生配置，以覆盖镜像内漏传变量的问题。
-2. 从 Human 与 Manager 的原始会话派任务。用固定例子验证简单、复杂和并发，逐条记录原始事件、Main Task、执行节点、精确候选验收、真实回告和下载文件摘要。额外验证同正文独立请求、建单前撤回、更新输入、拒绝返工和终态回执。
-3. 当前 1.2.9 验证对每种 Harness 使用三组简单、三组复杂任务，随后执行混合 Harness 双向验证。分开记录协议结果、业务 oracle、完整交付耗时、分阶段耗时、工具与 token，保留失败和人工恢复往返过程。[认证口径](task-cli-certification.md)
+## 七、新 Harness 准入验收
+
+### 冻结候选与测试组合
+
+- 固定 Core/Harness 提交、实际镜像 ID 或部署产物摘要、模型与参数、角色、资源和工具权限、输入及验收标准。默认一名 Leader、两名 Worker，以相同 Manager、入口和资源配置做比较。认证 Manager 角色时，入口须由候选 Manager 实际处理。依声明的角色验证托管或纳管模式，结果注明实际组合。
+- Leader 和 Worker 均支持时，先跑同 Harness 主批次。仅支持一个角色时，其他角色使用已验证的 Harness，报告写明候选所在角色。声明支持两种角色互通时，另外与已验证的 Harness 双向验证，分别交换 Leader 和 Worker，每个方向至少一组简单、一组复杂。交叉场景单列。
+- 每次从 Human 与 Manager 的原始会话发送业务需求，使用新的请求事件和 Task ID。用例只给需求、交付物和验收条件，节点数量、分工和依赖由 Leader 决定。记录实际拆解。相同条件下可复测，重复投递同一个事件另做幂等验证。
+
+| 验收 | 必须覆盖 | 通过证据 |
+| --- | --- | --- |
+| 启动与契约 | 正式启动入口、可信身份与来源、公共工具 schema、角色配置、技能加载、原生 SDK 调用、原生上下文、真实 Trace | 实际模型请求收到正确的公开工具名和参数，框架按角色写入公共 Task 记录，连续轮次不会重复注入；校验真实技能加载内容 |
+| 简单任务 | 同一冻结候选独立运行 **10 组**。采用[简单 CSV 汇总用例](../../tests/task-protocol/cases/requirements-only/simple-csv.md)或等价的轻量业务需求 | 10 组干净协议成功；默认全链路耗时目标 **300 秒** |
+| 复杂任务 | 同一冻结候选独立运行 **10 组**。采用[复杂对账交接用例](../../tests/task-protocol/cases/requirements-only/complex-settlement.md)或等价的多步骤需求 | 10 组干净协议成功；能证明真实委派、产物交接和依赖推进；默认全链路耗时目标 **900 秒** |
+| 交叉组合 | 在已验证的搭档上验证候选角色的交接与验收。按上述角色矩阵验证每个方向 | 通过相同的协议与交付判据，每个方向分别记录；角色能力以实际通过的范围为准 |
+| 并发与异常 | 相同正文的独立请求、建单前更正或撤回、同一事件重复投递、上传或通知失败、提交响应未知、旧代次迟到、取消、退回返工。角色涉及异步工具时验证跨等待窗口和终态回执 | 检查来源匹配、权限和幂等，已验收结果保留；未知副作用待核验，可恢复通知继续投递。合理的风险审批按原策略验收，同时排查框架误触发审批 |
+| 同 Harness 重启 | 在真实 Worker Task 已写入检查点、仍有步骤待完成时，分别验证正常重启和异常中断。覆盖原生会话缺失或过期 | 原 Worker 和 Task ID 保持，启动后自动恢复。无新派单、无新 Matrix 唤醒、无人工补状态。核对已完成步骤仅执行一次、产物版本及摘要一致、剩余工作继续、终态回告一次 |
+| 双向切换与回切 | 候选与至少一个已有验证的 Harness 实跑 `已有 → 候选` 和 `候选 → 已有`。在同一进行中的任务上完成一次往返，每次切换前都有已确认检查点；保留旧会话和游标。声明其他支持组合时分别举证 | 同一 Worker、Task 和原会话延续。核对源实例退出、目标执行代次、检查点推进、旧回调受限、步骤与回告无重复、带版本产物完整。分方向记录 Harness 版本和实际部署模式 |
+
+### 判定、计时和记录
+
+一次**干净协议成功**需要核对四类证据。
+
+1. 每个 Human 来源能追溯到对应主任务，Leader 用公共工具规划，Worker 经真实原生工具完成执行。每次提交都有精确候选和 Leader 决定，依赖由框架推进。
+2. 原会话实际收到派单身份发出的最终报告和可下载附件，校验实际文件大小和摘要。原会话随后的自然问答能读到已经交付的事实。通知状态和节点接单各有其真实回执。
+3. Trace 能关联来源 Matrix 事件、会话、Task、执行节点、角色和完成回告。持久状态、回执、会话实际展示可相互核对。模型与协作工具调用数、输入和输出 token 缺失时标记未知。
+4. 全程没有手工推进状态、补文件、临时改提示词或补发来完成该次任务。漏单补发、环境恢复和迟到交付保留原始尝试，并在报告内单列。模型生成的业务实现结果另用独立验收器检查，业务错误本身不改变协议判定。
+
+全链路时间从原始 Human 请求的 Matrix 服务端时间戳起算，到最终报告和最后一个要求的附件均在原会话可见的时间戳为止。下载验证用于确认交付成立。另记录建单、派发、接单、提交和验收时间，以便识别排队与执行耗时。报告简单、复杂各自的成功数、总尝试数、P50、P95、超时数及失败原因。P50/P95 使用已验证完整交付的耗时，同时保留超时和迟到结果，补跑不覆盖原始失败。
+
+**准入结论**须给出 20 组协议结果、适用的交叉与异常验收、时限达标情况、以及可复核的证据。协议要求简单 **10/10**、复杂 **10/10**，所声明角色的交叉场景和异常门禁通过。声明 Worker 支持时，重启、双向切换和回切均须通过，并独立报告。性能独立验收，以两类完整交付样本各自的 P95 对照 300 秒和 900 秒，并单列超过目标的尝试。性能未达标时记录阶段瓶颈并继续优化，保留协议结果及跨运行时的通用行为。发现协议实现缺陷时保留当批证据，在修复后的冻结候选上重新验收。
+
+复用 Core 的[独立业务验收器](../../tests/task-protocol/run_oracle.py)、[协议判定辅助](../../tests/task-protocol/protocol_verdict.py)和[运行汇总](../../tests/task-protocol/summarize_runs.py)。在 Core 根目录运行以下命令，第一条验证验收器，第二条汇总实际会话实跑记录。
+
+```sh
+python3 -m unittest discover -s tests/task-protocol -p 'test_*.py'
+python3 tests/task-protocol/summarize_runs.py /path/to/evidence/runs --source FULL_RUNTIME_COMMIT
+```
+
+提交接入材料时记录声明角色、部署模式、版本与镜像摘要、场景、运行 ID、原会话/Task/Trace 的关联、已校验附件和结果。证据存放在受控位置，报告使用可核对的摘要和关联 ID，凭据与私人会话原文留在测试环境。[1.2.9 历史认证记录](teamharness/task-cli-certification.md)
 
 实现参考
 
-- [公共原生桥接及角色 schema](../../../plugins/teamharness/mcp/common/task_native.py) · [公共 Task CLI 参数](../../../plugins/teamharness/mcp/common/task_cli.py) · [阶段准备](../../../plugins/teamharness/mcp/common/task_context.py)
-- [原生协调阶段](../../../agentteams-controller/internal/server/coordination_phase.go) · [执行恢复](../../../shared/lib/task_recovery.py) · [原会话的终态交付记录](../../../agentteams-controller/internal/server/task_delivery_context.go)
+- [公共原生桥接及角色 schema](../../plugins/teamharness/mcp/common/task_native.py) · [公共 Task CLI 参数](../../plugins/teamharness/mcp/common/task_cli.py) · [阶段准备](../../plugins/teamharness/mcp/common/task_context.py)
+- [原生协调阶段](../../agentteams-controller/internal/server/coordination_phase.go) · [执行恢复](../../shared/lib/task_recovery.py) · [原会话的终态交付记录](../../agentteams-controller/internal/server/task_delivery_context.go)

@@ -1,6 +1,6 @@
 # Task 协作协议与 CLI 收敛方案
 
-新运行时的必填配置、框架字段与验收步骤见 [Harness 接入指南](harness-integration-guide.md)。
+新运行时的必填配置、框架字段与准入验收见 [Harness 接入指南](harness-integration-guide.md)。以下设计状态描述 1.2.9 的实施快照。
 
 状态：设计与实施计划。目标版本：1.2.9；不修改 1.2.8 发布标签。
 基线：main `2a4fb0a35e974074820e66f408ed94887c9f3d4f`。

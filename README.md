@@ -451,6 +451,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 | [docs/usage/module-update.md](docs/usage/module-update.md) | Module update & distribution: Millforge channels, release index, and the three install planes (also available in [中文](docs/zh-cn/usage/module-update.md)) |
 | [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) (also available in [中文](docs/zh-cn/usage/higress-gateway-api.md)) |
 | [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev (also available in [中文](docs/zh-cn/usage/development.md)) |
+| [Harness integration guide](docs/design/teamharness/harness-integration-guide.md) | Task protocol integration, role capabilities, and acceptance criteria (中文) |
 
 The remaining design documents (skill catalog, worker channels/chats APIs, room power levels, capability foundation, human update / audit / AI-routes APIs, L2/L3 scoped access, member runtime config contract, team skills, agent pod template, TeamHarness v0.1 boundary) are indexed in the [中文 documentation table](README.zh-CN.md) — all are also available under `docs/zh-cn/design/`, except a few (`docs/design/internal/`, part of `docs/design/teamharness/`) that are natively written in Chinese upstream.
 

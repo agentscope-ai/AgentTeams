@@ -499,6 +499,7 @@ python scripts/export-debug-log.py --range 1h
 | [docs/zh-cn/usage/integrations/cms.md](docs/zh-cn/usage/integrations/cms.md) | 接入阿里云云监控 CMS 2.0 |
 | [docs/zh-cn/usage/integrations/credagent.md](docs/zh-cn/usage/integrations/credagent.md) | CredAgent 凭证保护配置 |
 | [docs/zh-cn/usage/development.md](docs/zh-cn/usage/development.md) | 开发指南：贡献与本地开发 |
+| [Harness 接入指南](docs/design/teamharness/harness-integration-guide.md) | Task 协议接入、必实现能力与准入验收 |
 | [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md) | 常见问题 |
 | [docs/zh-cn/usage/troubleshooting/legacy-faq.md](docs/zh-cn/usage/troubleshooting/legacy-faq.md) | 旧版常见问题 |
 

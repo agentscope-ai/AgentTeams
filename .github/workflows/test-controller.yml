@@ -153,6 +153,8 @@ jobs:
           echo "$RUNNER_TEMP/qwenpaw-bin" >> "$GITHUB_PATH"
 
       - name: Run QwenPaw tests against repository source
+        env:
+          AGENTTEAMS_CORE_SOURCE: ${{ github.workspace }}
         run: |
           python -m pytest qwenpaw/tests -q
           python -m pytest plugins/tests/agentteams-matrix/test_qwenpaw_reload_delivery.py -q

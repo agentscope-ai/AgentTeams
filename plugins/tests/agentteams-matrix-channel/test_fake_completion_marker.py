@@ -226,13 +226,13 @@ def test_quiet_tool_output_turn_keeps_the_done_marker(monkeypatch):
     assert captured == ["已完成"]
 
 
-@pytest.mark.parametrize("relative", [
-    "plugins/agentteams-matrix-channel/agentteams_matrix/channel.py",
-    "plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py",
+@pytest.mark.parametrize("relative, carries_trace", [
+    ("plugins/agentteams-matrix-channel/agentteams_matrix/channel.py", False),
+    ("plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py", True),
 ])
 @pytest.mark.parametrize("outcome", ["confirmed", "rejected", "notice"])
 @pytest.mark.parametrize("placeholder", [False, True])
-def test_only_acknowledged_manager_final_text_completes_source(monkeypatch, relative, outcome, placeholder):
+def test_only_acknowledged_manager_final_text_completes_source(monkeypatch, relative, carries_trace, outcome, placeholder):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -264,11 +264,14 @@ def test_only_acknowledged_manager_final_text_completes_source(monkeypatch, rela
 
     channel.send = send
     channel._edit_thread_root = edit
+    trace_context = {"source_event_id": "$source"}
     metadata = {module._MATRIX_STREAMING_FINAL_TEXT_KEY: "final answer", "room_id": ROOM,
-                "event_id": "$source", module._MATRIX_PLACEHOLDER_THREAD_ROOT_KEY: placeholder}
+                "event_id": "$source", module._MATRIX_PLACEHOLDER_THREAD_ROOT_KEY: placeholder,
+                "otel_delivery": trace_context}
     asyncio.run(channel._on_process_completed(SimpleNamespace(), ROOM, metadata))
     if outcome == "confirmed":
-        channel._session_receipts.complete.assert_awaited_once_with(ROOM, "$source")
+        kwargs = {"trace_context": trace_context} if carries_trace else {}
+        channel._session_receipts.complete.assert_awaited_once_with(ROOM, "$source", **kwargs)
     else:
         channel._session_receipts.complete.assert_not_awaited()
 

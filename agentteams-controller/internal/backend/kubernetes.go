@@ -277,6 +277,8 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			if image == "" {
 				return nil, fmt.Errorf("codex runtime requires spec.image or AGENTTEAMS_CODEX_WORKER_IMAGE")
 			}
+		case req.Runtime == RuntimeQoder:
+			return nil, fmt.Errorf("qoder runtime requires an explicitly built spec.image")
 		case k.config.WorkerImage != "":
 			image = k.config.WorkerImage
 		}
@@ -781,6 +783,8 @@ func defaultRuntime(runtime string) string {
 		return RuntimeDeepSeekHarness
 	case RuntimeCodex:
 		return RuntimeCodex
+	case RuntimeQoder:
+		return RuntimeQoder
 	default:
 		return RuntimeOpenClaw
 	}

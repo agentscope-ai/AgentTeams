@@ -23,6 +23,7 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 - 🧬 **集成** [AgentLoop](https://www.aliyun.com/product/agentloop?spm=at.readme.0.0.0) ：提供 Agent 全栈观测与审计、Agent 评估与实验、Agent 资产管理与持续优化等能力。
 
 ## 动态
+- **2026-11-20:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.8) — AgentTeams v1.2.8：优化 Team 从任务分配、执行、提交到验收交付的完整流程，降低协作耗时与上下文消耗；完善主任务与子任务协作、任务会话归档及六种 Harness 的 Worker 运行恢复；新增会话停止与补充指令、消息读取状态、原生审批及运行诊断；搭配 Dashboard v1.4.3，改善任务看板和团队管理，并支持通过 Higress 统一访问 `/api` 与 `/dashboard`。
 - **2026-11-12:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.7) — AgentTeams v1.2.7：简化一键启动与保留数据升级；统一六种 Harness 运行时的镜像命名与版本，Manager 复用 OpenClaw / QwenPaw 镜像；Tracing 支持按 Agent、团队、会话和任务查询；搭配 Dashboard v1.4.1，统一团队与 Agent 管理，优化工具调用过程展示，并修复模型、MCP、Skill、文件及登录管理中的多项问题。
 - **2026-11-08:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.6) — AgentTeams v1.2.6：搭配 Dashboard v1.4.0，带来新版工作台、语音输入及可选的 QwenPaw/Hermes 会话追踪；新增任务暂停与恢复、团队人工事项收件箱；增强多用户权限与模型授权；完善运行时配置、用户独立文件区及 S3 兼容存储；实验性 DeepSeek Harness Worker 镜像更新至 v0.1.1；并提升 Matrix 协作与升级可靠性。
 - **2026-10-16:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams 1.2.5 重点增强编码工具委派、Worker 配置管理和 QwenPaw 运行时升级，默认搭配 Dashboard v1.3.1，并修复 MCP 注册、Matrix 消息协作及 Worker 恢复中的多项问题。

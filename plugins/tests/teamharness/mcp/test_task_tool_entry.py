@@ -9,8 +9,8 @@ import server
 
 def test_role_schemas_offer_only_relevant_task_operations(monkeypatch):
     for role,expected in {
-        "manager":{"create","get","files_list","files_read","files_get"},
-        "leader":{"plan","get","accept","reject","complete","files_list","files_read","files_get"},
+        "manager":{"create","get","cancel","files_list","files_read","files_get"},
+        "leader":{"plan","get","accept","reject","complete","cancel","files_list","files_read","files_get"},
         "worker":{"begin","get","submit","files_list","files_read","files_get","files_put"},
     }.items():
         monkeypatch.setattr(server,"_runtime_role",lambda role=role:role)
@@ -19,6 +19,15 @@ def test_role_schemas_offer_only_relevant_task_operations(monkeypatch):
         assert set(properties["action"]["enum"])==expected
         assert not {"_nativeSource","role","projectId","roomId","recipient","controllerURL","env","command"}.intersection(properties)
         assert tool["inputSchema"]["additionalProperties"] is False
+
+
+def test_text_file_window_schema_uses_portable_integer_parameters(monkeypatch):
+    monkeypatch.setattr(server, "_runtime_role", lambda: "worker")
+    task = next(tool for tool in server.list_tools() if tool["name"] == "task")
+    props = task["inputSchema"]["properties"]
+    for field in ("offset", "limit"):
+        assert props[field]["type"] == "integer"
+        assert set(props[field]) <= {"type", "description"}
 
 
 def test_task_result_is_preserved_and_errors_use_mcp_error_status(monkeypatch):

@@ -14,7 +14,7 @@ pytest.importorskip("qwenpaw")
 from qwenpaw.app.approvals.service import ApprovalService, PendingApproval
 from qwenpaw.security.tool_guard.approval import ApprovalDecision
 
-path = Path(__file__).resolve().parents[3] / "plugins/agentteams-matrix-channel/agentteams_matrix/channel.py"
+path = Path(__file__).resolve().parents[3] / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py"
 spec = importlib.util.spec_from_file_location("approval_test_channel", path)
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module

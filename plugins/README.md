@@ -17,10 +17,9 @@ Two distribution paths exist:
 
 | Directory | Plugin id | Form | Runtime / entry | How it is installed |
 |:--|:--|:--|:--|:--|
-| `teamharness` | `teamharness` | `AgentTeamPlugin` bundle (surface: prompts / skills / mcp / adapters) | QwenPaw, OpenClaw, Hermes, Claude Code, DeepSeek Harness via `adapters/` | `agentteams plugin install` tarball, bundle `scripts/install.sh`, or Millforge module `teamharness` |
-| `agentteams-teamharness` | `teamharness` | Bundle compatibility copy (byte-identical to `teamharness/`, drift-tested) | same as above | not installed directly — exists so bundle consumers and parity tests can compare both trees |
-| `agentteams-matrix` | `agentteams-matrix` | Bundle (`plugin.json` `type: bundle`) with `adapters/{qwenpaw,openclaw,hermes}` | QwenPaw / OpenClaw / Hermes | bundle `scripts/install.sh --adapter <rt>` or Millforge module `agentteams-matrix` (installs plugin id `agentteams-matrix-channel` on QwenPaw) |
-| `agentteams-matrix-channel` | `agentteams-matrix-channel` | QwenPaw channel plugin (`type: channel`, `entry.backend: plugin.py`) | QwenPaw | written into `<working-dir>/plugins/` by the MX bundle installer (or the Millforge module install) |
+| `teamharness` | `teamharness` | Shared prompts, skills and MCP tools | Harness-independent | Bundled with Core |
+| `agentteams-teamharness` | `agentteams-teamharness` | Bundle referencing the shared TeamHarness source | OpenClaw / Hermes | Bundle lifecycle scripts |
+| `agentteams-matrix` | `agentteams-matrix` | Shared Matrix core and portable runtime adapters | OpenClaw / Hermes | Bundle lifecycle scripts |
 | `agentteams-matrix-openclaw` | `agentteams-matrix-openclaw` | OpenClaw channel plugin (JS plugin + Python sidecar) | OpenClaw | OpenClaw adapter path (`openclaw.plugin.json`, `install.sh`) |
 | `qwen-code-bridge` | `qwen-code-bridge` | QwenPaw plugin (`type: general`) with `entry.backend: plugin.py` + `entry.frontend: frontend/index.js` | QwenPaw 2.2.x | `qwenpaw plugin install` / `POST /api/plugins/upload` / Millforge module `qwenpaw-qwencode-bridge` |
 | `agentteams-manager-tools` | `agentteams-manager-tools` | QwenPaw tool plugin (`type: tool`) | QwenPaw (manager) | shipped in the controller/manager image (`plugins/` → `/opt/agentteams/plugins/`) |
@@ -46,85 +45,18 @@ Two distribution paths exist:
   materializes it in portable releases. Controller and Embedded images ship
   the canonical `plugins/teamharness/` tree.
 
-## Default Path: AgentTeams CLI
+## QwenPaw Source and Upgrade
 
-The default installer is the AgentTeams-owned `agentteams` CLI:
+The [QwenPaw Harness](https://github.com/agentteams-group/agentteams-harness-qwenpaw)
+owns the native Task tools, receipts, and Matrix channel. The managed QwenPaw
+image packages those adapters with the shared TeamHarness and Matrix assets
+from Core. Upgrade Core and the QwenPaw Harness as one release.
 
-```bash
-agentteams plugin install teamharness --package dist/teamharness.tar.gz
-agentteams plugin list
-agentteams plugin update teamharness --package dist/teamharness.tar.gz
-agentteams plugin uninstall teamharness
-```
-
-The CLI stores local state under `.agentteams/`. It does not manage cluster
-worker lifecycle, and it does not hard-code QwenPaw or Claude Code install
-details. It unpacks the TeamHarness tarball, calls the package lifecycle script,
-and records the installed manifest.
-
-## LoongSuite Compatibility
-
-LoongSuite/Pilot is currently a local deployment integration path. The base
-TeamHarness package keeps only the generic QwenPaw-compatible plugin-probe
-definition. Remote-managed Claude Code runtime templates are packaged from
-`teamharness/remote/claude-code/`.
-
-TeamHarness is compatible with LoongSuite by providing:
-
-```text
-loongsuite-pilot/
-├── agents.d/teamharness.json
-└── plugins/teamharness.tar.gz
-```
-
-`agents.d/teamharness.json` uses LoongSuite's `plugin-probe` shape:
-
-```json
-{
-  "id": "teamharness",
-  "displayName": "TeamHarness",
-  "deployMode": "plugin-probe",
-  "detection": {
-    "paths": ["~/.qwenpaw"],
-    "commands": ["qwenpaw"]
-  },
-  "pluginProbe": {
-    "source": {
-      "type": "tar",
-      "tarball": "$PILOT_DIR/plugins/teamharness.tar.gz",
-      "destDir": "$PILOT_DATA/plugins/teamharness"
-    },
-    "mountType": "wrapper"
-  }
-}
-```
-
-LoongSuite only discovers the local runtime, unpacks the tarball, and runs the
-standard lifecycle script. It does not parse `plugin.yaml`, prompts, skills, MCP
-tools, hooks, or runtime adapter internals.
-
-## TeamHarness Package Contract
-
-TeamHarness is distributed as a tarball whose root is the plugin content itself:
-
-```text
-teamharness.tar.gz
-├── plugin.yaml
-├── prompts/
-├── skills/
-├── mcp/
-├── hooks/
-├── adapters/
-│   └── qwenpaw/
-└── scripts/
-    ├── install.sh
-    └── uninstall.sh
-```
+## OpenClaw and Hermes Bundles
 
 The lifecycle entrypoints are the shared contract:
 
-- `scripts/install.sh`: detects the supported local runtimes — `qwenpaw` on
-  PATH; `openclaw` on PATH or via `$OPENCLAW_CONFIG` /
+- `scripts/install.sh`: detects the supported local runtimes — `openclaw` on PATH or via `$OPENCLAW_CONFIG` /
   `~/.openclaw/openclaw.json`; `hermes` on PATH or via `$HERMES_HOME` /
   `~/.hermes/config.yaml` — and dispatches to the matching adapter for every
   detected runtime, so coexisting runtimes are all installed.
@@ -136,9 +68,6 @@ The lifecycle entrypoints are the shared contract:
   after the runtime binary is gone; the adapters are idempotent, so an
   uninstall with nothing installed is a no-op. `--runtime` and `--dry-run`
   behave as in install.
-
-Both the AgentTeams CLI and LoongSuite `plugin-probe` path call the same lifecycle
-scripts. Runtime-specific details stay inside TeamHarness adapters.
 
 Interpreter contract: the lifecycle scripts (and every per-runtime adapter
 script) run on the system shell — **bash 3.2 or later, macOS system bash
@@ -157,14 +86,9 @@ on PATH) and the whole lifecycle suite runs under it. On macOS the system
 
 - `desired.agentPackage` in the runtime config contract is an AgentTeams AgentSpec
   package. It is not this TeamHarness plugin package.
-- Cluster QwenPaw workers do not use LoongSuite. They may later reuse the same
-  TeamHarness tarball or bundled assets from the worker image.
 - Remote-managed Claude Code workers use
   `teamharness/remote/claude-code/` and produce a separate
   `agentteams-claude-code-local-runtime-0.0.1.tar.gz` bundle.
-- Stage 2 only defines package, lifecycle, CLI fallback, and LoongSuite
-  compatibility contracts. TeamHarness business semantics and real QwenPaw /
-  remote-managed Claude Code runtime integration are covered in later phases.
 
 ## Validation
 

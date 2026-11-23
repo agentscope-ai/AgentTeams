@@ -1,1 +1,0 @@
-../../../teamharness/adapters/qwenpaw/task_trace.py

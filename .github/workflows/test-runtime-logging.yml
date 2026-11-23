@@ -5,6 +5,7 @@ on:
       - 'shared/lib/runtime_*.py'
       - 'shared/lib/agentteams-env.sh'
       - 'shared/lib/telemetry/**'
+      - 'qwenpaw'
       - 'manager/tests/test_runtime_observability.py'
       - 'tests/test_worker_full_telemetry.py'
       - '.github/workflows/test-runtime-logging.yml'
@@ -14,6 +15,7 @@ on:
       - 'shared/lib/runtime_*.py'
       - 'shared/lib/agentteams-env.sh'
       - 'shared/lib/telemetry/**'
+      - 'qwenpaw'
       - 'manager/tests/test_runtime_observability.py'
       - 'tests/test_worker_full_telemetry.py'
       - '.github/workflows/test-runtime-logging.yml'
@@ -24,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

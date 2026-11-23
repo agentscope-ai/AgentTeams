@@ -32,8 +32,7 @@ pytest.importorskip("qwenpaw")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHANNEL_MODULE_PATH = (
     REPO_ROOT
-    / "plugins"
-    / "agentteams-matrix-channel"
+    / "qwenpaw/adapters/matrix"
     / "agentteams_matrix"
     / "channel.py"
 )
@@ -226,17 +225,13 @@ def test_quiet_tool_output_turn_keeps_the_done_marker(monkeypatch):
     assert captured == ["已完成"]
 
 
-@pytest.mark.parametrize("relative, carries_trace", [
-    ("plugins/agentteams-matrix-channel/agentteams_matrix/channel.py", False),
-    ("plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py", True),
-])
 @pytest.mark.parametrize("outcome", ["confirmed", "rejected", "notice"])
 @pytest.mark.parametrize("placeholder", [False, True])
-def test_only_acknowledged_manager_final_text_completes_source(monkeypatch, relative, carries_trace, outcome, placeholder):
+def test_only_acknowledged_manager_final_text_completes_source(monkeypatch, outcome, placeholder):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    spec = importlib.util.spec_from_file_location("_manager_final_channel", REPO_ROOT / relative)
+    spec = importlib.util.spec_from_file_location("_manager_final_channel", REPO_ROOT / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py")
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
@@ -270,8 +265,7 @@ def test_only_acknowledged_manager_final_text_completes_source(monkeypatch, rela
                 "otel_delivery": trace_context}
     asyncio.run(channel._on_process_completed(SimpleNamespace(), ROOM, metadata))
     if outcome == "confirmed":
-        kwargs = {"trace_context": trace_context} if carries_trace else {}
-        channel._session_receipts.complete.assert_awaited_once_with(ROOM, "$source", **kwargs)
+        channel._session_receipts.complete.assert_awaited_once_with(ROOM, "$source", trace_context=trace_context)
     else:
         channel._session_receipts.complete.assert_not_awaited()
 

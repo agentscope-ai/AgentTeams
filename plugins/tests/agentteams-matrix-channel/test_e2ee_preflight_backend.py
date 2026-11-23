@@ -30,10 +30,7 @@ pytest.importorskip("qwenpaw")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHANNEL_MODULE_PATH = (
     REPO_ROOT
-    / "plugins"
-    / "agentteams-matrix"
-    / "adapters"
-    / "qwenpaw"
+    / "qwenpaw/adapters/matrix"
     / "agentteams_matrix"
     / "channel.py"
 )

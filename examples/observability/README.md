@@ -91,6 +91,7 @@ Dashboard 源码构建：在 ../dashboard 执行 npm ci、npm run build。重建
 本次在已缓存 Worker 上构建 telemetry overlay，不等同于重新构建整个发行镜像。QwenPaw 为 arm64，Hermes 为 amd64：
 
 ~~~bash
+git submodule update --init -- qwenpaw
 docker build -f examples/observability/Dockerfile.runtime \
   --build-arg BASE_IMAGE=agentteams/qwenpaw-worker:local-20261106003000-otel \
   --build-arg VENV_PATH=/opt/venv/qwenpaw --build-arg RUNTIME=qwenpaw \

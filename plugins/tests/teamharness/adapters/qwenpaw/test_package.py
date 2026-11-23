@@ -9,15 +9,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 MANIFEST = REPO_ROOT / "plugins" / "teamharness" / "plugin.yaml"
-BUILD_SCRIPT = (
-    REPO_ROOT
-    / "plugins"
-    / "teamharness"
-    / "adapters"
-    / "qwenpaw"
-    / "scripts"
-    / "build-qwenpaw-plugin.rb"
-)
+BUILD_SCRIPT = REPO_ROOT / "qwenpaw/adapters/teamharness/scripts/build-qwenpaw-plugin.rb"
 
 
 def _manifest_version() -> str:

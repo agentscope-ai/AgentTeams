@@ -44,7 +44,7 @@ BUNDLE_DIR = Path(__file__).resolve().parents[2] / "agentteams-matrix"
 for _p in (
     str(REPO_ROOT),
     str(BUNDLE_DIR),
-    str(BUNDLE_DIR / "adapters" / "qwenpaw"),
+    str(BUNDLE_DIR.parents[1] / "qwenpaw/adapters/matrix"),
 ):
     if _p not in sys.path:
         sys.path.insert(0, _p)

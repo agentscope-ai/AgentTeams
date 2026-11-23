@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-PATH = ROOT / 'plugins/agentteams-matrix-channel/agentteams_matrix/session_receipts.py'
+PATH = ROOT / 'qwenpaw/adapters/matrix/agentteams_matrix/session_receipts.py'
 spec = importlib.util.spec_from_file_location('session_receipts', PATH)
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
@@ -125,9 +125,8 @@ def test_pending_read_recovered_and_retry_uses_same_transaction(tmp_path):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize('relative', ['plugins/agentteams-matrix-channel/agentteams_matrix/channel.py', 'plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py'])
-def test_history_gaps_threads_and_debounce_preserve_only_included_ids(relative):
-    spec = importlib.util.spec_from_file_location('receipt_test_channel', ROOT / relative)
+def test_history_gaps_threads_and_debounce_preserve_only_included_ids():
+    spec = importlib.util.spec_from_file_location('receipt_test_channel', ROOT / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py")
     channel_module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = channel_module
     spec.loader.exec_module(channel_module)
@@ -144,10 +143,9 @@ def test_history_gaps_threads_and_debounce_preserve_only_included_ids(relative):
     assert channel.merge_native_items([first, second])['meta']['session_source_event_ids'] == ['$image', '$text']
 
 
-@pytest.mark.parametrize('relative', ['plugins/agentteams-matrix-channel/agentteams_matrix/channel.py', 'plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py'])
-def test_started_receipt_service_never_sends_legacy_read_at_enqueue(relative):
+def test_started_receipt_service_never_sends_legacy_read_at_enqueue():
     from nio import RoomMessageText
-    spec = importlib.util.spec_from_file_location('receipt_active_channel', ROOT / relative)
+    spec = importlib.util.spec_from_file_location('receipt_active_channel', ROOT / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py")
     channel_module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = channel_module
     spec.loader.exec_module(channel_module)

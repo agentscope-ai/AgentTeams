@@ -69,13 +69,6 @@ Dir.mktmpdir("teamharness-plugin-") do |tmp|
   staging = Pathname.new(tmp) / name
   staging.mkpath
   includes.each { |entry| copy_entry(plugin_root, staging, entry) }
-  if name == "agentteams-teamharness"
-    %w[plugin.py task_trace.py].each do |entry|
-      relative = "adapters/qwenpaw/#{entry}"
-      FileUtils.rm_f(staging / relative)
-      copy_entry(plugin_root, staging, relative)
-    end
-  end
   prune_generated(staging)
 
   file_count = Dir.glob((staging / "**/*").to_s, File::FNM_DOTMATCH).count do |item|

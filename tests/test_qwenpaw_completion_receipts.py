@@ -12,7 +12,7 @@ if importlib.util.find_spec('qwenpaw') is None:
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'shared/lib/telemetry'),
-               str(ROOT / 'plugins/agentteams-matrix/adapters/qwenpaw')]
+               str(ROOT / 'qwenpaw/adapters/matrix')]
 from agentteams_matrix import channel as matrix
 from at_trace_transport import remember_reply
 from opentelemetry import trace

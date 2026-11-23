@@ -17,12 +17,12 @@ from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
 from worker_matrix_state import matrix_event_key
 
 
-@pytest.fixture(params=["agentteams-matrix-channel", "agentteams-matrix/adapters/qwenpaw"])
-def modules(request):
+@pytest.fixture
+def modules():
     loaded = []
     for name in ["task_execution", "session_receipts"]:
-        path = ROOT / "plugins" / request.param / "agentteams_matrix" / (name + ".py")
-        spec = importlib.util.spec_from_file_location("shared_native_" + name + request.param.replace("/", "_"), path)
+        path = ROOT / "qwenpaw/adapters/matrix/agentteams_matrix" / (name + ".py")
+        spec = importlib.util.spec_from_file_location("shared_native_" + name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)

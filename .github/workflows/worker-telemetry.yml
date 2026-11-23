@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'shared/lib/telemetry/**'
+      - 'qwenpaw'
       - 'tests/test_worker_telemetry.py'
       - 'tests/test_worker_full_telemetry.py'
       - 'tests/test_task_trace_mcp.py'
@@ -12,6 +13,7 @@ on:
     branches: [main]
     paths:
       - 'shared/lib/telemetry/**'
+      - 'qwenpaw'
       - 'tests/test_worker_telemetry.py'
       - 'tests/test_worker_full_telemetry.py'
       - 'tests/test_task_trace_mcp.py'
@@ -25,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

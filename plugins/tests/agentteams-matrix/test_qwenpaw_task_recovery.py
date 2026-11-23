@@ -25,7 +25,7 @@ def pending_reply(text, txn):
 
 @pytest.fixture
 def adapter(monkeypatch, tmp_path):
-    path = ROOT / "plugins/agentteams-matrix-channel/agentteams_matrix/task_execution.py"
+    path = ROOT / "qwenpaw/adapters/matrix/agentteams_matrix/task_execution.py"
     spec = importlib.util.spec_from_file_location("_task_execution_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -354,11 +354,10 @@ def test_unavailable_authority_is_not_a_cancellation_or_new_execution(adapter):
     channel.enqueue_recovered_task.assert_not_awaited()
 
 
-@pytest.fixture(params=["legacy", "bundle"])
-def native_channel(monkeypatch, request):
+@pytest.fixture
+def native_channel(monkeypatch):
     pytest.importorskip("qwenpaw.app.channels.base")
-    path = ROOT / ("plugins/agentteams-matrix-channel/agentteams_matrix/channel.py" if request.param == "legacy"
-                   else "plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py")
+    path = ROOT / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py"
     spec = importlib.util.spec_from_file_location("_native_task_channel", path)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)
@@ -632,13 +631,12 @@ def test_final_callback_prefers_authoritative_saved_result(adapter):
     assert delivered == [("T", "team", "$reply")]
 
 
-@pytest.mark.parametrize("bundle", ["teamharness", "agentteams-teamharness"])
 @pytest.mark.parametrize("state", ["active", "needs_verification"])
-def test_recovered_native_reasoning_is_fenced_before_task_tools(adapter, monkeypatch, bundle, state):
+def test_recovered_native_reasoning_is_fenced_before_task_tools(adapter, monkeypatch, state):
     import task_recovery
     recovery, authority, task, channel = adapter
     task["execution"]["state"] = state
-    path = ROOT / "plugins" / bundle / "adapters/qwenpaw/plugin.py"
+    path = ROOT / "qwenpaw/adapters/teamharness/plugin.py"
     spec = importlib.util.spec_from_file_location("_recovery_teamharness", path)
     plugin = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(plugin)

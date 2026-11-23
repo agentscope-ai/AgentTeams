@@ -6,7 +6,6 @@ truth; each adapter only projects it onto its runtime.
 
 | Runtime | Status |
 |---------|--------|
-| qwenpaw | functional |
 | openclaw | functional (MCP entry + staged plugin root) |
 | hermes | functional (MCP entry + plugin dir) |
 
@@ -21,7 +20,6 @@ installed, so coexisting runtimes are all covered.
 
 | Runtime | Detected when |
 |---------|---------------|
-| qwenpaw | `qwenpaw` is on PATH |
 | openclaw | `openclaw` is on PATH, or `$OPENCLAW_CONFIG` is set, or `~/.openclaw/openclaw.json` exists |
 | hermes | `hermes` is on PATH, or `$HERMES_HOME` is set, or `~/.hermes/config.yaml` exists |
 
@@ -30,7 +28,6 @@ the runtime binary is gone:
 
 | Runtime | Uninstalled when |
 |---------|------------------|
-| qwenpaw | `qwenpaw` is on PATH |
 | openclaw | the config file (`$OPENCLAW_CONFIG` or `~/.openclaw/openclaw.json`) or the staged plugin root `<config dir>/plugins/agentteams-teamharness` exists |
 | hermes | `$HERMES_HOME` is set, or `~/.hermes/config.yaml` or `~/.hermes/plugins/agentteams-teamharness` exists |
 

@@ -5,12 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 cd "${REPO_ROOT}"
+git submodule update --init -- qwenpaw
 
 python3 plugins/tests/cli/test_agentteams_plugin_cli.py
 ruby plugins/scripts/validate-plugin.rb plugins/teamharness/plugin.yaml
 OUT_DIR="$(mktemp -d)" ruby plugins/scripts/package-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 ruby plugins/tests/teamharness/test-contracts.rb
-python3 -m pytest plugins/tests/teamharness/adapters/qwenpaw/test_adapter.py -q
+python3 -m pytest qwenpaw/tests/native_adapters/test_adapter.py -q
 python3 -m pytest plugins/tests/teamharness/adapters/qwenpaw/test_package.py -q
 python3 -m pytest plugins/tests/teamharness/test_pull_project.py -q
 python3 -m pytest plugins/tests/teamharness/test_signal_emission.py -q
@@ -35,12 +36,8 @@ python3 -m pytest plugins/tests/agentteams-matrix-channel/test_send_gate_retrigg
 # Runtime adapter bundles (P0): agentteams-matrix + agentteams-teamharness
 bash -n plugins/agentteams-matrix/scripts/install.sh
 bash -n plugins/agentteams-matrix/scripts/uninstall.sh
-bash -n plugins/agentteams-matrix/adapters/qwenpaw/install.sh
-bash -n plugins/agentteams-matrix/adapters/qwenpaw/uninstall.sh
 bash -n plugins/agentteams-teamharness/scripts/install.sh
 bash -n plugins/agentteams-teamharness/scripts/uninstall.sh
-bash -n plugins/agentteams-teamharness/adapters/qwenpaw/install.sh
-bash -n plugins/agentteams-teamharness/adapters/qwenpaw/uninstall.sh
 ruby plugins/scripts/validate-plugin.rb plugins/agentteams-teamharness/plugin.yaml
 OUT_DIR="$(mktemp -d)" ruby plugins/scripts/package-plugin.rb plugins/agentteams-teamharness/plugin.yaml >/dev/null
 python3 -m pytest plugins/tests/agentteams-matrix/golden -q

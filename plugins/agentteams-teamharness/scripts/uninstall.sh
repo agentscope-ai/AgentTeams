@@ -3,12 +3,11 @@ set -euo pipefail
 
 # TeamHarness package uninstaller — the documented default entrypoint.
 #
-# Usage: uninstall.sh [--runtime auto|qwenpaw|openclaw|hermes]... [--dry-run]
+# Usage: uninstall.sh [--runtime auto|openclaw|hermes]... [--dry-run]
 #
 # Detection is artifact-driven (default, --runtime auto), so residue is
 # removed even after the runtime binary is gone:
 #
-#   qwenpaw   qwenpaw on PATH
 #   openclaw  the effective config file ($OPENCLAW_CONFIG_PATH,
 #             $OPENCLAW_CONFIG, or ~/.openclaw/openclaw.json — a symlink
 #             counts) or the staged plugin root
@@ -31,14 +30,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export AGENTTEAMS_PLUGIN_DIR="${AGENTTEAMS_PLUGIN_DIR:-$PLUGIN_DIR}"
 
-SUPPORTED_RUNTIMES=(qwenpaw openclaw hermes)
+SUPPORTED_RUNTIMES=(openclaw hermes)
 
 usage() {
   cat <<'EOF'
-Usage: uninstall.sh [--runtime auto|qwenpaw|openclaw|hermes]... [--dry-run]
+Usage: uninstall.sh [--runtime auto|openclaw|hermes]... [--dry-run]
 
 Removes the TeamHarness installation from the supported local runtimes
-(qwenpaw, openclaw, hermes). Detection is artifact-driven (config files
+(openclaw, hermes). Detection is artifact-driven (config files
 and staged plugin roots, not just the runtime binary), so residue is
 removed even after the binary is gone; --runtime selects runtimes
 explicitly (repeatable, bypasses detection); --dry-run previews through
@@ -53,9 +52,9 @@ while [ $# -gt 0 ]; do
     --runtime)
       value="${2:?--runtime requires a value}"
       case "$value" in
-        auto|qwenpaw|openclaw|hermes) ;;
+        auto|openclaw|hermes) ;;
         *)
-          echo "ERROR: unknown runtime: $value (supported: auto, qwenpaw, openclaw, hermes)" >&2
+          echo "ERROR: unknown runtime: $value (supported: auto, openclaw, hermes)" >&2
           exit 2
           ;;
       esac
@@ -123,10 +122,6 @@ canonical_config_dir() {
   printf '%s' "$(dirname "$path")"
 }
 
-detect_qwenpaw() {
-  command -v qwenpaw >/dev/null 2>&1
-}
-
 detect_openclaw() {
   config="$(openclaw_config_file)"
   [ -e "$config" ] \
@@ -159,7 +154,6 @@ for runtime in "${SUPPORTED_RUNTIMES[@]}"; do
   fi
   detected=0
   case "$runtime" in
-    qwenpaw) detect_qwenpaw && detected=1 ;;
     openclaw) detect_openclaw && detected=1 ;;
     hermes) detect_hermes && detected=1 ;;
   esac
@@ -170,13 +164,11 @@ done
 
 # Per-runtime status as plain variables (this entrypoint must run on the
 # system shell, bash 3.2 on macOS; the portability test pins that).
-STATUS_QWENPAW="skipped (not detected)"
 STATUS_OPENCLAW="skipped (not detected)"
 STATUS_HERMES="skipped (not detected)"
 
 set_status() {  # $1=runtime $2=status
   case "$1" in
-    qwenpaw)  STATUS_QWENPAW="$2" ;;
     openclaw) STATUS_OPENCLAW="$2" ;;
     hermes)   STATUS_HERMES="$2" ;;
   esac
@@ -184,7 +176,6 @@ set_status() {  # $1=runtime $2=status
 
 get_status() {  # $1=runtime
   case "$1" in
-    qwenpaw)  printf '%s' "$STATUS_QWENPAW" ;;
     openclaw) printf '%s' "$STATUS_OPENCLAW" ;;
     hermes)   printf '%s' "$STATUS_HERMES" ;;
   esac
@@ -230,7 +221,7 @@ if [ "$OVERALL_RC" -ne 0 ]; then
   done
   {
     echo "ERROR: TeamHarness uninstall failed for: ${failed[*]+"${failed[*]}"}."
-    echo "Supported runtimes: ${SUPPORTED_RUNTIMES[*]}. Select explicitly: uninstall.sh --runtime <qwenpaw|openclaw|hermes>"
+    echo "Supported runtimes: ${SUPPORTED_RUNTIMES[*]}. Select explicitly: uninstall.sh --runtime <openclaw|hermes>"
   } >&2
   exit 1
 fi

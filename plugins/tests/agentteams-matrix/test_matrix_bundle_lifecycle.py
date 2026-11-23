@@ -15,13 +15,8 @@ Refs #1427 (bundle lifecycle). Run the whole gate with ``make verify-bundle``.
 from __future__ import annotations
 
 import os
-import re
-import subprocess
-from unittest import mock
 import sys
 from pathlib import Path
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -41,7 +36,6 @@ BUNDLE = REPO_ROOT / "plugins" / "agentteams-matrix"
 INSTALL = BUNDLE / "scripts" / "install.sh"
 UNINSTALL = BUNDLE / "scripts" / "uninstall.sh"
 
-QWENPAW_PLUGIN = Path("plugins") / "agentteams-matrix-channel"
 HERMES_PLUGIN = Path("plugins") / "agentteams-matrix"
 MARKER = Path(".agentteams") / "agentteams-matrix" / "installed.json"
 
@@ -56,64 +50,8 @@ def _fake_runtime(bin_dir: Path, name: str) -> None:
     binary.chmod(0o755)
 
 
-def _import_installed_channel(plugin_dir: Path, env: dict) -> None:
-    """Import the installed channel module, as the runtime does at load time.
-
-    A missing third-party runtime dependency (matrix-nio) is an environment
-    gap, not a payload defect, so it skips with the reason instead of failing;
-    anything else — including a missing payload module — fails the test.
-    """
-    imported = subprocess.run(
-        [sys.executable, "-c", "import agentteams_matrix.channel, os; assert 'AGENTTEAMS_TEST_CALLER_SECRET' not in os.environ, 'caller secret loaded by isolated plugin'"],
-        cwd=str(plugin_dir),
-        env={**env, "PYTHONPATH": str(plugin_dir)},
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if imported.returncode == 0:
-        return
-    missing = re.search(r"ModuleNotFoundError: No module named '([^']+)'", imported.stderr)
-    payload_roots = {"agentteams_matrix", "core"}
-    if missing and missing.group(1).split(".")[0] not in payload_roots:
-        pytest.skip(
-            f"third-party runtime dependency {missing.group(1)!r} is not installed; "
-            "the installed payload itself is staged (see the marker check)"
-        )
-    raise AssertionError(
-        "installed plugin fails to import:\n" + imported.stderr
-    )
-
-
-def _qwenpaw_env(home: Path, work: Path, bin_dir: Path) -> dict:
-    base_path = os.environ.get("PATH", "")
-    return isolated_env(
-        home,
-        QWENPAW_WORKING_DIR=str(work),
-        PATH=f"{bin_dir}{os.pathsep}{base_path}",
-    )
-
-
-# Runtime artefacts the QwenPaw bootstrap/import creates inside the working
-# dir. They are not installer-owned, so uninstall neither knows nor removes
-# them; the residue check must not mistake them for installer debris.
-_RUNTIME_ARTEFACTS = {".qwenpaw_restore.lock"}
-
-
 def _installer_residue(root: Path) -> list:
-    """Files left behind, ignoring artefacts the runtime generated itself.
-
-    ``__pycache__`` appears when the runtime imports the installed plugin and
-    ``.qwenpaw_restore.lock`` when QwenPaw bootstraps persisted state; both are
-    runtime output, not installer-owned files (the marker only ever lists
-    installer-owned files, so uninstall cannot own them).
-    """
-    return [
-        path
-        for path in residue(root)
-        if "__pycache__" not in Path(path).parts
-        and Path(path).name not in _RUNTIME_ARTEFACTS
-    ]
+    return [path for path in residue(root) if "__pycache__" not in Path(path).parts]
 
 
 def _assert_marker_matches_tree(marker_path: Path, plugin_dir: Path) -> None:
@@ -132,53 +70,6 @@ def _assert_marker_matches_tree(marker_path: Path, plugin_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 # L3 — isolated install / load / uninstall, one test per adapter
 # ---------------------------------------------------------------------------
-def test_l3_qwenpaw_install_load_uninstall(tmp_path: Path, monkeypatch) -> None:
-    caller_secret = tmp_path / "caller-secret"
-    caller_secret.mkdir()
-    (caller_secret / "envs.json").write_text('{"AGENTTEAMS_TEST_CALLER_SECRET":"fixture-only"}')
-    monkeypatch.setenv("QWENPAW_SECRET_DIR", str(caller_secret))
-    home = tmp_path / "home"
-    home.mkdir()
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _fake_runtime(bin_dir, "qwenpaw")
-    work = home / ".qwenpaw"
-    env = _qwenpaw_env(home, work, bin_dir)
-
-    run(INSTALL, "--adapter", "qwenpaw", env=env)
-
-    plugin_dir = work / QWENPAW_PLUGIN
-    assert (plugin_dir / "plugin.json").is_file()
-    assert (plugin_dir / "agentteams_matrix" / "channel.py").is_file()
-    assert (plugin_dir / "core" / "sync.py").is_file(), (
-        "the shared core package must ship with the plugin (load-time import)"
-    )
-    _assert_marker_matches_tree(work / MARKER, plugin_dir)
-
-    # Load: the installed channel module imports from the installed layout.
-    # The child must inherit the isolated env: QwenPaw bootstraps persisted
-    # state during package import, and inheriting the caller's runtime would
-    # write its lock/config into the caller's directory.
-    caller_runtime = tmp_path / "caller-runtime"
-    caller_runtime.mkdir()
-    (caller_runtime / ".env").write_text("CALLER=1\n", encoding="utf-8")
-    before_caller = files(caller_runtime)
-    with mock.patch.dict(
-        os.environ,
-        {"QWENPAW_WORKING_DIR": str(caller_runtime), "HOME": str(caller_runtime)},
-    ):
-        _import_installed_channel(plugin_dir, env)
-    assert files(caller_runtime) == before_caller, (
-        "the load step bootstrapped against the caller's runtime instead of "
-        "the isolated env"
-    )
-
-    run(UNINSTALL, "--adapter", "qwenpaw", env=env)
-    assert _installer_residue(work) == [], (
-        "uninstall left installer-owned files behind"
-    )
-
-
 def test_l3_openclaw_projects_contract_and_uninstall_keeps_foreign_keys(
     tmp_path: Path,
 ) -> None:
@@ -284,96 +175,36 @@ def test_l3_uninstall_without_adapter_cleans_every_detected_runtime(
     home.mkdir()
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for runtime in ("qwenpaw", "openclaw", "hermes"):
+    for runtime in ("openclaw", "hermes"):
         _fake_runtime(bin_dir, runtime)
-    work = home / ".qwenpaw"
     hermes_home = home / ".hermes"
     config = home / "openclaw.json"
     config.write_text("{}\n", encoding="utf-8")
-    env = _qwenpaw_env(home, work, bin_dir)
+    env = isolated_env(home, PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     env.update({"HERMES_HOME": str(hermes_home), "OPENCLAW_CONFIG_PATH": str(config)})
 
-    for adapter in ("qwenpaw", "openclaw", "hermes"):
+    for adapter in ("openclaw", "hermes"):
         run(INSTALL, "--adapter", adapter, env=env)
 
     run(UNINSTALL, env=env)  # no --adapter: every detected runtime
 
-    assert _installer_residue(work) == []
     assert _installer_residue(hermes_home) == []
     assert read_json(config).get("channels", {}).get("matrix") is None
-
-
-def test_l4_marker_guard_repairs_drift_and_keeps_user_files(tmp_path: Path) -> None:
-    """A tree that drifted from the marker is repaired, never reported as current.
-
-    This is the installer's state invariant: re-running against an unchanged
-    payload is a no-op, but a file the marker owns that went missing or was
-    edited (a native uninstall, an operator edit) is restored from the
-    payload — and a file the installer never wrote survives uninstall.
-    """
-    home = tmp_path / "home"
-    home.mkdir()
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _fake_runtime(bin_dir, "qwenpaw")
-    work = home / ".qwenpaw"
-    env = _qwenpaw_env(home, work, bin_dir)
-    plugin_dir = work / QWENPAW_PLUGIN
-    marker_path = work / MARKER
-
-    run(INSTALL, "--adapter", "qwenpaw", env=env)
-    installed = files(plugin_dir)
-    assert installed
-
-    # Unchanged payload: a no-op that says so, with no file rewritten.
-    repeat = run(INSTALL, "--adapter", "qwenpaw", env=env)
-    assert "up to date" in repeat.stdout.lower(), repeat.stdout
-    assert files(plugin_dir) == installed
-
-    victim = plugin_dir / "core" / "sync.py"
-    victim.unlink()
-    corrupted = plugin_dir / "core" / "state.py"
-    corrupted.write_text("# corrupted by the runtime\n", encoding="utf-8")
-
-    repaired = run(INSTALL, "--adapter", "qwenpaw", env=env)
-    assert "up to date" not in repaired.stdout.lower(), (
-        "the installer called a drifted tree up to date"
-    )
-    assert victim.is_file(), "reinstall did not restore a deleted owned file"
-    assert files(plugin_dir) == installed, (
-        "reinstall left the tree different from the payload it installed"
-    )
-    _assert_marker_matches_tree(marker_path, plugin_dir)
-
-    user_file = plugin_dir / "notes.txt"
-    user_file.write_text("user file\n", encoding="utf-8")
-    run(UNINSTALL, "--adapter", "qwenpaw", env=env)
-    assert user_file.is_file(), "uninstall removed a file it never wrote"
-    assert sorted(files(plugin_dir)) == ["notes.txt"]
 
 
 # ---------------------------------------------------------------------------
 # L4 — N-1 install -> N upgrade -> N-1 rollback
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "adapter,plugin_rel,marker_root_name",
-    [
-        ("qwenpaw", QWENPAW_PLUGIN, "work"),
-        ("hermes", HERMES_PLUGIN, "hermes"),
-    ],
-)
-def test_l4_upgrade_and_rollback_follow_the_payload(
-    tmp_path: Path, adapter: str, plugin_rel: Path, marker_root_name: str
-) -> None:
+def test_l4_upgrade_and_rollback_follow_the_payload(tmp_path: Path) -> None:
+    adapter = "hermes"
     home = tmp_path / "home"
     home.mkdir()
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for runtime in ("qwenpaw", "openclaw", "hermes"):
+    for runtime in ("openclaw", "hermes"):
         _fake_runtime(bin_dir, runtime)
-    work = home / ".qwenpaw"
     hermes_home = home / ".hermes"
-    env = _qwenpaw_env(home, work, bin_dir)
+    env = isolated_env(home, PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     env["HERMES_HOME"] = str(hermes_home)
 
     previous = stage_bundle(
@@ -388,8 +219,8 @@ def test_l4_upgrade_and_rollback_follow_the_payload(
         version="0.1.0",
         add={f"adapters/{adapter}/{NEW_FILE}": "new payload\n"},
     )
-    root = work if marker_root_name == "work" else hermes_home
-    plugin_dir = root / plugin_rel
+    root = hermes_home
+    plugin_dir = root / HERMES_PLUGIN
 
     def install(bundle: Path) -> None:
         run(bundle / "scripts" / "install.sh", "--adapter", adapter, env=env)

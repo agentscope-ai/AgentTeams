@@ -3,13 +3,12 @@ set -euo pipefail
 
 # TeamHarness package installer — the documented default entrypoint.
 #
-# Usage: install.sh [--runtime auto|qwenpaw|openclaw|hermes]... [--dry-run]
+# Usage: install.sh [--runtime auto|openclaw|hermes]... [--dry-run]
 #
 # Detects the supported local runtimes and dispatches to the matching
 # adapters. Detection (default, --runtime auto): every detected runtime is
 # installed, so coexisting runtimes are all covered:
 #
-#   qwenpaw   qwenpaw on PATH
 #   openclaw  openclaw on PATH, $OPENCLAW_CONFIG_PATH set, $OPENCLAW_CONFIG
 #             set, or the effective config path (default
 #             ~/.openclaw/openclaw.json) present — a symlink counts
@@ -36,14 +35,14 @@ PLUGIN_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 export AGENTTEAMS_BUNDLE_DIR="${AGENTTEAMS_BUNDLE_DIR:-$PLUGIN_DIR}"
 export AGENTTEAMS_PLUGIN_DIR="${AGENTTEAMS_PLUGIN_DIR:-$PLUGIN_DIR}"
 
-SUPPORTED_RUNTIMES=(qwenpaw openclaw hermes)
+SUPPORTED_RUNTIMES=(openclaw hermes)
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--runtime auto|qwenpaw|openclaw|hermes]... [--dry-run]
+Usage: install.sh [--runtime auto|openclaw|hermes]... [--dry-run]
 
 Installs the TeamHarness bundle into the supported local runtimes
-(qwenpaw, openclaw, hermes). By default every detected runtime is
+(openclaw, hermes). By default every detected runtime is
 installed; --runtime selects runtimes explicitly (repeatable, bypasses
 detection); --dry-run previews through every adapter without writing.
 EOF
@@ -56,9 +55,9 @@ while [ $# -gt 0 ]; do
     --runtime)
       value="${2:?--runtime requires a value}"
       case "$value" in
-        auto|qwenpaw|openclaw|hermes) ;;
+        auto|openclaw|hermes) ;;
         *)
-          echo "ERROR: unknown runtime: $value (supported: auto, qwenpaw, openclaw, hermes)" >&2
+          echo "ERROR: unknown runtime: $value (supported: auto, openclaw, hermes)" >&2
           exit 2
           ;;
       esac
@@ -92,10 +91,6 @@ if [ "${#RUNTIME_SELECTIONS[@]}" -gt 0 ]; then
     fi
   done
 fi
-
-detect_qwenpaw() {
-  command -v qwenpaw >/dev/null 2>&1
-}
 
 # The effective OpenClaw config path, same priority the adapters use:
 # $OPENCLAW_CONFIG_PATH (the Worker export), then $OPENCLAW_CONFIG (legacy),
@@ -143,7 +138,6 @@ for runtime in "${SUPPORTED_RUNTIMES[@]}"; do
   fi
   detected=0
   case "$runtime" in
-    qwenpaw) detect_qwenpaw && detected=1 ;;
     openclaw) detect_openclaw && detected=1 ;;
     hermes) detect_hermes && detected=1 ;;
   esac
@@ -154,13 +148,11 @@ done
 
 # Per-runtime status as plain variables (this entrypoint must run on the
 # system shell, bash 3.2 on macOS; the portability test pins that).
-STATUS_QWENPAW="skipped (not detected)"
 STATUS_OPENCLAW="skipped (not detected)"
 STATUS_HERMES="skipped (not detected)"
 
 set_status() {  # $1=runtime $2=status
   case "$1" in
-    qwenpaw)  STATUS_QWENPAW="$2" ;;
     openclaw) STATUS_OPENCLAW="$2" ;;
     hermes)   STATUS_HERMES="$2" ;;
   esac
@@ -168,7 +160,6 @@ set_status() {  # $1=runtime $2=status
 
 get_status() {  # $1=runtime
   case "$1" in
-    qwenpaw)  printf '%s' "$STATUS_QWENPAW" ;;
     openclaw) printf '%s' "$STATUS_OPENCLAW" ;;
     hermes)   printf '%s' "$STATUS_HERMES" ;;
   esac
@@ -204,7 +195,7 @@ if [ "${#SELECTED_RUNTIMES[@]}" -eq 0 ]; then
   {
     echo "ERROR: no supported TeamHarness local runtime found."
     echo "Supported runtimes: ${SUPPORTED_RUNTIMES[*]}."
-    echo "Select one explicitly: install.sh --runtime <qwenpaw|openclaw|hermes>"
+    echo "Select one explicitly: install.sh --runtime <openclaw|hermes>"
   } >&2
   exit 1
 fi
@@ -218,7 +209,7 @@ if [ "$OVERALL_RC" -ne 0 ]; then
   done
   {
     echo "ERROR: TeamHarness install failed for: ${failed[*]+"${failed[*]}"}."
-    echo "Supported runtimes: ${SUPPORTED_RUNTIMES[*]}. Select explicitly: install.sh --runtime <qwenpaw|openclaw|hermes>"
+    echo "Supported runtimes: ${SUPPORTED_RUNTIMES[*]}. Select explicitly: install.sh --runtime <openclaw|hermes>"
   } >&2
   exit 1
 fi

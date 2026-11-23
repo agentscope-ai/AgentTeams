@@ -18,8 +18,8 @@ TeamHarness owns:
   projects, task delegation, and task execution.
 - Explicit MCP tools for team messages, shared files, project flow, task flow,
   and plugin health.
-- A single plugin tarball installed through the AgentTeams `agt` CLI by
-  default and compatible with LoongSuite `plugin-probe` for local runtimes.
+- The shared Task protocol and assets. Managed QwenPaw images package the
+  QwenPaw Harness adapter.
 
 TeamHarness does not own:
 

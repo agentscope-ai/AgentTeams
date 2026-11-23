@@ -7,7 +7,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import tarfile
-import zipfile
 
 import pytest
 
@@ -37,15 +36,11 @@ def test_reused_output_directory_does_not_publish_unrelated_archive(tmp_path):
     source = ROOT / "plugins/teamharness"
     bundle = ROOT / "plugins/agentteams-teamharness"
     skill = "skills/team/task-management/SKILL.md"
-    adapter = "adapters/qwenpaw/plugin.py"
-    for entry in ("contracts", "mcp", "prompts", "skills", adapter):
+    for entry in ("contracts", "mcp", "prompts", "skills"):
         assert (bundle / entry).is_symlink()
-        assert (bundle / entry).resolve() == source / entry
+        assert (bundle / entry).resolve() == (source / entry).resolve()
     with tarfile.open(tmp_path / "agentteams-teamharness.tar.gz") as archive:
-        for entry in (skill, adapter, "mcp/common/task_receipt.py"):
+        for entry in (skill, "mcp/common/task_receipt.py"):
             assert archive.getmember(entry).isfile()
             assert archive.extractfile(entry).read() == (source / entry).read_bytes()
-    with zipfile.ZipFile(tmp_path / "agentteams-teamharness-qwenpaw.zip") as archive:
-        assert archive.read("teamharness/plugin.py") == (source / adapter).read_bytes()
-        for entry in (skill, "qwenpaw-skills/task-management/SKILL.md"):
-            assert archive.read("teamharness/teamharness/" + entry) == (source / skill).read_bytes()
+    assert names == ["agentteams-teamharness.tar.gz"]

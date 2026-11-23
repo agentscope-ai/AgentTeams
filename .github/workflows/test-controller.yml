@@ -28,7 +28,6 @@ on:
       - 'qwenpaw/**'
       - 'manager/src/**'
       - 'plugins/teamharness/**'
-      - 'plugins/agentteams-matrix-channel/**'
       - 'plugins/agentteams-matrix/**'
       - 'plugins/agentteams-teamharness/**'
       - 'plugins/tests/**'
@@ -65,7 +64,6 @@ on:
       - 'qwenpaw/**'
       - 'manager/src/**'
       - 'plugins/teamharness/**'
-      - 'plugins/agentteams-matrix-channel/**'
       - 'plugins/agentteams-matrix/**'
       - 'plugins/agentteams-teamharness/**'
       - 'plugins/tests/**'
@@ -108,6 +106,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-go@v5
         with:
@@ -142,7 +141,20 @@ jobs:
             'pytest>=8.3,<10' \
             'pytest-asyncio>=0.23,<2'
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agentteams-controller/go.mod
+          cache-dependency-path: agentteams-controller/go.sum
+      - name: Build Task CLI for adapter tests
+        working-directory: agentteams-controller
+        run: |
+          mkdir -p "$RUNNER_TEMP/qwenpaw-bin"
+          go build -o "$RUNNER_TEMP/qwenpaw-bin/agt" ./cmd/agt
+          echo "$RUNNER_TEMP/qwenpaw-bin" >> "$GITHUB_PATH"
+
       - name: Run QwenPaw tests against repository source
+        env:
+          AGENTTEAMS_CORE_SOURCE: ${{ github.workspace }}
         run: |
           python -m pytest qwenpaw/tests -q
           python -m pytest plugins/tests/agentteams-matrix/test_qwenpaw_reload_delivery.py -q
@@ -153,6 +165,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -237,6 +250,8 @@ jobs:
           python -m pytest plugins/tests/agentteams-matrix-channel/test_stage_packets.py -q
 
   plugin-loader-smoke:
+    env:
+      AGENTTEAMS_CORE_SOURCE: ${{ github.workspace }}
     # Keyless smoke of the real QwenPaw plugin loader: install the
     # runtime from public PyPI on a standard runner (no secrets, no
     # external build machine) and drive PluginLoader against the
@@ -267,7 +282,7 @@ jobs:
       - name: Prove a broken package turns the smoke red
         run: |
           BROKEN_ROOT="$(mktemp -d)"
-          cp -r plugins/agentteams-matrix-channel \
+          cp -r qwenpaw/adapters/matrix \
             "$BROKEN_ROOT/agentteams-matrix-channel"
           printf '\nraise RuntimeError("intentionally broken smoke package")\n' \
             >> "$BROKEN_ROOT/agentteams-matrix-channel/plugin.py"
@@ -289,6 +304,7 @@ jobs:
     name: Matrix channel regressions (${{ matrix.suite }})
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -328,6 +344,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -354,6 +371,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -374,12 +392,8 @@ jobs:
         run: |
           bash -n plugins/agentteams-matrix/scripts/install.sh \
             plugins/agentteams-matrix/scripts/uninstall.sh \
-            plugins/agentteams-matrix/adapters/qwenpaw/install.sh \
-            plugins/agentteams-matrix/adapters/qwenpaw/uninstall.sh \
             plugins/agentteams-teamharness/scripts/install.sh \
-            plugins/agentteams-teamharness/scripts/uninstall.sh \
-            plugins/agentteams-teamharness/adapters/qwenpaw/install.sh \
-            plugins/agentteams-teamharness/adapters/qwenpaw/uninstall.sh
+            plugins/agentteams-teamharness/scripts/uninstall.sh
 
       - name: Validate TeamHarness bundle manifest and package
         run: |
@@ -398,6 +412,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-node@v4
         with:
@@ -546,6 +561,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-go@v5
         with:

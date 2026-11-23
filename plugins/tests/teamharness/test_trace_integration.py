@@ -34,7 +34,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TRACE_MODULE_PATH = (
-    REPO_ROOT / "plugins" / "teamharness" / "adapters" / "qwenpaw" / "task_trace.py"
+    REPO_ROOT / "qwenpaw/adapters/teamharness" / "task_trace.py"
 )
 SERVER_MODULE_PATH = REPO_ROOT / "plugins" / "teamharness" / "mcp" / "server.py"
 

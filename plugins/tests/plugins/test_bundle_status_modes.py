@@ -18,7 +18,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BUNDLES = ("agentteams-matrix", "agentteams-teamharness")
-RUNTIMES = ("qwenpaw", "openclaw", "hermes")
+RUNTIMES = ("openclaw", "hermes")
 
 
 @pytest.mark.parametrize("bundle", BUNDLES)

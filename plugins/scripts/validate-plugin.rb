@@ -143,7 +143,9 @@ Array(manifest["adapters"]).each do |adapter|
   assert_file(path / "README.md")
 end
 
-assert_file(plugin_root / "scripts/install.sh")
-assert_file(plugin_root / "scripts/uninstall.sh")
+unless Array(manifest["adapters"]).empty?
+  assert_file(plugin_root / "scripts/install.sh")
+  assert_file(plugin_root / "scripts/uninstall.sh")
+end
 
 puts "ok: #{name} #{version}"

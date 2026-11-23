@@ -16,10 +16,10 @@ sys.path.insert(0, str(ROOT / "shared/lib"))
 from task_recovery import RecoveryUnavailable
 
 
-@pytest.fixture(params=["agentteams-matrix-channel", "agentteams-matrix/adapters/qwenpaw"])
-def channel_module(request):
-    path = ROOT / "plugins" / request.param / "agentteams_matrix/channel.py"
-    spec = importlib.util.spec_from_file_location("shared_input_channel_" + request.param.replace("/", "_"), path)
+@pytest.fixture
+def channel_module():
+    path = ROOT / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py"
+    spec = importlib.util.spec_from_file_location("shared_input_channel", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -90,10 +90,9 @@ def test_verified_task_input_is_saved_before_task_recovery(channel_module, monke
         order = []
         ch._task_execution.accept_input.side_effect = lambda *a, **k: order.append("persist")
         ch._task_execution.recover = AsyncMock(side_effect=lambda *a, **k: order.append("recover"))
-        ch._mark_event_callback_accepted = Mock()
         event = source()
         event.source["content"]["org.agentteams.coordination"] = {}
-        monkeypatch.setattr(task_coordination, "notification", lambda *a: {
+        monkeypatch.setattr(task_coordination, "notification", lambda *a, event_id: {
             "text": "Canonical assignment", "meta": {"teamharness_coordination": {"kind": "task_assigned", "task_id": "T"}}})
         await ch._on_room_event(SimpleNamespace(room_id="!room:test"), event)
         assert order == ["persist", "recover"]
@@ -112,7 +111,7 @@ def test_coordination_handoff_does_not_create_ordinary_message_execution(channel
         event.source["content"]["org.agentteams.coordination"] = {
             "channel_meta": meta, "session_id": "coordination-handoff:" + "a" * 32,
             "input": [{"content": [{"text": "Canonical handoff"}]}]}
-        monkeypatch.setattr(task_coordination, "notification", lambda *a: {"meta": meta})
+        monkeypatch.setattr(task_coordination, "notification", lambda *a, event_id: {"meta": meta})
         await ch._on_room_event(SimpleNamespace(room_id="!room:test"), event)
         assert ch._task_execution.accept_input.await_args.args[2] == "control"
         ch._enqueue.assert_called_once()

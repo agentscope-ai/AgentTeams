@@ -143,6 +143,9 @@ OPENCLAW_BASE_BUILD_ARG = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE)
 OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 
 .PHONY: stage-agent-assets
+qwenpaw/adapters/teamharness/plugin.py:
+	git submodule update --init -- qwenpaw
+
 stage-agent-assets: ## Assemble shared role prompts and skills for Controller images
 	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -RP ./plugins ./agentteams-controller/plugins
 	@rm -rf ./agentteams-controller/plugins/agentteams-teamharness ./agentteams-controller/plugins/tests
@@ -197,11 +200,11 @@ build-worker: build-agentteams-controller ## Build shared OpenClaw Harness image
 hermes/Dockerfile:
 	git submodule update --init -- hermes
 
-build-hermes-worker push-hermes-worker: | hermes/Dockerfile
+build-hermes-worker push-hermes-worker: | hermes/Dockerfile qwenpaw/adapters/teamharness/plugin.py
 
 build-hermes-worker: build-agentteams-controller ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./qwenpaw/adapters/teamharness --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
 		./hermes/
@@ -218,9 +221,11 @@ build-openhuman-worker: build-agentteams-controller ## Build OpenHuman Worker im
 		-t $(LOCAL_OPENHUMAN_WORKER) \
 		./openhuman/
 
+build-qwenpaw-worker push-qwenpaw-worker: | qwenpaw/adapters/teamharness/plugin.py
+
 build-qwenpaw-worker: build-agentteams-controller ## Build the shared QwenPaw Harness image
 	@echo "==> Building QwenPaw Worker image: $(LOCAL_QWENPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
+	OUT_DIR=dist/adapters/qwenpaw ruby qwenpaw/adapters/teamharness/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
@@ -405,7 +410,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building Hermes Worker for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./qwenpaw/adapters/teamharness --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(HERMES_WORKER_TAG) \
 			./hermes/ && ) true
@@ -417,7 +422,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./qwenpaw/adapters/teamharness --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(HERMES_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(HERMES_WORKER_IMAGE):latest) \
@@ -444,7 +449,7 @@ endif
 
 push-qwenpaw-worker: push-agentteams-controller ## Build + push multi-arch QwenPaw Harness image
 	@echo "==> Building + pushing multi-arch QwenPaw Worker: $(QWENPAW_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
-	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
+	OUT_DIR=dist/adapters/qwenpaw ruby qwenpaw/adapters/teamharness/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(QWENPAW_WORKER_TAG) 2>/dev/null

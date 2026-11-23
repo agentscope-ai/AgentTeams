@@ -32,15 +32,7 @@ from core import (
 ME = "@alice:matrix.local"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CHANNEL_MODULE_PATH = (
-    REPO_ROOT
-    / "plugins"
-    / "agentteams-matrix"
-    / "adapters"
-    / "qwenpaw"
-    / "agentteams_matrix"
-    / "channel.py"
-)
+CHANNEL_MODULE_PATH = Path(__file__).resolve().parents[3] / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py"
 
 
 def _event(

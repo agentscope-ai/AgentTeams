@@ -18,21 +18,22 @@ import (
 )
 
 type fakeTeamMatrix struct {
-	createRooms  []matrix.CreateRoomRequest
-	members      map[string][]matrix.RoomMember
-	listErrs     map[string]error
-	tokenUsers   map[string]string
-	leaves       []string
-	joins        []roomUserCall
-	kicks        []roomUserCall
-	tokenKicks   []roomUserCall
-	kickErr      error
-	adminCmds    []string
-	deletedAlias []string
-	roomNames    []roomNameCall
-	roomStates   []roomStateCall
-	tokenInvites []roomUserCall
-	created      bool
+	createRooms   []matrix.CreateRoomRequest
+	members       map[string][]matrix.RoomMember
+	listErrs      map[string]error
+	tokenUsers    map[string]string
+	leaves        []string
+	joins         []roomUserCall
+	kicks         []roomUserCall
+	tokenKicks    []roomUserCall
+	kickErr       error
+	adminCmds     []string
+	deletedAlias  []string
+	roomNames     []roomNameCall
+	roomStates    []roomStateCall
+	tokenInvites  []roomUserCall
+	created       bool
+	requireInvite bool
 
 	// powerStates seeds m.room.power_levels reads per room; an absent room
 	// reports (nil, nil) — the legacy "state never set" case.
@@ -238,6 +239,9 @@ func (f *fakeTeamMatrix) GetRoomState(_ context.Context, roomID, eventType, _ st
 func (f *fakeTeamMatrix) JoinRoom(_ context.Context, roomID, token string) error {
 	f.joins = append(f.joins, roomUserCall{roomID: roomID, userID: token})
 	if userID := f.tokenUsers[token]; userID != "" {
+		if f.requireInvite && !f.hasMembership(roomID, userID) {
+			return fakeForbidden("invite required")
+		}
 		f.members[roomID] = append(f.members[roomID], matrix.RoomMember{UserID: userID, Membership: "join"})
 	}
 	return nil
@@ -1103,6 +1107,7 @@ func TestProvisionTeamRoomsUsesTeamAdminTokenForExistingTeamRoom(t *testing.T) {
 func TestProvisionTeamRoomsAddsAdminToExistingRooms(t *testing.T) {
 	m := newFakeTeamMatrix()
 	m.created = false
+	m.requireInvite = true
 	m.tokenUsers["leader-token"] = "@lead:localhost"
 	m.tokenUsers["alice-token"] = "@alice:localhost"
 	m.powerStates = map[string]map[string]interface{}{}

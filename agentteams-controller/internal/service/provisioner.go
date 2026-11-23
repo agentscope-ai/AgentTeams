@@ -859,7 +859,7 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	// took effect and Reconcile is a no-op; on alias resolution it catches
 	// up members added/removed since the previous run.
 	if hasTeamAdmin {
-		if err := p.matrix.JoinRoom(ctx, teamRoom.RoomID, req.TeamAdminActorToken); err != nil {
+		if err := p.ensureTeamAdminJoinedRoom(ctx, teamRoom.RoomID, teamAdminID, req.TeamAdminActorToken, req.LeaderCredentialName, req.LeaderName, req.TeamName, teamRoom.Created); err != nil {
 			return nil, fmt.Errorf("team admin join team room: %w", err)
 		}
 		if !teamRoom.Created {
@@ -936,7 +936,7 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	logger.Info("leader DM room ready", "roomID", leaderDMRoom.RoomID, "created", leaderDMRoom.Created)
 
 	if hasTeamAdmin {
-		if err := p.ensureTeamAdminJoinedLeaderDM(ctx, leaderDMRoom.RoomID, teamAdminID, req.TeamAdminActorToken, req.LeaderCredentialName, req.LeaderName, req.TeamName, leaderDMRoom.Created); err != nil {
+		if err := p.ensureTeamAdminJoinedRoom(ctx, leaderDMRoom.RoomID, teamAdminID, req.TeamAdminActorToken, req.LeaderCredentialName, req.LeaderName, req.TeamName, leaderDMRoom.Created); err != nil {
 			return nil, err
 		}
 		if !leaderDMRoom.Created {
@@ -1006,22 +1006,22 @@ func (p *Provisioner) ensureExistingRoomTeamAdminPower(ctx context.Context, room
 	return p.EnsureRoomPowerLevel(ctx, roomID, teamAdminID, 100, token, "")
 }
 
-func (p *Provisioner) ensureTeamAdminJoinedLeaderDM(ctx context.Context, roomID, teamAdminID, teamAdminToken, leaderCredentialName, leaderName, teamName string, created bool) error {
+func (p *Provisioner) ensureTeamAdminJoinedRoom(ctx context.Context, roomID, teamAdminID, teamAdminToken, leaderCredentialName, leaderName, teamName string, created bool) error {
 	if err := p.matrix.JoinRoom(ctx, roomID, teamAdminToken); err == nil {
 		return nil
 	} else if created {
-		return fmt.Errorf("team admin join leader DM room: %w", err)
+		return fmt.Errorf("team admin join room: %w", err)
 	} else {
 		joinErr := err
 		leaderToken, tokenErr := p.leaderInviteToken(ctx, leaderCredentialName, leaderName, teamName)
 		if tokenErr != nil {
-			return fmt.Errorf("team admin join leader DM room: %w", joinErr)
+			return fmt.Errorf("team admin join room: %w", joinErr)
 		}
 		if inviteErr := p.matrix.InviteToRoomWithToken(ctx, roomID, teamAdminID, leaderToken); inviteErr != nil {
-			return fmt.Errorf("leader invite team admin to leader DM room: %w", inviteErr)
+			return fmt.Errorf("leader invite team admin to room: %w", inviteErr)
 		}
 		if retryErr := p.matrix.JoinRoom(ctx, roomID, teamAdminToken); retryErr != nil {
-			return fmt.Errorf("team admin join leader DM room after leader invite: %w", retryErr)
+			return fmt.Errorf("team admin join room after leader invite: %w", retryErr)
 		}
 		return nil
 	}
@@ -1309,7 +1309,7 @@ func (p *Provisioner) ReconcileRoomMembershipWithActorToken(ctx context.Context,
 			if shouldForceLeaveAfterKickError(err) {
 				if forceErr := p.ForceLeaveRoom(ctx, m.UserID, roomID); forceErr == nil {
 					logger.Info("force-leave-room command sent after kick failed", "room", roomID, "user", m.UserID)
-					stillPresent, memberships, checkErr := p.observedRoomMembership(ctx, roomID, m.UserID)
+					stillPresent, memberships, checkErr := p.observedRoomMembershipWithToken(ctx, roomID, m.UserID, actorToken)
 					if checkErr != nil {
 						logger.Error(checkErr, "failed to verify force-leave-room result", "room", roomID, "user", m.UserID)
 						if firstErr == nil {

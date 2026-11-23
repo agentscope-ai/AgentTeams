@@ -58,7 +58,7 @@ class AssistantFixture:
     def content(self):
         wire = copy.deepcopy(self.control)
         wire["input"][0]["content"][0]["text"] = "Forged wire text must not reach inference"
-        return {"msgtype": "m.text", "body": "Visible Teams wake", "m.mentions": {"user_ids": [self.own]},
+        return {"msgtype": "m.notice", "body": "Background Teams wake", "m.mentions": {"user_ids": [self.own]},
             "org.agentteams.coordination": wire}
 
     def __exit__(self, *_):

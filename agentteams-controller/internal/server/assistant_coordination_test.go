@@ -83,6 +83,9 @@ func TestAssistantUsesOneTeamsProtocolForEveryHarness(t *testing.T) {
 				}
 				if content["org.agentteams.coordination"] != nil {
 					wakes++
+					if content["msgtype"] != "m.notice" {
+						t.Fatal("background wake can notify the Human", content)
+					}
 					if content["m.mentions"] == nil {
 						t.Fatal("Teams wake lost recipient mention")
 					}

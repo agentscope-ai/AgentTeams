@@ -191,7 +191,10 @@ func (h *CoordinationHandler) advanceAssistant(ctx context.Context, d *coordinat
 	if d.NativeID != "" {
 		return // Wait for the public send receipt, never infer success from model text.
 	}
-	id, err := h.assistant.send(ctx, e.RecipientKind, e.RecipientName, e.RoomID, e.ID, coordinationMatrixNotification(e, nil))
+	content := coordinationMatrixNotification(e, nil)
+	// A background wake must not count as a Human's unread reminder.
+	content["msgtype"] = "m.notice"
+	id, err := h.assistant.send(ctx, e.RecipientKind, e.RecipientName, e.RoomID, e.ID, content)
 	if err != nil {
 		d.Error = "Teams assistant trigger remains pending"
 		return

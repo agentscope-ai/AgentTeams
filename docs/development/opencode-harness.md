@@ -10,6 +10,9 @@ configure `AGENTTEAMS_OPENCODE_WORKER_IMAGE` on the Controller. There is deliber
 no default release image until the candidate passes the
 [Harness admission requirements](../design/harness-integration-guide.md).
 Helm exposes the optional `worker.defaultImage.opencode.repository` and `.tag`.
+The shared publication workflow accepts explicit `runtime=opencode` with a fixed
+Harness SHA; `runtime=all` retains the existing release set until admission passes.
+Use `make build-opencode-worker OPENCODE_HARNESS_DIR=/path/to/checkout` for a local build.
 
 The adapter consumes the existing member runtime record and public Task schema;
 Core owns authorization, coordination, execution generations, files and delivery.

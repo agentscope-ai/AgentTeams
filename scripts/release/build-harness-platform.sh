@@ -13,13 +13,17 @@ case "$runtime" in
   hermes) target=hermes-worker; output=LOCAL_HERMES_WORKER ;;
   deepseek) target=deepseek-harness-worker; output=LOCAL_DEEPSEEK_HARNESS_WORKER ;;
   openhuman) target=openhuman-worker; output=LOCAL_OPENHUMAN_WORKER ;;
+  opencode)
+    docker build --platform "$platform" --build-context at=. "${common[@]}" \
+      --build-arg "AGENTTEAMS_CONTROLLER_IMAGE=$controller" -t "$image" opencode-harness
+    ;;
   codex)
     docker build --platform "$platform" --build-context at=. "${common[@]}" -t "${image}-source" codex-harness
     docker build --platform "$platform" "${common[@]}" --build-arg "CODEX_IMAGE=${image}-source" --build-arg "CONTROLLER_IMAGE=$controller" -f scripts/release/Dockerfile.codex -t "$image" .
     ;;
   *) echo "Unknown runtime: $runtime" >&2; exit 1 ;;
 esac
-if [[ "$runtime" != codex ]]; then
+if [[ "$runtime" != codex && "$runtime" != opencode ]]; then
   make -o build-agentteams-controller "build-${target}" \
     "$output=$image" "LOCAL_CONTROLLER_BUILD_IMAGE=$controller" "OPENCLAW_BASE_VERSION=$RELEASE_VERSION" \
     "DOCKER_PLATFORM=$platform" HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
@@ -33,6 +37,10 @@ case "$runtime" in
   hermes) docker run --rm --platform "$platform" --entrypoint /opt/venv/hermes/bin/python "$image" -c 'import hermes_worker' ;;
   deepseek) docker run --rm --platform "$platform" --entrypoint python3 -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/smoke.py:ro" "$image" /tmp/smoke.py ;;
   openhuman) docker run --rm --platform "$platform" --entrypoint openhuman-core "$image" --help ;;
+  opencode)
+    docker run --rm --platform "$platform" --entrypoint python3 "$image" -c 'import agentteams_opencode.bridge'
+    docker run --rm --platform "$platform" --entrypoint bun "$image" -e 'import { OpenCode } from "@opencode/sdk"; const host=await OpenCode.create({database:{path:":memory:"},models:{fetch:false},config:{project:false,content:"{}"}}); await host.close();'
+    ;;
   codex)
     docker run --rm --platform "$platform" --entrypoint codex "$image" --version
     docker run --rm --platform "$platform" --entrypoint /opt/venv/bin/python "$image" -c 'import agentteams_codex.bridge'

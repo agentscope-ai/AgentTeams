@@ -1,0 +1,47 @@
+# R1 Higress route split for the workers API.
+#
+# THIS FILE IS THE FROZEN ROUTE LOCATION: agentteams-service/deploy/higress/.
+# The installer/helm consumes it in R2; R1 ships the file so the route ownership
+# is reviewable and no wildcard ("/api/v1/workers*") can leave PUT/DELETE/
+# GET-by-name unassigned.
+#
+# Ownership rule:
+#   - 3 native routes -> agentteams-service (new envelope {code,message})
+#   - 2 proxy routes  -> agentteams-service forwards to agentteams-controller
+#                        byte-for-byte (old controller envelope preserved)
+#   - /internal/v1/*  -> NEVER public (internal service<->controller network only)
+apiVersion: agentteams.agentteams.io/v1alpha1
+kind: ServiceRouteFile
+metadata:
+  name: agentteams-service-workers-r1
+  annotations:
+    contract: "R1 workers route split (3 native, 2 proxy)"
+spec:
+  upstream:
+    service: agentteams-service
+    port: 8080
+  routes:
+    - name: workers-create
+      match: { method: POST, path: /api/v1/workers }
+      backend: { kind: service }
+    - name: workers-list
+      match: { method: GET, path: /api/v1/workers }
+      backend: { kind: service }
+    - name: workers-get
+      match: { method: GET, path: "/api/v1/workers/{name}" }
+      backend: { kind: service }
+    # The service forwards to the controller unchanged, so the
+    # write authority stays in the CR during R1. R2 turns these native.
+    - name: workers-update
+      match: { method: PUT, path: "/api/v1/workers/{name}" }
+      backend: { kind: service, mode: transparent-proxy, target: agentteams-controller }
+    - name: workers-delete
+      match: { method: DELETE, path: "/api/v1/workers/{name}" }
+      backend: { kind: service, mode: transparent-proxy, target: agentteams-controller }
+  neverPublic:
+    - prefix: /internal/v1/
+  disabledMode:
+    # AGENTTEAMS_SERVICE_ENABLED unset/false (G1 mode 1): the installer keeps
+    # the pre-R1 route set pointing at the controller. The service exits 0 and
+    # registers no business route, so the closed face is byte-identical.
+    active: false

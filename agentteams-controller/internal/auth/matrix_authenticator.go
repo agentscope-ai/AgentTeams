@@ -22,6 +22,12 @@ type MatrixWhoami interface {
 // MatrixTokenAuthenticator validates Matrix identities and resolves current Human
 // permissions: L1 administrator, L2 team scope, and L3 assigned-worker scope.
 // Token validation is cached; mutable Human permissions are resolved per request.
+//
+// Cache bounds (#1706): the whoami cache is capped at defaultCacheMax
+// entries. An insert that would exceed the cap first sweeps expired
+// entries and, if none were removed, evicts the earliest-expiry entry
+// (equivalent to LRU, since every insert uses the same TTL). This keeps
+// memory bounded even under adversarial token spraying.
 type MatrixTokenAuthenticator struct {
 	k8s       client.Client
 	namespace string
@@ -30,6 +36,7 @@ type MatrixTokenAuthenticator struct {
 	cacheMu         sync.Mutex
 	cache           map[[32]byte]cachedIdentity
 	cacheTTL        time.Duration
+	cacheMax        int
 	cleanupInterval time.Duration
 }
 
@@ -46,8 +53,9 @@ func NewMatrixTokenAuthenticator(k8s client.Client, namespace string, whoami Mat
 		namespace:       namespace,
 		whoami:          whoami,
 		cache:           make(map[[32]byte]cachedIdentity),
-		cacheTTL:        5 * time.Minute,
-		cleanupInterval: time.Minute,
+		cacheTTL:        defaultCacheTTL,
+		cacheMax:        defaultCacheMax,
+		cleanupInterval: defaultCleanupInterval,
 	}
 }
 
@@ -198,7 +206,44 @@ func (a *MatrixTokenAuthenticator) getFromCache(key [32]byte) *cachedIdentity {
 func (a *MatrixTokenAuthenticator) putToCache(key [32]byte, userID string) {
 	a.cacheMu.Lock()
 	defer a.cacheMu.Unlock()
+	if a.cacheMax > 0 && len(a.cache) >= a.cacheMax {
+		if a.sweepExpiredLocked(time.Now()) == 0 {
+			a.evictOldestLocked()
+		}
+	}
 	a.cache[key] = cachedIdentity{userID: userID, expiry: time.Now().Add(a.cacheTTL)}
+}
+
+// sweepExpiredLocked deletes entries whose expiry is at or before now. Caller
+// must hold a.cacheMu for write.
+func (a *MatrixTokenAuthenticator) sweepExpiredLocked(now time.Time) int {
+	n := 0
+	for k, v := range a.cache {
+		if !now.Before(v.expiry) {
+			delete(a.cache, k)
+			n++
+		}
+	}
+	return n
+}
+
+// evictOldestLocked deletes the entry with the earliest expiry — equivalent to
+// LRU here because every insert uses the same TTL, so insertion order matches
+// expiry order. Caller must hold a.cacheMu for write.
+func (a *MatrixTokenAuthenticator) evictOldestLocked() {
+	var oldestKey [32]byte
+	var oldestExp time.Time
+	found := false
+	for k, v := range a.cache {
+		if !found || v.expiry.Before(oldestExp) {
+			oldestKey = k
+			oldestExp = v.expiry
+			found = true
+		}
+	}
+	if found {
+		delete(a.cache, oldestKey)
+	}
 }
 
 // localpartFromUserID extracts the localpart from a Matrix user id

@@ -93,6 +93,14 @@ Dir.mktmpdir("agentteams-matrix-qwenpaw-") do |tmp|
     copy_entry(adapter_root, staging, rel.to_s)
   end
 
+  # Materialize adapter files owned by the Harness submodule in the ZIP.
+  Dir.glob((staging / "**/*").to_s).each do |item|
+    next unless File.symlink?(item)
+    relative = Pathname.new(item).relative_path_from(staging)
+    FileUtils.rm_f(item)
+    copy_entry(adapter_root, staging, relative)
+  end
+
   core_dir = bundle_root / "core"
   copy_entry(bundle_root, staging, "core") if core_dir.directory?
 

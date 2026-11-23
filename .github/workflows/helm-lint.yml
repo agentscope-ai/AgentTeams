@@ -184,6 +184,7 @@ jobs:
       - name: Check image build and release workflows
         run: |
           python3 -m pip install PyYAML==6.0.3
+          git submodule update --init -- qwenpaw
           python3 tests/test-build-workflows.py
 
       - name: Check QwenPaw installer runtime options

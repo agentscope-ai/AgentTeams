@@ -162,7 +162,7 @@ class BuildWorkflowTests(unittest.TestCase):
                 result = subprocess.run(['make', '-n', target, 'IS_PODMAN=' + podman],
                                         cwd=ROOT, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn('--build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw', result.stdout)
+                self.assertIn('--build-context teamharness_trace=./qwenpaw/adapters/teamharness', result.stdout)
                 self.assertTrue((ROOT / 'plugins/teamharness/adapters/qwenpaw/task_trace.py').is_file())
 
     def test_openclaw_base_builds_on_native_runners(self):

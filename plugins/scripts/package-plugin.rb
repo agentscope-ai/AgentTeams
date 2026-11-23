@@ -69,12 +69,13 @@ Dir.mktmpdir("teamharness-plugin-") do |tmp|
   staging = Pathname.new(tmp) / name
   staging.mkpath
   includes.each { |entry| copy_entry(plugin_root, staging, entry) }
-  if name == "agentteams-teamharness"
-    %w[plugin.py task_trace.py].each do |entry|
-      relative = "adapters/qwenpaw/#{entry}"
-      FileUtils.rm_f(staging / relative)
-      copy_entry(plugin_root, staging, relative)
-    end
+  # Source links point to the pinned Harness checkout. Release artifacts
+  # carry the actual files so consumers can install without that checkout.
+  Dir.glob((staging / "adapters/qwenpaw/**/*").to_s).each do |item|
+    next unless File.symlink?(item)
+    relative = Pathname.new(item).relative_path_from(staging)
+    FileUtils.rm_f(item)
+    copy_entry(plugin_root, staging, relative)
   end
   prune_generated(staging)
 

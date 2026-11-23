@@ -108,6 +108,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-go@v5
         with:
@@ -153,6 +154,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -289,6 +291,7 @@ jobs:
     name: Matrix channel regressions (${{ matrix.suite }})
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -328,6 +331,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -354,6 +358,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -546,6 +551,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-go@v5
         with:

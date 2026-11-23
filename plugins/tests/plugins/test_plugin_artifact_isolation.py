@@ -40,7 +40,7 @@ def test_reused_output_directory_does_not_publish_unrelated_archive(tmp_path):
     adapter = "adapters/qwenpaw/plugin.py"
     for entry in ("contracts", "mcp", "prompts", "skills", adapter):
         assert (bundle / entry).is_symlink()
-        assert (bundle / entry).resolve() == source / entry
+        assert (bundle / entry).resolve() == (source / entry).resolve()
     with tarfile.open(tmp_path / "agentteams-teamharness.tar.gz") as archive:
         for entry in (skill, adapter, "mcp/common/task_receipt.py"):
             assert archive.getmember(entry).isfile()

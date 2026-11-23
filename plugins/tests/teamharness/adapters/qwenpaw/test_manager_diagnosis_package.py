@@ -48,7 +48,9 @@ def test_controller_image_context_contains_manager_diagnosis(tmp_path, target):
     # image is built or published. Inspect the context at the build boundary.
     shutil.copy(ROOT / "Makefile", tmp_path / "Makefile")
     shutil.copytree(ROOT / "manager/agent", tmp_path / "manager/agent")
-    shutil.copytree(ROOT / "plugins/teamharness", tmp_path / "plugins/teamharness")
+    shutil.copytree(ROOT / "plugins/teamharness", tmp_path / "plugins/teamharness", symlinks=True)
+    shutil.copytree(ROOT / "plugins/agentteams-matrix", tmp_path / "plugins/agentteams-matrix", symlinks=True)
+    shutil.copytree(ROOT / "qwenpaw/adapters", tmp_path / "qwenpaw/adapters")
     compatibility = tmp_path / "plugins/agentteams-teamharness"
     compatibility.mkdir()
     (compatibility / "plugin.yaml").write_text("compatibility plugin")
@@ -71,6 +73,10 @@ if sys.argv[1:2] == ['build'] or sys.argv[1:3] == ['buildx', 'build']:
     leader = Path('agentteams-controller/agent/team-leader-agent')
     public = Path('plugins/teamharness')
     assert Path('agentteams-controller/plugins/teamharness/plugin.yaml').is_file()
+    for bundle, native in [('teamharness', 'teamharness'), ('agentteams-matrix', 'matrix')]:
+        payload = Path('agentteams-controller/plugins') / bundle / 'adapters/qwenpaw/plugin.py'
+        assert not payload.is_symlink()
+        assert payload.read_bytes() == (Path('qwenpaw/adapters') / native / 'plugin.py').read_bytes()
     assert not Path('agentteams-controller/plugins/agentteams-teamharness').exists()
     assert not Path('agentteams-controller/plugins/tests').exists()
     for template in ['worker-agent', 'hermes-worker-agent', 'openhuman-worker-agent', 'copaw-worker-agent']:

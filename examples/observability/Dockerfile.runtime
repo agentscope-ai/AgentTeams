@@ -15,7 +15,7 @@ for package in Path('/tmp/runtime-overlay').iterdir():
         shutil.copytree(package, Path(sysconfig.get_paths()['purelib']) / package.name, dirs_exist_ok=True)
 PY
 COPY shared/lib/ /opt/agentteams/scripts/lib/
-COPY plugins/teamharness/adapters/qwenpaw/task_trace.py /opt/agentteams/scripts/lib/telemetry/at_task_trace.py
+COPY qwenpaw/adapters/teamharness/task_trace.py /opt/agentteams/scripts/lib/telemetry/at_task_trace.py
 COPY plugins/agentteams-matrix-channel/ /opt/agentteams/qwenpaw-builtin/plugins/agentteams-matrix-channel/
 COPY ${RUNTIME}/scripts/${RUNTIME}-worker-entrypoint.sh /opt/agentteams/scripts/${RUNTIME}-worker-entrypoint.sh
 RUN ${VENV_PATH}/bin/python - <<'PY'

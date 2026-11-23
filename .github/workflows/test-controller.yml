@@ -143,6 +143,17 @@ jobs:
             'pytest>=8.3,<10' \
             'pytest-asyncio>=0.23,<2'
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agentteams-controller/go.mod
+          cache-dependency-path: agentteams-controller/go.sum
+      - name: Build Task CLI for adapter tests
+        working-directory: agentteams-controller
+        run: |
+          mkdir -p "$RUNNER_TEMP/qwenpaw-bin"
+          go build -o "$RUNNER_TEMP/qwenpaw-bin/agt" ./cmd/agt
+          echo "$RUNNER_TEMP/qwenpaw-bin" >> "$GITHUB_PATH"
+
       - name: Run QwenPaw tests against repository source
         run: |
           python -m pytest qwenpaw/tests -q

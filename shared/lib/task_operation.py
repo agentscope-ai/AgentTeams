@@ -22,6 +22,11 @@ def begin(checkpoint, anchor, calls):
     for call, evidence in zip(calls, expected):
         if call.get('read_only') is True:
             evidence['read_only'] = True
+        codes = call.get('pre_effect_error_codes', [])
+        if not isinstance(codes, list) or any(not isinstance(code, str) or not code for code in codes):
+            raise RecoveryConflict('Native pre-effect error codes must be nonempty strings')
+        if codes:
+            evidence['pre_effect_error_codes'] = codes
     cp.update(version=cp.get('version', 0) + 1,
               operation={'id': operation, 'state': 'started', 'evidence': json.dumps(expected)})
     return operation, cp
@@ -39,10 +44,13 @@ def result_bytes(checkpoint, operation, results):
     cp = pending(checkpoint, operation)
     expected = json.loads(cp['operation']['evidence'])
     read_only = {call['id'] for call in expected if call.get('read_only') is True}
+    pre_effect_codes = {call['id']: call.get('pre_effect_error_codes', []) for call in expected}
     if (not isinstance(results, list) or any(not isinstance(result, dict) or 'id' not in result
             or 'content' not in result or result.get('effect') == 'unknown'
             or (result.get('effect') == 'none'
-                and (result.get('status') != 'error' or result['id'] not in read_only))
+                and (result.get('status') != 'error' or
+                     (result['id'] not in read_only
+                      and result.get('error_code') not in pre_effect_codes.get(result['id'], []))))
             for result in results)
             or sorted(result['id'] for result in results) != sorted(call['id'] for call in expected)):
         raise RecoveryConflict('Native tool receipts differ from the admitted calls or remain unconfirmed')

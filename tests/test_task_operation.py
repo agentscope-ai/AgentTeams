@@ -146,6 +146,19 @@ class OperationAdmissionTest(unittest.TestCase):
     setUp = OperationTest.setUp
     transport = OperationTest.transport
 
+    def test_registered_pre_effect_error_requires_exact_code_and_call(self):
+        calls = [dict(self.calls[0], pre_effect_error_codes=['NATIVE_PRECONDITION'])]
+        op = self.recovery.begin_tools(self.identity, calls)
+        result = dict(self.results[0], effect='none', status='error', error_code='NATIVE_PRECONDITION')
+        with patch('task_recovery.subprocess.run') as upload:
+            for invalid in (dict(result, id='different'), dict(result, error_code='unknown'),
+                            dict(result, effect='unknown'), dict(result, status='success')):
+                with self.assertRaises(RecoveryConflict):
+                    self.recovery.finish_tools(self.identity, op, [invalid])
+            upload.assert_not_called()
+            self.recovery.finish_tools(self.identity, op, [result])
+        self.assertEqual(self.recovery.tools_current(self.identity)['execution']['state'], 'active')
+
     def test_read_only_terminal_error_allows_followup_under_same_identity(self):
         calls = [dict(self.calls[0], read_only=True)]
         failed = [dict(self.results[0], effect='none', status='error')]

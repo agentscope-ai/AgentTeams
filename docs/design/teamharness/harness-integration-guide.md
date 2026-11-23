@@ -52,6 +52,8 @@ Worker 使用实际启动入口调用 `POST /api/v1/runtime/matrix` 登记 `acti
 
 框架能确认原生注册工具只读时，在准入日志为该次调用记录 `read_only: true`。收到同一调用的终态错误后，用 `status: error` 和 `effect: none` 保存错误回执并恢复后续工具准入。核对真实 SDK 注册身份及调用 ID，工具参数和输出文字不参与只读能力判断。缺少可信终态或副作用未知时保留公共核验。
 
+SDK 能以结构化错误证明在任何副作用前拒绝时，框架可在准入记录的 `pre_effect_error_codes` 声明该工具的精确错误码。回执须关联原调用 ID，并同时提供 `status: error`、`effect: none` 和匹配的 `error_code`。错误码来自原生工具结果，准入列表来自 SDK 对接代码。
+
 ## 三、模型可见的 Task 工具
 
 托管回合通过受信注册的原生 Task 工具执行状态变更。通用 shell 会在运行前登记待核验操作，使用 shell 调用 `agt task submit` 会和提交所需的 active 执行状态互斥。独立 CLI 入口需要继承当前 Worker 的有效运行身份。

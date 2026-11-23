@@ -48,6 +48,9 @@ type WorkerDeprovisionRequest struct {
 
 // TeamRoomRequest describes rooms to create for a team.
 type TeamRoomRequest struct {
+	LeaderDMRoomID       string // reuse the Team-owned conversation during Leader replacement
+	LeaderDMRecipient    string // previous Human binding; never reuse another user's DM
+	AdminUID             string
 	TeamName             string
 	TeamAliasName        string
 	LeaderName           string
@@ -900,18 +903,35 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		leaderDMInvites = withoutString(leaderDMDesired, teamAdminID)
 	}
 	leaderDMMeta := leaderDMRoomMeta(req, teamAdminID, leaderMatrixID)
-	leaderDMRoom, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
-		Name:          fmt.Sprintf("Leader DM: %s", req.LeaderName),
-		Topic:         fmt.Sprintf("DM channel for team leader %s", req.LeaderName),
-		Invite:        leaderDMInvites,
-		PowerLevels:   p.leaderDMPowerLevels(managerMatrixID, adminMatrixID, leaderMatrixID, teamAdminID, hasTeamAdmin),
-		CreatorToken:  req.TeamAdminActorToken,
-		IsDirect:      true,
-		InitialState:  roomMetaState(leaderDMMeta),
-		RoomAliasName: roomAliasLocalpart("leader-dm", req.LeaderName),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("leader DM room creation failed: %w", err)
+	leaderDMRoom := &matrix.RoomInfo{RoomID: req.LeaderDMRoomID}
+	recipient := TeamAssistantRecipient(teamAdminID, req.AdminUID)
+	if req.LeaderDMRecipient != "" && req.LeaderDMRecipient != recipient {
+		leaderDMRoom.RoomID = ""
+	} else if leaderDMRoom.RoomID != "" && req.LeaderDMRecipient == "" && hasTeamAdmin {
+		// Legacy rooms have no stored Human binding. Only their existing
+		// Admin may retain them during migration, never a newly selected user.
+		if _, readErr := p.matrix.GetRoomState(ctx, leaderDMRoom.RoomID, "m.room.power_levels", "", req.TeamAdminActorToken); matrix.IsForbidden(readErr) {
+			leaderDMRoom.RoomID = ""
+		} else if readErr != nil {
+			return nil, fmt.Errorf("verify assistant recipient: %w", readErr)
+		}
+	}
+	if leaderDMRoom.RoomID == "" {
+		leaderDMRoom, err = p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
+			Name:          fmt.Sprintf("%s助手", req.TeamName),
+			Topic:         fmt.Sprintf("DM channel for team leader %s", req.LeaderName),
+			Invite:        leaderDMInvites,
+			PowerLevels:   p.leaderDMPowerLevels(managerMatrixID, adminMatrixID, leaderMatrixID, teamAdminID, hasTeamAdmin),
+			CreatorToken:  req.TeamAdminActorToken,
+			IsDirect:      true,
+			InitialState:  roomMetaState(leaderDMMeta),
+			RoomAliasName: roomAliasLocalpart("team-assistant", teamAliasName+"-"+recipient),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("leader DM room creation failed: %w", err)
+		}
+	} else if err := p.matrix.SetRoomName(ctx, leaderDMRoom.RoomID, req.TeamName+"助手", req.TeamAdminActorToken); err != nil {
+		return nil, fmt.Errorf("update team assistant name: %w", err)
 	}
 	logger.Info("leader DM room ready", "roomID", leaderDMRoom.RoomID, "created", leaderDMRoom.Created)
 
@@ -1292,12 +1312,18 @@ func (p *Provisioner) ReconcileRoomMembershipWithActorToken(ctx context.Context,
 					stillPresent, memberships, checkErr := p.observedRoomMembership(ctx, roomID, m.UserID)
 					if checkErr != nil {
 						logger.Error(checkErr, "failed to verify force-leave-room result", "room", roomID, "user", m.UserID)
+						if firstErr == nil {
+							firstErr = fmt.Errorf("verify previous role holder removal: %w", checkErr)
+						}
 					} else {
 						logger.Info("force-leave-room post-check",
 							"room", roomID,
 							"user", m.UserID,
 							"stillPresent", stillPresent,
 							"memberships", memberships)
+						if stillPresent && firstErr == nil {
+							firstErr = fmt.Errorf("previous role holder remains in room %s", roomID)
+						}
 					}
 					continue
 				} else {

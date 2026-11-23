@@ -112,7 +112,7 @@ func (f *fakeTeamMatrix) EnsureUser(context.Context, matrix.EnsureUserRequest) (
 func (f *fakeTeamMatrix) CreateRoom(_ context.Context, req matrix.CreateRoomRequest) (*matrix.RoomInfo, error) {
 	f.createRooms = append(f.createRooms, req)
 	roomID := "!team:localhost"
-	if strings.Contains(req.RoomAliasName, "leader-dm") {
+	if strings.Contains(req.RoomAliasName, "leader-dm") || strings.Contains(req.RoomAliasName, "team-assistant") {
 		roomID = "!leader-dm:localhost"
 	} else if strings.Contains(req.RoomAliasName, "manager") {
 		roomID = "!manager:localhost"
@@ -1133,7 +1133,7 @@ func TestProvisionTeamRoomsAddsAdminToExistingRooms(t *testing.T) {
 	}
 }
 
-func TestReconcileRoomMembershipForceLeavesWhenKickPowerDenied(t *testing.T) {
+func TestReconcileRoomMembershipDoesNotCompleteBeforeForceLeaveIsObserved(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	matrixClient.members["!team:localhost"] = []matrix.RoomMember{
 		{UserID: "@lead:localhost", Membership: "join"},
@@ -1145,8 +1145,8 @@ func TestReconcileRoomMembershipForceLeavesWhenKickPowerDenied(t *testing.T) {
 		AdminUser: "admin",
 	})
 
-	if err := p.ReconcileRoomMembership(context.Background(), "!team:localhost", []string{"@lead:localhost"}); err != nil {
-		t.Fatalf("ReconcileRoomMembership: %v", err)
+	if err := p.ReconcileRoomMembership(context.Background(), "!team:localhost", []string{"@lead:localhost"}); err == nil {
+		t.Fatal("pending force-leave was incorrectly reported as completed")
 	}
 
 	if got, want := matrixClient.kicks, []roomUserCall{{roomID: "!team:localhost", userID: "@nov11:localhost"}}; !reflect.DeepEqual(got, want) {

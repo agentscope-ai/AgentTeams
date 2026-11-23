@@ -95,8 +95,8 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Worker name, globally unique |
 | `spec.model` | string | Yes | — | LLM model ID, e.g. `claude-sonnet-4-6`, `qwen3.5-plus` |
-| `spec.runtime` | string | No | `openclaw` | The current Worker CRD accepts `openclaw`, `qwenpaw`, `copaw` (legacy), or `hermes`. |
-| `spec.image` | string | No | — | Custom image. When empty, the controller selects `AGENTTEAMS_WORKER_IMAGE`, `AGENTTEAMS_COPAW_WORKER_IMAGE`, `AGENTTEAMS_QWENPAW_WORKER_IMAGE`, or `AGENTTEAMS_HERMES_WORKER_IMAGE` by runtime. The current chart has no `worker.defaultImage.qwenpaw`, so set this field explicitly for a QwenPaw Worker on Kubernetes. |
+| `spec.runtime` | string | No | install/backend default | `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, `openhuman`, `codex`, or legacy `copaw`; Helm defaults to OpenClaw, the local installer to QwenPaw. |
+| `spec.image` | string | No | — | Custom image; when empty, the Controller selects its configured image for the runtime. The current chart provides `worker.defaultImage` entries for all six current Harnesses. Legacy CoPaw requires an explicit old repository and tag. |
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |
 | `spec.agents` | string | No | — | Agent behavior rules, used to generate AGENTS.md |
@@ -110,7 +110,7 @@ spec:
 
 Changing `spec.resources` updates the Worker spec and recreates the managed container/Pod. Avoid resource changes while a Worker is actively processing a task.
 
-The Controller already contains an OpenHuman backend and image configuration, but the shipped Worker CRD enum does not accept `openhuman`. Until a separate business-code change aligns that contract, do not set `spec.runtime: openhuman` in Worker YAML.
+The current Worker CRD accepts OpenHuman and Codex. See [runtime and image configuration](deployment/kubernetes.md#34-default-worker-runtime) for chart defaults and legacy CoPaw handling.
 
 ### identity / soul / agents vs package
 
@@ -173,7 +173,7 @@ A **team skill** belongs to one team (storage: `teams/<team>/skills/<name>/`) �
    The upload is content-scanned (best-effort): a blocked scan returns
    `422` with the findings; an unavailable scan proceeds and reports
    `scan.status: "skipped"`. Re-uploading the same skill replaces it
-   exactly (dropped files are deleted). `scope=deployment` (admin only)
+   exactly (dropped files are deleted). `scope=deployment` (admin or platform Manager)
    publishes to `agents/global/skills/` instead.
 2. **Assign**: update the Worker's `spec.skills` (API, Dashboard, or
    through the Manager). At the next reconcile the Controller scans the
@@ -183,8 +183,8 @@ A **team skill** belongs to one team (storage: `teams/<team>/skills/<name>/`) �
    it into its native workspace within the sync interval.
 
 Team leaders can browse their team's catalog (`GET /api/v1/skills?team=…`)
-as the assign surface but cannot publish; manager and worker principals
-cannot publish at all. On a name clash the **team layer wins** over the
+as the assign surface. Skill publishing is available to admins, platform
+Managers and L2 humans according to the scopes above. On a name clash the **team layer wins** over the
 builtin library. See [Team Skills design](../design/team-skills.md) for
 the full contract, scan semantics, and the k8s-mode limitation.
 
@@ -280,7 +280,7 @@ Create `alpha-lead`, `alpha-dev`, and `alpha-qa` as Worker resources first. Mode
 | `spec.peerMentions` | bool | No | If `true` (default), team Workers may @mention each other in group rooms |
 | `spec.channelPolicy` | object | No | Team-wide overrides for group/DM allow-deny lists (same shape as Worker `channelPolicy`) |
 | `spec.admin` | object | No | Team-specific human admin (`name` required; `matrixUserId` optional). Defaults to global Admin when omitted |
-| `spec.humanMembers` | []object | No | Additional human Team members. In this version, `role: coordinator` members join the Team Room and can assign work there like the Team Admin |
+| `spec.humanMembers` | []object | No | Additional human Team members. `coordinator` can assign work; `member` joins the Team Room as an ordinary member |
 | `spec.workerMembers` | []object | Yes | References to existing Worker resources; exactly one entry must have `role: team_leader` |
 | `spec.workerMembers[].name` | string | Yes | Referenced Worker resource name |
 | `spec.workerMembers[].role` | string | Yes | `team_leader` or `worker` |
@@ -384,7 +384,7 @@ If not specified, the global Admin is used by default. The Team Admin is invited
 
 ### Team Members
 
-Use `spec.humanMembers` to add human members who are part of the Team but are not Workers. The first supported member role is `coordinator`: the member is invited to the Team Room, and Leader/Workers accept their @mentions there as authorized task assignment. Leader DM remains limited to the Team Admin and Leader.
+Use `spec.humanMembers` to add human members who are part of the Team but are not Workers. The default `coordinator` role can assign tasks to Leader/Workers through @mentions in the Team Room. The `member` role joins the Team Room without coordinator task-assignment authority. Leader DM remains limited to the Team Admin and Leader. In team updates, `admin: null` clears the explicit admin assignment; omitting `admin` preserves it.
 
 ```yaml
 spec:
@@ -438,7 +438,7 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Manager resource name (often `default` for the primary instance) |
 | `spec.model` | string | Yes | — | LLM model ID |
-| `spec.runtime` | string | No | install/backend default | **OpenClaw** (`openclaw`) or **CoPaw/QwenPaw** (`qwenpaw`; `copaw` is a legacy compatibility alias). Hermes is **not** a supported Manager runtime. |
+| `spec.runtime` | string | No | install/backend default | `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, or `openhuman`; `copaw` is a legacy QwenPaw alias. Codex is not accepted by the Manager CRD. |
 | `spec.image` | string | No | — | Custom Manager image; empty uses deployment default |
 | `spec.soul` | string | No | — | Custom SOUL.md content |
 | `spec.agents` | string | No | — | Custom AGENTS.md content |

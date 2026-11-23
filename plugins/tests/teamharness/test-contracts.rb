@@ -54,10 +54,13 @@ end
 assert_file(runtime_design_doc)
 
 # Builtin Leader guidance must agree with Controller resource authorization.
-leader_root = repo_root / "manager/agent/team-leader-agent"
-leader_guidance = [leader_root / "AGENTS.md", leader_root / "HEARTBEAT.md", leader_root / "skills/organization/SKILL.md"].map { |path| read(path) }.join("\n")
+leader_guidance = [plugin_root / "prompts/agent/leader.md", plugin_root / "prompts/agent/leader-heartbeat.md", plugin_root / "skills/team/organization/SKILL.md"].map { |path| read(path) }.join("\n")
 assert(!leader_guidance.match?(/^\s*agt worker (wake|sleep|ensure-ready)\b/), "Leader guidance must not prescribe resource lifecycle writes")
 assert(leader_guidance.include?("Manager or platform Admin"), "Leader runtime blockers must name the resource authority")
+
+task_skill = normalized(read(plugin_root / "skills/team/task-management/SKILL.md"))
+assert(task_skill.include?("distinct Worker identities") && task_skill.include?("every required upstream result"),
+       "Leader planning must preserve explicit independent assignees and all required inputs to aggregation")
 
 runtime_design = read(runtime_design_doc)
 assert(runtime_design.include?("submission_id") && runtime_design.include?("submitted_at") && runtime_design.include?("不透明、不可变提交身份"), "runtime design must define opaque immutable submission identity")
@@ -110,19 +113,25 @@ assert(manager_prompts == expected_manager_prompts, "unexpected manager prompts:
 
 team_prompt = read(plugin_root / prompts.fetch("team"))
 assert(team_prompt.include?("stable collaboration"), "team prompt must define stable collaboration rules")
+assert(normalized(team_prompt).include?("room-join notices, duplicate acknowledgements") &&
+       normalized(team_prompt).include?('a plain name without a leading `@`'),
+       "Managed task-room guidance must prevent passive messages from waking Workers")
 assert(team_prompt.include?("Request Modes"), "team prompt must define request modes")
 assert(team_prompt.include?("Direct Reply"), "team prompt must allow ordinary direct replies")
 assert(!team_prompt.include?("Lightweight Action"), "team prompt must not keep the old lightweight action mode")
-assert(team_prompt.include?("Quick Task"), "team prompt must define quick task mode")
+assert(team_prompt.include?("### Task Work"), "team prompt must define Task Work")
 assert(team_prompt.include?("Project Work"), "team prompt must reserve project/task flow for project work")
 assert(team_prompt.include?("Request Modes And Standard Flow"), "team prompt must merge request modes and standard flow")
 assert(!team_prompt.include?("Project Wake-Up Recovery"), "team prompt must not keep project wake-up as a standalone chapter")
 assert(normalized(team_prompt).include?("resolve project context"), "team prompt must resolve project context before result handling")
-assert(team_prompt.include?("create_quick_project"), "team prompt quick task flow must index project-management quick project steps")
+assert(normalized(team_prompt).include?('For a verified `task/v1` event, use the common `task` tool'),
+       "team prompt must route managed delegation to the common task tool")
+assert(!"#{team_prompt}\n#{leader_guidance}".match?(/\b(?:start_task|start_project)\b/),
+       "Keep legacy start commands in the project-management skill, outside default team and Leader prompts")
 assert(team_prompt.include?("task request message"), "team prompt must route task-room handoff as a task request message")
 assert(team_prompt.include?("roomflow create_task_room"), "team prompt must create task rooms through roomflow")
 assert(!team_prompt.include?("Load `teamharness-team-coordination` if the boundary is unclear"), "team prompt quick task flow must not re-run mode selection")
-assert(normalized(team_prompt).include?("Do not call `delegate_task` for Quick Task"), "team prompt quick task flow must not delegate after create_quick_project")
+assert(!team_prompt.include?("create_quick_project") && normalized(team_prompt).include?("Use this flow when the requester explicitly asks you to create a Project"), "team prompt must reserve Project creation for explicit requests")
 assert(team_prompt.include?("create_project") && team_prompt.include?("plan_dag") && team_prompt.include?("plan_loop"), "team prompt project work flow must route planning to project-management")
 assert(team_prompt.include?("Rooms and Channels"), "team prompt must define rooms and channels")
 assert(team_prompt.include?("Source channel / requester room"), "team prompt must define source/requester channels")
@@ -172,10 +181,10 @@ assert(
 assert(remote_prompt.include?("current room/session"), "remote prompt must avoid message tool for current-session reports")
 assert(remote_prompt.include?("must leave"), "remote prompt must scope message tool to cross-session routing")
 leader_prompt = read(plugin_root / agent_prompts.fetch("leader"))
-assert(leader_prompt.include?("Do not treat a worker completion message as automatic project acceptance"), "leader prompt must require acceptance")
-assert(leader_prompt.include?("Request Intake"), "leader prompt must define request intake")
-assert(leader_prompt.include?("Do not create a project"), "leader prompt must avoid project state for direct replies")
-assert(leader_prompt.include?("PROJECT_REQUESTED") && leader_prompt.include?("requester/source session"), "leader prompt must route source project work through task-room self-trigger")
+assert(normalized(leader_prompt).include?("`accept` or `reject` the exact submission ID") &&
+       normalized(leader_prompt).include?("`complete` the main Task"), "leader prompt must fence subtask acceptance and explicit main completion")
+assert(normalized(leader_prompt).include?("without creating a Task, Project or assignment"), "leader prompt must avoid durable state for direct replies")
+assert(normalized(leader_prompt).include?("original Task ID, spec, requester and reply route"), "leader prompt must preserve existing requester routing")
 manager_prompt = read(plugin_root / manager_prompts.fetch("agents"))
 assert(manager_prompt.include?("control-plane"), "manager prompt must state the control-plane boundary")
 
@@ -196,6 +205,7 @@ expected_skills = {
     "team-coordination" => %w[leader],
     "project-management" => %w[leader],
     "task-delegation" => %w[leader],
+    "task-management" => %w[leader],
     "task-execution" => %w[worker remote-member]
   }
 }
@@ -221,6 +231,9 @@ communication_skill = read(team_skill_dir / "communication/SKILL.md")
 roomflow_skill = read(team_skill_dir / "roomflow/SKILL.md")
 coordination_skill = read(team_skill_dir / "team-coordination/SKILL.md")
 project_skill = read(team_skill_dir / "project-management/SKILL.md")
+project_description = skill_frontmatter(team_skill_dir / "project-management/SKILL.md").fetch("description")
+assert(project_description.include?("legacy Task flows") && !project_description.match?(/\b(?:start_task|start_project)\b/),
+       "Project skill discovery must not advertise legacy start commands as the default for managed tasks")
 delegation_skill = read(team_skill_dir / "task-delegation/SKILL.md")
 execution_skill = read(team_skill_dir / "task-execution/SKILL.md")
 project_skill_text = normalized(project_skill)
@@ -243,14 +256,14 @@ assert(communication_skill.include?("Do not use Matrix mention syntax") && commu
 assert(normalized(communication_skill).include?("do not describe workspace files as chat attachments") && communication_skill.include?("platform object-storage view"), "communication skill must describe external-channel artifact paths without fake file attachments")
 assert(communication_skill.include?("return to `teamharness-project-management`") && communication_skill.include?("mark_requester_report_sent"), "communication skill must leave requester report state updates to project-management")
 assert(communication_skill.include?("replyRoute") && communication_skill.include?("targetSession"), "communication skill must show requester report delivery payload")
-assert(communication_skill.include?("Quick Task or Project Work handoff"), "communication skill self-trigger must cover Quick Task and Project Work")
+assert(communication_skill.include?("manual Project Work handoff"), "communication skill self-trigger must cover manual Project Work")
 assert(roomflow_skill.include?("roomflow describe_room"), "roomflow skill must document room description")
 assert(roomflow_skill.include?("roomflow create_task_room"), "roomflow skill must document task-room creation")
 assert(roomflow_skill.include?("TASK：<projectId>"), "roomflow skill must document project-id task-room name normalization")
 assert(normalized(roomflow_skill).include?("Different projects from the same DingTalk group or same person still get different task rooms"), "roomflow skill must document project-scoped task-room reuse")
 assert(coordination_skill.include?("Choose Loop"), "coordination skill must retain Loop mode")
 assert(coordination_skill.include?("Do not pre-expand repeated Loop rounds"), "coordination skill must avoid flattening Loop into a large DAG")
-assert(project_skill.include?("Quick Task") && project_skill.include?("Project Work"), "project skill must cover Quick Task and Project Work")
+assert(project_skill.include?("taskflow start_task") && normalized(project_skill).include?('Use `create_quick_project` only for an explicitly requested single-node Project'), "project skill must reserve the legacy quick action for explicit Projects")
 assert(project_skill.include?("ordinary direct replies"), "project skill must exclude ordinary direct replies")
 assert(project_skill.include?("meta.json"), "project skill must use CoPaw meta.json state")
 assert(project_skill.include?("resolve_project"), "project skill must document project context resume")
@@ -273,15 +286,15 @@ assert(project_skill.include?("PROJECT_REQUESTED") && project_skill_text.include
 assert(project_skill.include?("Do not call this in the requester/source session"), "project skill quick task creation must run in the task room")
 assert(project_skill.include?("Project Status Reports"), "project skill must include requester status report template")
 assert(project_skill.include?("owner or executor cells are descriptive text") && project_skill.include?("Do not prefix them with `@`"), "project report template must avoid display-only Matrix mentions")
-assert(project_skill.include?("After the project state changes"), "project skill must require requester visibility after accepted state changes")
+assert(normalized(project_skill).include?("Keep intermediate results in the Task room; they do not trigger a Manager report") && project_skill.include?("once at final completion"), "project skill must retain intermediate progress in the task room and deliver the final requester report")
 assert(project_skill.include?("publishArtifacts: true") && project_skill.include?("parentEventId"), "project skill must document explicit project artifact publish after requester report")
 assert(project_skill.include?("non-Matrix channel") && project_skill.include?("do not claim that a file was attached") && project_skill.include?("platform object-storage view"), "project requester report template must avoid fake external-channel file attachment claims")
 assert(project_skill.include?("Task room coordination") && project_skill.include?("do not count as the requester report"), "project skill must not count task-room coordination as requester reporting")
 assert(!project_skill.include?("Loop planning, pause/resume/complete"), "project skill must not mark Loop planning as future")
 assert(delegation_skill.include?("ready project node"), "delegation skill must be scoped to ready project nodes")
 assert(delegation_skill.include?("ordinary conversation"), "delegation skill must not turn ordinary conversation into tasks")
-assert(delegation_skill.include?("For Quick Task") && delegation_skill.include?("do not call\n`delegate_task` again"), "delegation skill must keep Quick Task assignment message separate from delegate_task")
-assert(delegation_skill.include?("normal current-session reply") && delegation_skill.include?("Do not use the `message` tool"), "delegation skill must keep same-room assignment out of message tool")
+assert(delegation_skill.include?("start_task and acceptance dispatch ready execution specs") && delegation_skill.include?("Do not send duplicate assignments"), "delegation skill must avoid duplicate dispatch after automatic Task assignment")
+assert(delegation_skill.include?("automatically sends the") && delegation_skill.include?("Worker assignment notification with `m.mentions`"), "delegation skill must leave assignment notification to the task system")
 assert(delegation_skill.include?("`teamharness-roomflow` owns task-room creation"), "delegation skill must leave room setup details to roomflow")
 assert(!delegation_skill.include?("roomBindingScope: \"sender\""), "delegation skill must not duplicate roomflow sender binding details")
 assert(delegation_skill_text.include?("Do not fall back to the requester/source session"), "delegation skill must keep Project Work assignment inside the task room")
@@ -292,9 +305,9 @@ assert(communication_skill.include?("matrix:!roomid:domain"), "communication ski
 assert(communication_skill.include?("Matrix DM requester reports") && communication_skill.include?("targetSession"), "communication skill must document Matrix DM reply routes")
 assert(communication_skill.include?("requester report") && communication_skill.include?("mandatory"), "communication skill must require requester reports after accepted state changes")
 assert(communication_skill.include?("PROJECT_REQUESTED Self Trigger") && communication_skill.include?("matrix_self_trigger"), "communication skill must document PROJECT_REQUESTED trigger result")
-assert(communication_skill.include?("same-agent Quick Task or Project Work handoff"), "communication skill must own PROJECT_REQUESTED handoff details")
-assert(leader_prompt.include?("same runtime\nMatrix account") && leader_prompt.include?("current Matrix user id"), "leader prompt must describe self-trigger identity as the runtime Matrix account")
-assert(leader_prompt.include?("role names such as `leader`") && leader_prompt.include?("workspace names such as\n`default`"), "leader prompt must reject role/workspace names for self-trigger identity")
+assert(communication_skill.include?("same-agent manual Project Work handoff"), "communication skill must own PROJECT_REQUESTED handoff details")
+assert(communication_skill.include?("same-agent") && communication_skill.include?("current runtime Matrix user id"), "communication skill must describe self-trigger identity as the runtime Matrix account")
+assert(normalized(communication_skill).include?("role names such as `leader`") && communication_skill.include?("workspace names such as"), "communication skill must reject role/workspace names for self-trigger identity")
 assert(normalized(communication_skill).include?("recorded requester route is exactly"), "communication skill must own requester route exclusion rules")
 assert(execution_skill.include?("Do not use this skill or taskflow"), "execution skill must exclude direct checks")
 assert(execution_skill.include?("meta.json"), "execution skill must use CoPaw meta.json state")
@@ -316,8 +329,8 @@ assert(
 
 assert(!manifest.key?("hooks"), "TeamHarness v0.1 must not define runtime-neutral top-level hooks")
 
-adapters = manifest.fetch("adapters").to_h { |adapter| [adapter.fetch("id"), adapter.fetch("path")] }
-assert(adapters == { "qwenpaw" => "adapters/qwenpaw" }, "unexpected adapters: #{adapters.inspect}")
+adapters = manifest.fetch("adapters", []).to_h { |adapter| [adapter.fetch("id"), adapter.fetch("path")] }
+assert(adapters.empty?, "unexpected adapters: #{adapters.inspect}")
 
 plugin_files = Dir.glob((plugin_root / "**/*").to_s, File::FNM_DOTMATCH)
   .map { |path| Pathname.new(path) }

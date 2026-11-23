@@ -51,6 +51,9 @@ skills:
     - id: task-delegation
       path: skills/team/task-delegation
       roles: [leader]
+    - id: task-management
+      path: skills/team/task-management
+      roles: [leader]
     - id: task-execution
       path: skills/team/task-execution
       roles: [worker, remote-member]
@@ -70,8 +73,10 @@ mcp:
         - projectflow
         - taskflow
 adapters:
-  - id: qwenpaw
-    path: adapters/qwenpaw
+  - id: openclaw
+    path: adapters/openclaw
+  - id: hermes
+    path: adapters/hermes
 package:
   include:
     - plugin.yaml

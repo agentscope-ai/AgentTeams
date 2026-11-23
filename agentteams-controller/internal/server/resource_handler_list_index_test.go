@@ -115,7 +115,7 @@ func TestListWorkersTeamIndexListCount(t *testing.T) {
 		}
 		want := workerToResponse(w)
 		if found {
-			applyTeamMember(&want, team, member)
+			applyTeamMember(&want, team, member, nil)
 		}
 		if got.Team != want.Team || got.Role != want.Role ||
 			got.RoomID != want.RoomID || got.MatrixUserID != want.MatrixUserID {
@@ -245,7 +245,7 @@ func TestListWorkersTeamIndexFirstHitWins(t *testing.T) {
 			t.Fatalf("findTeamMember(%s): not found, but response carries team=%q", got.Name, got.Team)
 		}
 		var want WorkerResponse
-		applyTeamMember(&want, team, member)
+		applyTeamMember(&want, team, member, nil)
 		if got.Team != want.Team || got.Role != want.Role ||
 			got.RoomID != want.RoomID || got.MatrixUserID != want.MatrixUserID {
 			t.Errorf("worker %s: got team=%q role=%q roomID=%q matrixUserID=%q, want team=%q role=%q roomID=%q matrixUserID=%q",

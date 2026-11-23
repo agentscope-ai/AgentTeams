@@ -115,7 +115,7 @@ def test_lifecycle_script_inventory_is_complete():
         "scripts/uninstall.sh",
         "scripts/status.sh",
     }
-    for runtime in ("qwenpaw", "openclaw", "hermes"):
+    for runtime in ("openclaw", "hermes"):
         expected.add(f"adapters/{runtime}/install.sh")
         expected.add(f"adapters/{runtime}/uninstall.sh")
     assert rels == expected

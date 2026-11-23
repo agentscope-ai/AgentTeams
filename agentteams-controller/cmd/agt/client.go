@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -72,23 +73,46 @@ func discoverToken() string {
 // Do sends an HTTP request and returns the raw response.
 // body may be nil for methods that have no request body.
 func (c *APIClient) Do(method, path string, body interface{}) (*http.Response, error) {
+	return c.doWithHeaders(method, path, body, nil)
+}
+
+func (c *APIClient) doWithHeaders(method, path string, body interface{}, headers http.Header) (*http.Response, error) {
+	return c.doWithHeadersContext(context.Background(), method, path, body, headers)
+}
+
+func (c *APIClient) doWithHeadersContext(ctx context.Context, method, path string, body interface{}, headers http.Header) (*http.Response, error) {
 	url := c.BaseURL + path
 
 	var bodyReader io.Reader
 	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request body: %w", err)
+		if stream, ok := body.(io.Reader); ok {
+			bodyReader = stream
+		} else {
+			data, err := json.Marshal(body)
+			if err != nil {
+				return nil, fmt.Errorf("marshal request body: %w", err)
+			}
+			bodyReader = bytes.NewReader(data)
 		}
-		bodyReader = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequest(method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	if body != nil {
+	for k, values := range headers {
+		for _, value := range values {
+			req.Header.Add(k, value)
+		}
+	}
+	// Preserve the current Task tool's W3C context across the CLI subprocess.
+	for _, name := range []string{"traceparent", "tracestate", "baggage"} {
+		if value := os.Getenv("AT_OTEL_" + strings.ToUpper(name)); value != "" && req.Header.Get(name) == "" {
+			req.Header.Set(name, value)
+		}
+	}
+	if body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.Token != "" {
@@ -105,6 +129,10 @@ func (c *APIClient) DoJSON(method, path string, body, result interface{}) error 
 	if err != nil {
 		return err
 	}
+	return decodeJSONResponse(resp, result)
+}
+
+func decodeJSONResponse(resp *http.Response, result interface{}) error {
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)

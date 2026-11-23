@@ -7,10 +7,18 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import yaml
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/release/build-harness-platform.sh'
 
 class HarnessPublicationTest(unittest.TestCase):
+    def test_staging_only_build_cannot_publish_release_tags(self):
+        workflow = yaml.safe_load((SCRIPT.parents[2] / '.github/workflows/publish-harnesses.yml').read_text())
+        inputs = workflow[True]['workflow_dispatch']['inputs']
+        self.assertEqual(inputs['publish']['type'], 'boolean')
+        self.assertTrue(inputs['publish']['default'])
+        self.assertEqual(workflow['jobs']['publish']['if'], 'inputs.publish')
+
     def exercise(self, runtime, fail_smoke=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -43,6 +51,12 @@ if os.environ.get('FAIL_SMOKE') == '1' and sys.argv[1:2] == ['run']: sys.exit(9)
                     f'registry.test/agentteams/agentteams-harness-{runtime}:candidate-arm64'])
                 self.assertTrue(any(c[:2] == ['docker', 'run'] for c in calls[:-1]))
                 self.assertNotIn('agentteams-manager', json.dumps(calls))
+
+    def test_openclaw_uses_the_matching_release_base(self):
+        code, calls = self.exercise('openclaw')
+        self.assertEqual(code, 0)
+        build = next(call for call in calls if call[0] == 'make')
+        self.assertIn('OPENCLAW_BASE_VERSION=v1.2.7', build)
 
     def test_failed_smoke_never_pushes(self):
         code, calls = self.exercise('qwenpaw', fail_smoke=True)

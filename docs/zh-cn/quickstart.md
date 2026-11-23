@@ -21,12 +21,14 @@
 
 > 默认直接启动本地服务和 Dashboard。需要逐项配置安装参数时，在命令末尾添加 `--manual`。
 
+Core v1.2.7 的六种 Harness 镜像统一使用 `v1.2.7` 标签，配套 Dashboard 独立编号为 `v1.4.1`。安装器位于官网仓库；Core 仓库不再维护安装脚本实现。
+
 ## 第一步：安装 AgentTeams
 
 在终端中运行：
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 等待 Dashboard 自动打开。安装器会将登录密码复制到剪贴板，登录页预填用户名 `admin`；粘贴密码后即可登录。浏览器或剪贴板不可用时，可以使用终端打印的地址和账号密码。
@@ -136,6 +138,8 @@ docker ps --filter name=agentteams-worker
 
 ## 下一步
 
+- 阅读 [Dashboard 使用指南](usage/dashboard.md)，了解会话、团队、人工待办、文件和 Tracing。
+
 - 先阅读 [AgentTeams 概览](overview.md)，了解角色、组件和部署方式。
 - 参考 [AgentTeams 使用案例](usage/use-cases.md)，尝试软件交付、研究分析、内容本地化、故障分析、长期项目协作，以及自定义 Skill 的添加与实际使用。
 - 使用 [本地部署指南](usage/deployment/local.md) 查看模型、端口、域名、存储、运行时和自动化安装选项。
@@ -149,5 +153,5 @@ docker ps --filter name=agentteams-worker
 以下操作会移除 AgentTeams 容器、网络、数据卷、配置文件和本地工作空间。确认不再需要其中的数据后再执行：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```

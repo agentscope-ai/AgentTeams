@@ -21,7 +21,7 @@
 # ---------- Configuration ----------
 
 VERSION        ?= latest
-DEEPSEEK_HARNESS_WORKER_VERSION ?= v1.2.7
+DEEPSEEK_HARNESS_WORKER_VERSION ?= v1.2.8
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= agentteams
 
@@ -145,12 +145,30 @@ OPENCLAW_BASE_VERSION ?= $(shell sed -n 's/^OPENCLAW_BASE_TAG=//p' hack/versions
 OPENCLAW_BASE_BUILD_ARG = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE):$(OPENCLAW_BASE_VERSION)
 
-build-agentteams-controller: ## Build agentteams-controller image (prerequisite for Manager)
-	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
-	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -r ./plugins ./agentteams-controller/plugins
+.PHONY: stage-agent-assets
+qwenpaw/adapters/teamharness/plugin.py:
+	git submodule update --init -- qwenpaw
+
+stage-agent-assets: ## Assemble shared role prompts and skills for Controller images
+	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -RP ./plugins ./agentteams-controller/plugins
+	@rm -rf ./agentteams-controller/plugins/agentteams-teamharness ./agentteams-controller/plugins/tests
 	@mkdir -p ./agentteams-controller/agent/manager-agent
 	@cp ./plugins/teamharness/prompts/manager/*.md ./agentteams-controller/agent/manager-agent/
 	@cp -r ./plugins/teamharness/skills/manager ./agentteams-controller/agent/manager-agent/skills
+	@cp -r ./plugins/teamharness/skills/agent/task-diagnosis ./agentteams-controller/agent/manager-agent/skills/
+	@mkdir -p ./agentteams-controller/agent/team-leader-agent/skills
+	@cp ./plugins/teamharness/prompts/agent/leader.md ./agentteams-controller/agent/team-leader-agent/AGENTS.md
+	@cp ./plugins/teamharness/prompts/agent/leader-heartbeat.md ./agentteams-controller/agent/team-leader-agent/HEARTBEAT.md
+	@for skill in communication file-sharing roomflow team-coordination project-management task-delegation task-management organization; do cp -r ./plugins/teamharness/skills/team/$$skill ./agentteams-controller/agent/team-leader-agent/skills/; done
+	@for skill in task-diagnosis mcporter find-skills; do cp -r ./plugins/teamharness/skills/agent/$$skill ./agentteams-controller/agent/team-leader-agent/skills/; done
+	@for template in worker-agent hermes-worker-agent copaw-worker-agent; do \
+		cp ./plugins/teamharness/prompts/agent/worker.md ./agentteams-controller/agent/$$template/AGENTS.md; \
+		for skill in communication file-sharing task-execution; do cp -r ./plugins/teamharness/skills/team/$$skill ./agentteams-controller/agent/$$template/skills/; done; \
+		for skill in mcporter find-skills; do cp -r ./plugins/teamharness/skills/agent/$$skill ./agentteams-controller/agent/$$template/skills/; done; \
+	done
+
+build-agentteams-controller: stage-agent-assets ## Build agentteams-controller image (prerequisite for Manager)
+	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
 		./agentteams-controller/
@@ -183,7 +201,7 @@ build-worker push-worker: | worker/Dockerfile
 
 build-worker: build-agentteams-controller ## Build shared OpenClaw Harness image
 	@echo "==> Building Worker image: $(LOCAL_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(OPENCLAW_BASE_BUILD_ARG) $(SHARED_LIB_CTX) --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_WORKER) \
 		./worker/
@@ -191,25 +209,32 @@ build-worker: build-agentteams-controller ## Build shared OpenClaw Harness image
 hermes/Dockerfile:
 	git submodule update --init -- hermes
 
-build-hermes-worker push-hermes-worker: | hermes/Dockerfile
+build-hermes-worker push-hermes-worker: | hermes/Dockerfile qwenpaw/adapters/teamharness/plugin.py
 
 build-hermes-worker: build-agentteams-controller ## Build Hermes Worker image
 	@echo "==> Building Hermes Worker image: $(LOCAL_HERMES_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./qwenpaw/adapters/teamharness --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_HERMES_WORKER) \
 		./hermes/
 
+openhuman/Dockerfile:
+	git submodule update --init -- openhuman
+
+build-openhuman-worker push-openhuman-worker: | openhuman/Dockerfile
+
 build-openhuman-worker: build-agentteams-controller ## Build OpenHuman Worker image (Rust + native Matrix)
 	@echo "==> Building OpenHuman Worker image: $(LOCAL_OPENHUMAN_WORKER)"
-	docker build $(PLATFORM_FLAG) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
 		-t $(LOCAL_OPENHUMAN_WORKER) \
-		-f openhuman/Dockerfile .
+		./openhuman/
+
+build-qwenpaw-worker push-qwenpaw-worker: | qwenpaw/adapters/teamharness/plugin.py
 
 build-qwenpaw-worker: build-agentteams-controller ## Build the shared QwenPaw Harness image
 	@echo "==> Building QwenPaw Worker image: $(LOCAL_QWENPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
+	OUT_DIR=dist/adapters/qwenpaw ruby qwenpaw/adapters/teamharness/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
@@ -310,12 +335,8 @@ push-agentteams-service: buildx-setup ## Build + push multi-arch agentteams-serv
 		-t $(SERVICE_TAG) \
 		./agentteams-service/
 
-push-agentteams-controller: buildx-setup ## Build + push multi-arch agentteams-controller image
+push-agentteams-controller: buildx-setup stage-agent-assets ## Build + push multi-arch agentteams-controller image
 	@echo "==> Building + pushing multi-arch agentteams-controller: $(CONTROLLER_TAG) [$(MULTIARCH_PLATFORMS)]"
-	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -r ./plugins ./agentteams-controller/plugins
-	@mkdir -p ./agentteams-controller/agent/manager-agent
-	@cp ./plugins/teamharness/prompts/manager/*.md ./agentteams-controller/agent/manager-agent/
-	@cp -r ./plugins/teamharness/skills/manager ./agentteams-controller/agent/manager-agent/skills
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(CONTROLLER_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
@@ -379,7 +400,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building Worker for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(WORKER_TAG) \
 			./worker/ && ) true
@@ -391,7 +412,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(OPENCLAW_BASE_PUSH_ARG) $(SHARED_LIB_CTX) --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(WORKER_IMAGE):latest) \
@@ -406,7 +427,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building Hermes Worker for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./qwenpaw/adapters/teamharness --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 			--manifest $(HERMES_WORKER_TAG) \
 			./hermes/ && ) true
@@ -418,7 +439,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context teamharness_trace=./qwenpaw/adapters/teamharness --build-context teamharness=./plugins/teamharness $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(HERMES_WORKER_TAG) \
 		$(if $(PUSH_LATEST),-t $(HERMES_WORKER_IMAGE):latest) \
@@ -430,22 +451,22 @@ push-openhuman-worker: push-agentteams-controller buildx-setup ## Build + push m
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(OPENHUMAN_WORKER_TAG) 2>/dev/null
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
-		podman build --platform $(plat) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		podman build --platform $(plat) $(REGISTRY_ARG) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 			--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
-			--manifest $(OPENHUMAN_WORKER_TAG) -f openhuman/Dockerfile . && ) true
+			--manifest $(OPENHUMAN_WORKER_TAG) ./openhuman/ && ) true
 	podman manifest push --all $(OPENHUMAN_WORKER_TAG) docker://$(OPENHUMAN_WORKER_TAG)
 	$(if $(PUSH_LATEST),podman manifest push --all $(OPENHUMAN_WORKER_TAG) docker://$(OPENHUMAN_WORKER_IMAGE):latest)
 else
 	docker buildx build --builder $(BUILDX_BUILDER) --platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(CONTROLLER_TAG) \
 		-t $(OPENHUMAN_WORKER_TAG) $(if $(PUSH_LATEST),-t $(OPENHUMAN_WORKER_IMAGE):latest) \
-		--push -f openhuman/Dockerfile .
+		--push ./openhuman/
 endif
 
 push-qwenpaw-worker: push-agentteams-controller ## Build + push multi-arch QwenPaw Harness image
 	@echo "==> Building + pushing multi-arch QwenPaw Worker: $(QWENPAW_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
-	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
+	OUT_DIR=dist/adapters/qwenpaw ruby qwenpaw/adapters/teamharness/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(QWENPAW_WORKER_TAG) 2>/dev/null
@@ -606,7 +627,7 @@ endif
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
-		bash ./install/agentteams-install.sh manager
+		bash -c 'bash <(curl -fsSL https://agentteams.cloud/install.sh) "$${@}"' -- manager
 
 install-interactive: ## Install Manager interactively (prompts for config)
 ifndef SKIP_BUILD
@@ -618,7 +639,7 @@ endif
 		AGENTTEAMS_INSTALL_WORKER_IMAGE=$(LOCAL_WORKER) \
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
-		bash ./install/agentteams-install.sh manager
+		bash -c 'bash <(curl -fsSL https://agentteams.cloud/install.sh) "$${@}"' -- manager
 
 uninstall: ## Stop and remove Manager + all Worker containers
 	@echo "==> Uninstalling AgentTeams..."
@@ -672,7 +693,7 @@ endif
 		AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE=$(LOCAL_HERMES_WORKER) \
 		AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE=$(LOCAL_OPENHUMAN_WORKER) \
 		AGENTTEAMS_MATRIX_E2EE=0 \
-		bash ./install/agentteams-install.sh
+		bash -c 'bash <(curl -fsSL https://agentteams.cloud/install.sh) "$${@}"' --
 
 wait-ready-embedded: ## Wait for embedded-mode services to be ready
 	@echo "==> Waiting for embedded services..."
@@ -914,11 +935,11 @@ help: ## Show this help
 # Variables:
 #   DASHBOARD_CONTEXT   Path to dashboard source tree (default: ../agentteams-dashboard)
 #   DASHBOARD_IMAGE     Override dashboard image (derived from DASHBOARD_VERSION by default)
-#   DASHBOARD_VERSION   Dashboard version tag (default: v1.4.0)
+#   DASHBOARD_VERSION   Dashboard version tag (default: v1.4.1)
 #   AGENTTEAMS_PORT_DASHBOARD   Dashboard host port (default: 13000)
 
 DASHBOARD_CONTEXT ?= ../agentteams-dashboard
-DASHBOARD_VERSION ?= v1.4.0
+DASHBOARD_VERSION ?= v1.4.1
 DASHBOARD_IMAGE ?= $(REGISTRY)/$(REPO)/agentteams-dashboard:$(DASHBOARD_VERSION)
 AGENTTEAMS_PORT_DASHBOARD ?= 13000
 
@@ -958,7 +979,7 @@ install-dashboard:
 		AGENTTEAMS_DASHBOARD_VERSION=$(DASHBOARD_VERSION) \
 		AGENTTEAMS_DASHBOARD_IMAGE=$(DASHBOARD_IMAGE) \
 		AGENTTEAMS_PORT_DASHBOARD=$(AGENTTEAMS_PORT_DASHBOARD) \
-		bash ./install/agentteams-install.sh dashboard
+		bash -c 'bash <(curl -fsSL https://agentteams.cloud/install.sh) "$${@}"' -- dashboard
 	@echo "==> Dashboard installed. Access it at http://localhost:$(AGENTTEAMS_PORT_DASHBOARD)"
 
 .PHONY: update-dashboard
@@ -970,7 +991,7 @@ update-dashboard: build-dashboard
 		AGENTTEAMS_DASHBOARD_VERSION=$(DASHBOARD_VERSION) \
 		AGENTTEAMS_DASHBOARD_IMAGE=$(DASHBOARD_IMAGE) \
 		AGENTTEAMS_PORT_DASHBOARD=$(AGENTTEAMS_PORT_DASHBOARD) \
-		bash ./install/agentteams-install.sh dashboard
+		bash -c 'bash <(curl -fsSL https://agentteams.cloud/install.sh) "$${@}"' -- dashboard
 	@echo "==> Dashboard updated."
 
 .PHONY: uninstall-dashboard

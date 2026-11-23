@@ -25,6 +25,7 @@ import (
 
 // ServerDeps aggregates all dependencies needed by the HTTP API handlers.
 type ServerDeps struct {
+	HandoffMatrix    service.WorkerHandoffMatrix
 	WorkerEnvBuilder *service.WorkerEnvBuilder
 	Client           client.Client
 	// APIReader reads CRs straight from the API server (uncached). Write-path
@@ -56,9 +57,12 @@ type ServerDeps struct {
 
 // HTTPServer serves the unified controller REST API.
 type HTTPServer struct {
-	Addr   string
-	Mux    *http.ServeMux
-	server *http.Server
+	Addr               string
+	Mux                *http.ServeMux
+	server             *http.Server
+	coordination       *CoordinationHandler
+	coordinationCtx    context.Context
+	coordinationCancel context.CancelFunc
 }
 
 // newRuntimeRegistry builds the registry of runtime adapters compiled into
@@ -74,9 +78,12 @@ func newRuntimeRegistry() *runtimeconfig.Registry {
 
 func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux := http.NewServeMux()
+	coordinationCtx, coordinationCancel := context.WithCancel(context.Background())
 	s := &HTTPServer{
-		Addr: addr,
-		Mux:  mux,
+		Addr:               addr,
+		Mux:                mux,
+		coordinationCtx:    coordinationCtx,
+		coordinationCancel: coordinationCancel,
 		server: &http.Server{
 			Addr:    addr,
 			Handler: withControllerHTTPMetrics(mux),
@@ -84,6 +91,23 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	}
 
 	mw := deps.AuthMw
+	archives := NewTaskRoomArchiveHandler(deps)
+	mux.Handle("GET /api/v1/task-rooms/archived", mw.Authenticate(http.HandlerFunc(archives.List)))
+	mux.Handle("GET /api/v1/task-rooms/{roomId}/archive", mw.Authenticate(http.HandlerFunc(archives.Status)))
+	for _, action := range []string{"archive", "unarchive", "delete"} {
+		mux.Handle("POST /api/v1/task-rooms/{roomId}/"+action, mw.Authenticate(archives.Mutate(action)))
+	}
+	s.coordination = NewCoordinationHandler(deps)
+	mux.Handle("POST /api/v1/coordination/events", mw.Authenticate(http.HandlerFunc(s.coordination.PostEvent)))
+	mux.Handle("POST /api/v1/teams/{name}/task-rooms/{roomId}/join-humans", mw.Authenticate(http.HandlerFunc(s.coordination.JoinTaskRoomHumans)))
+	mux.Handle("GET /api/v1/coordination/events/{id}", mw.Authenticate(http.HandlerFunc(s.coordination.GetEvent)))
+	mux.Handle("POST /api/v1/coordination/events/{id}/phase", mw.Authenticate(http.HandlerFunc(s.coordination.NativePhase)))
+
+	// Container-level telemetry is restricted to administrator/Manager
+	// identities; scoped Humans, Leaders and Workers cannot read host logs.
+	monitoring := newMonitoringHandler(deps)
+	mux.Handle("GET /api/v1/monitoring", mw.RequireAuthz(authpkg.ActionGet, "monitoring", nil)(http.HandlerFunc(monitoring.snapshot)))
+	mux.Handle("GET /api/v1/monitoring/{kind}/{name}/logs", mw.RequireAuthz(authpkg.ActionGet, "monitoring", nil)(http.HandlerFunc(monitoring.logs)))
 
 	// --- Status / health (no auth) ---
 	sh := NewStatusHandler(deps.Client, deps.Namespace, deps.KubeMode)
@@ -133,12 +157,12 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// stable while specs are, so it is ETag/304-protected (#1475 PR-3).
 	mux.Handle("GET /api/v1/mcp-servers", mw.RequireAuthz(authpkg.ActionList, "mcp-server", nil)(httputil.ETagMiddleware(http.HandlerFunc(rh.ListMCPServers))))
 
-	probe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL}
+	probe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, gateway: deps.Gateway}
 	if deps.Provisioner != nil {
 		probe.key = deps.Provisioner.WorkerGatewayKey
 	}
 	mux.Handle("POST /api/v1/workers/{name}/gateway-probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(probe))
-	managerProbe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, manager: true}
+	managerProbe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, manager: true, gateway: deps.Gateway}
 	if deps.Provisioner != nil {
 		managerProbe.key = deps.Provisioner.ManagerGatewayKey
 	}
@@ -161,6 +185,9 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/humans", mw.RequireAuthz(authpkg.ActionList, "human", nil)(http.HandlerFunc(rh.ListHumans)))
 	mux.Handle("GET /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionGet, "human", nameFn)(http.HandlerFunc(rh.GetHuman)))
 	mux.Handle("PUT /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionUpdate, "human", nameFn)(http.HandlerFunc(rh.UpdateHuman)))
+	rh.passwordResetter, _ = deps.MatrixClient.(humanPasswordResetter)
+	rh.passwordResetEnabled = deps.MatrixConfig.AppServiceEnabled
+	mux.Handle("POST /api/v1/humans/{name}/reset-password", mw.Authenticate(http.HandlerFunc(rh.ResetHumanPassword)))
 	mux.Handle("DELETE /api/v1/humans/{name}", mw.RequireAuthz(authpkg.ActionDelete, "human", nameFn)(http.HandlerFunc(rh.DeleteHuman)))
 
 	// ModelAccessTable (PR-A1a): shared model-grant tables. Humans are
@@ -272,10 +299,35 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/workers/{name}/sleep", mw.RequireAuthz(authpkg.ActionSleep, "worker", nameFn)(http.HandlerFunc(lh.Sleep)))
 	mux.Handle("POST /api/v1/workers/{name}/ensure-ready", mw.RequireAuthz(authpkg.ActionEnsureReady, "worker", nameFn)(http.HandlerFunc(lh.EnsureReady)))
 	mux.Handle("POST /api/v1/workers/{name}/ready", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.Ready)))
+	mux.Handle("POST /api/v1/workers/{name}/skill-warnings", mw.RequireAuthz(authpkg.ActionReady, "worker", nameFn)(http.HandlerFunc(lh.ReportSkillWarnings)))
 	mux.Handle("GET /api/v1/workers/{name}/status", mw.RequireAuthz(authpkg.ActionStatus, "worker", nameFn)(http.HandlerFunc(lh.GetWorkerRuntimeStatus)))
 
 	// --- Projects (workflow inspection; read from object storage) ---
 	projh := NewProjectHandler(deps.Client, deps.Namespace, deps.OSS, deps.MatrixClient)
+	projh.coordination = s.coordination
+	s.coordination.taskNotifications = projh
+	recovery := NewTaskRecoveryHandler(projh, deps)
+	projh.recovery = recovery
+	mux.Handle("GET /api/v1/task-deliveries", mw.Authenticate(http.HandlerFunc(s.coordination.ListTaskDeliveries)))
+	mux.Handle("POST /api/v1/tasks/native-operations", mw.Authenticate(http.HandlerFunc(projh.NativeTaskOperation)))
+	mux.Handle("POST /api/v1/tasks", mw.Authenticate(http.HandlerFunc(projh.CreateTask)))
+	mux.Handle("GET /api/v1/tasks/recoverable", mw.Authenticate(http.HandlerFunc(recovery.ListRecoverableTasks)))
+	mux.Handle("POST /api/v1/tasks/{id}/execution", mw.Authenticate(http.HandlerFunc(recovery.UpdateExecution)))
+	workerMatrix := NewWorkerMatrixHandler(deps, recovery)
+	mux.Handle("GET /api/v1/runtime/handoff", mw.Authenticate(http.HandlerFunc(workerMatrix.SelfHandoff)))
+	mux.Handle("POST /api/v1/runtime/handoff/recovered", mw.Authenticate(http.HandlerFunc(workerMatrix.ConfirmHandoffRecovery)))
+	mux.Handle("GET /api/v1/workers/{name}/runtime-handoff", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(workerMatrix.RuntimeHandoff)))
+	mux.Handle("POST /api/v1/workers/{name}/runtime-handoff", mw.RequireAuthz(authpkg.ActionUpdate, "worker", nameFn)(http.HandlerFunc(workerMatrix.RuntimeHandoff)))
+	mux.Handle("GET /api/v1/runtime/sessions", mw.Authenticate(http.HandlerFunc(workerMatrix.GetSession)))
+	mux.Handle("PUT /api/v1/runtime/sessions", mw.Authenticate(http.HandlerFunc(workerMatrix.RememberSession)))
+	mux.Handle("GET /api/v1/runtime/matrix", mw.Authenticate(http.HandlerFunc(workerMatrix.Get)))
+	mux.Handle("POST /api/v1/runtime/matrix", mw.Authenticate(http.HandlerFunc(workerMatrix.Update)))
+	mux.Handle("GET /api/v1/runtime/matrix/events/{key}", mw.Authenticate(http.HandlerFunc(workerMatrix.GetInput)))
+	mux.Handle("GET /api/v1/runtime/matrix/events/{key}/native", mw.Authenticate(http.HandlerFunc(workerMatrix.GetNativeInput)))
+	mux.Handle("POST /api/v1/runtime/matrix/events/{key}/native", mw.Authenticate(http.HandlerFunc(workerMatrix.CommitNativeInput)))
+	mux.Handle("GET /api/v1/runtime/matrix/events/{key}/execution", mw.Authenticate(http.HandlerFunc(workerMatrix.GetExecution)))
+	mux.Handle("POST /api/v1/runtime/matrix/events/{key}/execution", mw.Authenticate(http.HandlerFunc(workerMatrix.UpdateExecution)))
+	projh.taskAssigned = s.coordination.wakeRunner
 	if deps.APIReader != nil {
 		projh.configReader = deps.APIReader
 	}
@@ -342,6 +394,17 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// non-qwenpaw), L2 team-scoped, 5-tab field whitelist for L2 writes, and
 	// loop-change notification (@leader + @changer) on custom-loop writes.
 	rch := NewRuntimeConfigHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.ContainerPrefix, deps.MatrixClient)
+	mrch := NewManagerRuntimeConfigHandler(deps)
+	for _, route := range []struct{ method, path string }{
+		{"GET", "runtime-config"}, {"PUT", "runtime-config"}, {"GET", "loops"}, {"GET", "loops/status"},
+		{"GET", "loops/custom"}, {"POST", "loops/custom"}, {"PUT", "loops/custom/{loop}"}, {"DELETE", "loops/custom/{loop}"},
+	} {
+		action := authpkg.ActionGet
+		if isWrite(route.method) {
+			action = authpkg.ActionUpdate
+		}
+		mux.Handle(route.method+" /api/v1/managers/{name}/"+route.path, mw.RequireAuthz(action, "manager", nameFn)(http.HandlerFunc(mrch.Handle)))
+	}
 	mux.Handle("GET /api/v1/workers/{name}/runtime-config", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
 	mux.Handle("PUT /api/v1/workers/{name}/runtime-config", mw.RequireAuthz(authpkg.ActionRuntimeConfig, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
 	mux.Handle("GET /api/v1/workers/{name}/loops", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(rch.Handle)))
@@ -483,11 +546,24 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// enforces the team boundary (the middleware cannot resolve task -> team)
 	// and refuses to release the Controller's cancellation.
 	taskNameFn := func(r *http.Request) string { return r.PathValue("id") }
+	mux.Handle("GET /api/v1/tasks/{id}", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskResource)))
+	mux.Handle("GET /api/v1/tasks/{id}/files", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskFiles)))
+	mux.Handle("POST /api/v1/tasks/{id}/files", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PublishTaskFile)))
+	mux.Handle("POST /api/v1/tasks/{id}/complete", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.CompleteTask)))
+	mux.Handle("POST /api/v1/tasks/{id}/cancel", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.CancelMainTask)))
+	mux.Handle("POST /api/v1/tasks/{id}/accept", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(projh.ReviewTask(true)))
+	mux.Handle("POST /api/v1/tasks/{id}/plan", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PlanTask)))
+	mux.Handle("POST /api/v1/tasks/{id}/reject", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(projh.ReviewTask(false)))
+	mux.Handle("POST /api/v1/tasks/{id}/submit", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.SubmitTask)))
+	mux.Handle("POST /api/v1/tasks/{id}/begin", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.BeginTask)))
 	mux.Handle("GET /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskMeta)))
 	mux.Handle("PUT /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PutTaskMeta)))
 
 	// --- Gateway ---
 	gh := NewGatewayHandler(deps.Gateway)
+	assets := &gatewayAssets{gateway: deps.Gateway, resources: rh, gatewayURL: deps.GatewayURL}
+	mux.Handle("GET /api/v1/gateway/assets/{asset}", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(assets))
+	mux.Handle("POST /api/v1/gateway/assets/{asset}", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(assets))
 	mux.Handle("GET /api/v1/gateway/consumers", mw.RequireAuthz(authpkg.ActionList, "gateway", nil)(http.HandlerFunc(gh.ListConsumers)))
 	mux.Handle("POST /api/v1/gateway/consumers", mw.RequireAuthz(authpkg.ActionCreate, "gateway", nil)(http.HandlerFunc(gh.CreateConsumer)))
 	mux.Handle("POST /api/v1/gateway/consumers/{id}/bind", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(http.HandlerFunc(gh.BindConsumer)))
@@ -533,6 +609,10 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 }
 
 func (s *HTTPServer) Start() error {
+	if s.coordination != nil && s.coordinationCtx != nil {
+		defer s.coordinationCancel()
+		go s.coordination.Run(s.coordinationCtx)
+	}
 	logger := log.Log.WithName("http-server")
 	logger.Info("starting unified REST API server", "addr", s.Addr)
 	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -544,6 +624,9 @@ func (s *HTTPServer) Start() error {
 // Shutdown gracefully stops the HTTP server, waiting for in-flight requests
 // to finish or ctx to be cancelled. Idempotent.
 func (s *HTTPServer) Shutdown(ctx context.Context) error {
+	if s.coordinationCancel != nil {
+		s.coordinationCancel()
+	}
 	return s.server.Shutdown(ctx)
 }
 

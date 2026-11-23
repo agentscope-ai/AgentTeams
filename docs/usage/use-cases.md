@@ -363,7 +363,7 @@ Extract and validate it safely, distribute the complete Skill, and confirm that 
 
 **Method B: Distribute through the Dashboard**
 
-Open **资源中心 (Resource Center) → 市场 (Marketplace)**. If `bilingual-doc-review` is not yet in the marketplace, click **上传技能 (Upload Skill)** and upload `bilingual-doc-review.zip`. Then click **分发到 Worker (Distribute to Worker)** in that Skill's row, select `doc-reviewer`, and click **分发到 1 个 Worker (Distribute to 1 Worker)**. Alternatively, upload the ZIP directly through **Workers → doc-reviewer → 详情 (Details) → 上传技能包 (Upload Skill Package)**. Distribute only while the Worker is idle because the reload may restart it.
+Open **资产中心 (Asset Center) → 技能 (Skills)**. If `bilingual-doc-review` is not yet in the marketplace, click **上传技能 (Upload Skill)** and upload `bilingual-doc-review.zip`. Then click **分发到 Worker (Distribute to Worker)** in that Skill's row, select `doc-reviewer`, and click **分发到 1 个 Worker (Distribute to 1 Worker)**. Alternatively, upload the ZIP directly through **成员与团队 (Members & Teams) → 团队与Agent (Teams & Agents) → doc-reviewer → 上传技能包 (Upload Skill Package)**. Distribute only while the Worker is idle because the reload may restart it.
 
 After distribution, confirm `bilingual-doc-review` under **已分发技能 (Distributed Skills)** in Worker details and in `Worker.spec.skills`. Both Manager and Dashboard distribution maintain the declarative assignment.
 

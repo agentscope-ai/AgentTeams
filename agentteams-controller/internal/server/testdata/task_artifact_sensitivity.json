@@ -1,0 +1,130 @@
+[
+  {
+    "content": "Authorization: Bearer <YOUR_API_KEY>",
+    "sensitive": false
+  },
+  {
+    "content": "Authorization: Basic <your-basic-token>",
+    "sensitive": false
+  },
+  {
+    "content": "curl -H 'Authorization: Bearer <your-jev-api-key>' https://api.example.test/v1",
+    "sensitive": false
+  },
+  {
+    "content": "api_key = <PLACEHOLDER_123456789012>",
+    "sensitive": false
+  },
+  {
+    "content": "export TOKEN=<PASTE_TOKEN_HERE>",
+    "sensitive": false
+  },
+  {
+    "content": "body = {\"token\": \"<YOUR_TOKEN>\"}",
+    "sensitive": false
+  },
+  {
+    "content": "No secrets here at all.",
+    "sensitive": false
+  },
+  {
+    "content": "Authorization: Bearer `YOUR_API_KEY`",
+    "sensitive": false
+  },
+  {
+    "content": "Authorization: Basic `paste-token-here`",
+    "sensitive": false
+  },
+  {
+    "content": "curl -H 'Authorization: Bearer `your-jev-api-key`' https://api.example.test/v1",
+    "sensitive": false
+  },
+  {
+    "content": "Authorization: Bearer **PASTE_TOKEN_HERE**",
+    "sensitive": false
+  },
+  {
+    "content": "Authorization: Basic **your-api-key**",
+    "sensitive": false
+  },
+  {
+    "content": "Authorization: Bearer '**YOUR_KEY**'",
+    "sensitive": false
+  },
+  {
+    "content": "Authorization: Bearer sk-a1b2c3d4e5f607182930415263748596",
+    "sensitive": true
+  },
+  {
+    "content": "authorization: basic dXNlcjpwYXNzd29yZA==",
+    "sensitive": true
+  },
+  {
+    "content": "api_key = a1b2c3d4e5f607182930415263748596",
+    "sensitive": true
+  },
+  {
+    "content": "token: \"a1b2c3d4e5f607182930415263748596\"",
+    "sensitive": true
+  },
+  {
+    "content": "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Bearer <sk-a1b2c3d4e5f607182930415263748596>",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Basic <dXNlcjpwYXNzd29yZA==>",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Bearer <sk-abc123def456>",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Bearer <sk-abcdefghijklmnopqrstuvwxyz>",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Bearer <token:abc123def4567890>",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Basic <basic-token>",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Bearer `sk-a1b2c3d4e5f607182930415263748596`",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Basic `dXNlcjpwYXNzd29yZA==`",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Bearer **sk-a1b2c3d4e5f607182930415263748596**",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Basic **dXNlcjpwYXNzd29yZA==**",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Bearer `token:abc123def4567890`",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Basic `basic-token`",
+    "sensitive": true
+  },
+  {
+    "content": "Authorization: Bearer **token:abc123def4567890**",
+    "sensitive": true
+  },
+  {
+    "content": "Usage: Authorization: Bearer <YOUR_API_KEY>\nReal: api_key = a1b2c3d4e5f607182930415263748596\n",
+    "sensitive": true
+  }
+]

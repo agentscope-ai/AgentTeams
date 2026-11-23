@@ -209,8 +209,8 @@ Dir.mktmpdir("teamharness-message-") do |_dir|
         "message": "@worker:example.test please verify",
         "dryRun": True,
     })
-    if user_target.get("ok") is not False or "user targets are not supported yet" not in user_target.get("error", ""):
-        raise AssertionError(f"user target was not rejected: {user_target!r}")
+    if not user_target.get("ok") or user_target.get("targetKind") != "user" or user_target.get("target") != "@worker:example.test":
+        raise AssertionError(f"user target dry-run did not preserve the recipient: {user_target!r}")
 
     dingtalk_dry = payload({
         "action": "send",

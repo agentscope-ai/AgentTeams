@@ -342,6 +342,16 @@ func TestLoopSpec_JSONTagsAndDefaults(t *testing.T) {
 // TestLoopCRD_EnumsMatchConstants verifies the enums enforced by the
 // deployed CRD schema cover the Go constants, so a value the apiserver
 // accepts is always one the reconciler knows.
+func TestTeamCRDHumanMemberRoles(t *testing.T) {
+	for _, path := range []string{"../../config/crd/teams.agentteams.io.yaml", "../../../helm/agentteams/crds/teams.agentteams.io.yaml"} {
+		teams := loadCRDDoc(t, path)
+		assertCRDEnumCoversConstants(t, path,
+			crdNodeAt(t, "human member role", teams,
+				"spec", "versions", "*", "schema", "openAPIV3Schema", "properties", "spec", "properties", "humanMembers", "items", "properties", "role"),
+			[]string{"coordinator", "member"})
+	}
+}
+
 func TestLoopCRD_EnumsMatchConstants(t *testing.T) {
 	loops := loadCRDDoc(t, "../../config/crd/loops.agentteams.io.yaml")
 	assertCRDEnumCoversConstants(t, "spec.loopType",

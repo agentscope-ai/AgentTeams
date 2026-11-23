@@ -1,0 +1,166 @@
+{
+  "status": "failed",
+  "reason": "Fixture incorrectly required active execution after a started checkpoint; Controller correctly marks it needs_verification. No effects executed, no cutover.",
+  "driver_core_sha": "48320bcda52251e69645554426ff22731c6b8de3",
+  "controller_core_sha": "45cbf4f5f6048fe4f6561462f90e1a9db6e3c15c",
+  "hermes_sha": "012eb7c1938c79ee9599d270aef0b5888df97c1f",
+  "task": {
+    "acknowledged_by_role": "worker",
+    "assigned_at": "2026-11-16T21:16:38Z",
+    "assigned_to": "@agent-a:recovery-1631.test",
+    "execution": {
+      "generation": 1,
+      "instance_id": "docker/fb6143b9960c8255995f02c103bb656990aae6bb695d08ca0484a00115a24458/2026-11-16T21:15:04.678604805Z",
+      "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+      "runtime": "hermes",
+      "state": "needs_verification",
+      "checkpoint": {
+        "version": 1,
+        "completed_steps": [],
+        "remaining_steps": [
+          "one",
+          "two",
+          "three"
+        ],
+        "operation": {
+          "id": "fixture:live-hermes-deepseek-harness-18:one",
+          "state": "started"
+        },
+        "artifacts": null,
+        "saved_at": "2026-11-16T21:16:54.300666961Z"
+      }
+    },
+    "history": [
+      {
+        "action": "ack_task",
+        "actor": "worker:agent-a",
+        "from": "assigned",
+        "seq": 1,
+        "to": "in_progress",
+        "ts": "2026-11-16T21:16:38Z"
+      }
+    ],
+    "history_seq": 1,
+    "main_task_id": "live-main-18",
+    "notifyTxn": "live-assignment-18",
+    "parent_task_id": "live-main-18",
+    "project_id": "",
+    "recovery_fixture": {
+      "oracle_url": "http://recovery-1631-live-20261117-v5-oracle:8091",
+      "oracle_version": 3
+    },
+    "room_id": "!axHawNJRamKueTkBhS:recovery-1631.test",
+    "spec_path": "",
+    "status": "in_progress",
+    "task_id": "live-hermes-deepseek-harness-18",
+    "task_kind": "subtask",
+    "task_title": "Run three stable steps across hermes to deepseek-harness",
+    "team_id": "recovery-team",
+    "title": "Run three stable steps across hermes to deepseek-harness"
+  },
+  "oracle_proof": {
+    "calls": [
+      {
+        "accepted": false,
+        "at_ns": 1794863814320862061,
+        "method": "POST",
+        "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1794863846848370522,
+        "method": "GET",
+        "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1794863857997478504,
+        "method": "GET",
+        "process_id": "",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1794863875546955544,
+        "method": "GET",
+        "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1794863885957905890,
+        "method": "POST",
+        "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1794863910106612264,
+        "method": "GET",
+        "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1794863910123706635,
+        "method": "POST",
+        "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+        "step": "one",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1794863910140170044,
+        "method": "GET",
+        "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+        "step": "two",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1794863910156683619,
+        "method": "POST",
+        "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+        "step": "two",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1794863910174827790,
+        "method": "GET",
+        "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+        "step": "three",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      },
+      {
+        "accepted": false,
+        "at_ns": 1794863910197201865,
+        "method": "POST",
+        "process_id": "1:1794863704903917796:87d5094c5e834ef6b66e6fff6c0b4a45",
+        "step": "three",
+        "task_id": "live-hermes-deepseek-harness-18",
+        "team_id": "recovery-team"
+      }
+    ],
+    "effects": []
+  },
+  "workers_stopped": true
+}

@@ -70,8 +70,8 @@ func TestLifecycleWakeSetsRunningPhase(t *testing.T) {
 	sleeping := "Sleeping"
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
-		Spec:       v1beta1.WorkerSpec{State: &sleeping},
-		Status:     v1beta1.WorkerStatus{Phase: "Sleeping"},
+		Spec:       v1beta1.WorkerSpec{State: &sleeping, Runtime: "codex", Image: "codex:v2"},
+		Status:     v1beta1.WorkerStatus{Phase: "Sleeping", SpecHash: "previous-hermes-instance"},
 	}
 	k8sClient := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -100,6 +100,9 @@ func TestLifecycleWakeSetsRunningPhase(t *testing.T) {
 	}
 	if updated.Spec.DesiredState() != "Running" {
 		t.Fatalf("expected spec.state Running, got %q", updated.Spec.DesiredState())
+	}
+	if backendStub.startCalls != 0 {
+		t.Fatal("wake started a retained container before the reconciler checked its pending Harness/image change")
 	}
 }
 
@@ -633,6 +636,59 @@ func TestLifecycleReadyEmptyBodyBackwardCompatible(t *testing.T) {
 	}
 	if updated.Status.AgentStatus != "" || updated.Status.RunningTaskCount != nil {
 		t.Errorf("expected no runtime report fields from empty body, got %+v", updated.Status)
+	}
+}
+
+func TestLifecycleSkillWarningsDoNotChangePhaseAndCanBeCleared(t *testing.T) {
+	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "skills-worker", Namespace: "default"}, Status: v1beta1.WorkerStatus{Phase: "Running"}}
+	k8sClient := fake.NewClientBuilder().WithScheme(newLifecycleTestScheme(t)).WithStatusSubresource(&v1beta1.Worker{}).WithObjects(worker).Build()
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{&stubWorkerBackend{status: backend.StatusRunning}}), "default")
+	for _, payload := range []string{`{"skillWarnings":["Skill broken: load failed"]}`, `{}`, `{"skillWarnings":[]}`} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/skills-worker/ready", strings.NewReader(payload))
+		req.SetPathValue("name", "skills-worker")
+		rec := httptest.NewRecorder()
+		handler.Ready(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("ready: %d %s", rec.Code, rec.Body.String())
+		}
+		var updated v1beta1.Worker
+		if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "skills-worker", Namespace: "default"}, &updated); err != nil {
+			t.Fatal(err)
+		}
+		if updated.Status.Phase != "Running" {
+			t.Fatalf("warning changed phase to %s", updated.Status.Phase)
+		}
+		want := 1
+		if payload == `{"skillWarnings":[]}` {
+			want = 0
+		}
+		if len(updated.Status.SkillWarnings) != want {
+			t.Fatalf("warnings after %s: %v", payload, updated.Status.SkillWarnings)
+		}
+		response := workerToResponse(&updated)
+		if len(response.SkillWarnings) != want || len(response.StatusView().SkillWarnings) != want || len(response.SpecStatusView().SkillWarnings) != want {
+			t.Fatalf("warnings missing from API projection: %+v", response)
+		}
+	}
+}
+
+func TestSkillWarningsBeforeStartupDoNotMarkWorkerReady(t *testing.T) {
+	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "skills-worker", Namespace: "default"}, Status: v1beta1.WorkerStatus{Phase: "Pending"}}
+	k8sClient := fake.NewClientBuilder().WithScheme(newLifecycleTestScheme(t)).WithStatusSubresource(&v1beta1.Worker{}).WithObjects(worker).Build()
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry(nil), "default")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/skills-worker/skill-warnings", strings.NewReader(`{"skillWarnings":["Skill broken: load failed"]}`))
+	req.SetPathValue("name", "skills-worker")
+	rec := httptest.NewRecorder()
+	handler.ReportSkillWarnings(rec, req)
+	if rec.Code != http.StatusNoContent || handler.isReady("skills-worker") {
+		t.Fatalf("diagnostics must not mark ready: status=%d ready=%v", rec.Code, handler.isReady("skills-worker"))
+	}
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "skills-worker", Namespace: "default"}, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status.Phase != "Pending" || len(updated.Status.SkillWarnings) != 1 {
+		t.Fatalf("unexpected status: %+v", updated.Status)
 	}
 }
 

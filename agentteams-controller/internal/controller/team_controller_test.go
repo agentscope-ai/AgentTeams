@@ -33,6 +33,21 @@ func newTeamTestClient(t *testing.T, objs ...client.Object) client.Client {
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 }
 
+func TestTeamRoomAliasNameKeepsLegacyNamesAndSupportsWhitespace(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"alpha", "alpha"},
+		{"前端团队", "前端团队"},
+		{"Release smoke", "release-smoke"},
+		{"Release\tteam", "release-smoke"},
+		{"前端\u3000团队", "release-smoke"},
+	} {
+		team := &v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "release-smoke"}, Spec: v1beta1.TeamSpec{TeamName: tc.name}}
+		if got := teamRoomAliasName(team); got != tc.want {
+			t.Errorf("name %q: alias name %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func newTestManagerConfig(t *testing.T) (*service.ManagerConfigStore, *ossfake.Memory) {
 	t.Helper()
 	fake := ossfake.NewMemory()
@@ -556,6 +571,31 @@ func TestReconcileTeamTeamReferences_QwenPawProjectsRuntimeRoster(t *testing.T) 
 	}
 	if got := len(deployer.Calls.InjectChannelPolicy); got != 0 {
 		t.Fatalf("qwenpaw InjectChannelPolicy calls=%d, want 0", got)
+	}
+}
+
+func TestDeployTeamRuntimeConfigsHermesPublishesTaskToolScope(t *testing.T) {
+	deployer := mocks.NewMockDeployer()
+	r := &TeamReconciler{Deployer: deployer}
+	members := []teamWorkerMember{{
+		ref: v1beta1.TeamWorkerRef{Name: "hermes-worker", Role: "worker"},
+		worker: v1beta1.Worker{
+			ObjectMeta: metav1.ObjectMeta{Name: "hermes-worker", Generation: 4},
+			Spec:       v1beta1.WorkerSpec{Runtime: "hermes", Model: "qwen3.6-plus"},
+			Status:     v1beta1.WorkerStatus{MatrixUserID: "@worker:matrix.local", RoomID: "!dm:matrix.local"},
+		},
+		runtimeName: "hermes-worker",
+	}}
+	err := r.deployTeamRuntimeConfigs(context.Background(), &v1beta1.Team{}, members, "leader", "team-a", "leader", &service.TeamRoomResult{TeamRoomID: "!team:matrix.local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deployer.Calls.DeployMemberRuntimeConfig) != 1 {
+		t.Fatalf("missing Hermes Task tool scope: %+v", deployer.Calls.DeployMemberRuntimeConfig)
+	}
+	req := deployer.Calls.DeployMemberRuntimeConfig[0]
+	if req.Runtime != "hermes" || req.Role != "worker" || req.TeamName != "team-a" || req.TeamRoomID != "!team:matrix.local" {
+		t.Fatalf("wrong Hermes Task tool scope: %+v", req)
 	}
 }
 
@@ -1099,13 +1139,14 @@ func TestReconcileTeamTeamReferences_WorkerNotProvisionedKeepsTeamActive(t *test
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(team.DeepCopy(), leaderWorker.DeepCopy(), unprovisionedWorker.DeepCopy()).
-		WithStatusSubresource(&v1beta1.Team{}).
+		WithStatusSubresource(&v1beta1.Team{}, &v1beta1.Worker{}).
 		Build()
 
+	deployer := mocks.NewMockDeployer()
 	r := &TeamReconciler{
 		Client:      c,
 		Provisioner: mocks.NewMockProvisioner(),
-		Deployer:    mocks.NewMockDeployer(),
+		Deployer:    deployer,
 	}
 
 	patchBase := client.MergeFrom(team.DeepCopy())
@@ -1131,6 +1172,26 @@ func TestReconcileTeamTeamReferences_WorkerNotProvisionedKeepsTeamActive(t *test
 	}
 	if ms.Ready {
 		t.Errorf("dev Ready=true, want false")
+	}
+
+	if _, ok := runtimeConfigCallFor(deployer.Calls.DeployMemberRuntimeConfig, "dev"); ok {
+		t.Fatal("published a runtime config before Worker Matrix identity was available")
+	}
+	var readyWorker v1beta1.Worker
+	if err := c.Get(ctx, client.ObjectKeyFromObject(unprovisionedWorker), &readyWorker); err != nil {
+		t.Fatalf("get Worker: %v", err)
+	}
+	readyWorker.Status.MatrixUserID = "@dev:matrix.local"
+	readyWorker.Status.RoomID = "!room-dev:matrix.local"
+	if err := c.Status().Update(ctx, &readyWorker); err != nil {
+		t.Fatalf("publish Worker identity: %v", err)
+	}
+	if _, err := r.reconcileTeam(ctx, team, client.MergeFrom(team.DeepCopy())); err != nil {
+		t.Fatalf("reconcile provisioned Worker: %v", err)
+	}
+	cfg, ok := runtimeConfigCallFor(deployer.Calls.DeployMemberRuntimeConfig, "dev")
+	if !ok || cfg.MatrixUserID != readyWorker.Status.MatrixUserID || cfg.PersonalRoomID != readyWorker.Status.RoomID {
+		t.Fatalf("missing complete runtime config after provisioning: %+v", cfg)
 	}
 }
 
@@ -1609,6 +1670,28 @@ func TestReconcileTeamTeamReferences_HeartbeatFromTeamCR(t *testing.T) {
 	}
 	if hbReq.WorkerName != "lead" {
 		t.Errorf("heartbeat WorkerName=%q, want lead", hbReq.WorkerName)
+	}
+
+	// An explicit Worker switch must survive the Team's later policy overlay.
+	var updated v1beta1.Worker
+	if err := c.Get(ctx, client.ObjectKeyFromObject(leaderWorker), &updated); err != nil {
+		t.Fatal(err)
+	}
+	disabled := false
+	updated.Spec.LlmHeartbeatEnabled = &disabled
+	if err := c.Update(ctx, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.reconcileTeam(ctx, team, client.MergeFrom(team.DeepCopy())); err != nil {
+		t.Fatal(err)
+	}
+	last := deployer.Calls.InjectHeartbeatConfig[len(deployer.Calls.InjectHeartbeatConfig)-1]
+	if last.Enabled || last.Every != "0m" {
+		t.Fatalf("Team restored disabled heartbeat: %#v", last)
+	}
+	coord := deployer.Calls.InjectCoordinationContext[len(deployer.Calls.InjectCoordinationContext)-1]
+	if coord.HeartbeatEvery != "" {
+		t.Fatalf("disabled Leader still instructed to poll: %#v", coord)
 	}
 }
 

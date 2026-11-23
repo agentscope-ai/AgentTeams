@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 )
@@ -8,6 +10,7 @@ import (
 // --- Worker API types ---
 
 type CreateWorkerRequest struct {
+	LlmHeartbeatEnabled          *bool                              `json:"llmHeartbeatEnabled,omitempty"`
 	Env                          map[string]string                  `json:"env,omitempty"`
 	Name                         string                             `json:"name"`
 	WorkerName                   string                             `json:"workerName,omitempty"`
@@ -48,9 +51,10 @@ type CreateWorkerRequest struct {
 // UpdateWorkerRequest preserves modelProvider when omitted or null and clears it
 // when an explicit empty string is supplied.
 type UpdateWorkerRequest struct {
-	Env        map[string]string `json:"env,omitempty"`
-	WorkerName string            `json:"workerName,omitempty"`
-	Model      string            `json:"model,omitempty"`
+	LlmHeartbeatEnabled *bool             `json:"llmHeartbeatEnabled,omitempty"`
+	Env                 map[string]string `json:"env,omitempty"`
+	WorkerName          string            `json:"workerName,omitempty"`
+	Model               string            `json:"model,omitempty"`
 	// SubagentModel is a pointer so callers can distinguish omission (nil:
 	// keep the current value) from an explicit clear ("" — the worker
 	// returns to inheriting the team default / the runtime default).
@@ -90,14 +94,15 @@ type UpdateWorkerRequest struct {
 }
 
 type WorkerResponse struct {
-	EnvEditable      bool              `json:"envEditable"`
-	Env              map[string]string `json:"env,omitempty"`
-	Name             string            `json:"name"`
-	WorkerName       string            `json:"workerName,omitempty"`
-	Phase            string            `json:"phase"`
-	ContainerManaged bool              `json:"containerManaged"`
-	State            string            `json:"state,omitempty"` // desired lifecycle state
-	Model            string            `json:"model,omitempty"`
+	LlmHeartbeatEnabled *bool             `json:"llmHeartbeatEnabled,omitempty"`
+	EnvEditable         bool              `json:"envEditable"`
+	Env                 map[string]string `json:"env,omitempty"`
+	Name                string            `json:"name"`
+	WorkerName          string            `json:"workerName,omitempty"`
+	Phase               string            `json:"phase"`
+	ContainerManaged    bool              `json:"containerManaged"`
+	State               string            `json:"state,omitempty"` // desired lifecycle state
+	Model               string            `json:"model,omitempty"`
 	// ModelProvider is the worker's LLM provider (WorkerSpec.ModelProvider,
 	// an APIG Model API name). The model alias alone does not select the
 	// upstream when the deployment has several Higress providers.
@@ -140,6 +145,7 @@ type WorkerResponse struct {
 	RunningTaskCount *int              `json:"runningTaskCount,omitempty"`
 	LastRunAt        string            `json:"lastRunAt,omitempty"`
 	LastFinishAt     string            `json:"lastFinishAt,omitempty"`
+	SkillWarnings    []string          `json:"skillWarnings,omitempty"`
 	ExposedPorts     []ExposedPortInfo `json:"exposedPorts,omitempty"`
 	Team             string            `json:"team,omitempty"`
 	Role             string            `json:"role,omitempty"`
@@ -192,6 +198,7 @@ type workerListProjection struct {
 
 // WorkerSpecView is the fields=spec projection of a worker.
 type WorkerSpecView struct {
+	LlmHeartbeatEnabled          *bool             `json:"llmHeartbeatEnabled,omitempty"`
 	Name                         string            `json:"name"`
 	WorkerName                   string            `json:"workerName,omitempty"`
 	ContainerManaged             bool              `json:"containerManaged"`
@@ -226,23 +233,26 @@ type WorkerSpecView struct {
 // row can be keyed by name instead of by its position in the list
 // (issue #1477).
 type WorkerStatusView struct {
-	Name             string `json:"name"`
-	WorkerName       string `json:"workerName,omitempty"`
-	Phase            string `json:"phase"`
-	ContainerState   string `json:"containerState,omitempty"`
-	Message          string `json:"message,omitempty"`
-	LastActiveAt     string `json:"lastActiveAt,omitempty"`
-	AgentStatus      string `json:"agentStatus,omitempty"`
-	RunningTaskCount *int   `json:"runningTaskCount,omitempty"`
-	LastRunAt        string `json:"lastRunAt,omitempty"`
-	LastFinishAt     string `json:"lastFinishAt,omitempty"`
-	Team             string `json:"team,omitempty"`
-	Role             string `json:"role,omitempty"`
+	SkillWarnings    []string `json:"skillWarnings,omitempty"`
+	Name             string   `json:"name"`
+	WorkerName       string   `json:"workerName,omitempty"`
+	Phase            string   `json:"phase"`
+	ContainerState   string   `json:"containerState,omitempty"`
+	Message          string   `json:"message,omitempty"`
+	LastActiveAt     string   `json:"lastActiveAt,omitempty"`
+	AgentStatus      string   `json:"agentStatus,omitempty"`
+	RunningTaskCount *int     `json:"runningTaskCount,omitempty"`
+	LastRunAt        string   `json:"lastRunAt,omitempty"`
+	LastFinishAt     string   `json:"lastFinishAt,omitempty"`
+	Team             string   `json:"team,omitempty"`
+	Role             string   `json:"role,omitempty"`
 }
 
 // WorkerSpecStatusView is the fields=spec,status projection: the union of
 // WorkerSpecView and WorkerStatusView in WorkerResponse field order.
 type WorkerSpecStatusView struct {
+	SkillWarnings                []string          `json:"skillWarnings,omitempty"`
+	LlmHeartbeatEnabled          *bool             `json:"llmHeartbeatEnabled,omitempty"`
 	Name                         string            `json:"name"`
 	WorkerName                   string            `json:"workerName,omitempty"`
 	Phase                        string            `json:"phase"`
@@ -284,6 +294,7 @@ type WorkerSpecStatusView struct {
 // configuration fields (GET /api/v1/workers?fields=spec).
 func (r WorkerResponse) SpecView() WorkerSpecView {
 	return WorkerSpecView{
+		LlmHeartbeatEnabled:          r.LlmHeartbeatEnabled,
 		Name:                         r.Name,
 		WorkerName:                   r.WorkerName,
 		ContainerManaged:             r.ContainerManaged,
@@ -330,6 +341,7 @@ func (r WorkerResponse) StatusView() WorkerStatusView {
 		RunningTaskCount: r.RunningTaskCount,
 		LastRunAt:        r.LastRunAt,
 		LastFinishAt:     r.LastFinishAt,
+		SkillWarnings:    r.SkillWarnings,
 		Team:             r.Team,
 		Role:             r.Role,
 	}
@@ -339,6 +351,7 @@ func (r WorkerResponse) StatusView() WorkerStatusView {
 // union (GET /api/v1/workers?fields=spec,status).
 func (r WorkerResponse) SpecStatusView() WorkerSpecStatusView {
 	return WorkerSpecStatusView{
+		LlmHeartbeatEnabled:          r.LlmHeartbeatEnabled,
 		Name:                         r.Name,
 		WorkerName:                   r.WorkerName,
 		Phase:                        r.Phase,
@@ -371,6 +384,7 @@ func (r WorkerResponse) SpecStatusView() WorkerSpecStatusView {
 		RunningTaskCount:             r.RunningTaskCount,
 		LastRunAt:                    r.LastRunAt,
 		LastFinishAt:                 r.LastFinishAt,
+		SkillWarnings:                r.SkillWarnings,
 		ExposedPorts:                 r.ExposedPorts,
 		Team:                         r.Team,
 		Role:                         r.Role,
@@ -402,6 +416,7 @@ type CreateTeamRequest struct {
 }
 
 type UpdateTeamRequest struct {
+	AdminProvided                bool                       `json:"-"`
 	TeamName                     string                     `json:"teamName,omitempty"`
 	Description                  string                     `json:"description,omitempty"`
 	Admin                        *v1beta1.TeamAdminSpec     `json:"admin,omitempty"`
@@ -422,6 +437,22 @@ type UpdateTeamRequest struct {
 	ChannelPolicy                *v1beta1.ChannelPolicySpec `json:"channelPolicy,omitempty"`
 }
 
+// An explicit null clears the admin; omission preserves the current assignment.
+func (req *UpdateTeamRequest) UnmarshalJSON(data []byte) error {
+	type request UpdateTeamRequest
+	var decoded request
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, decoded.AdminProvided = fields["admin"]
+	*req = UpdateTeamRequest(decoded)
+	return nil
+}
+
 type TeamResponse struct {
 	Name               string                       `json:"name"`
 	TeamName           string                       `json:"teamName,omitempty"`
@@ -430,6 +461,7 @@ type TeamResponse struct {
 	Admin              *v1beta1.TeamAdminSpec       `json:"admin,omitempty"`
 	HumanMembers       []v1beta1.TeamMemberSpec     `json:"humanMembers,omitempty"`
 	WorkerMembers      []v1beta1.TeamWorkerRef      `json:"workerMembers"`
+	Members            []TeamMemberView             `json:"members,omitempty"`
 	LeaderName         string                       `json:"leaderName"`
 	HeartbeatEvery     string                       `json:"heartbeatEvery,omitempty"`
 	TeamRoomID         string                       `json:"teamRoomID,omitempty"`
@@ -456,6 +488,18 @@ type TeamResponse struct {
 	LlmRateLimitPause            string `json:"llmRateLimitPause,omitempty"`
 	LlmRateLimitJitter           string `json:"llmRateLimitJitter,omitempty"`
 	LlmAcquireTimeout            string `json:"llmAcquireTimeout,omitempty"`
+}
+
+// TeamMemberView contains only the identity and readiness needed for delegation.
+type TeamMemberView struct {
+	Name                        string   `json:"name"`
+	Role                        string   `json:"role"`
+	MatrixUserID                string   `json:"matrixUserID,omitempty"`
+	Runtime                     string   `json:"runtime,omitempty"`
+	Phase                       string   `json:"phase"`
+	State                       string   `json:"state,omitempty"`
+	Skills                      []string `json:"skills,omitempty"`
+	NativeCoordinationSupported bool     `json:"nativeCoordinationSupported"`
 }
 
 type TeamListResponse struct {
@@ -547,21 +591,22 @@ type UpdateHumanRequest struct {
 }
 
 type HumanResponse struct {
-	SystemAdmin       bool                     `json:"systemAdmin,omitempty"`
-	Name              string                   `json:"name"`
-	Phase             string                   `json:"phase"`
-	DisplayName       string                   `json:"displayName"`
-	Email             string                   `json:"email,omitempty"`
-	PermissionLevel   int                      `json:"permissionLevel"`
-	AccessibleTeams   []string                 `json:"accessibleTeams,omitempty"`
-	AccessibleWorkers []string                 `json:"accessibleWorkers,omitempty"`
-	Capabilities      []string                 `json:"capabilities,omitempty"`
-	Note              string                   `json:"note,omitempty"`
-	MatrixUserID      string                   `json:"matrixUserID,omitempty"`
-	InitialPassword   string                   `json:"initialPassword,omitempty"`
-	Rooms             []string                 `json:"rooms,omitempty"`
-	Message           string                   `json:"message,omitempty"`
-	ModelAccess       *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
+	PasswordResetAvailable bool                     `json:"passwordResetAvailable,omitempty"`
+	SystemAdmin            bool                     `json:"systemAdmin,omitempty"`
+	Name                   string                   `json:"name"`
+	Phase                  string                   `json:"phase"`
+	DisplayName            string                   `json:"displayName"`
+	Email                  string                   `json:"email,omitempty"`
+	PermissionLevel        int                      `json:"permissionLevel"`
+	AccessibleTeams        []string                 `json:"accessibleTeams,omitempty"`
+	AccessibleWorkers      []string                 `json:"accessibleWorkers,omitempty"`
+	Capabilities           []string                 `json:"capabilities,omitempty"`
+	Note                   string                   `json:"note,omitempty"`
+	MatrixUserID           string                   `json:"matrixUserID,omitempty"`
+	InitialPassword        string                   `json:"initialPassword,omitempty"`
+	Rooms                  []string                 `json:"rooms,omitempty"`
+	Message                string                   `json:"message,omitempty"`
+	ModelAccess            *v1beta1.ModelAccessSpec `json:"modelAccess,omitempty"`
 }
 
 type HumanListResponse struct {
@@ -648,6 +693,7 @@ type CreateManagerRequest struct {
 }
 
 type UpdateManagerRequest struct {
+	Env           map[string]string                  `json:"env,omitempty"`
 	Model         string                             `json:"model,omitempty"`
 	ModelProvider *string                            `json:"modelProvider,omitempty"`
 	Runtime       string                             `json:"runtime,omitempty"`
@@ -664,7 +710,7 @@ type UpdateManagerRequest struct {
 }
 
 type ManagerResponse struct {
-	Ready bool `json:"ready"`
+	Ready bool   `json:"ready"`
 	Name  string `json:"name"`
 	Phase string `json:"phase"`
 	State string `json:"state,omitempty"` // desired lifecycle state
@@ -685,6 +731,10 @@ type ManagerResponse struct {
 	// + welcome prompt actually delivered). Always present (false until set)
 	// so the install script can rely on a stable JSON shape.
 	WelcomeSent bool `json:"welcomeSent"`
+
+	// Environment values are returned only by privileged detail/update requests.
+	Env         map[string]string `json:"env,omitzero"`
+	EnvEditable bool              `json:"envEditable,omitempty"`
 }
 
 type ManagerListResponse struct {

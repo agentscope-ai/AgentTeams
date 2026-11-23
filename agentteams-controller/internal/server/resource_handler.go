@@ -13,6 +13,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	audit "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/audit"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
@@ -33,10 +34,12 @@ const k8sUpdateMaxRetries = 3
 // Team CRs reference independently managed Worker CRs. Worker CRUD always
 // operates on Worker CRs; Team CRUD only owns membership and coordination.
 type ResourceHandler struct {
-	workerEnvBuilder *service.WorkerEnvBuilder
-	client           client.Client
-	namespace        string
-	backend          *backend.Registry
+	workerEnvBuilder     *service.WorkerEnvBuilder
+	client               client.Client
+	namespace            string
+	backend              *backend.Registry
+	passwordResetter     humanPasswordResetter
+	passwordResetEnabled bool
 	// oss backs object-storage-backed read surfaces (the shared MCP
 	// registry). Nil in embedded mode without MinIO: the affected endpoints
 	// then report the shared half as unavailable instead of failing.
@@ -150,6 +153,10 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	if !h.validateWorkerEnvRequest(w, r, req.Env) {
 		return
 	}
+	if req.LlmHeartbeatEnabled != nil && !canManageWorkerEnv(r) {
+		httputil.WriteError(w, http.StatusForbidden, "only Manager or platform Admin can change autonomous checks")
+		return
+	}
 
 	// containerManaged default is true (controller manages container).
 	containerManaged := true
@@ -167,6 +174,10 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = h.defaultWorkerModel
 	}
+	if req.LlmHeartbeatEnabled != nil && runtime != "openclaw" {
+		httputil.WriteError(w, http.StatusBadRequest, "llmHeartbeatEnabled is supported for OpenClaw Workers only")
+		return
+	}
 
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{
@@ -174,6 +185,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Namespace: h.namespace,
 		},
 		Spec: v1beta1.WorkerSpec{
+			LlmHeartbeatEnabled:          req.LlmHeartbeatEnabled,
 			Env:                          req.Env,
 			Model:                        req.Model,
 			SubagentModel:                req.SubagentModel,
@@ -249,7 +261,7 @@ func (h *ResourceHandler) GetWorker(w http.ResponseWriter, r *http.Request) {
 			writeK8sError(w, "get worker", terr)
 			return
 		} else if ok {
-			applyTeamMember(&resp, team, member)
+			applyTeamMember(&resp, team, member, worker.Spec.LlmHeartbeatEnabled)
 		}
 		// Scoped readers (team leaders or humans) may only fetch workers in
 		// the teams they control; L3 (worker-scoped) humans may additionally
@@ -489,7 +501,7 @@ func (h *ResourceHandler) ListWorkers(w http.ResponseWriter, r *http.Request) {
 			resp.EnvEditable = false
 		}
 		if hit, ok := teamIndex[list.Items[i].Name]; ok {
-			applyTeamMember(&resp, hit.team, hit.member)
+			applyTeamMember(&resp, hit.team, hit.member, list.Items[i].Spec.LlmHeartbeatEnabled)
 		}
 		// Scoped readers (team leaders or humans) only see the workers in
 		// the teams they control; L3 (worker-scoped) humans only see their
@@ -538,6 +550,10 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 	if !h.validateWorkerEnvRequest(w, r, req.Env) {
 		return
 	}
+	if req.LlmHeartbeatEnabled != nil && !canManageWorkerEnv(r) {
+		httputil.WriteError(w, http.StatusForbidden, "only Manager or platform Admin can change autonomous checks")
+		return
+	}
 
 	ctx := r.Context()
 	caller := authpkg.CallerFromContext(ctx)
@@ -570,6 +586,17 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		// (return to team default / runtime default).
 		if req.SubagentModel != nil {
 			worker.Spec.SubagentModel = *req.SubagentModel
+		}
+		if req.LlmHeartbeatEnabled != nil {
+			runtime := worker.Spec.Runtime
+			if req.Runtime != "" {
+				runtime = req.Runtime
+			}
+			if runtime != "openclaw" {
+				httputil.WriteError(w, http.StatusBadRequest, "llmHeartbeatEnabled is supported for OpenClaw Workers only")
+				return
+			}
+			worker.Spec.LlmHeartbeatEnabled = req.LlmHeartbeatEnabled
 		}
 		if req.LlmStreamFirstContentTimeout != nil {
 			worker.Spec.LlmStreamFirstContentTimeout = *req.LlmStreamFirstContentTimeout
@@ -811,7 +838,27 @@ func (h *ResourceHandler) GetTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, teamToResponse(&team))
+	var workers v1beta1.WorkerList
+	if err := h.client.List(r.Context(), &workers, client.InNamespace(h.namespace)); err != nil {
+		writeK8sError(w, "get team members", err)
+		return
+	}
+	byName := make(map[string]*v1beta1.Worker, len(workers.Items))
+	for i := range workers.Items {
+		byName[workers.Items[i].Name] = &workers.Items[i]
+	}
+	response := teamToResponse(&team)
+	for _, member := range team.Spec.WorkerMembers {
+		view := TeamMemberView{Name: member.Name, Role: member.Role, Phase: "Missing"}
+		if worker := byName[member.Name]; worker != nil {
+			view.MatrixUserID = worker.Status.MatrixUserID
+			view.Runtime, view.Phase, view.State = worker.Spec.Runtime, worker.Status.Phase, worker.Spec.DesiredState()
+			view.Skills = worker.Spec.Skills
+			view.NativeCoordinationSupported = coordinationRuntimeSupported(worker.Spec.Runtime)
+		}
+		response.Members = append(response.Members, view)
+	}
+	httputil.WriteJSON(w, http.StatusOK, response)
 }
 
 func (h *ResourceHandler) ListTeams(w http.ResponseWriter, r *http.Request) {
@@ -887,7 +934,7 @@ func (h *ResourceHandler) UpdateTeam(w http.ResponseWriter, r *http.Request) {
 		if req.TeamName != "" {
 			team.Spec.TeamName = req.TeamName
 		}
-		if req.Admin != nil {
+		if req.AdminProvided || req.Admin != nil {
 			team.Spec.Admin = req.Admin
 		}
 		if req.HumanMembers != nil {
@@ -1592,7 +1639,10 @@ func (h *ResourceHandler) ListHumans(w http.ResponseWriter, r *http.Request) {
 
 	humans := make([]HumanResponse, 0, len(list.Items))
 	for i := range list.Items {
-		humans = append(humans, humanListToResponse(&list.Items[i]))
+		human := &list.Items[i]
+		response := humanListToResponse(human)
+		response.PasswordResetAvailable = h.passwordResetEnabled && h.passwordResetter != nil && canResetHumanPassword(human)
+		humans = append(humans, response)
 	}
 
 	if fieldViews == listFieldsAll {
@@ -1700,7 +1750,15 @@ func (h *ResourceHandler) GetManager(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, managerToResponse(&mgr))
+	resp := h.managerResponseForCaller(r, &mgr)
+	if canManageWorkerEnv(r) {
+		resp.Env = mgr.Spec.Env
+		if resp.Env == nil {
+			resp.Env = map[string]string{}
+		}
+		resp.EnvEditable = true
+	}
+	httputil.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *ResourceHandler) ListManagers(w http.ResponseWriter, r *http.Request) {
@@ -1712,7 +1770,7 @@ func (h *ResourceHandler) ListManagers(w http.ResponseWriter, r *http.Request) {
 
 	managers := make([]ManagerResponse, 0, len(list.Items))
 	for i := range list.Items {
-		managers = append(managers, managerToResponse(&list.Items[i]))
+		managers = append(managers, h.managerResponseForCaller(r, &list.Items[i]))
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, ManagerListResponse{Managers: managers, Total: len(managers)})
@@ -1730,6 +1788,9 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+	if !h.validateManagerEnvRequest(w, r, req.Env) {
+		return
+	}
 
 	ctx := r.Context()
 	for attempt := 0; attempt < k8sUpdateMaxRetries; attempt++ {
@@ -1739,6 +1800,9 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
+		if req.Env != nil {
+			mgr.Spec.Env = req.Env
+		}
 		if req.Model != "" {
 			mgr.Spec.Model = req.Model
 		}
@@ -1785,7 +1849,15 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		httputil.WriteJSON(w, http.StatusOK, managerToResponse(&mgr))
+		resp := h.managerResponseForCaller(r, &mgr)
+		if canManageWorkerEnv(r) {
+			resp.Env = mgr.Spec.Env
+			if resp.Env == nil {
+				resp.Env = map[string]string{}
+			}
+			resp.EnvEditable = true
+		}
+		httputil.WriteJSON(w, http.StatusOK, resp)
 		return
 	}
 }
@@ -1851,6 +1923,11 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		RunningTaskCount:             w.Status.RunningTaskCount,
 		LastRunAt:                    w.Status.LastRunAt,
 		LastFinishAt:                 w.Status.LastFinishAt,
+		SkillWarnings:                w.Status.SkillWarnings,
+	}
+	if w.Spec.Runtime == "openclaw" {
+		enabled := w.Spec.LlmHeartbeatEnabled != nil && *w.Spec.LlmHeartbeatEnabled
+		resp.LlmHeartbeatEnabled = &enabled
 	}
 	resp.RuntimeDeprecated = strings.EqualFold(w.Spec.Runtime, backend.RuntimeCopaw)
 	if resp.Phase == "" {
@@ -1967,7 +2044,7 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 
 func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 	resp := ManagerResponse{
-		Ready: m.Status.Ready,
+		Ready:         m.Status.Ready,
 		Name:          m.Name,
 		Phase:         m.Status.Phase,
 		State:         m.Spec.DesiredState(),
@@ -2076,6 +2153,9 @@ func (h *ResourceHandler) checkScopedWorkerUpdate(ctx context.Context, caller *a
 		return http.StatusForbidden, "team leaders cannot update Worker resources; ask Manager or platform Admin"
 	}
 	var forbidden []string
+	if req.LlmHeartbeatEnabled != nil {
+		forbidden = append(forbidden, "llmHeartbeatEnabled")
+	}
 	if req.WorkerName != "" {
 		forbidden = append(forbidden, "workerName")
 	}
@@ -2261,9 +2341,14 @@ func findTeamMember(ctx context.Context, c client.Client, namespace, name string
 	return nil, "", false, nil
 }
 
-func applyTeamMember(resp *WorkerResponse, t *v1beta1.Team, memberName string) {
+func applyTeamMember(resp *WorkerResponse, t *v1beta1.Team, memberName string, heartbeatOverride *bool) {
 	resp.Team = t.Name
 	resp.Role = teamMemberRole(t, memberName)
+	if resp.LlmHeartbeatEnabled != nil && resp.Role == "team_leader" {
+		hb := agentconfig.ResolveLLMHeartbeat(heartbeatOverride,
+			&agentconfig.HeartbeatConfig{Enabled: t.Spec.HeartbeatEvery != "" && t.Spec.HeartbeatEvery != "0m", Every: t.Spec.HeartbeatEvery})
+		resp.LlmHeartbeatEnabled = &hb.Enabled
+	}
 	if ms := t.Status.MemberByName(memberName); ms != nil {
 		if resp.RoomID == "" {
 			resp.RoomID = ms.RoomID

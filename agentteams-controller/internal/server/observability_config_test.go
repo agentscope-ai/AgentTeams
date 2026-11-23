@@ -135,3 +135,27 @@ func TestObservabilityApplyPreservesWorkerEnvAndRejectsStaleRevision(t *testing.
 		t.Fatal("query credentials reached Worker env")
 	}
 }
+
+func TestObservabilityApplySupportsManagedRuntimes(t *testing.T) {
+	for _, runtime := range []string{"qwenpaw", "hermes", "openclaw", "deepseek-harness", "codex", "openhuman"} {
+		t.Run(runtime, func(t *testing.T) {
+			h := tracingFixture(t)
+			saveTraceBackend(t, h, "http://langfuse")
+			worker := &v1beta1.Worker{}
+			key := client.ObjectKey{Namespace: "default", Name: "worker-cr"}
+			if err := h.client.Get(t.Context(), key, worker); err != nil {
+				t.Fatal(err)
+			}
+			worker.Spec.Runtime = runtime
+			if err := h.client.Update(t.Context(), worker); err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			h.ApplyObservabilityConfig(rec, withCaller(httptest.NewRequest("POST", "/api/v1/observability/apply",
+				strings.NewReader(`{"workers":["worker-cr"],"revision":"test"}`)), &authpkg.CallerIdentity{Role: authpkg.RoleAdmin}))
+			if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"success":true`) {
+				t.Fatalf("collection config rejected: %d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}

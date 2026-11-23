@@ -188,7 +188,7 @@ class WorkflowPlanTests(unittest.TestCase):
         self.assertEqual(len(suites), 2)
         expected = {'consume_error', 'show_thinking_gate', 'send_gate_retrigger_placeholder',
                     'mention_localpart', 'send_gate_retrigger_relevance', 'retry_classifier',
-                    'sync_timeout_clamp', 'no_reply_final_line'}
+                    'sync_timeout_clamp', 'no_reply_final_line', 'session_receipts', 'direct_control'}
         actual = [case for suite in suites for case in suite['cases'].split()]
         self.assertEqual(set(actual), expected)
         self.assertEqual(len(actual), len(expected))
@@ -222,13 +222,13 @@ class WorkflowPlanTests(unittest.TestCase):
         jobs = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())['jobs']
         expected = {
             'build-images-independent': ({'qwenpaw-worker', 'deepseek-harness-worker'}, {'detect-changes', 'build-base'}),
-            'build-images-controller': ({'embedded', 'manager-qwenpaw', 'hermes-worker'}, {'detect-changes', 'build-base'}),
-            'build-images-openclaw': ({'manager', 'worker'}, {'detect-changes', 'resolve-openclaw-base', 'build-base', 'build-openclaw-base'}),
+            'build-images-controller': ({'embedded', 'hermes-worker'}, {'detect-changes', 'build-base'}),
+            'build-images-openclaw': ({'openclaw'}, {'detect-changes', 'resolve-openclaw-base', 'build-base', 'build-openclaw-base'}),
         }
         dockerfiles = {'embedded': 'agentteams-controller/Dockerfile.embedded',
-                      'manager-qwenpaw': 'qwenpaw/Dockerfile', 'hermes-worker': 'hermes/Dockerfile',
+                      'hermes-worker': 'hermes/Dockerfile',
                       'qwenpaw-worker': 'qwenpaw/Dockerfile', 'deepseek-harness-worker': 'deepseek-harness/Dockerfile',
-                      'manager': 'worker/Dockerfile', 'worker': 'worker/Dockerfile'}
+                      'openclaw': 'worker/Dockerfile'}
         targets = []
         for name, (wanted, dependencies) in expected.items():
             job = jobs[name]
@@ -263,18 +263,20 @@ class WorkflowPlanTests(unittest.TestCase):
         step = next(step for step in workflow['jobs']['build']['steps']
                     if step.get('name') == 'Build image')['run']
         for local in ('true', 'false'):
-            for target in ('manager', 'worker'):
-                immutable = 'example/base@sha256:' + '0' * 64
-                script = step.replace('${{ inputs.local_openclaw_base }}', local)
-                script = script.replace('${{ matrix.target }}', target)
-                script = script.replace('${{ inputs.published_base_ref }}', immutable)
-                script = script.replace('${{ inputs.controller }}', 'true')
-                script = script.replace('make "${MAKE_ARGS[@]}"', 'make -n "${MAKE_ARGS[@]}"')
-                result = subprocess.run(['bash', '-eu', '-c', script], cwd=ROOT, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                expected = 'agentteams/openclaw-base:latest' if local == 'true' else immutable
-                self.assertIn('OPENCLAW_BASE_IMAGE=' + expected, result.stdout)
-                self.assertNotIn('==> Building agentteams-controller image:', result.stdout)
+            target = 'openclaw'
+            immutable = 'example/base@sha256:' + '0' * 64
+            script = step.replace('${{ inputs.local_openclaw_base }}', local)
+            script = script.replace('${{ matrix.target }}', target)
+            script = script.replace('${{ inputs.published_base_ref }}', immutable)
+            script = script.replace('${{ inputs.controller }}', 'true')
+            script = script.replace('make "${MAKE_ARGS[@]}"', 'make -n "${MAKE_ARGS[@]}"')
+            result = subprocess.run(['bash', '-eu', '-c', script], cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected = 'agentteams/openclaw-base:latest' if local == 'true' else immutable
+            self.assertIn('OPENCLAW_BASE_IMAGE=' + expected, result.stdout)
+            self.assertIn('-t agentteams/agentteams-harness-openclaw:latest', result.stdout)
+            self.assertNotIn('docker tag', result.stdout)
+            self.assertNotIn('==> Building agentteams-controller image:', result.stdout)
 
     def test_pipeline_matrix_keeps_three_runtime_controller_checks(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())

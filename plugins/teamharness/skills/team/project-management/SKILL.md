@@ -1,39 +1,80 @@
 ---
 name: teamharness-project-management
-description: "Use when you act as Leader and maintain durable TeamHarness project state for Quick Task or Project Work: create_quick_project, create_project, plan_dag, plan_loop, ready_nodes, resolve_project, accept_task_result, project completion, and requester report state. Do not use to create Matrix task rooms or send messages."
+description: "Use as Leader for explicitly requested Projects, existing Project DAG and Loop work, and legacy Task flows. For managed task/v1 work, use the Task Collaboration skill."
 ---
 
 # Project Management
 
-Use this skill when maintaining durable project state.
+## Archive accepted task rooms
 
-A project owns the plan, context, dependencies, and accepted progress. Keep the
-project plan separate from individual task execution logs.
+When asked to archive finished work, verify task acceptance and workspace artifact
+uploads first. Get the room ID from the accepted Task, check
+`agt task-room status <room-id>`, then use `agt task-room archive <room-id>`.
+Use `agt task-room list` to review already archived rooms.
+Verify that the archived room appears in that list before reporting success.
+Moving task files into an `archive` directory, or leaving/forgetting a Matrix
+room, does not archive a task. Preserve task metadata and workspace artifacts;
+use the Controller lifecycle operation so all members stop syncing while
+membership and history remain available in Dashboard's archived tasks.
+You can restore your team's task rooms with
+`agt task-room unarchive <room-id>` before further edits or follow-up work.
+These commands use your Controller identity. You cannot archive private chats,
+ordinary groups or Team rooms, and your Leader role cannot delete task rooms.
+Keep historical messages available through the existing conversation history.
 
-Only advance a dependency after you accept the submitted result as the trusted
-Leader runtime.
-Do not use this skill for ordinary direct replies or lightweight one-off
-actions.
+## Default: one main Task, executable subtasks
 
-## Scope
+Answer ordinary direct replies without creating durable Task or Project state.
 
-Use this skill when acting as Leader for:
+For ordinary team work, use `taskflow start_task`. Do not create a Project,
+including a hidden or temporary one. Only create a Project when the user
+explicitly requests one. Automatic cross-team Project creation is future work;
+do not infer that authorization from task complexity or member count.
 
-- `projectflow` calls
-- project creation
-- quick single-task project creation
-- DAG planning
-- Loop planning
-- ready-node resolution
-- Loop iteration recording
-- accepting checked Worker results into project progress
-- project-level status reports
+If the Manager registered a main task, reuse its ID and unchanged original
+spec. When the requester assigns work directly to you without a registered
+main task, choose a stable task ID and use the original request as the spec.
+In both cases pass the execution subtasks, owners, dependencies, and requester
+route to `start_task`. Successful dispatch makes the main task assigned;
+only a Worker's durable ACK makes it in progress.
 
-For Project Work, use `teamharness-team-coordination` first to decide task
-boundaries. If no task room exists yet, use `teamharness-roomflow` and
-`teamharness-communication` before this skill. Use
-`teamharness-task-delegation` for individual task specs, assignment messages,
-and Worker result checks.
+A main Task owns the original request, execution plan, task room, source reply
+route and final report. Each subtask is independently executable by one Worker.
+`parent_task_id` records parentage; `dependsOn` records execution prerequisites.
+Project membership is optional: `projectId` on start_task may reference an
+existing Project. Only the main Task is linked into that Project. Never close
+or wait for unrelated main tasks in the same Project when finishing this one.
+
+Call `taskflow` with role leader and an object payload:
+
+```json
+{"action":"start_task","payload":{"taskId":"delivery-001","title":"Bounded delivery","spec":"The complete original request and acceptance criteria.","sourceRoomId":"!source:matrix.local","requester":"@requester:matrix.local","tasks":[{"taskId":"delivery-001-analysis","assignedTo":"@analyst:matrix.local","spec":"Record the requested behavior and acceptance cases."},{"taskId":"delivery-001-implementation","assignedTo":"@developer:matrix.local","dependsOn":["delivery-001-analysis"],"spec":"Implement the accepted contract and submit actual verification evidence."}]}}
+```
+
+This single call validates the plan, creates/reuses the main Task room, saves
+all execution specs and dispatches ready subtasks. End after successful dispatch;
+do not poll or send duplicate assignments. Exact retries preserve the room and
+accepted work. Later specs must have their actual owners and contracts; resolve
+material ambiguities with the user instead of inventing a plan.
+
+On `task_submitted`, use your runtime-prepared check_task receipt, review the
+exact submission, and call `taskflow accept_task_result` with
+`{mainTaskId, taskId, submissionId, resultStatus, accepted}`. Submission alone
+never unlocks dependencies. The task system dispatches newly ready subtasks
+only after your acceptance. Preserve independent QA and required boundary checks.
+
+When the final acceptance receipt returns `mainTaskReady` and `nextAction`,
+continue from that authoritative receipt directly; do not wait for another
+callback merely to repeat it. Otherwise resume on `main_task_ready`. Verify the
+whole original request using accepted results,
+then call `taskflow complete_task` with `{taskId, report}`. This saves the final
+report under `shared/tasks/{main-task-id}/result.md`, completes only that main
+Task and notifies its original source. Do not repeat testing or write accepted
+Worker outputs. Inspect requesterNotification; do not send a duplicate report.
+
+For explicit Project work and existing manual DAG/Loop plans, use the legacy
+Project operations below. A Loop's iteration rules remain unchanged; do not
+replace an iterative plan with finite automatic completion.
 
 ## Project Files
 
@@ -88,9 +129,67 @@ safe.
 When calling `projectflow`, pass `payload` as a JSON object, not as a serialized
 JSON string.
 
-## Create Project
+## Explicit Project work only
 
-Create the project before planning tasks:
+Use these creation operations only when the user explicitly requested a Project.
+Ordinary team tasks use start_task above, even when they have multiple members.
+
+When API coordination is enabled and every execution task can be specified up
+front, set `dispatchMode: "automatic"` on `start_project` and include `spec` and
+`assignedTo` on every leaf. After you check and accept a result, the task system
+dispatches newly ready leaves using the stored plan. Do not send duplicate
+assignment messages or call `delegate_task` again. Submitted results do not
+unlock dependencies. Use normal manual planning when later specs require a new
+Human decision; do not invent those decisions to enable automatic dispatch.
+
+Put the shared original request and acceptance criteria once in
+`start_project.payload.spec`. The tool materializes it in every execution
+leaf's stored spec; each Worker receives the full contract in its ACK without
+an extra context lookup. Keep each leaf's `spec` concise: its own assignment,
+required input paths and output paths. Do not repeat the shared contract in
+every leaf. Do not put role-specific requirements in the common request. Reference accepted upstream
+artifacts instead of copying their contents into every downstream spec. Do not
+repeat task protocol, status report templates or CLI instructions in specs;
+the runtime already supplies those. Scale the plan to the request rather than
+expanding a small function into a long implementation document. For report-only
+work, use the task's canonical `result.md` as the report instead of requiring a
+second document with the same findings. Preserve any filename or separate
+artifact explicitly requested by the user. Workers can save the full report
+with `submit_task.resultMarkdown` in the submission call.
+
+Add a dependency only when the task actually consumes that predecessor's
+output or the requester requires the order. Role order alone is not a data
+dependency. When the original request already fixes inputs, outputs and
+acceptance criteria, analysis and implementation can independently use that
+same contract; make QA consume both accepted outputs. If analysis must resolve
+an ambiguity or choose the contract, implementation must wait for it. Never
+invent parallelism across a real prerequisite. Implementation documentation and independent QA can
+both use the accepted implementation in parallel; only make documentation wait
+for QA when its requested content needs the QA result. Final acceptance still
+requires all required branches to finish.
+
+For an explicitly requested Project whose initial owners and acceptance criteria are known, use
+`start_project` in the source session. It reuses the existing room creation,
+plan validation and delegation operations in one call; you do not send a
+`PROJECT_REQUESTED` self-trigger for this path. Supply the normal
+`create_project` fields, a safe explicit `projectId`, and `tasks`. Each initially
+ready leaf needs `assignedTo` and a bounded `spec`; later tasks can wait for
+their accepted inputs. Runtime-roster names or full Matrix IDs identify owners.
+
+```json
+{"action":"start_project","payload":{"projectId":"delivery-001","title":"Bounded delivery","source":"matrix","sourceRoomId":"!source:matrix.local","requester":"@requester:matrix.local","replyRoute":{"channel":"matrix","target_session":"!coordinator:matrix.local","target_user":"@coordinator:matrix.local"},"tasks":[{"taskId":"delivery-001-analysis","assignedTo":"@analyst:matrix.local","spec":"Describe the requested behavior and acceptance cases. Submit requirements.md under your task directory."},{"taskId":"delivery-001-implementation","assignedTo":"@developer:matrix.local","dependsOn":["delivery-001-analysis"],"spec":"Implement the accepted requirements under your task directory and submit code plus verification evidence."}]}}
+```
+
+After successful initial assignments, end the source turn with `NO_REPLY`.
+Worker completion events wake you in the returned task room. An exact retry
+reuses the plan and preserves accepted/assigned work. A partial failure returns
+the room, project and assignment receipts; resolve the reported failure rather
+than create a second plan. The existing explicit room/self-trigger flow remains
+available when the request needs further planning in its task room.
+
+## Manual and Loop reference
+
+For the explicit manual workflow, create the project before planning tasks:
 
 ```json
 {
@@ -110,6 +209,15 @@ Create the project before planning tasks:
 ```
 
 This creates `meta.json` and `plan.md`.
+When the initial DAG is already known, include its `tasks` array in this
+same `create_project` payload (using the `plan_dag` task fields). The tool
+validates and saves the plan together, returning `readyNodes`; delegate those
+nodes directly instead of calling `plan_dag` and `ready_nodes` again.
+
+Keep intermediate results in the task room. `complete_project` sends the
+verified final report to the requester automatically after committing terminal
+state. When `requesterNotification.sent` is true, do not send it again or call
+`mark_requester_report_sent`; delivery is already recorded.
 
 `team_id` is stamped automatically from the runtime team configuration; pass
 `payload.teamId` explicitly only when the project must belong to a different
@@ -139,11 +247,11 @@ For DingTalk requester compatibility, `requester` may use
 `dingtalk:{user_id}:{session_id}`; TeamHarness derives `reply_route` from that
 value when `replyRoute` is not provided.
 
-## Create Quick Project
+## Create an explicit single-node Project
 
-Use `create_quick_project` only after Quick Task mode is selected and the
-Leader is in the Matrix Task room that received the task request message. It is
-a shortcut for:
+Use `create_quick_project` only for an explicitly requested single-node Project
+after a manual handoff to its Matrix Task room. For an ordinary Task request,
+use `taskflow start_task`. This legacy Project action is a shortcut for:
 
 ```text
 create_project + plan single-node DAG + assigned task spec
@@ -321,8 +429,9 @@ continue, replan, ask the requester, stop successfully, or stop blocked.
 ## Resolve Project Context
 
 When a Worker completion or blocker wakes the Leader in a fresh session, do not
-guess the project from the current room. First resolve the context from the task
-id:
+guess the project from the current room. Start with `taskflow check_task` using
+the task ID; its snapshot includes the task's project ID and submitted evidence.
+Use `resolve_project` only if additional project context is actually missing:
 
 ```json
 {
@@ -364,13 +473,10 @@ To accept a result, call `accept_task_result`:
 }
 ```
 
-`accept_task_result` updates the DAG or Loop node and records
-the terminal task decision. With the runtime-neutral standalone MCP it also
-records `requester_report.pending` in ProjectMeta. Native CoPaw `projectflow`
-commits only the plan and TaskMeta terminal state; it does not invent a
-`requester_report`. In both runtimes you must still follow the existing
-requester-report flow and `replyRoute`; absence of a CoPaw pending marker is not
-permission to omit the report. Keep unresolved nodes in their current state.
+`accept_task_result` commits the terminal decision and returns the updated
+project plus `readyNodes`/`readyLoopNodes`. Keep intermediate results in the
+Task room; they do not trigger a Manager report. Reuse this returned snapshot
+instead of reloading project files or querying readiness again.
 
 For a normal task that already has a `submission_id`, you must pass that exact
 value as `submissionId` to both acceptance and cancellation. Retry only with the
@@ -397,32 +503,28 @@ with `artifact publish_file` and set `parentEventId` to the report message id.
 Use `publishArtifacts: true` only when you intentionally want an immediate
 project artifact before the requester report.
 
-Then call `ready_nodes` and delegate any newly ready downstream node with
-`teamharness-task-delegation`.
+Delegate downstream nodes from the acceptance response. When all required
+work is accepted, write the final project summary and call `complete_project`.
+For Matrix routes the tool commits state, publishes the full report and sends
+a structured final event. Check `requesterNotification.sent`: when true,
+report delivery is already recorded; do not resend or clear the marker again.
+If delivery failed, resolve its explicit error and retry `complete_project`
+idempotently. For legacy or non-Matrix routes without automatic delivery,
+use the Requester Report Delivery Protocol once at final completion.
 
-After the project state changes, close the loop with requester visibility:
-
-1. Read `shared/projects/{project-id}/meta.json` and `plan.md`.
-2. Build the requester-facing content with the Project Status Reports template
-   below.
-3. Use `teamharness-communication`
-   `## Requester Report Delivery Protocol` to deliver the report to the
-   requester recorded on the project.
-4. If the requester report was sent to a Matrix room and
-   `shared/projects/{project-id}/result.md` exists, call `artifact publish_file`
-   for that file with `parentEventId` set to the report message id.
-5. If the requester report was sent to DingTalk, Feishu, WeChat, or another
-   non-Matrix channel, do not claim that a file was attached or published in
-   that channel. In the report text, list the important `shared/...` artifact
-   paths and say they are available from the shared workspace or platform
-   object-storage view.
-6. After successful delivery, call `mark_requester_report_sent`.
+The standalone MCP records pending requester delivery in `requester_report`.
+Native CoPaw `projectflow` does not invent a
+`requester_report` marker when its runtime has not supplied one. An absent
+marker is not permission to omit the report: deliver the verified final result
+through the requester route once. In Agent API mode, check the durable delivery
+receipt rather than treating queue admission as the Human's receipt.
 
 Task room coordination, Worker completion messages, downstream assignment
 messages, and tool-call summaries do not count as the requester report. You may
-batch several accepted task results and downstream delegations into one
-requester report, but do not omit the report when accepted project state
-changed.
+summarize accepted task results in the final requester report. Keep ordinary
+intermediate changes in the Task room; do not wake a Manager to supervise each
+step. Surface a blocker only when the requester must act, or progress when the
+requester explicitly asks for it. The final report remains required.
 
 ## Project Status Reports
 
@@ -482,7 +584,7 @@ Keep the report envelope consistent across DAG and Loop:
 
 For Matrix requester reports, this section may say the report file or artifact
 was published to the requester room only after `artifact publish_file` succeeds.
-For DingTalk, Feishu, WeChat, or other non-Matrix requester reports, say the
+For a non-Matrix channel, do not claim that a file was attached. Say the
 files are available from the shared workspace or platform object-storage view;
 do not say "attached", "uploaded to this chat", "click the file card", or
 "view the file here".
@@ -556,7 +658,7 @@ When `notificationNeeded` is present in the tool result:
    status update to that room. Use `m.notice`-style concise format:
    `[ProjectFlow] {event}: {summary}`.
 3. If `notificationNeeded.replyRoute` is present and the event is
-   `accept_task_result` or `complete_project`, this is the requester report
+   `complete_project` and `requesterNotification.sent` is not true, this is the final requester report
    trigger — follow the Requester Report Delivery Protocol in
    `teamharness-communication`.
 4. Do not send a notification if the tool returned `ok: false`.

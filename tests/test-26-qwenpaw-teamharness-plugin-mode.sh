@@ -31,7 +31,6 @@ LEADER_PACKAGE_V1_MARKER="TEST26_LEADER_PACKAGE_V1_${TEST_RUN_ID}"
 WORKER_PACKAGE_V1_MARKER="TEST26_WORKER_PACKAGE_V1_${TEST_RUN_ID}"
 LEADER_PACKAGE_V2_MARKER="TEST26_LEADER_PACKAGE_V2_${TEST_RUN_ID}"
 WORKER_PACKAGE_V2_MARKER="TEST26_WORKER_PACKAGE_V2_${TEST_RUN_ID}"
-DONE_LINE="TASK_COMPLETED: ${TASK_ID}"
 LEADER_CONTAINER="$(worker_container_name "${TEST_LEADER}")"
 WORKER_CONTAINER="$(worker_container_name "${TEST_WORKER}")"
 K8S_NAMESPACE="${AGENTTEAMS_E2E_NAMESPACE:-default}"
@@ -375,8 +374,12 @@ raise SystemExit(1)
 # A real Leader may already have accepted the result before this observer checks.
 # effective is intentionally false after acceptance; require its recorded history.
 _task_check_succeeded() {
-    jq -e --arg task "${TASK_ID}" --arg marker "${MARKER}" '
+    jq -e --arg task "${TASK_ID}" --arg marker "${MARKER}" \
+        --arg project "${PROJECT_ID}" --arg room "${TEAM_ROOM}" \
+        --arg worker "${TEST_WORKER}" --arg mxid "${WORKER_MXID}" '
         .ok == true and .task.task_id == $task and
+        .task.project_id == $project and .task.room_id == $room and
+        (.task.assigned_to == $worker or .task.assigned_to == $mxid) and
         .result.status == "SUCCESS" and
         (.result.summary | contains($marker)) and
         (.validationErrors | type == "array" and length == 0) and
@@ -579,9 +582,7 @@ Complete these steps immediately before handling the user's request:
 1. Run the packaged hello script:
    sh bootstrap/test26-hello.sh
 
-2. Reply with exactly this marker:
-
-${bootstrap_marker}
+2. Reply with exactly the marker printed by the script.
 EOF
         cat >\"\${work}/config/bootstrap/test26-seed.md\" <<'EOF'
 # TEST26 AgentSpec Config Bootstrap
@@ -598,6 +599,7 @@ role=\"\${AGENTTEAMS_WORKER_ROLE:-\${AGENTTEAMS_AGENT_ROLE:-unknown}}\"
 mkdir -p bootstrap
 printf '%s\n' \"\${marker}\" > bootstrap/test26-hello-result.txt
 printf '%s\n' \"\${role}\" > bootstrap/test26-hello-role.txt
+printf '%s\n' \"\${marker}\"
 EOF
         chmod +x \"\${work}/config/bootstrap/test26-hello.sh\"
         cat >\"\${work}/config/materials/test26-note.md\" <<'EOF'
@@ -925,8 +927,8 @@ _assert_runtime_yaml_has_no_secret_values "${LEADER_RUNTIME_YAML}${WORKER_RUNTIM
 
 LEADER_ENV="$(_container_env "${LEADER_CONTAINER}")"
 WORKER_ENV="$(_container_env "${WORKER_CONTAINER}")"
-assert_eq "standalone" "$(_env_value "${LEADER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Leader Worker runtime role remains standalone"
-assert_eq "standalone" "$(_env_value "${WORKER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Member Worker runtime role remains standalone"
+assert_eq "team_leader" "$(_env_value "${LEADER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Leader runtime receives the team_leader role"
+assert_eq "worker" "$(_env_value "${WORKER_ENV}" AGENTTEAMS_WORKER_ROLE)" "Member runtime receives the worker role"
 
 # ============================================================
 # Section 4: QwenPaw plugin-mode install and TeamHarness assets
@@ -991,12 +993,6 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
         log_pass "${container} does not use legacy agentteam plugin state"
     else
         log_fail "${container} contains legacy agentteam plugin state"
-    fi
-
-    if docker exec "${container}" test -f "${workspace}/TEAMS.md" >/dev/null 2>&1; then
-        log_pass "${container} workspace TeamHarness prompt exists"
-    else
-        log_fail "${container} workspace TeamHarness prompt missing"
     fi
 
     if _wait_workspace_team_context "${container}" "${workspace}/TEAMS.md" "${role}" 120; then
@@ -1305,16 +1301,16 @@ fi
 
 log_section "QwenPaw Native Bootstrap"
 
-LEADER_BOOTSTRAP_PROMPT="Please run your package bootstrap now. Follow BOOTSTRAP.md exactly: run the packaged hello script, then reply with the requested marker. Do not ask me to confirm identity."
-if matrix_send_message "${ADMIN_TOKEN}" "${LEADER_DM}" "${LEADER_BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
+BOOTSTRAP_PROMPT="Please run your package bootstrap now. Follow BOOTSTRAP.md exactly. Run the packaged hello script and reply with only the marker printed by the script. Do not ask me to confirm identity."
+if matrix_send_message "${ADMIN_TOKEN}" "${LEADER_DM}" "${BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
     log_pass "Admin sent package bootstrap request to QwenPaw leader"
 else
     log_fail "Admin failed to send package bootstrap request to QwenPaw leader"
 fi
 
 LEADER_BOOTSTRAP_REPLY=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${LEADER_DM}" "${LEADER_MXID}" "${BOOTSTRAP_LEADER_MARKER}" 360 2>/dev/null || true)
-if echo "${LEADER_BOOTSTRAP_REPLY}" | grep -Fq "${BOOTSTRAP_LEADER_MARKER}"; then
+    "${ADMIN_TOKEN}" "${LEADER_DM}" "${LEADER_MXID}" "^${BOOTSTRAP_LEADER_MARKER}$" 360 2>/dev/null || true)
+if echo "${LEADER_BOOTSTRAP_REPLY}" | grep -Fxq "${BOOTSTRAP_LEADER_MARKER}"; then
     log_pass "QwenPaw leader completed package bootstrap instructions"
 else
     log_fail "QwenPaw leader did not complete package bootstrap instructions"
@@ -1326,22 +1322,21 @@ else
     log_fail "QwenPaw leader did not write bootstrap completion flag"
 fi
 
-if docker exec "${LEADER_CONTAINER}" sh -c "grep -Fq '${BOOTSTRAP_LEADER_MARKER}' '${LEADER_DEFAULT_WS}/bootstrap/test26-hello-result.txt'" >/dev/null 2>&1; then
+if _wait_workspace_marker "${LEADER_CONTAINER}" "${LEADER_DEFAULT_WS}/bootstrap/test26-hello-result.txt" "${BOOTSTRAP_LEADER_MARKER}" 120; then
     log_pass "QwenPaw leader hello script wrote expected marker"
 else
     log_fail "QwenPaw leader hello script did not write expected marker"
 fi
 
-WORKER_BOOTSTRAP_PROMPT="Please run your package bootstrap now. Follow BOOTSTRAP.md exactly: run the packaged hello script, then reply with the requested marker. Do not ask me to confirm identity."
-if matrix_send_mention_message "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${WORKER_BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
+if matrix_send_mention_message "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${BOOTSTRAP_PROMPT}" >/dev/null 2>&1; then
     log_pass "Admin sent package bootstrap mention to QwenPaw worker"
 else
     log_fail "Admin failed to send package bootstrap mention to QwenPaw worker"
 fi
 
 WORKER_BOOTSTRAP_REPLY=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${BOOTSTRAP_WORKER_MARKER}" 360 2>/dev/null || true)
-if echo "${WORKER_BOOTSTRAP_REPLY}" | grep -Fq "${BOOTSTRAP_WORKER_MARKER}"; then
+    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "^${BOOTSTRAP_WORKER_MARKER}$" 360 2>/dev/null || true)
+if echo "${WORKER_BOOTSTRAP_REPLY}" | grep -Fxq "${BOOTSTRAP_WORKER_MARKER}"; then
     log_pass "QwenPaw worker completed package bootstrap instructions"
 else
     log_fail "QwenPaw worker did not complete package bootstrap instructions"
@@ -1353,11 +1348,42 @@ else
     log_fail "QwenPaw worker did not write bootstrap completion flag"
 fi
 
-if docker exec "${WORKER_CONTAINER}" sh -c "grep -Fq '${BOOTSTRAP_WORKER_MARKER}' '${WORKER_DEFAULT_WS}/bootstrap/test26-hello-result.txt'" >/dev/null 2>&1; then
+if _wait_workspace_marker "${WORKER_CONTAINER}" "${WORKER_DEFAULT_WS}/bootstrap/test26-hello-result.txt" "${BOOTSTRAP_WORKER_MARKER}" 120; then
     log_pass "QwenPaw worker hello script wrote expected marker"
 else
     log_fail "QwenPaw worker hello script did not write expected marker"
 fi
+
+_wait_coordination_message() {
+    local kind="$1" sender="$2" recipient="$3" timeout="$4"
+    local elapsed=0 matching
+    while [ "${elapsed}" -lt "${timeout}" ]; do
+        matching=$(matrix_read_messages "${ADMIN_TOKEN}" "${TEAM_ROOM}" 100 2>/dev/null | jq -c \
+            --arg kind "${kind}" --arg sender "${sender}" --arg recipient "${recipient}" \
+            --arg task "${TASK_ID}" --arg project "${PROJECT_ID}" '
+            .chunk[] | select(.type == "m.room.message" and .sender == $sender and .event_id != null) |
+            .content as $content |
+            $content["org.agentteams.coordination"].channel_meta as $meta |
+            $meta.teamharness_coordination as $event |
+            select(($meta.sender_id == $sender and $meta.agent_matrix_user_id == $recipient and
+                $event.kind == $kind and $event.task_id == $task and $event.project_id == $project and
+                ($event.id // "") != "") or
+                ($content["org.agentteams.coordination"] == null and
+                 $content["org.agentteams.progress_only"] != true and
+                 (($content["m.mentions"].user_ids // []) | index($recipient)) != null and
+                 (($kind == "task_assigned" and
+                   (($content.body // "") | startswith($recipient + " You are assigned task **" + $task + "**:"))) or
+                  ($kind == "task_submitted" and
+                   (($content.body // "") | startswith($recipient + " TASK_COMPLETED: " + $task + " -"))))))' | head -n 1)
+        if [ -n "${matching}" ]; then
+            echo "${matching}"
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    return 1
+}
 
 TASK_PROMPT=$(cat <<EOF
 ${LEADER_MXID} Please complete this TeamHarness plugin-mode E2E request by coordinating with
@@ -1366,26 +1392,27 @@ the worker. Do not complete the worker task yourself.
 Project id: ${PROJECT_ID}
 Task id: ${TASK_ID}
 Completion marker: ${MARKER}
+Existing Team Room: ${TEAM_ROOM}
 
 Required leader steps:
-1. Use projectflow create_project for projectId ${PROJECT_ID}.
+1. Use projectflow create_project for projectId ${PROJECT_ID}, with roomId ${TEAM_ROOM}.
 2. Use projectflow plan_dag with exactly one task whose taskId is ${TASK_ID}
    and whose assignedTo is the worker runtimeName from your TeamHarness
    roster facts. Do not invent a different task id.
 3. Use taskflow delegate_task for projectId ${PROJECT_ID}, taskId ${TASK_ID},
-   using the Team Room from your TeamHarness roster facts, and the task spec
-   below. This must create
+   using exactly roomId ${TEAM_ROOM}, and the task spec below. This request
+   exercises the existing Team Room; do not create another room. This must create
    shared/tasks/${TASK_ID}/spec.md.
-4. Reply directly in this Team Room to assign the task. The assignment must
-   visibly mention the worker Matrix user from your TeamHarness roster facts,
-   include ${TASK_ID}, include shared/tasks/${TASK_ID}/spec.md, and tell the
-   assignee to call taskflow ack_task before reading the spec.
+4. The successful delegation automatically notifies the worker. End your turn
+   after dispatch; do not send a second assignment or manually mention the worker.
 
 Task spec to delegate:
 # Task: Write TeamHarness plugin-mode readiness note
 
-First call taskflow ack_task for task ${TASK_ID}. Use the returned spec as the
-execution contract.
+First call taskflow ack_task for task ${TASK_ID}. Continue only when the
+returned acknowledgement has ok=true and synced=true. If acknowledgement
+sync failed, retry the same ack_task. Use the returned spec as the execution
+contract.
 
 Create shared/tasks/${TASK_ID}/workspace/readiness-note.txt with this exact
 line:
@@ -1398,14 +1425,13 @@ Then call taskflow submit_task with status SUCCESS, a summary containing
 ${MARKER}, and both shared/tasks/${TASK_ID}/result.md and
 shared/tasks/${TASK_ID}/workspace/readiness-note.txt as deliverables.
 
-After submit_task succeeds, its automatic TASK_COMPLETED notification must
-reach the Team Room and mention the leader. Do not send a duplicate completion
-notification.
+Treat submission as complete only when taskflow submit_task returns
+ok=true and synced=true. If shared-storage sync fails, retry that same call
+with the same status, summary and ordered deliverables. Do not switch task
+tools or report completion based on a local state. The successful submission
+automatically notifies the leader in the Team Room.
 EOF
 )
-
-LEADER_TASK_BASELINE=$(matrix_latest_message_event_id "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${LEADER_MXID}")
-WORKER_TASK_BASELINE=$(matrix_latest_message_event_id "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}")
 
 if matrix_send_message "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${TASK_PROMPT}" >/dev/null 2>&1; then
     log_pass "Admin sent real TeamHarness task to QwenPaw leader"
@@ -1413,12 +1439,9 @@ else
     log_fail "Admin failed to send task to QwenPaw leader"
 fi
 
-# Match either the delegate_task notification or the leader's explicit
-# TASK_ASSIGNED reply, together with the unique task ID and Worker identity.
-LEADER_ASSIGNMENT=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${LEADER_MXID}" "\(assigned task\|TASK_ASSIGNED:\).*${TASK_ID}" 480 \
-    "" "" "" 600 "${LEADER_TASK_BASELINE}" 2>/dev/null || true)
-if echo "${LEADER_ASSIGNMENT}" | grep -Fq "${TASK_ID}" && echo "${LEADER_ASSIGNMENT}" | grep -Fq "${TEST_WORKER}"; then
+# Check the coordination envelope or the default legacy protocol with real mentions.
+LEADER_ASSIGNMENT=$(_wait_coordination_message task_assigned "${LEADER_MXID}" "${WORKER_MXID}" 480 || true)
+if [ -n "${LEADER_ASSIGNMENT}" ]; then
     log_pass "Leader assigned TeamHarness task to worker in Team Room"
 else
     log_fail "Leader did not assign TeamHarness task to worker in Team Room"
@@ -1431,10 +1454,8 @@ else
     log_fail "Task spec missing after leader delegation"
 fi
 
-WORKER_REPLY=$(matrix_wait_for_message_containing \
-    "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${WORKER_MXID}" "${DONE_LINE}" 720 \
-    "" "" "" 600 "${WORKER_TASK_BASELINE}" 2>/dev/null || true)
-if echo "${WORKER_REPLY}" | grep -q "${DONE_LINE}"; then
+WORKER_REPLY=$(_wait_coordination_message task_submitted "${WORKER_MXID}" "${LEADER_MXID}" 720 || true)
+if [ -n "${WORKER_REPLY}" ]; then
     log_pass "Worker completed delegated TeamHarness task in Team Room"
 else
     log_fail "Worker did not complete delegated TeamHarness task"

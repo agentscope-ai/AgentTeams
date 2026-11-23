@@ -646,8 +646,14 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         "action": "ack_task",
         "payload": {"taskId": context_task_id},
     })
-    context_result_path = pathlib.Path("#{workspace}") / "shared/tasks/context-parent-task/result.md"
-    context_result_path.write_text("context result body\\n", encoding="utf-8")
+    context_report_source = f"shared/tasks/{context_task_id}/qa-report.md"
+    context_result_path = pathlib.Path("#{workspace}") / context_report_source
+    invalid_inline = payload("taskflow", {
+        "role": "worker", "action": "submit_task",
+        "payload": {"taskId": context_task_id, "status": "SUCCESS", "summary": "Ready", "resultMarkdown": 42},
+    })
+    if invalid_inline.get("ok") or context_result_path.exists():
+        raise AssertionError(f"invalid inline report must fail without a write: {invalid_inline!r}")
     context_file.write_text(json.dumps({
         "rooms": {
             "!team:example.test": {
@@ -663,9 +669,35 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
             "taskId": context_task_id,
             "status": "SUCCESS",
             "summary": "Submitted using Matrix context parent.",
+            "resultMarkdown": "context result body\\n", "resultPath": context_report_source,
             "deliverables": [],
         },
     })
+    if context_result_path.read_text(encoding="utf-8") != "context result body\\n":
+        raise AssertionError("inline report must be saved exactly before publication")
+    inline_retry_args = {
+        "role": "worker", "action": "submit_task",
+        "payload": {"taskId": context_task_id, "status": "SUCCESS",
+                    "summary": "Submitted using Matrix context parent.",
+                    "resultMarkdown": "context result body\\n", "resultPath": context_report_source, "deliverables": []},
+    }
+    inline_retry = payload("taskflow", inline_retry_args)
+    if not inline_retry.get("ok") or not inline_retry.get("reused"):
+        raise AssertionError(f"identical inline report retry must be idempotent: {inline_retry!r}")
+    inline_retry_args["payload"]["resultMarkdown"] = "changed submitted report"
+    inline_conflict = payload("taskflow", inline_retry_args)
+    if inline_conflict.get("ok") or context_result_path.read_text(encoding="utf-8") != "context result body\\n":
+        raise AssertionError(f"retry must not mutate a submitted report: {inline_conflict!r}")
+    if (context_result_path.parent / "result.md").exists():
+        raise AssertionError("named canonical report must not create a duplicate result.md")
+    checked_named = payload("taskflow", {"role":"leader", "action":"check_task", "payload":{"taskId":context_task_id}})
+    if checked_named.get("report") != "context result body\\n" or not checked_named.get("effective"):
+        raise AssertionError(f"check_task must return the actual canonical report: {checked_named!r}")
+    inline_retry_args["payload"]["resultMarkdown"] = "context result body\\n"
+    inline_retry_args["payload"]["resultPath"] = f"shared/tasks/{context_task_id}/another.md"
+    changed_path = payload("taskflow", inline_retry_args)
+    if changed_path.get("ok") or (context_result_path.parent/"another.md").exists():
+        raise AssertionError("retry must not change canonical report identity")
     context_published = context_submitted.get("publishedArtifacts") or []
     if len(context_published) != 1 or context_published[0].get("status") != "published":
         raise AssertionError(f"context submit_task should publish result artifact: {context_submitted!r}")
@@ -1512,12 +1544,14 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         "payload": {
             "taskId": task_id,
             "status": "SUCCESS",
-            "summary": "This should be rejected for leader role.",
+            "summary": "A completed task cannot be submitted again.",
             "deliverables": ["shared/tasks/t-001/result.md"],
         },
     })
-    if forbidden_submit.get("ok") or "worker or remote-member role" not in forbidden_submit.get("error", ""):
-        raise AssertionError(f"leader role should not submit: {forbidden_submit!r}")
+    if (forbidden_submit.get("ok")
+            or forbidden_submit.get("error") != "illegal_transition"
+            or forbidden_submit.get("from") != "completed"):
+        raise AssertionError(f"leader must not resubmit a completed task: {forbidden_submit!r}")
 
     os.environ["AGENTTEAMS_WORKER_ROLE"] = "worker"
     remote_ack = payload("taskflow", {

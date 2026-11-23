@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$source = Get-Content (Join-Path $PSScriptRoot '../install/agentteams-install.ps1') -Raw
+$source = Get-Content (Join-Path $PSScriptRoot '../.installer-source/public/install.ps1') -Raw
 $start = $source.IndexOf('    $script:MANAGER_IMAGE = if')
 $end = $source.IndexOf('    # Resolve embedded controller image', $start)
 if ($start -lt 0 -or $end -lt 0) { throw 'Image resolution block missing' }

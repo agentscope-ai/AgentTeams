@@ -16,6 +16,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
@@ -88,12 +89,15 @@ type MemberContext struct {
 	TeamName    string // effective Team identity used for scoped storage access
 	Namespace   string
 	Role        MemberRole
+	AgentRole   MemberRole // registered collaboration role; infrastructure Role remains independent
 	Spec        v1beta1.WorkerSpec
 
 	// TeamSubagentModel is the Team.spec.subagentModel default for this
 	// member, resolved by the owning reconciler (read-time merge input).
 	// An explicit Spec.SubagentModel always takes precedence.
 	TeamSubagentModel string
+	// TeamHeartbeat retains the Leader's inherited cadence during Worker config regeneration.
+	TeamHeartbeat *agentconfig.HeartbeatConfig
 
 	// TeamLlmStreamFirstContentTimeout / TeamLlmStreamIdleTimeout are the
 	// Team.spec defaults for the worker LLM stream timeouts, resolved by the
@@ -272,6 +276,20 @@ func resolveBackendForMember(registry *backend.Registry, backendRuntime string, 
 	return wb, nil
 }
 
+// resolvePreviousMemberBackend must not use auto-detection: a missing or
+// unavailable previous backend is not permission to inspect/delete the target
+// instead. "pod" is historically recorded for embedded Docker workers too;
+// retain that alias only when no Kubernetes backend is registered.
+func resolvePreviousMemberBackend(ctx context.Context, registry *backend.Registry, recorded string) (backend.WorkerBackend, error) {
+	if recorded == v1beta1.BackendRuntimePod {
+		if wb, err := registry.GetWorkerBackend(ctx, "k8s"); err == nil {
+			return wb, nil
+		}
+		return registry.GetWorkerBackend(ctx, "docker")
+	}
+	return registry.GetWorkerBackend(ctx, recorded)
+}
+
 // MemberDeps aggregates the service-layer dependencies the member phases
 // invoke. Both WorkerReconciler and TeamReconciler build a MemberDeps once
 // and pass it through each phase.
@@ -429,33 +447,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	}
 
 	if backend.UsesMemberRuntimeConfig(effectiveRuntime) || m.DeployMode == v1beta1.DeployModeEdge {
-		runtime := effectiveRuntime
-		var matrixAccessToken, gatewayKey string
-		skillRegistryURL, skillRegistryAuthType := runtimeSkillRegistryConfig(d, m, state)
-		if m.DeployMode == v1beta1.DeployModeEdge {
-			runtime = runtimeRemoteManagedLocal
-			matrixAccessToken = state.ProvResult.MatrixToken
-			gatewayKey = state.ProvResult.GatewayKey
-		}
-		if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
-			Name:                  m.Name,
-			RuntimeName:           m.RuntimeName,
-			Runtime:               runtime,
-			Role:                  m.Role.String(),
-			Generation:            m.Generation,
-			Spec:                  m.Spec,
-			SubagentModel:         resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
-			MatrixUserID:          state.MatrixUserID,
-			PersonalRoomID:        state.RoomID,
-			MatrixAccessToken:     matrixAccessToken,
-			GatewayKey:            gatewayKey,
-			AIGatewayURL:          aiGatewayURL,
-			SkillRegistryURL:      skillRegistryURL,
-			SkillRegistryAuthType: skillRegistryAuthType,
-		}); err != nil {
-			return fmt.Errorf("deploy runtime config: %w", err)
-		}
-		return nil
+		return deployMemberRuntimeConfig(ctx, d, m, state, effectiveRuntime, aiGatewayURL)
 	}
 
 	if err := d.Deployer.DeployPackage(ctx, m.RuntimeName, m.Spec.Package, m.IsUpdate); err != nil {
@@ -473,6 +465,7 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 		Spec:                   m.Spec,
 		SubagentModel:          resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
 		Role:                   m.Role.String(),
+		Heartbeat:              m.TeamHeartbeat,
 		MatrixToken:            state.ProvResult.MatrixToken,
 		GatewayKey:             state.ProvResult.GatewayKey,
 		MatrixPassword:         state.ProvResult.MatrixPassword,
@@ -484,7 +477,47 @@ func ReconcileMemberConfig(ctx context.Context, d MemberDeps, m MemberContext, s
 	}); err != nil {
 		return fmt.Errorf("deploy worker config: %w", err)
 	}
+	if effectiveRuntime == backend.RuntimeHermes || effectiveRuntime == backend.RuntimeOpenClaw || effectiveRuntime == backend.RuntimeOpenHuman {
+		// Retain compatibility assets while publishing the same Worker record
+		// for every supported Harness, after its current policy is resolved.
+		return deployMemberRuntimeConfig(ctx, d, m, state, effectiveRuntime, aiGatewayURL)
+	}
 
+	return nil
+}
+
+func deployMemberRuntimeConfig(ctx context.Context, d MemberDeps, m MemberContext, state *MemberState, runtime, aiGatewayURL string) error {
+	var matrixAccessToken, gatewayKey string
+	skillRegistryURL, skillRegistryAuthType := runtimeSkillRegistryConfig(d, m, state)
+	tracing, err := observability.ReadRuntimeSettings(ctx, d.ObservabilityReader, m.Namespace)
+	if err != nil {
+		return fmt.Errorf("read Worker observability configuration: %w", err)
+	}
+	if m.DeployMode == v1beta1.DeployModeEdge {
+		runtime = runtimeRemoteManagedLocal
+		matrixAccessToken = state.ProvResult.MatrixToken
+		gatewayKey = state.ProvResult.GatewayKey
+	}
+	if err := d.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
+		Name:                  m.Name,
+		RuntimeName:           m.RuntimeName,
+		Runtime:               runtime,
+		Role:                  m.Role.String(),
+		Generation:            m.Generation,
+		Spec:                  m.Spec,
+		SubagentModel:         resolveSubagentModel(m.Spec.SubagentModel, m.TeamSubagentModel),
+		Heartbeat:             m.TeamHeartbeat,
+		Observability:         tracing,
+		MatrixUserID:          state.MatrixUserID,
+		PersonalRoomID:        state.RoomID,
+		MatrixAccessToken:     matrixAccessToken,
+		GatewayKey:            gatewayKey,
+		AIGatewayURL:          aiGatewayURL,
+		SkillRegistryURL:      skillRegistryURL,
+		SkillRegistryAuthType: skillRegistryAuthType,
+	}); err != nil {
+		return fmt.Errorf("deploy runtime config: %w", err)
+	}
 	return nil
 }
 
@@ -570,10 +603,30 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	if desiredBackend != currentBackend {
 		logger.Info("backend switch detected",
 			"name", m.Name, "current", currentBackend, "desired", desiredBackend)
-		if oldWb, oldErr := resolveBackendForMember(d.Backend, currentBackend, m); oldErr == nil {
+		// Keep the old backend authoritative until its resource is observed
+		// absent. Delete can be asynchronous (Pods/Sandboxes), and a failed
+		// lookup is not proof that the previous Agent has stopped. Advancing
+		// status early would lose the old location on the next reconcile and
+		// allow both backends to consume messages as the same identity.
+		state.BackendRuntime = currentBackend
+		oldWb, oldErr := resolvePreviousMemberBackend(ctx, d.Backend, currentBackend)
+		if oldErr != nil {
+			return reconcile.Result{}, fmt.Errorf("resolve old backend during switch: %w", oldErr)
+		}
+		oldResult, oldErr := oldWb.Status(ctx, m.Name)
+		if oldErr != nil && !errors.Is(oldErr, backend.ErrNotFound) {
+			return reconcile.Result{}, fmt.Errorf("query old backend during switch: %w", oldErr)
+		}
+		if oldErr == nil && oldResult == nil {
+			return reconcile.Result{}, fmt.Errorf("query old backend during switch: missing status")
+		}
+		if oldErr == nil && oldResult.Status != backend.StatusNotFound {
 			if delErr := oldWb.Delete(ctx, m.Name); delErr != nil && !errors.Is(delErr, backend.ErrNotFound) {
 				return reconcile.Result{}, fmt.Errorf("delete old backend resource during switch: %w", delErr)
 			}
+			state.ContainerState = "stopping"
+			state.Message = "Waiting for the previous backend resource to disappear before replacement"
+			return reconcile.Result{RequeueAfter: reconcileRetryDelay}, nil
 		}
 		state.BackendRuntime = desiredBackend
 	}
@@ -600,6 +653,12 @@ func ensureMemberContainerPresent(ctx context.Context, d MemberDeps, m MemberCon
 	// doc). Both Worker and Team paths fill this boolean with their own
 	// equivalence check so this phase stays agnostic of the upstream CR.
 	specChanged := m.SpecChanged
+	// A conflicting status write can lose the hash recorded at container creation.
+	// Compare observed collaboration identity so a stale Docker process cannot
+	// adopt the desired hash while still dispatching tools with the old role.
+	if role := m.collaborationRole().String(); role != "" && result.AgentRole != "" {
+		specChanged = specChanged || result.AgentRole != role || result.TeamName != m.TeamName
+	}
 	if specChanged && result.Status != backend.StatusNotFound {
 		logger.Info("spec changed, deleting stale backend resource before recreate",
 			"name", m.Name,
@@ -946,6 +1005,13 @@ func refreshSandboxSetWorkerDeps(ctx context.Context, d MemberDeps, m MemberCont
 	return requeueAfter, message, err
 }
 
+func (m MemberContext) collaborationRole() MemberRole {
+	if m.AgentRole != "" {
+		return m.AgentRole
+	}
+	return m.Role
+}
+
 func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, prov *service.WorkerProvisionResult) (map[string]string, error) {
 	if d.EnvBuilder == nil {
 		return nil, fmt.Errorf("worker env builder is not configured")
@@ -959,10 +1025,12 @@ func buildMemberWorkerEnv(ctx context.Context, d MemberDeps, m MemberContext, pr
 	if m.ModelProviderInfo != nil && m.ModelProviderInfo.IntranetURL != "" {
 		workerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = m.ModelProviderInfo.IntranetURL
 	}
-	workerEnv["AGENTTEAMS_WORKER_ROLE"] = m.Role.String()
-	workerEnv["AGENTTEAMS_AGENT_ROLE"] = m.Role.String()
+	agentRole := m.collaborationRole()
+	workerEnv["AGENTTEAMS_WORKER_ROLE"] = agentRole.String()
+	workerEnv["AGENTTEAMS_AGENT_ROLE"] = agentRole.String()
+	workerEnv["AGENTTEAMS_TEAM_NAME"] = m.TeamName
 	runtime := backend.ResolveRuntime(m.Spec.Runtime, d.DefaultRuntime)
-	if d.ObservabilityReader != nil && (runtime == "qwenpaw" || runtime == "hermes") {
+	if d.ObservabilityReader != nil && observability.SupportsRuntime(runtime) {
 		config, _, err := observability.Read(ctx, d.ObservabilityReader, m.Namespace)
 		if err != nil {
 			return nil, fmt.Errorf("read Worker observability configuration: %w", err)

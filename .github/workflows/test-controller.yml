@@ -5,13 +5,29 @@ on:
     paths:
       - 'worker'
       - 'worker/**'
+      - 'shared/lib/agentteams_receipts.py'
+      - 'shared/lib/agentteams_skill_warnings.py'
+      - 'shared/lib/task_recovery*.py'
+      - 'shared/lib/worker_matrix*.py'
+      - 'shared/lib/worker_handoff.py'
+      - 'shared/lib/runtime_supervisor.py'
+      - 'tests/test_worker_handoff.py'
+      - 'shared/lib/worker_sessions.py'
+      - 'tests/test_worker_sessions.py'
+      - 'tests/test_worker_matrix*.py'
+      - 'tests/test_task_recovery*.py'
+      - 'tests/test-skill-runtime-warnings.py'
+      - 'tests/test_harness_session_receipts.py'
+      - 'tests/lib/matrix-client.sh'
+      - 'openhuman'
+      - 'hermes'
+      - 'deepseek-harness'
       - '.gitmodules'
       - 'agentteams-controller/**'
       - 'qwenpaw'
       - 'qwenpaw/**'
       - 'manager/src/**'
       - 'plugins/teamharness/**'
-      - 'plugins/agentteams-matrix-channel/**'
       - 'plugins/agentteams-matrix/**'
       - 'plugins/agentteams-teamharness/**'
       - 'plugins/tests/**'
@@ -25,13 +41,29 @@ on:
     paths:
       - 'worker'
       - 'worker/**'
+      - 'shared/lib/agentteams_receipts.py'
+      - 'shared/lib/agentteams_skill_warnings.py'
+      - 'shared/lib/task_recovery*.py'
+      - 'shared/lib/worker_matrix*.py'
+      - 'shared/lib/worker_handoff.py'
+      - 'shared/lib/runtime_supervisor.py'
+      - 'tests/test_worker_handoff.py'
+      - 'shared/lib/worker_sessions.py'
+      - 'tests/test_worker_sessions.py'
+      - 'tests/test_worker_matrix*.py'
+      - 'tests/test_task_recovery*.py'
+      - 'tests/test-skill-runtime-warnings.py'
+      - 'tests/test_harness_session_receipts.py'
+      - 'tests/lib/matrix-client.sh'
+      - 'openhuman'
+      - 'hermes'
+      - 'deepseek-harness'
       - '.gitmodules'
       - 'agentteams-controller/**'
       - 'qwenpaw'
       - 'qwenpaw/**'
       - 'manager/src/**'
       - 'plugins/teamharness/**'
-      - 'plugins/agentteams-matrix-channel/**'
       - 'plugins/agentteams-matrix/**'
       - 'plugins/agentteams-teamharness/**'
       - 'plugins/tests/**'
@@ -43,11 +75,38 @@ on:
   workflow_dispatch:
 
 jobs:
+  skill-warnings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pytest PyYAML
+      - run: python -m pytest tests/test-skill-runtime-warnings.py -q
+
+  harness-session-receipts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: python3 -m unittest discover -s tests -p test_harness_session_receipts.py -v
+      - run: cargo test --locked --manifest-path openhuman/tests/session-receipts/Cargo.toml
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-go@v5
         with:
@@ -82,16 +141,31 @@ jobs:
             'pytest>=8.3,<10' \
             'pytest-asyncio>=0.23,<2'
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agentteams-controller/go.mod
+          cache-dependency-path: agentteams-controller/go.sum
+      - name: Build Task CLI for adapter tests
+        working-directory: agentteams-controller
+        run: |
+          mkdir -p "$RUNNER_TEMP/qwenpaw-bin"
+          go build -o "$RUNNER_TEMP/qwenpaw-bin/agt" ./cmd/agt
+          echo "$RUNNER_TEMP/qwenpaw-bin" >> "$GITHUB_PATH"
+
       - name: Run QwenPaw tests against repository source
+        env:
+          AGENTTEAMS_CORE_SOURCE: ${{ github.workspace }}
         run: |
           python -m pytest qwenpaw/tests -q
           python -m pytest plugins/tests/agentteams-matrix/test_qwenpaw_reload_delivery.py -q
+          PYTHONPATH=shared/lib python -m pytest plugins/tests/agentteams-matrix/test_qwenpaw_task_recovery.py -q
 
   teamharness:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -115,18 +189,31 @@ jobs:
           NO_PROXY: 127.0.0.1,localhost
         run: |
           ruby plugins/tests/teamharness/test-contracts.rb
+          python -m pytest tests/test_task_coordination.py tests/test_teamharness_notification_wait.py -q
+          python -m pytest tests/test_task_recovery.py -q
+          python -m pytest tests/test_worker_matrix*.py tests/test_worker_sessions.py tests/test_worker_handoff.py -q
+          python -m unittest discover -s tests -p 'test_task_recovery_rpc.py' -v
+          python -m unittest discover -s tests -p 'test_runtime_recovery_*.py' -v
           python -m pytest plugins/tests/teamharness/mcp/test_continuation.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_delegate_redelegation.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_filesync_remote_guard.py -q
           python -m pytest plugins/tests/teamharness/mcp/test_sensitive_scan_placeholder.py -q
           python -m pytest plugins/tests/teamharness/test_loop_budget.py -q
           python -m pytest plugins/tests/teamharness/test_pull_project.py -q
+          python -m pytest plugins/tests/teamharness/test_task_hierarchy.py -q
           python -m pytest plugins/tests/teamharness/test_signal_emission.py -q
           python -m pytest plugins/tests/teamharness/test_transition_validation.py -q
           python -m pytest plugins/tests/teamharness/test_attention_schema.py -q
           PYTHONPATH="${GITHUB_WORKSPACE}/manager/src/agentteams_manager" \
             python -m pytest manager/src/agentteams_manager/agentteams_manager/tests/ -q
           python -m pytest plugins/tests/teamharness/test_task_meta_commit.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_coordination_transport.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_main_task_plan.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_manager_handoff_schema.py -q
+          python -m pytest plugins/tests/teamharness/mcp/test_manager_worker_delivery.py -q
+          PYTHONPATH="${GITHUB_WORKSPACE}/shared/lib" \
+            python -m pytest plugins/tests/teamharness/mcp/test_worker_task_ownership.py -q
+          ruby plugins/tests/teamharness/mcp/tools/test-roomflow.rb
           ruby plugins/tests/teamharness/mcp/tools/test-taskflow.rb
           ruby plugins/tests/teamharness/mcp/tools/test-transition-table.rb
 
@@ -146,7 +233,7 @@ jobs:
         run: |
           python -m pip install \
             'matrix-nio>=0.25,<0.27' \
-            'qwenpaw==2.2.1' \
+            'qwenpaw==2.2.2.post1' \
             'pytest>=8.3,<10' \
             'pytest-asyncio>=0.23,<2'
 
@@ -159,8 +246,12 @@ jobs:
       - name: Run matrix-channel completion-guard tests
         run: |
           python -m pytest plugins/tests/agentteams-matrix-channel/test_fake_completion_marker.py -q
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_approval_contract.py -q
+          python -m pytest plugins/tests/agentteams-matrix-channel/test_stage_packets.py -q
 
   plugin-loader-smoke:
+    env:
+      AGENTTEAMS_CORE_SOURCE: ${{ github.workspace }}
     # Keyless smoke of the real QwenPaw plugin loader: install the
     # runtime from public PyPI on a standard runner (no secrets, no
     # external build machine) and drive PluginLoader against the
@@ -191,7 +282,7 @@ jobs:
       - name: Prove a broken package turns the smoke red
         run: |
           BROKEN_ROOT="$(mktemp -d)"
-          cp -r plugins/agentteams-matrix-channel \
+          cp -r qwenpaw/adapters/matrix \
             "$BROKEN_ROOT/agentteams-matrix-channel"
           printf '\nraise RuntimeError("intentionally broken smoke package")\n' \
             >> "$BROKEN_ROOT/agentteams-matrix-channel/plugin.py"
@@ -207,12 +298,13 @@ jobs:
       matrix:
         include:
           - suite: delivery
-            cases: consume_error mention_localpart retry_classifier sync_timeout_clamp
+            cases: consume_error mention_localpart retry_classifier sync_timeout_clamp session_receipts direct_control
           - suite: gates
             cases: show_thinking_gate send_gate_retrigger_placeholder send_gate_retrigger_relevance no_reply_final_line
     name: Matrix channel regressions (${{ matrix.suite }})
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -252,6 +344,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -278,6 +371,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-python@v5
         with:
@@ -298,12 +392,8 @@ jobs:
         run: |
           bash -n plugins/agentteams-matrix/scripts/install.sh \
             plugins/agentteams-matrix/scripts/uninstall.sh \
-            plugins/agentteams-matrix/adapters/qwenpaw/install.sh \
-            plugins/agentteams-matrix/adapters/qwenpaw/uninstall.sh \
             plugins/agentteams-teamharness/scripts/install.sh \
-            plugins/agentteams-teamharness/scripts/uninstall.sh \
-            plugins/agentteams-teamharness/adapters/qwenpaw/install.sh \
-            plugins/agentteams-teamharness/adapters/qwenpaw/uninstall.sh
+            plugins/agentteams-teamharness/scripts/uninstall.sh
 
       - name: Validate TeamHarness bundle manifest and package
         run: |
@@ -322,6 +412,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-node@v4
         with:
@@ -470,6 +561,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - run: git submodule update --init -- qwenpaw
 
       - uses: actions/setup-go@v5
         with:

@@ -1,0 +1,153 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path"
+	"time"
+
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
+)
+
+type mainTaskRequest struct {
+	TaskID string `json:"taskId"`
+	Title  string `json:"title"`
+	Spec   string `json:"spec"`
+}
+
+// The Manager assigns the request before the Leader has an execution plan.
+func (h *CoordinationHandler) registerHandoffTasks(ctx context.Context, e coordinationEvent) error {
+	if len(e.Tasks) == 0 {
+		return nil
+	}
+	if e.Kind != "handoff" || len(e.Tasks) > 50 {
+		return errCoordinationRejected
+	}
+	seen := map[string]bool{}
+	for _, request := range e.Tasks {
+		if !coordinationSafeID.MatchString(request.TaskID) || seen[request.TaskID] || request.Title == "" || request.Spec == "" {
+			return errCoordinationRejected
+		}
+		seen[request.TaskID] = true
+	}
+	for _, request := range e.Tasks {
+		key := path.Join("teams", e.StorageTeam, "shared/tasks", request.TaskID, "meta.json")
+		task := map[string]any{
+			"task_id": request.TaskID, "task_kind": "main", "team_id": e.StorageTeam,
+			"title": request.Title, "spec": request.Spec, "status": "planned", "assigned_to": e.Recipient,
+			"source_room_id": coordinationString(e.SourceRoute, "target_session"), "requester": coordinationString(e.SourceRoute, "target_user"),
+			"task_origin":           map[string]any{"event_id": e.OriginEventID, "room_id": coordinationString(e.SourceRoute, "target_session"), "requester": coordinationString(e.SourceRoute, "target_user"), "dispatch_agent": e.ActorName, "dispatch_agent_role": e.ActorRole, "dispatch_agent_matrix_id": e.Actor},
+			"reply_route":           map[string]any{"channel": "matrix", "target_user": e.Actor, "target_session": e.RoomID},
+			"requester_reply_route": e.SourceRoute, "tasks": []any{}, "handoff_id": e.ID,
+			"created_at":         time.Now().UTC().Format(time.RFC3339),
+			"task_notifications": map[string]taskNotificationIntent{"handoff": {Event: e, ActorRole: e.ActorRole, ActorName: e.ActorName, Team: e.Team, Status: "pending"}},
+		}
+		body, _ := json.Marshal(task)
+		err := h.deps.OSS.PutObjectIfAbsent(ctx, key, body)
+		if errors.Is(err, oss.ErrPreconditionFailed) {
+			existing, readErr := h.read(ctx, key)
+			if readErr != nil {
+				return readErr
+			}
+			if existing["handoff_id"] != e.ID || existing["spec"] != request.Spec || existing["title"] != request.Title || existing["assigned_to"] != e.Recipient || existing["source_room_id"] != coordinationString(e.SourceRoute, "target_session") || existing["requester"] != coordinationString(e.SourceRoute, "target_user") {
+				return oss.ErrPreconditionFailed
+			}
+		} else if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Only a durable child assignment/ACK advances the parent's execution phase.
+// Workers keep writing their own task; the Controller owns this parent update.
+func (h *ProjectHandler) advanceMainTaskExecution(ctx context.Context, childKey string, body []byte) error {
+	var child map[string]any
+	if err := json.Unmarshal(body, &child); err != nil {
+		return err
+	}
+	id := coordinationString(child, "main_task_id")
+	status := coordinationString(child, "status")
+	if id == "" || (status != "assigned" && status != "in_progress") {
+		return nil
+	}
+	if !isSafeTaskID(id) {
+		return fmt.Errorf("invalid parent task")
+	}
+	key := path.Join(path.Dir(path.Dir(childKey)), id, "meta.json")
+	for attempt := 0; attempt < 3; attempt++ {
+		raw, err := h.oss.GetObject(ctx, key)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		} // Legacy tasks may lack a coordinating record.
+		if err != nil {
+			return err
+		}
+		var main map[string]any
+		if err := json.Unmarshal(raw, &main); err != nil {
+			return err
+		}
+		current := coordinationString(main, "status")
+		managedPlan := main["task_plan"] != nil
+		if main["task_kind"] != "main" || (current != "planned" && current != "assigned" && !(managedPlan && current == "in_progress")) || (!managedPlan && current == status) {
+			return nil
+		}
+		nodes, _ := main["tasks"].([]any)
+		matched := false
+		nodeChanged := false
+		for _, item := range nodes {
+			node, _ := item.(map[string]any)
+			if node["task_id"] == child["task_id"] && node["assigned_to"] == child["assigned_to"] {
+				matched = true
+				if managedPlan {
+					nodeStatus := coordinationString(node, "status")
+					if nodeStatus != "planned" && nodeStatus != "assigned" && nodeStatus != "in_progress" {
+						return fmt.Errorf("execution node is no longer active")
+					}
+					if nodeStatus != status && !(nodeStatus == "in_progress" && status == "assigned") {
+						node["status"], nodeChanged = status, true
+					}
+				}
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("execution task does not match its main plan")
+		}
+		nextStatus := status
+		if managedPlan && current == "in_progress" {
+			nextStatus = current
+		}
+		if current == nextStatus && !nodeChanged {
+			return nil
+		}
+		if current != nextStatus {
+			main["status"] = nextStatus
+			history, _ := main["history"].([]any)
+			seq, _ := main["history_seq"].(float64)
+			if seq < float64(len(history)) {
+				seq = float64(len(history))
+			}
+			seq++
+			main["history_seq"] = seq
+			main["history"] = append(history, map[string]any{"seq": seq, "from": current, "to": nextStatus,
+				"action": "execution_" + nextStatus, "actor": "controller", "ts": time.Now().UTC().Format(time.RFC3339)})
+		}
+		updated, _ := json.Marshal(main)
+		strict, ok := h.oss.(conditionalWriter)
+		if !ok {
+			return oss.ErrConditionalUnsupported
+		}
+		err = strict.PutObjectIfMatchStrict(ctx, key, updated, contentETag(raw))
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, oss.ErrPreconditionFailed) {
+			return err
+		}
+	}
+	return oss.ErrPreconditionFailed
+}

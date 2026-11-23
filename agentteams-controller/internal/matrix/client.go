@@ -317,6 +317,11 @@ func (c *TuwunelClient) UserID(localpart string) string {
 	return fmt.Sprintf("@%s:%s", localpart, c.config.Domain)
 }
 
+// ControllerAdminToken is used only after Controller lifecycle authorization.
+func (c *TuwunelClient) ControllerAdminToken(ctx context.Context) (string, error) {
+	return c.ensureAdminToken(ctx)
+}
+
 // ensureAdminToken obtains and caches an admin access token via Login.
 func (c *TuwunelClient) ensureAdminToken(ctx context.Context) (string, error) {
 	if t, ok := c.adminToken.Load().(string); ok && t != "" {
@@ -598,13 +603,31 @@ func (c *TuwunelClient) loginAppServiceFresh(ctx context.Context, username strin
 // This is used in AppService mode to set initial passwords for Human users
 // so they can still log in via Element with username/password.
 func (c *TuwunelClient) SetPasswordAsAdmin(ctx context.Context, userID, password string) error {
-	cmd := fmt.Sprintf("!admin users reset-password %s %s", userID, password)
+	// Initial password assignment must not revoke the newly issued AS token.
+	cmd := fmt.Sprintf("!admin users reset-password --no-logout-devices %s %s", userID, password)
 	if err := c.AdminCommand(ctx, cmd); err != nil {
 		return err
 	}
-	// A password reset may invalidate the user's existing access tokens
-	// (see the provisioner's "clear cached AS token" convention): drop any
-	// cached one so the next Login goes to the homeserver.
+	// Switching to password authentication must obtain a fresh login token.
+	c.InvalidateUserToken(userID)
+	return nil
+}
+
+// ResetUserPassword changes an existing password through the admin HTTP API.
+func (c *TuwunelClient) ResetUserPassword(ctx context.Context, userID, password string) error {
+	token, err := c.ensureAdminToken(ctx)
+	if err != nil {
+		return err
+	}
+	status, _, err := c.doJSON(ctx, http.MethodPost,
+		"/_synapse/admin/v1/reset_password/"+url.PathEscape(userID), token,
+		map[string]any{"new_password": password, "logout_devices": true}, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("Matrix password reset returned HTTP %d", status)
+	}
 	c.InvalidateUserToken(userID)
 	return nil
 }
@@ -929,7 +952,7 @@ func (c *TuwunelClient) GetRoomState(ctx context.Context, roomID, eventType, sta
 	if err != nil {
 		return nil, fmt.Errorf("get room state %s %s: %w", roomID, eventType, err)
 	}
-	if statusCode == http.StatusNotFound {
+	if statusCode == http.StatusNotFound && (eventType != "m.room.encryption" || apiErrorFromBody(statusCode, respBody).ErrCode == "M_NOT_FOUND") {
 		return nil, nil // state event never set on this room
 	}
 	if statusCode != http.StatusOK {
@@ -942,6 +965,9 @@ func (c *TuwunelClient) GetRoomState(ctx context.Context, roomID, eventType, sta
 	var content map[string]interface{}
 	if err := json.Unmarshal(respBody, &content); err != nil {
 		return nil, fmt.Errorf("get room state %s %s: decode: %w", roomID, eventType, err)
+	}
+	if eventType == "m.room.encryption" && content == nil {
+		return nil, fmt.Errorf("get room encryption state %s: missing content", roomID)
 	}
 	return content, nil
 }
@@ -1470,3 +1496,18 @@ func truncate(b []byte, max int) string {
 
 // txnCounter provides unique transaction IDs for Matrix event sends.
 var txnCounter atomic.Int64
+
+// SendNotice uses a persistent caller-owned transaction ID to make retries safe.
+func (c *TuwunelClient) SendNotice(ctx context.Context, room, token, txn, body string) error {
+	status, data, err := c.doJSON(ctx, http.MethodPut, fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%s", encodeRoomID(room), url.PathEscape(txn)), token, map[string]string{"msgtype": "m.notice", "body": body}, nil)
+	if err != nil {
+		return fmt.Errorf("Matrix notice transport failed")
+	}
+	var result struct {
+		EventID string `json:"event_id"`
+	}
+	if (status != http.StatusOK && status != http.StatusCreated) || json.Unmarshal(data, &result) != nil || result.EventID == "" {
+		return fmt.Errorf("Matrix notice not acknowledged")
+	}
+	return nil
+}

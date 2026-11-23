@@ -143,6 +143,8 @@ func TestTeamHumanWorkerGrantsRespectDenyAndRuntimeOwnership(t *testing.T) {
 	}
 	lead := newWorker("lead", v1beta1.WorkerSpec{Runtime: "qwenpaw", Model: "qwen-plus"})
 	dev := newWorker("dev", v1beta1.WorkerSpec{Runtime: "qwenpaw", Model: "qwen-plus"})
+	lead.Status.MatrixUserID = "@lead:matrix.local"
+	dev.Status.MatrixUserID = "@dev:matrix.local"
 	rig := newTeamReconcileRig(t, team, lead, dev, human)
 	_, _, err := rig.reconcile("team")
 	if err != nil {

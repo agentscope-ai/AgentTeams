@@ -1,0 +1,117 @@
+{
+  "passed": false,
+  "case": "12",
+  "fixture_prefix": "recovery-1631-live-20261117",
+  "scope": "Hermes-to-DeepSeek baseline failed before cutover; DeepSeek never started",
+  "sources": {
+    "core": "2c90bccfedb563cbf94e3e1a932fd2effd7b5e23",
+    "hermes": "0b0892f3aad69c9e655a41a3a95902f8ea1e1185"
+  },
+  "failure": "Native helper reported persisted step one, then a native mc mirror of the Task directory overwrote shared meta.json and attempts.json from stale local files. Completed steps were lost; the driver refused cutover.",
+  "native_claimed_session": "20261116_175904_36868b55",
+  "actual_message_session": "20261116_174411_c9c3228e",
+  "native_cached_agent_issue": "The selected new SDK session had no messages, while its new Task terminal calls were persisted in the previous Task session. Native cache eviction is required as well as a new SessionStore entry.",
+  "after": {
+    "recorded_at": 1794852123.6933818,
+    "task": {
+      "acknowledged_by_role": "worker",
+      "assigned_at": "2026-11-16T17:59:14Z",
+      "assigned_to": "@agent-a:recovery-1631.test",
+      "execution": {
+        "generation": 1,
+        "instance_id": "docker/00e2d6cf0e512d368803f35ddfcbc34d102b556720a2745aa4892a23367c6f32/2026-11-16T17:46:46.542219949Z",
+        "process_id": "1:1794851206781286288:5f9262e201f44f86b367187d32000992",
+        "runtime": "hermes",
+        "state": "active",
+        "checkpoint": {
+          "version": 2,
+          "completed_steps": null,
+          "remaining_steps": null,
+          "artifacts": null,
+          "result": {
+            "key": "teams/recovery-team/shared/tasks/live-hermes-deepseek-harness-12/checkpoints/reply-f9d67942e8d17a9708efaeb66472ab04e5066968bf2c773a574b4e100aa9bdf7.txt",
+            "sha256": "f9d67942e8d17a9708efaeb66472ab04e5066968bf2c773a574b4e100aa9bdf7",
+            "size": 476
+          },
+          "delivery": "delivered",
+          "reply_txn": "task-reply:aaf73c2e6e487efb7079fbf770740fa3eb84463f5a597757040c87d9c53a9cda",
+          "reply_event": "$_hTJ4nGjOnTj4ye0gCOXvWOX6A_erVAjZW4uQSJAeTk",
+          "saved_at": "2026-11-16T18:00:02.763122242Z"
+        }
+      },
+      "history": [
+        {
+          "action": "ack_task",
+          "actor": "worker:agent-a",
+          "from": "assigned",
+          "seq": 1,
+          "to": "in_progress",
+          "ts": "2026-11-16T17:59:14Z"
+        }
+      ],
+      "history_seq": 1,
+      "main_task_id": "live-main-12",
+      "notifyTxn": "live-assignment-12",
+      "parent_task_id": "live-main-12",
+      "project_id": "",
+      "room_id": "!IN9Jix6mbGhvVE2MPu:recovery-1631.test",
+      "spec_path": "",
+      "status": "in_progress",
+      "task_id": "live-hermes-deepseek-harness-12",
+      "task_kind": "subtask",
+      "task_title": "Run three stable steps across hermes to deepseek-harness",
+      "team_id": "recovery-team",
+      "title": "Run three stable steps across hermes to deepseek-harness"
+    },
+    "ledger": [],
+    "instances": [
+      {
+        "name": "recovery-1631-live-20261117-controller",
+        "id": "ca3c55e16097e5c73f939f5370df765f402f0f98caa96e1a2682d59916ac5d53",
+        "image": "recovery-1631/controller:local-20261117002500",
+        "running": true,
+        "pid": 3441390,
+        "started_at": "2026-11-16T17:24:35.525098042Z",
+        "finished_at": "0001-01-01T00:00:00Z"
+      },
+      {
+        "name": "recovery-1631-live-20261117-worker-agent-a",
+        "id": "00e2d6cf0e512d368803f35ddfcbc34d102b556720a2745aa4892a23367c6f32",
+        "image": "recovery-1631/hermes:local-20261117013200",
+        "running": true,
+        "pid": 3579455,
+        "started_at": "2026-11-16T17:46:46.542219949Z",
+        "finished_at": "2026-11-16T17:46:46.38319587Z"
+      },
+      {
+        "name": "recovery-1631-live-20261117-worker-leader",
+        "id": "9a32fd19161aa01b3f85f40f1518a55a266e41cc87526b0065a6b8d195c00788",
+        "image": "recovery-1631/hermes:local-20261117013200",
+        "running": true,
+        "pid": 3584196,
+        "started_at": "2026-11-16T17:47:31.526786458Z",
+        "finished_at": "2026-11-16T17:46:43.623329256Z"
+      }
+    ],
+    "native_sessions": {
+      "hermes": [
+        {
+          "timestamp": "2026-11-16T17:59:04.585162+00:00",
+          "runtime": "hermes",
+          "role": "standalone",
+          "agent_name": "agent-a",
+          "boot_id": "5f9262e201f44f86b367187d32000992",
+          "event": "task.recovery.session",
+          "task_id": "live-hermes-deepseek-harness-12",
+          "team_id": "recovery-team",
+          "generation": 1,
+          "session_id": "20261116_175904_36868b55",
+          "checkpoint_version": 0,
+          "reused": false
+        }
+      ],
+      "hermes_cache": [],
+      "codex": null
+    }
+  }
+}

@@ -2,6 +2,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,11 +10,111 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "teamharness" / "mc
 import server
 
 
+@pytest.mark.parametrize("old_role", ["standalone", "leader", ""])
+def test_current_member_role_overrides_stale_container_role(tmp_path, monkeypatch, old_role):
+    config = tmp_path / "runtime.json"
+    config.write_text(json.dumps({"member": {"role": "worker"}}))
+    monkeypatch.setenv("TEAMHARNESS_RUNTIME_CONFIG", str(config))
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", old_role)
+    assert server._runtime_role() == "worker"
+    assert server._role({"role": "human"}) == "worker"
+
+
+def test_checkpoint_unavailable_does_not_terminate_the_tool_server(monkeypatch):
+    from task_recovery import Recovery, RecoveryUnavailable
+    def unavailable(*a, **kw):
+        raise RecoveryUnavailable("Task recovery request failed (HTTP 503)")
+    monkeypatch.setattr(Recovery, "checkpoint", unavailable)
+    monkeypatch.setenv("AGENTTEAMS_PROCESS_ID", "actual-start")
+    result = server.handle_request({"id": 1, "method": "tools/call", "params": {"name": "taskflow", "arguments": {
+        "action": "checkpoint_task", "payload": {"taskId": "t1", "checkpoint": {"version": 1}}}}})
+    assert json.loads(result["result"]["content"][0]["text"])["ok"] is False
+    health = server.handle_request({"id": 2, "method": "tools/call", "params": {"name": "health", "arguments": {}}})
+    assert json.loads(health["result"]["content"][0]["text"])["ok"] is True
+
+
+def test_legacy_submit_rejects_controller_planned_execution_without_writing(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.example.test")
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
+    monkeypatch.setattr(server, "_pull_task", lambda *args, **kwargs: True)
+    task_id = "exec-" + "a" * 32
+    task_path = tmp_path / "shared" / "tasks" / task_id / "meta.json"
+    server._write_json(task_path, {
+        "task_id": task_id, "task_kind": "execution", "main_task_id": "main",
+        "task_plan_id": "b" * 64, "status": "in_progress", "assigned_to": "alice",
+    })
+    before = task_path.read_bytes()
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("legacy submit must not change a Controller-planned execution")
+
+    monkeypatch.setattr(server, "_write_task", unexpected_write)
+    monkeypatch.setattr(server, "_sync_task", unexpected_write)
+    monkeypatch.setattr(server, "_publish_task_artifacts", unexpected_write)
+    result = server.call_tool("taskflow", {"action": "submit_task", "workspaceDir": str(tmp_path),
+        "payload": {"taskId": task_id, "summary": "Ready", "status": "SUCCESS"}})
+    response = json.loads(result["content"][0]["text"])
+    assert not response["ok"] and "Task submit" in response["error"]
+    assert task_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("progress_delivery", [None, "delivered", "pending"])
+@pytest.mark.parametrize("runtime_role", ["worker", "leader"])
+def test_recoverable_submission_persists_a_report_even_when_only_summary_is_supplied(tmp_path, monkeypatch, progress_delivery, runtime_role):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", runtime_role)
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
+    monkeypatch.setattr(server, "_pull_project", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_pull_task", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_update_project_task", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_publish_task_artifacts", lambda *a, **kw: [])
+    monkeypatch.setattr(server, "_task_completion_notification", lambda *a, **kw: {"sent": True})
+    task_path = tmp_path / "shared/tasks/p1-01/meta.json"
+    execution = {"generation": 1}
+    if progress_delivery:
+        execution["checkpoint"] = {"version": 4, "completed_steps": ["one", "two", "three"], "remaining_steps": [],
+            "result": {"key": "old-progress.txt"}, "delivery": progress_delivery, "reply_txn": "old-progress", "reply_event": "$progress"}
+    server._write_json(task_path, {"task_id": "p1-01", "project_id": "p1", "status": "in_progress",
+        "assigned_to": "alice", "execution": execution})
+    checkpoints = []
+    def checkpoint(task_id, team, cp):
+        assert json.loads(task_path.read_text())["status"] == "in_progress"
+        assert cp["version"] == 5 and cp["completed_steps"] == ["one", "two", "three"]
+        assert not {"result", "delivery", "reply_txn", "reply_event"}.intersection(cp)
+        checkpoints.append(cp)
+        return {"execution": {"generation": 1, "checkpoint": cp}}
+    import task_recovery
+    monkeypatch.setattr(task_recovery, "Recovery", lambda: SimpleNamespace(checkpoint=checkpoint))
+
+    def sync(*a, **kw):
+        task = json.loads(task_path.read_text())
+        assert task["result_path"] == "shared/tasks/p1-01/result.md"
+        report = (tmp_path / task["result_path"]).read_text()
+        assert "Verified all three steps" in report
+        assert "SUCCESS" in report
+        assert "shared/tasks/p1-01/output/step-three.json" in report
+        return True
+
+    monkeypatch.setattr(server, "_sync_task", sync)
+    result = server.call_tool("taskflow", {"action": "submit_task", "workspaceDir": str(tmp_path),
+        "payload": {"taskId": "p1-01", "status": "SUCCESS", "summary": "Verified all three steps",
+            "deliverables": ["shared/tasks/p1-01/output/step-three.json"]}})
+    body = json.loads(result["content"][0]["text"])
+    if progress_delivery == "pending":
+        assert body["ok"] is False and "pending" in body["error"]
+        assert json.loads(task_path.read_text())["status"] == "in_progress"
+        assert not checkpoints
+    else:
+        assert body["ok"] is True
+        assert len(checkpoints) == (1 if progress_delivery else 0)
+
+
 @pytest.mark.parametrize("action", ["ack_task", "submit_task", "report_progress"])
 @pytest.mark.parametrize("assigned_to", ["alice", "@alice:example.test"])
 @pytest.mark.parametrize("actor,allowed", [("bob", False), ("alice", True)])
-def test_worker_can_write_only_the_assigned_task(tmp_path, monkeypatch, action, assigned_to, actor, allowed):
-    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+@pytest.mark.parametrize("runtime_role", ["worker", "leader"])
+def test_worker_can_write_only_the_assigned_task(tmp_path, monkeypatch, action, assigned_to, actor, allowed, runtime_role):
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", runtime_role)
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", actor)
     monkeypatch.setattr(server, "_pull_project", lambda *a, **kw: True)
     monkeypatch.setattr(server, "_pull_task", lambda *a, **kw: True)
@@ -37,7 +138,7 @@ def test_worker_can_write_only_the_assigned_task(tmp_path, monkeypatch, action, 
 
 
 @pytest.mark.parametrize("status", ["planned", "prepared", "assigned"])
-@pytest.mark.parametrize("runtime_role", ["worker", "remote-member"])
+@pytest.mark.parametrize("runtime_role", ["worker", "remote-member", "leader"])
 def test_controller_submission_requires_ack_before_any_mutation(tmp_path, monkeypatch, status, runtime_role):
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.example.test")
     monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", runtime_role)
@@ -64,9 +165,10 @@ def test_controller_submission_requires_ack_before_any_mutation(tmp_path, monkey
 
 
 @pytest.mark.parametrize("project_pull_ok", [True, False])
-def test_first_ack_loads_its_project_before_writing(tmp_path, monkeypatch, project_pull_ok):
+@pytest.mark.parametrize("runtime_role", ["worker", "leader"])
+def test_first_ack_loads_its_project_before_writing(tmp_path, monkeypatch, project_pull_ok, runtime_role):
     monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.example.test")
-    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "worker")
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", runtime_role)
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
     task_path = tmp_path / "shared/tasks/p1-01/meta.json"
     project_path = tmp_path / "shared/projects/p1/meta.json"

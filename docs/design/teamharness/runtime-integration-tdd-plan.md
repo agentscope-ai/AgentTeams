@@ -123,7 +123,7 @@ QwenPaw 集成包含两部分：QwenPaw worker runtime 和 TeamHarness QwenPaw a
 QwenPaw adapter runtime wrappers：
 
 - 先读 QwenPaw 源码确认可用 hook/middleware/agent toolkit API，不猜测 trigger 名称或 payload 形状。
-- Runtime-specific 资产和注册逻辑放在 `plugins/teamharness/adapters/qwenpaw/` 下，不放在 TeamHarness 顶层 manifest。
+- Runtime-specific 资产和注册逻辑放在 `qwenpaw/adapters/teamharness/` 下，不放在 TeamHarness 顶层 manifest。
 - Team context：adapter 将 `TEAMS.md` 安装到 QwenPaw agent workspace，并加入 prompt file list；内容合入 TeamHarness team prompt、当前 member role prompt、runtime.yaml 的团队、成员、房间、路由和 AgentSpec package 上下文，不写 secret 或动态任务状态。
 - Output sanitizer：adapter 私有包装 QwenPaw tool result 路径，在工具结果进入模型上下文、消息输出或日志前按 `desired.outputSanitize` 和 credential env 值进行 `[REDACTED]` 替换。
 - Desired-state apply loop、storage sync、runtime heartbeat 上报仍属于 worker，不通过 hook 实现。AgentSpec package 更新是 desired-state apply loop 的一个分支，不是独立 worker loop。

@@ -151,6 +151,8 @@ Response `200 OK`:
   "tasks_detail": [
     {
       "task_id": "t1",
+      "room_id": "!execution:matrix.local",
+      "source_room_id": "!assistant:matrix.local",
       "project_id": "demo-project-001",
       "status": "completed",
       "spec_path": "shared/tasks/t1/spec.md",
@@ -167,6 +169,8 @@ Response `200 OK`:
 
 `tasks_detail` is only present when `?includeTasks=true`. It surfaces the
 TaskMeta fields that the project-level `nodes[]` summary does not carry:
+`room_id` (task execution collaboration room), `source_room_id` (originating
+conversation; distinct from the execution room),
 `spec_path` (task spec file), `summary` / `result_status` / `result_path`
 (submission result), `deliverables` (artifact list), `cancel_reason`, and the
 opaque `submission_id` used to fence accept/cancel decisions.

@@ -99,3 +99,39 @@ func TestGetTaskMeta_MissingIs404(t *testing.T) {
 		t.Fatalf("status=%d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestWorkerMetaReadStaysWithinTeam(t *testing.T) {
+	for _, kind := range []string{"project", "task"} {
+		for _, callerTeam := range []string{"alpha-team", "beta-team"} {
+			t.Run(kind+"/"+callerTeam, func(t *testing.T) {
+				store := ossfake.NewMemory()
+				key := "teams/alpha-team/shared/tasks/item/meta.json"
+				data := []byte(`{"task_id":"item","status":"assigned"}`)
+				if kind == "project" {
+					key = metaCommitKey("alpha-team", "item")
+					data = []byte(`{"project_id":"item","team_id":"alpha-team","status":"active"}`)
+				}
+				if err := store.PutObject(context.Background(), key, data); err != nil {
+					t.Fatal(err)
+				}
+				h := newProjectTestHandler(t, store, team("alpha-team"), team("beta-team"))
+				req := httptest.NewRequest(http.MethodGet, "/api/v1/"+kind+"s/item/meta", nil)
+				req.SetPathValue("id", "item")
+				req = withCaller(req, &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "worker", Team: callerTeam})
+				rec := httptest.NewRecorder()
+				if kind == "project" {
+					h.GetProjectMeta(rec, req)
+				} else {
+					h.GetTaskMeta(rec, req)
+				}
+				want := http.StatusOK
+				if callerTeam != "alpha-team" {
+					want = http.StatusForbidden
+				}
+				if rec.Code != want {
+					t.Fatalf("status=%d, want %d; body=%s", rec.Code, want, rec.Body.String())
+				}
+			})
+		}
+	}
+}

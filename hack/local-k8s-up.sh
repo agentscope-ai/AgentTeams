@@ -86,12 +86,14 @@ if [ "$SKIP_BUILD" = "0" ]; then
 
     # The same QwenPaw Harness image supports Manager and team roles.
     log "Building shared QwenPaw Harness image..."
-    (cd "${PROJECT_ROOT}" && OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml)
+    git -C "${PROJECT_ROOT}" submodule update --init -- qwenpaw
+    (cd "${PROJECT_ROOT}" && OUT_DIR=dist/adapters/qwenpaw ruby qwenpaw/adapters/teamharness/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml)
     (cd "${PROJECT_ROOT}" && OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml)
     docker build -t "$QWENPAW_MANAGER_IMAGE" \
         --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
         --build-context shared="${PROJECT_ROOT}/shared/lib" \
-        -f "${PROJECT_ROOT}/qwenpaw/Dockerfile" "${PROJECT_ROOT}"
+        --build-context agentteams="${PROJECT_ROOT}" \
+        "${PROJECT_ROOT}/qwenpaw"
 
     # Worker images
     log "Building worker image (openclaw)..."
@@ -110,7 +112,9 @@ if [ "$SKIP_BUILD" = "0" ]; then
 
     log "Building worker image (openhuman)..."
     docker build -t "$OPENHUMAN_WORKER_IMAGE" \
-        -f "${PROJECT_ROOT}/openhuman/Dockerfile" "${PROJECT_ROOT}"
+        --build-arg AGENTTEAMS_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
+        --build-context agentteams="${PROJECT_ROOT}" \
+        "${PROJECT_ROOT}/openhuman"
 
     log "Loading images into kind cluster..."
     kind load docker-image "$MANAGER_IMAGE" --name "$CLUSTER_NAME"

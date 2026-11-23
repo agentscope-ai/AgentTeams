@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $rootDir = Split-Path -Parent $PSScriptRoot
-$installerPath = Join-Path $rootDir "install/agentteams-install.ps1"
+$installerPath = Join-Path $rootDir ".installer-source/public/install.ps1"
 $installer = Get-Content -Raw $installerPath
 $functionMatch = [regex]::Match(
     $installer,

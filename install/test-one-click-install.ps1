@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $tokens = $null
 $errors = $null
-$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'agentteams-install.ps1'), [ref]$tokens, [ref]$errors)
+$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../.installer-source/public/install.ps1'), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
 $definitions = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
 foreach ($name in @('Test-ShouldSkipStep', 'Step-Llm', 'Read-Prompt', 'Step-Admin', 'Step-Ports', 'Step-Domains', 'Step-Github', 'Step-Skills', 'Start-AgentTeamsDashboard')) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -eo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
+INSTALLER="${ROOT_DIR}/.installer-source/public/install.sh"
 eval "$(sed -n '/^step_admin()/,/^}/p' "$INSTALLER")"
 minio_block="$(sed -n '/^    AGENTTEAMS_MINIO_USER=/,/^    AGENTTEAMS_MINIO_PASSWORD=/p' "$INSTALLER")"
 msg() { printf '%s' "$1"; }

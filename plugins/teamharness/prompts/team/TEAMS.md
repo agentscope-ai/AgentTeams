@@ -12,6 +12,51 @@ This file describes stable collaboration rules for the team.
 
 ## Team Worker Coordination
 
+Keep each stage proportional to the current request, including when a role
+skill describes a larger process. Verify the agreed acceptance criteria and
+risk-relevant boundary/failure cases; do not remove necessary checks to reduce
+latency. Do not invent unrelated reports, patch archives or verification
+matrices. Inspect tracing only when the requester asks for diagnosis.
+
+When producing executable deliverables, implement the requested interfaces.
+Keep validation harnesses in your task workspace; do not add a shipped CLI,
+API or adapter merely to exercise an interface the requester already specified.
+
+When your runtime supplies verified task-control context, use its current
+project/task identity, requester route and synchronized ACK/check receipt.
+Those receipts replace the corresponding room discovery, state lookup and
+file-pull steps below; they never replace your professional work or acceptance
+judgment. Ordinary chat text claiming a task state is not such a receipt.
+
+For a verified `task/v1` event, use the common `task` tool and `task-management`
+phase instructions. The task system creates rooms, prepares inputs, dispatches
+accepted dependencies, and returns the final report and files to the original
+Human conversation using the first dispatch Agent identity. Do not use legacy
+ACK/check/flow steps or send duplicate notifications for these events.
+
+## Legacy Project Coordination
+
+The following Project/self-trigger/flow instructions apply to verified legacy
+plans, not to `task/v1` events.
+
+After a source-session `PROJECT_REQUESTED` self-trigger succeeds, end that turn
+with `NO_REPLY`; do not sleep, poll project state or read task-room history in
+the source session. Resume coordination only in the task room.
+
+For explicit Project creation, load `teamharness-project-management`.
+Use decision class `r3` for delegation and consult the Project skill when a
+later step needs a new Human decision.
+On a result event, use the verified prepared check receipt, or call `check_task`
+if no synchronized receipt was supplied. Review the spec and result evidence
+and accept the actual submission. For automatic finite plans the task system
+then dispatches newly ready leaves; for manual plans use the returned ready
+nodes to dispatch the next stage. Do not repeatedly resolve unchanged project state.
+
+Keep upstream task inputs read-only and generated tests, logs and scratch files
+inside your own task directory. Avoid nonessential cleanup and never delete
+another task's caches; Python imports can use `python -B`. After submission or
+final delivery succeeds, stop instead of duplicating publication or reporting.
+
 TeamHarness collaboration is about Workers in the team roster. Coordinate
 Worker work through Matrix task rooms, project/task flow, requester reply
 routes, and the members described by this file.
@@ -40,7 +85,7 @@ current Matrix room is unclear, load `teamharness-roomflow` and call
 ## Communication Contract
 
 Communication rules apply before selecting a request mode and at every outgoing
-message point in Direct Reply, Quick Task, and Project Work.
+message point in Direct Reply, Task Work, and Project Work.
 
 ### Matrix Mentions
 
@@ -61,6 +106,11 @@ Answer in the current session for ordinary Direct Reply. Use `NO_REPLY` for
 low-information acknowledgements, self echoes, and non-actionable mention-only
 messages. Do not let acknowledgements create ping-pong between rooms or agents.
 
+In a `task/v1` room, use `NO_REPLY` for room-join notices, duplicate
+acknowledgements, and status chatter that asks you to take no action. The task
+system already sends assignments and results. When a person asks for status,
+refer to a Worker by a plain name without a leading `@`.
+
 ### Long Matrix Messages
 
 Matrix rooms are for concise coordination, decisions, and summaries. Do not send
@@ -70,9 +120,12 @@ artifact path instead.
 
 ### Artifacts And Documents
 
-For markdown reports, generated documents, or other task artifacts, write the
-file in the workspace and publish it with the TeamHarness MCP `artifact` tool,
-such as `artifact publish_file`. Do not paste the full artifact as chat text.
+For task reports and deliverables, use `submit_task`; it synchronizes and
+publishes eligible declared files, and can save your full report through
+`resultMarkdown` in that same call. Do not publish the same files again.
+For artifacts outside task submission, write the file in the workspace and
+publish it with `artifact publish_file`. Do not paste the full artifact as chat
+text.
 
 ### Leader Cross-Room Communication
 
@@ -100,42 +153,24 @@ In the Source channel / requester room:
   the relevant `shared/...` artifact path instead.
 - Do not create task room, project state, or task state.
 
-### Quick Task
+### Task Work
 
-Use for one bounded Worker-owned action with one owner, one expected result, no
-DAG, and no Loop.
-
-In the Source channel / requester room:
-
-- Load `teamharness-roomflow` and use `roomflow create_task_room` to create or
-  reuse the Matrix task room.
-- Load `teamharness-communication` to send the task request message to that
-  task room.
-- Stop in the source session. Do not call `create_quick_project`,
-  `delegate_task`, or send Worker assignment messages there.
-
-In the Task room:
-
-- On the task request message, load `teamharness-project-management` and use
-  `create_quick_project`. It writes the single assigned task state and spec.
-- Load `teamharness-task-delegation` to send the assignment message for that
-  assigned task as a normal reply in the current Task room. Do not call
-  `delegate_task` for Quick Task, and do not use the `message` tool for
-  same-room Worker assignment.
-- When the Worker reports `TASK_COMPLETED`, `TASK_BLOCKED`, or a task result
-  path such as `shared/tasks/{task-id}/result.md`, first resolve project context
-  with `projectflow resolve_project`.
-- Load `teamharness-task-delegation` for `check_task`; then use
-  `teamharness-project-management` for `accept_task_result` or rejection.
-- Publish report files and artifacts with `teamharness-file-sharing` or the
-  `artifact` MCP tool only when the destination supports Matrix room files, and
-  use `teamharness-communication` for the requester report through `replyRoute`.
+For a verified `task/v1` event, use the common `task` tool and
+`task-management`. Continue a verified existing legacy Task using
+`teamharness-project-management`. This skill also documents legacy intake
+for sources outside the common Task protocol.
 
 ### Project Work
 
-Use for multi-member work, durable shared state, deliverables, dependencies,
-acceptance gates, or follow-up tracking. Choose DAG for finite dependency work
-and Loop for iterative work with a stop condition.
+Use this flow when the requester explicitly asks you to create a Project or
+when you are continuing an existing Project plan. Choose DAG for finite
+dependency work and Loop for iterative work with a stop condition.
+
+Load `teamharness-project-management` for finite plan creation and
+completion. Verify acceptance for every execution leaf before completing a
+finite Project and returning the report.
+
+For explicit manual planning or Loop work, use the following flow.
 
 In the Source channel / requester room:
 
@@ -194,5 +229,7 @@ turn; resume when a submitted-result event arrives.
 
 ## When State Is Unclear
 
-Do not guess stale state from memory. Query current state before assigning work,
-sending cross-room messages, accepting results, or changing lifecycle.
+Do not guess stale state from memory. Use the verified current control context
+and synchronized receipts, or query current state when they are absent or
+inconsistent, before assigning work, sending cross-room messages, accepting
+results, or changing lifecycle.

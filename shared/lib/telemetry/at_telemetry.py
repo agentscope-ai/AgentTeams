@@ -15,7 +15,6 @@ from urllib.parse import unquote
 
 from opentelemetry import baggage, context, trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.openai import OpenAIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan, SpanLimits, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
@@ -43,8 +42,11 @@ def sanitize(value):
             decoded = None
         if isinstance(decoded, (dict, list)):
             return json.dumps(sanitize(decoded), ensure_ascii=False, default=str)
-        for key, secret in os.environ.items():
-            if _secret_key.search(key) and len(secret) >= 8:
+        for key in os.environ:
+            if not _secret_key.search(key):
+                continue
+            secret = os.environ.get(key, "")
+            if len(secret) >= 8:
                 value = value.replace(secret, "[REDACTED]")
                 if key in ("OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"):
                     for header in secret.split(","):
@@ -223,8 +225,15 @@ def turn_fields(session_id, *, user_id="", metadata=None):
     for key, value in (metadata or {}).items():
         if key == "otel_received_at_ns" and isinstance(value, int):
             fields["agentteams.message.received_at_ns"] = value
-        if key in ("room_id", "task_id", "team_id", "project_id", "event_id") and value:
+        if key == "execution_generation" and isinstance(value, int):
+            fields["agentteams.execution.generation"] = value
+        if key in ("room_id", "task_id", "team_id", "project_id", "event_id", "coordination_id") and value:
             fields[f"agentteams.{key[:-3] if key.endswith('_id') else key}.id"] = str(value)
+    coordination = (metadata or {}).get("teamharness_coordination")
+    if isinstance(coordination, dict) and coordination.get("id"):
+        fields["agentteams.coordination.id"] = str(coordination["id"])
+        if coordination.get("kind"):
+            fields["agentteams.coordination.kind"] = str(coordination["kind"])
     received = fields.get("agentteams.message.received_at_ns")
     if received:
         fields["agentteams.message.dispatch_delay_ms"] = max(0, (time.time_ns() - int(received)) / 1_000_000)
@@ -240,12 +249,26 @@ def tool_error(result):
     if hasattr(result, "model_dump"):
         result = result.model_dump(mode="json")
     if isinstance(result, dict):
-        if result.get("error") or result.get("failed") or result.get("isError"):
+        if result.get("error") or result.get("failed") or result.get("isError") or result.get("ok") is False:
             return str(result.get("error") or result.get("failed") or "tool error")[:2000]
         if result.get("exit_code", 0) not in (0, None):
             return f"exit_code={result['exit_code']}"
-        if str(result.get("state", "")).lower() in ("error", "failed"):
-            return "tool returned error state"
+        if str(result.get("state", "")).lower() in ("error", "failed", "denied"):
+            detail = "\n".join(block.get("text", "") for block in result.get("content", [])
+                               if isinstance(block, dict) and block.get("type") == "text")
+            return detail[:2000] or "tool returned error state"
+        for block in result.get("content", []):
+            if isinstance(block, dict) and block.get("type") == "text":
+                try:
+                    payload = json.loads(block.get("text", ""))
+                except ValueError:
+                    continue
+                # TeamHarness/MCP envelopes are results; arbitrary JSON read
+                # from a file is data and must not become a tool failure.
+                if isinstance(payload, dict) and (payload.get("tool") or payload.get("isError")):
+                    reason = tool_error(payload)
+                    if reason:
+                        return reason
     return ""
 
 
@@ -314,6 +337,11 @@ class IdentityProcessor(SpanProcessor):
             "agentteams.runtime": os.getenv("AGENTTEAMS_OTEL_RUNTIME", "python"),
             "agentteams.telemetry.schema": "1",
         }
+        root = _active_turn.get()
+        if root is not None and root.context.trace_id == span.context.trace_id:
+            for key in ("agentteams.task.id", "agentteams.project.id", "agentteams.task.correlation"):
+                if key in root.attributes:
+                    fields.setdefault(key, root.attributes[key])
         for key, value in fields.items():
             span.set_attribute(key, value)
             span.set_attribute(f"langfuse.observation.metadata.{key}", value)
@@ -341,7 +369,49 @@ class IdentityProcessor(SpanProcessor):
             span.set_attribute("langfuse.session.id", session)
 
 
-def configure():
+class RuntimeLogProcessor(SpanProcessor):
+    """Record operation metadata locally, without prompts or tool arguments."""
+
+    @staticmethod
+    def phase(span):
+        attrs = span.attributes or {}
+        if span.name == "worker.turn":
+            return "turn"
+        if attrs.get("gen_ai.operation.name") == "execute_tool" or attrs.get("langfuse.observation.type") == "tool":
+            return "tool"
+        if attrs.get("gen_ai.operation.name") == "chat" or attrs.get("langfuse.observation.type") == "generation" or span.name == "openai.chat":
+            return "model"
+        if span.name == "http.request":
+            return "http"
+
+    def record(self, span, suffix):
+        from runtime_observability import event
+        phase = self.phase(span)
+        if not phase:
+            return
+        attrs = span.attributes or {}
+        fields = {key: attrs[source] for key, source in {
+            "room_id": "agentteams.room.id", "event_id": "agentteams.event.id",
+            "turn_id": "agentteams.turn.id", "tool_name": "gen_ai.tool.name",
+            "item_id": "gen_ai.tool.call.id", "model": "gen_ai.request.model",
+            "http_status": "http.response.status_code", "server": "server.address",
+        }.items() if source in attrs}
+        fields["span_id"] = f"{span.context.span_id:016x}"
+        if suffix == "end":
+            fields["duration_ms"] = round((span.end_time - span.start_time) / 1_000_000)
+            fields["status"] = "failed" if span.status.status_code == trace.StatusCode.ERROR else "completed"
+            if span.status.description:
+                fields["error"] = span.status.description[:4096]
+        event(f"{phase}.{suffix}", **fields)
+
+    def on_start(self, span, parent_context=None):
+        self.record(span, "begin")
+
+    def on_end(self, span):
+        self.record(span, "end")
+
+
+def configure(*, local_only=False):
     """Initialize once; keep an already configured SDK provider."""
     global _provider
     if _provider is not None:
@@ -355,12 +425,22 @@ def configure():
             "agentteams.telemetry.config_revision": os.getenv("AGENTTEAMS_OTEL_CONFIG_REVISION", ""),
         })
         provider = TracerProvider(resource=resource, span_limits=SpanLimits(max_attributes=4096))
-        provider.add_span_processor(BatchSpanProcessor(SanitizingExporter(OTLPSpanExporter())))
+        if not local_only:
+            provider.add_span_processor(BatchSpanProcessor(SanitizingExporter(OTLPSpanExporter())))
         trace.set_tracer_provider(provider)
     provider.add_span_processor(IdentityProcessor())
+    if os.getenv("AGENTTEAMS_LOG_CAPTURED") == "1":
+        provider.add_span_processor(RuntimeLogProcessor())
     os.environ["TRACELOOP_TRACE_CONTENT"] = os.getenv("AGENTTEAMS_OTEL_CAPTURE_CONTENT", "true")
     if os.getenv("AGENTTEAMS_OTEL_RUNTIME") != "qwenpaw":
-        OpenAIInstrumentor().instrument()
+        try:
+            from opentelemetry.instrumentation.openai import OpenAIInstrumentor
+        except ModuleNotFoundError as error:
+            # Native runtimes can use the shared tracing helpers without the OpenAI SDK.
+            if error.name != "openai":
+                raise
+        else:
+            OpenAIInstrumentor().instrument()
     from at_runtime_adapters import install
     install()
     _provider = provider

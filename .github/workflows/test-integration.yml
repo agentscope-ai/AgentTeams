@@ -20,7 +20,7 @@ on:
       - '.gitmodules'
       - 'deepseek-harness'
       - 'deepseek-harness/**'
-      - 'plugins/teamharness/adapters/qwenpaw/**'
+      - 'plugins/teamharness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
       - 'Makefile'
       - 'hack/versions.env'
@@ -49,7 +49,7 @@ on:
       - '.gitmodules'
       - 'deepseek-harness'
       - 'deepseek-harness/**'
-      - 'plugins/teamharness/adapters/qwenpaw/**'
+      - 'plugins/teamharness/**'
       - 'plugins/workerflow/adapters/qwenpaw/**'
       - 'Makefile'
       - 'hack/versions.env'
@@ -224,8 +224,7 @@ jobs:
 
       - name: Run DeepSeek Harness bridge tests
         run: |
-          python3 -m unittest discover -s deepseek-harness/tests -p 'test_*.py' -v
-          node --test deepseek-harness/tests/*.test.mjs
+          make -C deepseek-harness test
 
   mcp-setup-tests:
     runs-on: ubuntu-latest
@@ -248,6 +247,8 @@ jobs:
           submodules: recursive
       - name: Check Worker config pull and workspace upload
         run: |
+          python3 -m pip install 'PyYAML>=6,<7'
+          python3 shared/tests/test_worker_runtime_config.py
           bash shared/tests/test-worker-file-sync.sh
           bash shared/tests/test-merge-openclaw-config.sh
 
@@ -350,7 +351,7 @@ jobs:
     if: needs.detect-changes.outputs.run_builds == 'true'
     uses: ./.github/workflows/build-integration-images.yml
     with:
-      targets: '["embedded", "manager-qwenpaw", "hermes-worker"]'
+      targets: '["embedded", "hermes-worker"]'
       controller: true
     secrets: inherit
 
@@ -364,7 +365,7 @@ jobs:
       (needs.build-openclaw-base.result == 'success' || needs.build-openclaw-base.result == 'skipped')
     uses: ./.github/workflows/build-integration-images.yml
     with:
-      targets: '["manager", "worker"]'
+      targets: '["openclaw"]'
       controller: true
       local_openclaw_base: ${{ needs.resolve-openclaw-base.outputs.openclaw_base == 'true' }}
       published_base_ref: ${{ needs.resolve-openclaw-base.outputs.openclaw_base_ref }}
@@ -489,13 +490,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq curl unzip
       - name: Control UI device-identity policy (HTTP/LAN entries)
         # #1460/#1479: the gateway requires a device identity on the Control UI
-        # handshake. Runs one real gateway from the manager image this shard
-        # already loaded (the manager image is FROM the pinned openclaw-base),
+        # handshake. Runs one real gateway from the shared OpenClaw Harness this
+        # shard already loaded (it is FROM the pinned openclaw-base),
         # so the probe tests the shipped pairing and needs no extra pull; the
         # script asserts that gateway version == the pin in hack/versions.env.
         if: matrix.shard == 'controller-cr' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
         env:
-          OPENCLAW_BASE_IMAGE: agentteams/manager:latest
+          OPENCLAW_BASE_IMAGE: agentteams/agentteams-harness-openclaw:latest
         run: bash manager/tests/test-control-ui-device-identity.sh
 
 
@@ -523,8 +524,6 @@ jobs:
           AGENTTEAMS_LLM_PROVIDER: qwen
           AGENTTEAMS_DEFAULT_MODEL: ${{ inputs.model || 'qwen3.6-plus' }}
           AGENTTEAMS_MANAGER_RUNTIME: ${{ matrix.manager_runtime }}
-          # Exercise the PR-built QwenPaw Manager directly.
-          AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE: agentteams/manager-qwenpaw:latest
           # Propagate the worker runtime to worker-creating tests too. Without
           # this the apply-zip path (test-15) silently falls back to openclaw
           # on the qwenpaw and hermes matrix entries because the controller's
@@ -552,6 +551,8 @@ jobs:
           # prefixes because the install script (not make) consumes them.
           AGENTTEAMS_VERSION=v1.2.0-beta.1 SKIP_BUILD=1 \
           make test-embedded \
+            LOCAL_MANAGER=agentteams/agentteams-harness-openclaw:latest \
+            LOCAL_MANAGER_QWENPAW=agentteams/agentteams-harness-qwenpaw:latest \
             LOCAL_COPAW_WORKER="${CI_COPAW_WORKER_IMAGE}" \
             TEST_FILTER="$FILTER"
 
@@ -832,7 +833,7 @@ jobs:
           AGENTTEAMS_INSTALL_MANAGER_IMAGE=agentteams/manager:${VERSION} \
           AGENTTEAMS_INSTALL_WORKER_IMAGE=agentteams/agentteams-harness-openclaw:${VERSION} \
           AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=agentteams/agentteams-controller:${VERSION} \
-          bash ./install/agentteams-install.sh manager
+          bash <(curl -fsSL https://agentteams.cloud/install.sh) manager
 
       - name: Wait for Manager to be ready
         run: |
@@ -922,6 +923,9 @@ jobs:
 
       - name: Run the LLM-smoke regression suite (stubbed docker/curl)
         run: bash install/tests/verify-llm-regressions.sh
+
+      - name: Wait for complete task content in object storage
+        run: bash tests/test-minio-wait.sh
 
       - name: Run the OpenClaw version-guard regression (stubbed fs/node)
         run: bash manager/tests/test-openclaw-version-guard.sh

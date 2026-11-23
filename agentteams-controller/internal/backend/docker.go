@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 )
 
 // DockerConfig holds Docker backend configuration.
@@ -199,13 +201,17 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			return nil, fmt.Errorf("marshal create payload: %w", err)
 		}
 
-		containerID, err := d.doCreate(ctx, containerName, body)
+		containerID, err := d.doCreate(ctx, containerName, body, req.Labels[RuntimeHandoffLabel] == "")
 		if err != nil {
 			return nil, err
 		}
 		if req.AuthToken != "" && req.AuthTokenFile != "" {
 			if err := d.writeContainerFile(ctx, containerID, req.AuthTokenFile, req.AuthToken); err != nil {
-				_ = d.Delete(ctx, req.Name)
+				if req.Labels[RuntimeHandoffLabel] != "" {
+					_, _ = d.dockerInstanceRequest(ctx, http.MethodDelete, containerID, "?force=true")
+				} else {
+					_ = d.Delete(ctx, req.Name)
+				}
 				return nil, fmt.Errorf("project auth token: %w", err)
 			}
 		}
@@ -237,7 +243,11 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			log.Printf("[Docker] Host port %d in use, retrying with %d...", hostPort, hostPort+1)
 			hostPort++
 			// Clean up the container we just created
-			d.Delete(ctx, req.Name)
+			if req.Labels[RuntimeHandoffLabel] != "" {
+				_, _ = d.dockerInstanceRequest(ctx, http.MethodDelete, containerID, "?force=true")
+			} else {
+				_ = d.Delete(ctx, req.Name)
+			}
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
@@ -251,10 +261,115 @@ func dockerAuthVolumeName(containerName string) string {
 }
 
 func (d *DockerBackend) writeContainerFile(ctx context.Context, containerName, filePath, content string) error {
-	return d.writeContainerFileWithMode(ctx, containerName, filePath, content, 0400)
+	uid, gid, err := d.containerAuthOwner(ctx, containerName)
+	if err != nil {
+		return fmt.Errorf("resolve auth token owner: %w", err)
+	}
+	return d.writeContainerFileWithMode(ctx, containerName, filePath, content, 0400, uid, gid)
 }
 
-func (d *DockerBackend) writeContainerFileWithMode(ctx context.Context, containerName, filePath, content string, mode int64) error {
+func (d *DockerBackend) containerAuthOwner(ctx context.Context, container string) (int, int, error) {
+	endpoint := "http://localhost/containers/" + url.PathEscape(container)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/json", nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	response, err := d.client.Do(request)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return 0, 0, fmt.Errorf("inspect container user: HTTP %d", response.StatusCode)
+	}
+	var inspect struct {
+		Config struct{ User string }
+	}
+	if err := json.NewDecoder(response.Body).Decode(&inspect); err != nil {
+		return 0, 0, err
+	}
+	if inspect.Config.User == "" {
+		return 0, 0, nil
+	}
+
+	account, group, explicitGroup := strings.Cut(inspect.Config.User, ":")
+	uid, uidErr := dockerAccountID(account)
+	gid, gidErr := dockerAccountID(group)
+	if uidErr != nil || !explicitGroup {
+		// Archive reads work before the container starts, when Docker Exec
+		// cannot resolve the image's named user or its default group.
+		passwd, err := d.readDockerAccountFile(ctx, endpoint, "/etc/passwd")
+		if err != nil && (uidErr != nil || !os.IsNotExist(err)) {
+			return 0, 0, err
+		}
+		for _, line := range strings.Split(passwd, "\n") {
+			fields := strings.Split(line, ":")
+			if len(fields) < 4 || (fields[0] != account && (uidErr != nil || fields[2] != strconv.Itoa(uid))) {
+				continue
+			}
+			uid, uidErr = dockerAccountID(fields[2])
+			if !explicitGroup {
+				gid, gidErr = dockerAccountID(fields[3])
+			}
+			break
+		}
+	}
+	if uidErr != nil {
+		return 0, 0, fmt.Errorf("container user %q could not be resolved", account)
+	}
+	if explicitGroup && gidErr != nil {
+		groups, err := d.readDockerAccountFile(ctx, endpoint, "/etc/group")
+		if err != nil {
+			return 0, 0, err
+		}
+		for _, line := range strings.Split(groups, "\n") {
+			fields := strings.Split(line, ":")
+			if len(fields) >= 3 && fields[0] == group {
+				gid, gidErr = dockerAccountID(fields[2])
+				break
+			}
+		}
+		if gidErr != nil {
+			return 0, 0, fmt.Errorf("container group %q could not be resolved", group)
+		}
+	}
+	return uid, gid, nil
+}
+
+func dockerAccountID(raw string) (int, error) {
+	id, err := strconv.ParseUint(raw, 10, 32)
+	return int(id), err
+}
+
+func (d *DockerBackend) readDockerAccountFile(ctx context.Context, endpoint, file string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/archive?path="+url.QueryEscape(file), nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := d.client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound {
+		return "", os.ErrNotExist
+	}
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("read container %s: HTTP %d", file, response.StatusCode)
+	}
+	archive := tar.NewReader(response.Body)
+	header, err := archive.Next()
+	if err != nil {
+		return "", err
+	}
+	if header.Name != path.Base(file) || header.Typeflag != tar.TypeReg || header.Size > 1<<20 {
+		return "", fmt.Errorf("unexpected container account archive for %s", file)
+	}
+	data, err := io.ReadAll(archive)
+	return string(data), err
+}
+
+func (d *DockerBackend) writeContainerFileWithMode(ctx context.Context, containerName, filePath, content string, mode int64, uid, gid int) error {
 	cleanPath := path.Clean(filePath)
 	if !path.IsAbs(cleanPath) || cleanPath == "/" || path.Base(cleanPath) == "." {
 		return fmt.Errorf("invalid container file path %q", filePath)
@@ -267,6 +382,8 @@ func (d *DockerBackend) writeContainerFileWithMode(ctx context.Context, containe
 		Name: path.Base(cleanPath),
 		Mode: mode,
 		Size: int64(len(data)),
+		Uid:  uid,
+		Gid:  gid,
 	}); err != nil {
 		return fmt.Errorf("write archive header: %w", err)
 	}
@@ -307,26 +424,25 @@ func (d *DockerBackend) ProjectAuthToken(ctx context.Context, name, token string
 	if err := d.writeContainerFile(ctx, containerName, nextPath, token); err != nil {
 		return fmt.Errorf("write next auth token: %w", err)
 	}
-	command := []string{
-		"/bin/sh",
-		"-c",
-		"mv -f " + nextPath + " " + DefaultAuthTokenFile,
-	}
-	if err := d.execContainer(ctx, containerName, command); err != nil {
+	// The private mount's parent directory is managed by Docker as root.
+	command := []string{"mv", "-f", nextPath, DefaultAuthTokenFile}
+	if err := d.execContainer(ctx, containerName, "0:0", command); err != nil {
 		return fmt.Errorf("activate next auth token: %w", err)
 	}
 	return nil
 }
 
-func (d *DockerBackend) execContainer(ctx context.Context, containerName string, command []string) error {
+func (d *DockerBackend) execContainer(ctx context.Context, containerName, user string, command []string) error {
 	payload, err := json.Marshal(struct {
 		AttachStdout bool     `json:"AttachStdout"`
 		AttachStderr bool     `json:"AttachStderr"`
 		Cmd          []string `json:"Cmd"`
+		User         string   `json:"User,omitempty"`
 	}{
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          command,
+		User:         user,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal exec payload: %w", err)
@@ -518,15 +634,15 @@ func (d *DockerBackend) WriteFile(ctx context.Context, name, filePath, content s
 	// the Create-path auth-token projection runs before the container
 	// starts, where exec 409s).
 	if dir := path.Dir(path.Clean(filePath)); dir != "/" {
-		if err := d.execContainer(ctx, containerName, []string{"mkdir", "-p", dir}); err != nil {
+		if err := d.execContainer(ctx, containerName, "", []string{"mkdir", "-p", dir}); err != nil {
 			return fmt.Errorf("prepare parent dir for %s: %w", filePath, err)
 		}
 	}
 	nextPath := filePath + ".next"
-	if err := d.writeContainerFileWithMode(ctx, containerName, nextPath, content, 0600); err != nil {
+	if err := d.writeContainerFileWithMode(ctx, containerName, nextPath, content, 0600, 0, 0); err != nil {
 		return fmt.Errorf("write next file: %w", err)
 	}
-	if err := d.execContainer(ctx, containerName, []string{"mv", "-f", nextPath, filePath}); err != nil {
+	if err := d.execContainer(ctx, containerName, "", []string{"mv", "-f", nextPath, filePath}); err != nil {
 		return fmt.Errorf("activate next file: %w", err)
 	}
 	return nil
@@ -566,7 +682,7 @@ func readDockerExecStream(r io.Reader) (string, string, error) {
 
 // doCreate sends the container create request to Docker, handling conflict by
 // deleting the existing container and retrying once.
-func (d *DockerBackend) doCreate(ctx context.Context, containerName string, body []byte) (string, error) {
+func (d *DockerBackend) doCreate(ctx context.Context, containerName string, body []byte, replaceConflict bool) (string, error) {
 	for retry := 0; retry < 2; retry++ {
 		u := fmt.Sprintf("http://localhost/containers/create?name=%s", url.QueryEscape(containerName))
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(body)))
@@ -582,7 +698,7 @@ func (d *DockerBackend) doCreate(ctx context.Context, containerName string, body
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		if resp.StatusCode == http.StatusConflict && retry == 0 {
+		if resp.StatusCode == http.StatusConflict && replaceConflict && retry == 0 {
 			// Remove existing container and retry once
 			log.Printf("[Docker] Container %s already exists, removing before recreate", containerName)
 			// Extract worker name from container name
@@ -714,22 +830,62 @@ func (d *DockerBackend) Status(ctx context.Context, name string) (*WorkerResult,
 	}
 
 	var inspectResp struct {
-		ID    string `json:"Id"`
+		ID     string `json:"Id"`
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+			Env    []string          `json:"Env"`
+		} `json:"Config"`
 		State struct {
-			Status string `json:"Status"`
+			Status    string `json:"Status"`
+			StartedAt string `json:"StartedAt"`
+			PID       *int   `json:"Pid"`
+			Running   *bool  `json:"Running"`
+			OOMKilled bool   `json:"OOMKilled"`
+			ExitCode  int    `json:"ExitCode"`
 		} `json:"State"`
 	}
 	if err := json.Unmarshal(body, &inspectResp); err != nil {
 		return nil, fmt.Errorf("parse inspect response: %w", err)
 	}
 
+	instanceID := ""
+	if inspectResp.ID != "" && inspectResp.State.StartedAt != "" {
+		instanceID = inspectResp.ID + "/" + inspectResp.State.StartedAt
+	}
+	status := normalizeDockerStatus(inspectResp.State.Status)
+	var message string
+	if status == StatusStopped {
+		if inspectResp.State.OOMKilled {
+			message = "Container ran out of memory (OOMKilled)."
+		} else if inspectResp.State.ExitCode != 0 {
+			message = fmt.Sprintf("Container exited with code %d.", inspectResp.State.ExitCode)
+		}
+	}
+	var agentRole, teamName string
+	for _, entry := range inspectResp.Config.Env {
+		key, value, _ := strings.Cut(entry, "=")
+		switch key {
+		case "AGENTTEAMS_AGENT_ROLE":
+			agentRole = value
+		case "AGENTTEAMS_TEAM_NAME":
+			teamName = value
+		}
+	}
 	return &WorkerResult{
-		Name:           name,
-		Backend:        "docker",
-		DeploymentMode: DeployLocal,
-		Status:         normalizeDockerStatus(inspectResp.State.Status),
-		ContainerID:    inspectResp.ID,
-		RawStatus:      inspectResp.State.Status,
+		Name:                name,
+		Backend:             "docker",
+		DeploymentMode:      DeployLocal,
+		Status:              status,
+		Message:             message,
+		ContainerID:         inspectResp.ID,
+		InstanceID:          instanceID,
+		Runtime:             inspectResp.Config.Labels[v1beta1.LabelRuntime],
+		AgentRole:           agentRole,
+		TeamName:            teamName,
+		HandoffLabel:        inspectResp.Config.Labels[RuntimeHandoffLabel],
+		HandoffSpecHash:     inspectResp.Config.Labels[RuntimeHandoffSpecLabel],
+		dockerProcessExited: inspectResp.State.PID != nil && *inspectResp.State.PID == 0 && inspectResp.State.Running != nil && !*inspectResp.State.Running,
+		RawStatus:           inspectResp.State.Status,
 	}, nil
 }
 
@@ -821,6 +977,7 @@ type dockerCreatePayload struct {
 	ExposedPorts     map[string]struct{}     `json:"ExposedPorts,omitempty"`
 	HostConfig       *dockerHostConfig       `json:"HostConfig,omitempty"`
 	NetworkingConfig *dockerNetworkingConfig `json:"NetworkingConfig,omitempty"`
+	Labels           map[string]string       `json:"Labels,omitempty"`
 }
 
 type dockerHostConfig struct {
@@ -866,11 +1023,21 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 		Image:      req.Image,
 		Env:        envList,
 		WorkingDir: req.WorkingDir,
+		Labels:     map[string]string{v1beta1.LabelRuntime: ResolveRuntime(req.Runtime, req.RuntimeFallback)},
 	}
 
+	if handoff := req.Labels[RuntimeHandoffLabel]; handoff != "" {
+		p.Labels[RuntimeHandoffLabel] = handoff
+		p.Labels[RuntimeHandoffSpecLabel] = req.Labels[RuntimeHandoffSpecLabel]
+	}
 	hc := &dockerHostConfig{
 		NetworkMode: req.Network,
 		ExtraHosts:  req.ExtraHosts,
+	}
+	if ResolveRuntime(req.Runtime, req.RuntimeFallback) == RuntimeCodex {
+		// Codex's native bubblewrap sandbox needs unprivileged user namespaces;
+		// Docker's default seccomp blocks them before any command can run.
+		hc.SecurityOpt = []string{"seccomp=unconfined"}
 	}
 
 	// Bind mounts
@@ -919,7 +1086,7 @@ func (d *DockerBackend) buildCreatePayload(req CreateRequest, consolePort string
 	}
 
 	if hc.NetworkMode != "" || len(hc.ExtraHosts) > 0 || len(hc.PortBindings) > 0 ||
-		len(hc.Binds) > 0 || hc.RestartPolicy != nil {
+		len(hc.Binds) > 0 || hc.RestartPolicy != nil || len(hc.SecurityOpt) > 0 {
 		p.HostConfig = hc
 	}
 

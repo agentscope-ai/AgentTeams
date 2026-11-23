@@ -79,6 +79,21 @@ if [ -n "${TEST_TEAMS}" ]; then
             log_info "agt delete team ${team} failed (YAML likely already removed by prior test cleanup)"
         fi
     done
+
+    # The API accepts Team deletion before its finalizer detaches the Workers.
+    # Worker deletion returns a conflict while any Team still references it.
+    for team in ${TEST_TEAMS}; do
+        for ((elapsed = 0; elapsed < 120; elapsed += 5)); do
+            if LIVE_TEAMS=$(exec_in_agent agt get teams -o json 2>/dev/null) && \
+                jq -e --arg team "${team}" 'all(.teams[]; .name != $team)' <<< "${LIVE_TEAMS}" >/dev/null; then
+                break
+            fi
+            sleep 5
+        done
+        if [ "${elapsed}" -ge 120 ]; then
+            log_fail "Team ${team} still present before Worker deletion"
+        fi
+    done
 fi
 
 # ============================================================

@@ -23,6 +23,8 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 - 🧬 **集成** [AgentLoop](https://www.aliyun.com/product/agentloop?spm=at.readme.0.0.0) ：提供 Agent 全栈观测与审计、Agent 评估与实验、Agent 资产管理与持续优化等能力。
 
 ## 动态
+- **2026-11-20:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.8) — AgentTeams v1.2.8：优化 Team 从任务分配、执行、提交到验收交付的完整流程，降低协作耗时与上下文消耗；完善主任务与子任务协作、任务会话归档及六种 Harness 的 Worker 运行恢复；新增会话停止与补充指令、消息读取状态、原生审批及运行诊断；搭配 Dashboard v1.4.3，改善任务看板和团队管理，并支持通过 Higress 统一访问 `/api` 与 `/dashboard`。
+- **2026-11-12:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.7) — AgentTeams v1.2.7：简化一键启动与保留数据升级；统一六种 Harness 运行时的镜像命名与版本，Manager 复用 OpenClaw / QwenPaw 镜像；Tracing 支持按 Agent、团队、会话和任务查询；搭配 Dashboard v1.4.1，统一团队与 Agent 管理，优化工具调用过程展示，并修复模型、MCP、Skill、文件及登录管理中的多项问题。
 - **2026-11-08:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.6) — AgentTeams v1.2.6：搭配 Dashboard v1.4.0，带来新版工作台、语音输入及可选的 QwenPaw/Hermes 会话追踪；新增任务暂停与恢复、团队人工事项收件箱；增强多用户权限与模型授权；完善运行时配置、用户独立文件区及 S3 兼容存储；实验性 DeepSeek Harness Worker 镜像更新至 v0.1.1；并提升 Matrix 协作与升级可靠性。
 - **2026-10-16:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams 1.2.5 重点增强编码工具委派、Worker 配置管理和 QwenPaw 运行时升级，默认搭配 Dashboard v1.3.1，并修复 MCP 注册、Matrix 消息协作及 Worker 恢复中的多项问题。
 - **2026-09-20:** [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4：新增 TeamHarness 任务状态历史、进度跟踪与完成通知；升级至 QwenPaw 2.2.1 和 Dashboard v1.2.4.9；完善团队权限、审计与技能管理；引入实验性 DeepSeek Harness Worker；并改进 Worker 状态持久化与安装可靠性。
@@ -70,13 +72,13 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 第一步：打开终端，Mac 系统输入以下安装命令。
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/install.sh)
 ```
 
 **Windows（建议 PowerShell 7+）输入以下安装命令：**
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+iwr -UseBasicParsing https://agentteams.cloud/install.ps1 | iex
 ```
 
 第二步：等待本地服务和 Dashboard 启动。默认流程无需选择模型、embedding 或 Manager/Worker 运行时。需要逐项设置时，在命令末尾添加 `--manual`（PowerShell 使用 `-Manual`）。
@@ -99,14 +101,14 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; 
 每次更新新版本，您在终端执行以下命令，即可原地升级，默认升级到最新版本：
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/install.sh)
 ```
 检测到已有安装时，只需确认一次，即可保留原账号、模型配置、数据和工作空间。安装器先准备镜像，再备份原配置并替换服务。数据库备份、回滚及配置恢复说明参见[升级指南](install/README.md#upgrade-an-existing-local-installation)。全新重装是单独操作，会删除数据并要求额外确认。
 
 若要升级到指定版本，请使用以下命令：
 
 ```bash
-AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.7 bash <(curl -fsSL https://agentteams.cloud/install.sh)
 ```
 
 
@@ -114,12 +116,12 @@ AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/age
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://agentteams.cloud/install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
 将移除所有 AgentTeams 容器（Manager、Worker、docker-proxy）、Docker 卷、网络、env 文件、工作空间目录和安装日志。
@@ -193,8 +195,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | 可选 | 限流、网络错误和服务商 5xx 等临时错误的重试次数；默认 `2` |
 | `preflight.llm.activeDeadlineSeconds` | 可选 | 探测 Job 的最长运行时间；默认 `120` 秒 |
 | `preflight.llm.resources` | 可选 | 探测容器的 Kubernetes requests/limits |
-| `manager.runtime` | 可选 | Manager Agent 运行时：OpenClaw 使用 `openclaw`（默认）；CoPaw 在当前 Chart 中使用 `qwenpaw`，`copaw` 为兼容别名。Manager 不支持 Hermes 或 DeepSeek Harness |
-| `worker.defaultRuntime` | 可选 | Chart 提供 `openclaw`（默认）、`copaw`、`hermes`、实验性的 `deepseek-harness` 和 `openhuman` 默认镜像值；当前 CRD 不接受显式的 `spec.runtime: openhuman`，QwenPaw Worker 需在 `spec.image` 中显式配置镜像 |
+| `manager.runtime` | 可选 | 当前源码 Chart 支持 `openclaw`（默认）、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`；`copaw` 为 QwenPaw 兼容别名。未覆盖镜像时自动选择对应 Harness |
+| `worker.defaultRuntime` | 可选 | `openclaw`（Chart 默认）、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`、`codex`；旧版 `copaw` 必须显式固定旧镜像 |
 
 Helm 默认在安装和升级前执行 LLM 探测，使用 `credentials.llmApiKey`、`credentials.llmBaseUrl` 和 `credentials.defaultModel` 发送一个最小的 OpenAI 兼容请求。无效密钥、无法访问的 Base URL、不支持的模型、额度错误或服务商故障会在 Controller 启动前终止安装。受限或离线集群可以临时关闭：
 
@@ -208,13 +210,16 @@ helm install agentteams higress.io/agentteams \
 ```
 
 <details>
-<summary>使用其他运行时（CoPaw Manager + Hermes Workers）</summary>
+<summary>使用其他运行时（QwenPaw Manager + Hermes Workers）</summary>
+
+在当前源码检出的仓库根目录运行：
 
 ```bash
-helm install agentteams higress.io/agentteams \
-  -n agentteams-system --create-namespace --devel \
+helm dependency build helm/agentteams
+helm install agentteams ./helm/agentteams \
+  -n agentteams-system --create-namespace \
+  --set global.imageTag=v1.2.7 \
   --set manager.runtime=qwenpaw \
-  --set manager.image.repository=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-qwenpaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -223,7 +228,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-选择 CoPaw Manager 时需要同时设置 `manager.runtime=qwenpaw` 和 `agentteams-manager-qwenpaw` 镜像。Worker 的默认镜像分别通过 `worker.defaultImage.<runtime>` 配置。
+当前源码 Chart 自动选择 QwenPaw Harness 镜像。共享 Harness 镜像通过 `worker.defaultImage.<runtime>` 配置，仅自定义镜像时覆盖 `manager.image`。Chart 与镜像版本选择参见 [Kubernetes 部署指南](docs/zh-cn/usage/deployment/kubernetes.md)。
 
 </details>
 
@@ -402,6 +407,8 @@ AgentTeams 提供多类 Worker 运行时，可以**在同一个 IM 房间中共�
 agt update worker --runtime hermes
 ```
 
+各 Harness 的实现统一维护在 `agentteams-group` 的独立仓库：[OpenClaw](https://github.com/agentteams-group/agentteams-harness-openclaw), [QwenPaw](https://github.com/agentteams-group/agentteams-harness-qwenpaw), [Hermes](https://github.com/agentteams-group/agentteams-harness-hermes), [DeepSeek](https://github.com/agentteams-group/agentteams-harness-deepseek), [OpenHuman](https://github.com/agentteams-group/agentteams-harness-openhuman), [Codex](https://github.com/agentteams-group/agentteams-harness-codex)。Core 固定引用对应提交用于构建。
+
 ## 架构
 
 ```
@@ -461,6 +468,8 @@ python scripts/export-debug-log.py --range 1h
 
 ## 文档
 
+新版工作区、模型配置、团队、文件和 Tracing，参见 [Dashboard 使用指南](docs/zh-cn/usage/dashboard.md)。
+
 浏览 [中文文档目录](docs/zh-cn/)，或从概览和快速入门开始：
 
 ### 入门
@@ -490,6 +499,7 @@ python scripts/export-debug-log.py --range 1h
 | [docs/zh-cn/usage/integrations/cms.md](docs/zh-cn/usage/integrations/cms.md) | 接入阿里云云监控 CMS 2.0 |
 | [docs/zh-cn/usage/integrations/credagent.md](docs/zh-cn/usage/integrations/credagent.md) | CredAgent 凭证保护配置 |
 | [docs/zh-cn/usage/development.md](docs/zh-cn/usage/development.md) | 开发指南：贡献与本地开发 |
+| [Harness 接入指南](docs/design/harness-integration-guide.md) | 运行时接入、任务协作、重启续跑和跨 Harness 切换验收 |
 | [docs/zh-cn/usage/troubleshooting/faq.md](docs/zh-cn/usage/troubleshooting/faq.md) | 常见问题 |
 | [docs/zh-cn/usage/troubleshooting/legacy-faq.md](docs/zh-cn/usage/troubleshooting/legacy-faq.md) | 旧版常见问题 |
 

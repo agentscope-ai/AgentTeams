@@ -1720,6 +1720,46 @@ func TestSleepingSandboxIsNotDeletedForSpecChange(t *testing.T) {
 	}
 }
 
+func TestSleepingWorkerKeepsAppliedHashUntilChangedHarnessIsCreated(t *testing.T) {
+	worker := newWorker("solo", v1beta1.WorkerSpec{Runtime: "hermes", Image: "hermes:v1"})
+	worker.Generation = 1
+	rig := newWorkerRig(t, worker)
+	out, _, err := rig.reconcile("solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash := out.Status.SpecHash
+	sleeping := "Sleeping"
+	out.Spec.State = &sleeping
+	out.Spec.Runtime, out.Spec.Image = "codex", "codex:v2"
+	out.Generation++
+	if err := rig.client.Update(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err = rig.reconcile("solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status.SpecHash != oldHash {
+		t.Fatalf("sleeping old container was stamped with an unapplied Harness spec: got %s, want %s", out.Status.SpecHash, oldHash)
+	}
+	running := "Running"
+	out.Spec.State = &running
+	out.Generation++
+	if err := rig.client.Update(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	rig.backend.ClearCalls()
+	_, _, err = rig.reconcile("solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	creates, deletes, starts, _, _ := rig.backend.CallSnapshot()
+	if len(deletes) != 1 || len(starts) != 0 || len(creates) != 0 {
+		t.Fatalf("wake must delete stale Harness before create: creates=%v deletes=%v starts=%v", creates, deletes, starts)
+	}
+}
+
 // TestHashAppliedWorkerSpec_ExcludesServiceFields locks in that the
 // service-only fields (ServiceEnabled, Expose) are excluded from the
 // applied-spec hash. Toggling either field must NOT trigger sandbox/pod
@@ -2692,5 +2732,98 @@ func TestOwningTeamSubagentModel(t *testing.T) {
 	}
 	if got := r.owningTeamSubagentModel(context.Background(), stray); got != "" {
 		t.Errorf("non-member worker: got %q, want empty", got)
+	}
+}
+
+func TestTeamWorkerReconcileRequests(t *testing.T) {
+	team := &v1beta1.Team{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "team-ns"},
+		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{
+			{Name: "leader", Role: "team_leader"},
+			{Name: "reviewer", Role: "worker"},
+		}},
+	}
+	requests := teamWorkerRequests(context.Background(), team)
+	if len(requests) != 2 || requests[0].Name != "leader" || requests[1].Name != "reviewer" {
+		t.Fatalf("expected both registered members, got %v", requests)
+	}
+	for _, request := range requests {
+		if request.Namespace != team.Namespace {
+			t.Fatalf("reconcile namespace = %q, want %q", request.Namespace, team.Namespace)
+		}
+	}
+}
+
+func TestWorkerRegisteredCollaborationIdentityConverges(t *testing.T) {
+	ctx := context.Background()
+	worker := newWorker("member", v1beta1.WorkerSpec{Runtime: "qwenpaw", Image: "worker:v1"})
+	worker.Generation = 1
+	rig := newWorkerRig(t, worker)
+	out, _, err := rig.reconcile("member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	standaloneHash := out.Status.SpecHash
+	team := &v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "default"},
+		Spec: v1beta1.TeamSpec{WorkerMembers: []v1beta1.TeamWorkerRef{{Name: "member", Role: "team_leader"}}}}
+	if err := rig.client.Create(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	check := func(role, teamName string) string {
+		t.Helper()
+		rig.backend.ClearCalls()
+		var out *v1beta1.Worker
+		for i := 0; i < 2; i++ {
+			var err error
+			out, _, err = rig.reconcile("member")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		req, ok := rig.backend.LastCreateReq()
+		if !ok {
+			t.Fatal("membership change did not recreate runtime")
+		}
+		for _, key := range []string{"AGENTTEAMS_AGENT_ROLE", "AGENTTEAMS_WORKER_ROLE"} {
+			if req.Env[key] != role {
+				t.Fatalf("%s=%q, want %q", key, req.Env[key], role)
+			}
+		}
+		if req.Env["AGENTTEAMS_TEAM_NAME"] != teamName {
+			t.Fatalf("team env=%q, want %q", req.Env["AGENTTEAMS_TEAM_NAME"], teamName)
+		}
+		hash := out.Status.SpecHash
+		rig.backend.ClearCalls()
+		for i := 0; i < 2; i++ {
+			out, _, err = rig.reconcile("member")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		creates, deletes, _, _, _ := rig.backend.CallSnapshot()
+		if len(creates) != 0 || len(deletes) != 0 || out.Status.SpecHash != hash {
+			t.Fatalf("stable identity churned: creates=%v deletes=%v", creates, deletes)
+		}
+		return hash
+	}
+	leaderHash := check("team_leader", "team-a")
+	if leaderHash == standaloneHash {
+		t.Fatal("joining Team did not change startup identity hash")
+	}
+	if err := rig.client.Get(ctx, types.NamespacedName{Name: team.Name, Namespace: team.Namespace}, team); err != nil {
+		t.Fatal(err)
+	}
+	team.Spec.WorkerMembers[0].Role = "worker"
+	if err := rig.client.Update(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	if check("worker", "team-a") == leaderHash {
+		t.Fatal("Leader to Worker role did not change identity hash")
+	}
+	if err := rig.client.Delete(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	if check("standalone", "") != standaloneHash {
+		t.Fatal("leaving Team did not restore standalone identity hash")
 	}
 }

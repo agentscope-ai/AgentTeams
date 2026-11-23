@@ -6,8 +6,8 @@ set -euo pipefail
 # local installers at the same boundary as the other Worker runtimes.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASH_INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
-POWERSHELL_INSTALLER="${ROOT_DIR}/install/agentteams-install.ps1"
+BASH_INSTALLER="${ROOT_DIR}/.installer-source/public/install.sh"
+POWERSHELL_INSTALLER="${ROOT_DIR}/.installer-source/public/install.ps1"
 MAKEFILE="${ROOT_DIR}/Makefile"
 CORE_BUILD_WORKFLOW="${ROOT_DIR}/.github/workflows/build.yml"
 RC_BUILD_WORKFLOW="${ROOT_DIR}/.github/workflows/build-rc.yml"
@@ -93,7 +93,7 @@ grep -Fq 'AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE=$($Config.DEEPSEEK_HARNESS_WO
     fail "PowerShell installer env file must expose the DeepSeek Harness Worker image"
 pwsh -NoProfile -File "${ROOT_DIR}/tests/check-powershell-deepseek-harness-latest.ps1"
 
-grep -Fq 'DEEPSEEK_HARNESS_WORKER_VERSION ?= v1.2.7' "${MAKEFILE}" ||
+grep -Fq 'DEEPSEEK_HARNESS_WORKER_VERSION ?= v1.2.8' "${MAKEFILE}" ||
     fail "Makefile must give the DeepSeek Harness runtime an independent version"
 if sed -n '/^push-native:/,/^push-native-manager:/p' "${MAKEFILE}" | grep -Fq 'DEEPSEEK_HARNESS'; then
     fail "The aggregate native push must not publish or retag the DeepSeek Harness runtime"
@@ -107,7 +107,7 @@ grep -Fq 'VERSION="sha-${GITHUB_SHA:0:12}"' "${DSH_BUILD_WORKFLOW}" ||
     fail "Independent runtime builds must use a source-specific Controller tag"
 grep -Fq 'PUSH_LATEST=' "${DSH_BUILD_WORKFLOW}" ||
     fail "Independent runtime builds must not overwrite the Controller latest tag"
-grep -Fq 'DEEPSEEK_HARNESS_WORKER_VERSION: v1.2.7' "${RELEASE_WORKFLOW}" ||
+grep -Fq 'DEEPSEEK_HARNESS_WORKER_VERSION: ${{ inputs.version }}' "${RELEASE_WORKFLOW}" ||
     fail "Release notes must pin the independently published DeepSeek Harness runtime"
 grep -Fq 'docker buildx imagetools inspect' "${RELEASE_WORKFLOW}" ||
     fail "A core release must verify that its pinned DeepSeek Harness runtime is pullable"

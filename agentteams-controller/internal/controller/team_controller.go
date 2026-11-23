@@ -6,12 +6,15 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/controller/humanidentity"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/metrics"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -37,9 +40,10 @@ const (
 type TeamReconciler struct {
 	client.Client
 
-	Provisioner   service.WorkerProvisioner
-	Deployer      service.WorkerDeployer
-	ManagerConfig *service.ManagerConfigStore // nil in incluster mode
+	Provisioner         service.WorkerProvisioner
+	Deployer            service.WorkerDeployer
+	ManagerConfig       *service.ManagerConfigStore // nil in incluster mode
+	ObservabilityReader client.Reader
 
 	// DefaultRuntime is forwarded into MemberDeps.DefaultRuntime for every
 	// team member this reconciler converges. Sourced from
@@ -330,6 +334,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
 		TeamName:             teamRuntimeName,
+		TeamAliasName:        teamRoomAliasName(t),
 		LeaderName:           leaderRuntimeName,
 		LeaderCredentialName: leaderRef.Name,
 		WorkerNames:          workerRuntimeNames,
@@ -400,13 +405,19 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		}
 
 		// Leader coordination context
+		hb := agentconfig.ResolveLLMHeartbeat(leaderMember.worker.Spec.LlmHeartbeatEnabled,
+			&agentconfig.HeartbeatConfig{Enabled: t.Spec.HeartbeatEvery != "" && t.Spec.HeartbeatEvery != "0m", Every: t.Spec.HeartbeatEvery})
+		heartbeatEvery := ""
+		if hb.Enabled {
+			heartbeatEvery = hb.Every
+		}
 		if err := r.Deployer.InjectCoordinationContext(ctx, service.CoordinationDeployRequest{
 			LeaderName:         leaderRuntimeName,
 			Role:               RoleTeamLeader.String(),
 			TeamName:           teamRuntimeName,
 			TeamRoomID:         rooms.TeamRoomID,
 			LeaderDMRoomID:     rooms.LeaderDMRoomID,
-			HeartbeatEvery:     t.Spec.HeartbeatEvery,
+			HeartbeatEvery:     heartbeatEvery,
 			WorkerIdleTimeout:  "",
 			TeamWorkers:        teamWorkerEntries,
 			TeamAdminID:        teamAdminMatrixID(derivedTeam),
@@ -417,14 +428,13 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 		}
 
 		// Leader heartbeat injection
-		if t.Spec.HeartbeatEvery != "" {
-			if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
-				WorkerName: leaderRuntimeName,
-				Enabled:    true,
-				Every:      t.Spec.HeartbeatEvery,
-			}); err != nil {
-				logger.Error(err, "leader heartbeat config injection failed (non-fatal)")
-			}
+		if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
+			WorkerName: leaderRuntimeName,
+			Runtime:    leaderRuntime,
+			Enabled:    hb.Enabled,
+			Every:      hb.Every,
+		}); err != nil {
+			logger.Error(err, "leader heartbeat config injection failed (non-fatal)")
 		}
 	}
 
@@ -456,10 +466,6 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 			logger.Error(err, "worker coordination context injection failed (non-fatal)", "worker", rm.runtimeName)
 		}
 	}
-	if err := r.deployTeamRuntimeConfigs(ctx, derivedTeam, members, leaderRef.Name, teamRuntimeName, leaderRuntimeName, rooms); err != nil {
-		return r.failTeam(ctx, t, patchBase, err.Error())
-	}
-
 	// 6. Channel authorization
 	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() {
 		managerMatrixID := r.ManagerConfig.MatrixUserID("manager")
@@ -520,6 +526,11 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 				logger.Error(err, "channel policy injection failed (non-fatal)", "worker", rm.runtimeName)
 			}
 		}
+	}
+
+	// Publish the standard transport after the current Team policy is applied.
+	if err := r.deployTeamRuntimeConfigs(ctx, derivedTeam, members, leaderRef.Name, teamRuntimeName, leaderRuntimeName, rooms); err != nil {
+		return r.failTeam(ctx, t, patchBase, err.Error())
 	}
 
 	// 7. Status aggregation
@@ -657,10 +668,19 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 	rooms *service.TeamRoomResult,
 ) error {
 	roster := runtimeConfigTeamMembers(t, members, leaderName)
+	tracing, err := observability.ReadRuntimeSettings(ctx, r.ObservabilityReader, t.Namespace)
+	if err != nil {
+		return fmt.Errorf("read team Worker observability configuration: %w", err)
+	}
 	for _, member := range members {
 		// Skip members being deleted — their runtime config no longer needs
 		// updating and the model provider may already have been removed.
 		if !member.worker.DeletionTimestamp.IsZero() {
+			continue
+		}
+		// The Worker publishes its first runtime config before updating status.
+		// Wait for that Matrix identity before replacing the config with Team context.
+		if member.worker.Status.MatrixUserID == "" {
 			continue
 		}
 		runtime := backend.ResolveRuntime(member.worker.Spec.Runtime, r.DefaultRuntime)
@@ -668,7 +688,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 		if member.worker.Spec.DeployMode != nil {
 			deployMode = *member.worker.Spec.DeployMode
 		}
-		if !backend.UsesMemberRuntimeConfig(runtime) && runtime != backend.RuntimeCopaw && deployMode != v1beta1.DeployModeEdge {
+		if !backend.ValidRuntime(runtime) && deployMode != v1beta1.DeployModeEdge {
 			continue
 		}
 		role := RoleTeamWorker
@@ -696,6 +716,7 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			Generation:        member.worker.Generation,
 			Spec:              spec,
 			SubagentModel:     resolveSubagentModel(member.worker.Spec.SubagentModel, t.Spec.SubagentModel),
+			Observability:     tracing,
 			AIGatewayURL:      aiGatewayURL,
 			MatrixUserID:      member.worker.Status.MatrixUserID,
 			PersonalRoomID:    member.worker.Status.RoomID,
@@ -707,6 +728,13 @@ func (r *TeamReconciler) deployTeamRuntimeConfigs(
 			TeamAdminName:     teamAdminName(t),
 			TeamAdminMatrixID: teamAdminMatrixID(t),
 			TeamMembers:       roster,
+		}
+		if backend.UsesMemberRuntimeConfig(runtime) && deployMode != v1beta1.DeployModeEdge {
+			policy := r.teamChannelPolicy(t, members, leaderName, member, role)
+			req.MatrixAllowLists = &policy
+		}
+		if role == RoleTeamLeader {
+			req.Heartbeat = &agentconfig.HeartbeatConfig{Enabled: t.Spec.HeartbeatEvery != "" && t.Spec.HeartbeatEvery != "0m", Every: t.Spec.HeartbeatEvery}
 		}
 		if deployMode == v1beta1.DeployModeEdge {
 			req.Runtime = runtimeRemoteManagedLocal
@@ -765,10 +793,7 @@ func runtimeConfigTeamMembers(t *v1beta1.Team, members []teamWorkerMember, leade
 	return roster
 }
 
-type teamChannelAllowLists struct {
-	GroupAllowFrom []string
-	DMAllowFrom    []string
-}
+type teamChannelAllowLists = service.RuntimeMatrixAllowLists
 
 func teamMemberStatusSnapshot(member teamWorkerMember, role MemberRole) v1beta1.TeamMemberStatus {
 	ms := v1beta1.TeamMemberStatus{Name: member.ref.Name, Role: role.String()}
@@ -836,9 +861,31 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		}
 	}
 
+	if r.ManagerConfig != nil && r.ManagerConfig.Enabled() && !backend.UsesMemberRuntimeConfig(runtime) {
+		if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
+			logger.Error(err, "failed to revoke Manager groupAllowFrom for detached member (non-fatal)", "worker", runtimeName)
+		}
+		var systemAdminID string
+		if r.SystemAdminUser != "" {
+			systemAdminID = r.ManagerConfig.MatrixUserID(r.SystemAdminUser)
+		}
+		standaloneAllowFrom := uniqueTeamStrings([]string{r.ManagerConfig.MatrixUserID("manager"), systemAdminID, teamAdminMatrixID(t)})
+		if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
+			WorkerName:     runtimeName,
+			GroupAllowFrom: standaloneAllowFrom,
+			DMAllowFrom:    standaloneAllowFrom,
+		}); err != nil {
+			logger.Error(err, "failed to reset worker channel policy (non-fatal)", "worker", runtimeName)
+		}
+	}
+
 	aiGatewayURL, resolveErr := r.runtimeConfigAIGatewayURL(ctx, w.Spec, w.Name)
 	if resolveErr != nil {
 		logger.Error(resolveErr, "failed to resolve worker model provider for runtime config reset", "worker", runtimeName)
+	}
+	tracing, err := observability.ReadRuntimeSettings(ctx, r.ObservabilityReader, w.Namespace)
+	if err != nil {
+		return fmt.Errorf("read detached Worker observability configuration: %w", err)
 	}
 	if err := r.Deployer.DeployMemberRuntimeConfig(ctx, service.MemberRuntimeConfigDeployRequest{
 		Name:            w.Name,
@@ -848,6 +895,7 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		Generation:      w.Generation,
 		Spec:            w.Spec,
 		SubagentModel:   w.Spec.SubagentModel,
+		Observability:   tracing,
 		AIGatewayURL:    aiGatewayURL,
 		MatrixUserID:    w.Status.MatrixUserID,
 		PersonalRoomID:  w.Status.RoomID,
@@ -864,24 +912,6 @@ func (r *TeamReconciler) detachTeamMember(ctx context.Context, t *v1beta1.Team, 
 		if err := r.Provisioner.InviteToRoom(ctx, w.Status.RoomID, managerMatrixID); err != nil {
 			return fmt.Errorf("restore Manager to Worker %q personal room: %w", w.Name, err)
 		}
-	}
-	if backend.UsesMemberRuntimeConfig(runtime) {
-		return nil
-	}
-	if err := r.ManagerConfig.UpdateManagerGroupAllowFrom(r.ManagerConfig.MatrixUserID(runtimeName), false); err != nil {
-		logger.Error(err, "failed to revoke Manager groupAllowFrom for detached member (non-fatal)", "worker", runtimeName)
-	}
-	var systemAdminID string
-	if r.SystemAdminUser != "" {
-		systemAdminID = r.ManagerConfig.MatrixUserID(r.SystemAdminUser)
-	}
-	standaloneAllowFrom := uniqueTeamStrings([]string{managerMatrixID, systemAdminID, teamAdminMatrixID(t)})
-	if err := r.Deployer.InjectChannelPolicy(ctx, service.InjectChannelPolicyRequest{
-		WorkerName:     runtimeName,
-		GroupAllowFrom: standaloneAllowFrom,
-		DMAllowFrom:    standaloneAllowFrom,
-	}); err != nil {
-		logger.Error(err, "failed to reset worker channel policy (non-fatal)", "worker", runtimeName)
 	}
 	return nil
 }
@@ -1057,8 +1087,9 @@ func (r *TeamReconciler) handleDeleteTeam(ctx context.Context, t *v1beta1.Team) 
 			if !backend.UsesMemberRuntimeConfig(runtime) {
 				if err := r.Deployer.InjectHeartbeatConfig(ctx, service.InjectHeartbeatRequest{
 					WorkerName: leaderRN,
-					Enabled:    false,
-					Every:      "",
+					Runtime:    runtime,
+					Enabled:    leaderW.Spec.LlmHeartbeatEnabled != nil && *leaderW.Spec.LlmHeartbeatEnabled,
+					Every:      "30m",
 				}); err != nil {
 					logger.Error(err, "failed to remove leader heartbeat config (non-fatal)")
 				}
@@ -1085,7 +1116,7 @@ func (r *TeamReconciler) handleDeleteTeam(ctx context.Context, t *v1beta1.Team) 
 	// clean aliases.
 	leaderRuntimeName := r.teamLeaderRuntimeName(ctx, t, leaderRef)
 	r.archiveTeamRooms(ctx, t, teamRuntimeName, leaderRuntimeName)
-	if err := r.Provisioner.DeleteTeamRoomAliases(ctx, teamRuntimeName, leaderRuntimeName); err != nil {
+	if err := r.Provisioner.DeleteTeamRoomAliases(ctx, teamRoomAliasName(t), leaderRuntimeName); err != nil {
 		logger.Error(err, "failed to delete team room aliases (non-fatal)")
 	}
 
@@ -1117,6 +1148,14 @@ func (r *TeamReconciler) teamLeaderRuntimeName(ctx context.Context, t *v1beta1.T
 		}
 	}
 	return leaderRef.Name
+}
+
+func teamRoomAliasName(t *v1beta1.Team) string {
+	name := t.Spec.EffectiveTeamName(t.Name)
+	if strings.IndexFunc(name, unicode.IsSpace) >= 0 {
+		return t.Name
+	}
+	return name
 }
 
 func (r *TeamReconciler) archiveTeamRooms(ctx context.Context, t *v1beta1.Team, teamRuntimeName, leaderRuntimeName string) {

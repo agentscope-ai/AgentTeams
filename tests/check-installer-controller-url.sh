@@ -7,7 +7,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-install_sh="$root/install/agentteams-install.sh"
+install_sh="$root/.installer-source/public/install.sh"
 helm_ctrl="$root/helm/agentteams/templates/controller/deployment.yaml"
 
 fail() {

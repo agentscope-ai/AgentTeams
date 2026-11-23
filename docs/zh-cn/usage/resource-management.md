@@ -95,8 +95,8 @@ spec:
 |------|------|------|--------|------|
 | `metadata.name` | string | 是 | — | Worker 名称，全局唯一 |
 | `spec.model` | string | 是 | — | LLM 模型 ID，如 `claude-sonnet-4-6`、`qwen3.5-plus` |
-| `spec.runtime` | string | 否 | `openclaw` | 当前 Worker CRD 接受 `openclaw`、`qwenpaw`、`copaw`（旧版兼容）或 `hermes` |
-| `spec.image` | string | 否 | — | 自定义镜像；留空时 controller 按 runtime 使用 `AGENTTEAMS_WORKER_IMAGE`、`AGENTTEAMS_COPAW_WORKER_IMAGE`、`AGENTTEAMS_QWENPAW_WORKER_IMAGE` 或 `AGENTTEAMS_HERMES_WORKER_IMAGE`。当前 Chart 未提供 `worker.defaultImage.qwenpaw`，在 Kubernetes 中使用 `qwenpaw` 时应显式设置本字段。 |
+| `spec.runtime` | string | 否 | 安装/后端默认值 | `openclaw`、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`、`codex` 或旧版 `copaw`；Helm 默认 OpenClaw，本地安装器默认 QwenPaw。 |
+| `spec.image` | string | 否 | — | 自定义镜像；留空时 Controller 使用对应 runtime 的镜像配置。当前 Chart 为六种现行 Harness 提供 `worker.defaultImage` 配置；旧版 CoPaw 必须显式固定旧仓库与 tag。 |
 | `spec.identity` | string | 否 | — | Worker 公开身份（OpenClaw：生成 IDENTITY.md；QwenPaw：按实现合并入 SOUL.md） |
 | `spec.soul` | string | 否 | — | Worker 人格与价值观设定，用于生成 SOUL.md |
 | `spec.agents` | string | 否 | — | Agent 行为规则，用于生成 AGENTS.md |
@@ -110,7 +110,7 @@ spec:
 
 修改 `spec.resources` 会更新 Worker 规格并重建受管容器或 Pod。不要在 Worker 正在处理任务时修改资源配置。
 
-Controller 内部已经包含 OpenHuman 后端和镜像配置，但当前发布的 Worker CRD enum 不接受 `openhuman`。在业务代码另行统一该契约前，不要在 Worker YAML 中设置 `spec.runtime: openhuman`。
+当前 Worker CRD 接受 OpenHuman 和 Codex。Chart 默认值及旧版 CoPaw 处理见[运行时与镜像配置](deployment/kubernetes.md#34-默认-worker-runtime)。
 
 ### identity / soul / agents 与 package 的关系
 
@@ -167,10 +167,10 @@ Manager 会先上传并验证 `SKILL.md`，再更新 `spec.skills`。QwenPaw Wor
      -F "file=@./marketing-briefing.zip"
    ```
 
-   ZIP 必须只含**一个顶层目录**（技能根目录，目录名即技能名），其根下必须有 `SKILL.md`，且 frontmatter `name` 与目录名一致。上限 64 MB（ZIP 与解压后均计）。上传会做内容扫描（尽力而为）：命中阻断（CRITICAL/HIGH）返回 `422` 并带 findings；扫描不可用则继续并上报 `scan.status: "skipped"`。重复上传同一技能为**精确替换**（新版删掉的旧文件会被删掉）。`scope=deployment`（仅 admin）改发布到 `agents/global/skills/`。
+   ZIP 必须只含**一个顶层目录**（技能根目录，目录名即技能名），其根下必须有 `SKILL.md`，且 frontmatter `name` 与目录名一致。上限 64 MB（ZIP 与解压后均计）。上传会做内容扫描（尽力而为）：命中阻断（CRITICAL/HIGH）返回 `422` 并带 findings；扫描不可用则继续并上报 `scan.status: "skipped"`。重复上传同一技能为**精确替换**（新版删掉的旧文件会被删掉）。`scope=deployment`（管理员或平台 Manager）改发布到 `agents/global/skills/`。
 2. **指派**：更新 Worker 的 `spec.skills`（API、Dashboard，或经 Manager）。下次 reconcile 时 Controller 会**再次、强制地**扫描该技能（扫描被阻断或不可用则不复制，并在 Worker 状态里记为非阻塞 warning），然后把它拷入 `agents/<worker>/skills/<name>/`；Worker 的同步循环会在同步周期内把它物化进原生工作空间。
 
-team leader 可以浏览本团队目录（`GET /api/v1/skills?team=…`）作为指派面，但**不能发布**；manager 与 worker 主体一律不能发布。同名冲突时**团队层优先于 builtin 库**。完整契约、扫描语义与 k8s 模式限制见 [团队技能设计](../design/team-skills.md)。
+team leader 可以浏览本团队目录（`GET /api/v1/skills?team=…`）作为指派面。技能发布按上述角色与范围授权。同名冲突时**团队层优先于 builtin 库**。完整契约、扫描语义与 k8s 模式限制见 [团队技能设计](../design/team-skills.md)。
 
 ### 带自定义包的 Worker
 
@@ -264,7 +264,7 @@ spec:
 | `spec.peerMentions` | bool | 否 | 为 `true`（默认）时，团队 Worker 可在群房间中互相 @mention |
 | `spec.channelPolicy` | object | 否 | 团队级群聊/DM 允许与拒绝列表覆盖（字段形状与 Worker 的 `channelPolicy` 相同） |
 | `spec.admin` | object | 否 | 团队专属人类管理员（须含 `name`；可选 `matrixUserId`）。省略则使用全局 Admin |
-| `spec.humanMembers` | []object | 否 | 额外的 Team 真人成员。当前版本支持 `role: coordinator`，可进入 Team Room 并像 Team Admin 一样在其中分派任务 |
+| `spec.humanMembers` | []object | 否 | 额外的 Team 真人成员。`coordinator` 可分派任务，`member` 作为普通成员加入 Team Room |
 | `spec.workerMembers` | []object | 是 | 引用已存在的 Worker CR；必须且只能有一项的 `role` 为 `team_leader` |
 | `spec.workerMembers[].name` | string | 是 | 被引用的 Worker 资源名 |
 | `spec.workerMembers[].role` | string | 是 | `team_leader` 或 `worker` |
@@ -367,7 +367,7 @@ spec:
 
 ### Team Members
 
-使用 `spec.humanMembers` 添加属于 Team 的真人成员，这些成员不是 Worker。第一版支持的成员角色是 `coordinator`：成员会被邀请进入 Team Room，Leader/Worker 会把他们在 Team Room 中的 @mention 当作授权任务分派处理。Leader DM 仍只保留 Team Admin 和 Leader。
+使用 `spec.humanMembers` 添加属于 Team 的真人成员，这些成员不是 Worker。`coordinator`（默认）可在 Team Room 中通过 @mention 向 Leader/Worker 分派任务；`member` 是普通成员，可加入 Team Room，但不获得协调用户的任务分派权限。Leader DM 仍只保留 Team Admin 和 Leader。更新团队时，`admin: null` 可移除显式指定的管理员，省略 `admin` 则保留原值。
 
 ```yaml
 spec:
@@ -421,7 +421,7 @@ spec:
 |------|------|------|--------|------|
 | `metadata.name` | string | 是 | — | Manager 资源名（主实例常为 `default`） |
 | `spec.model` | string | 是 | — | LLM 模型 ID |
-| `spec.runtime` | string | 否 | 安装或后端默认值 | **OpenClaw**（`openclaw`）或 **CoPaw/QwenPaw**（`qwenpaw`；`copaw` 是旧版兼容别名）。**不支持**将 Hermes 作为 Manager 运行时。 |
+| `spec.runtime` | string | 否 | 安装/后端默认值 | `openclaw`、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`；`copaw` 为 QwenPaw 旧别名。Manager CRD 不接受 Codex。 |
 | `spec.image` | string | 否 | — | 自定义 Manager 镜像；留空则用部署默认值 |
 | `spec.soul` | string | 否 | — | 自定义 SOUL.md |
 | `spec.agents` | string | 否 | — | 自定义 AGENTS.md |

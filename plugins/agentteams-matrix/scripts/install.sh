@@ -5,10 +5,10 @@
 # plugin into $HERMES_HOME; QwenPaw copies the channel plugin).
 #
 # Usage:
-#   install.sh [--adapter <qwenpaw|openclaw|hermes>] [adapter options]
+#   install.sh [--adapter <openclaw|hermes>] [adapter options]
 #
 # Without --adapter, the first detected runtime is used (search order:
-# qwenpaw, openclaw, hermes). A runtime whose binary is on PATH is
+# openclaw, hermes). A runtime whose binary is on PATH is
 # detected as before; OpenClaw additionally counts as present when its
 # effective config exists — $OPENCLAW_CONFIG_PATH (exported by the
 # Worker entrypoint), then the legacy $OPENCLAW_CONFIG, then
@@ -16,7 +16,7 @@
 # config path is detected without the binary on PATH. Adapter options
 # given after the adapter name (e.g. --config, --dry-run for the
 # openclaw adapter) are forwarded to the selected adapter's
-# install.sh; the qwenpaw and hermes adapters take no options.
+# install.sh; the hermes adapter takes no options.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,10 +29,9 @@ FORWARD=()
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--adapter <qwenpaw|openclaw|hermes>] [adapter options]
+Usage: install.sh [--adapter <openclaw|hermes>] [adapter options]
 
 Adapters:
-  qwenpaw    copy the matrix channel plugin into the QwenPaw working dir
              (takes no options)
   openclaw   project channels.matrix into ~/.openclaw/openclaw.json
              (options: --config, --dry-run, --with-credentials)
@@ -43,7 +42,7 @@ Adapters:
              $HERMES_HOME/.agentteams/agentteams-matrix/installed.json
              (takes no options; set HERMES_HOME to relocate)
 
-Without --adapter, the first detected runtime (search order: qwenpaw,
+Without --adapter, the first detected runtime (search order:
 openclaw, hermes) is installed. OpenClaw counts as present when its
 effective config exists ($OPENCLAW_CONFIG_PATH, then $OPENCLAW_CONFIG,
 then ~/.openclaw/openclaw.json), even without the binary on PATH.
@@ -54,7 +53,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --adapter)
       if [ $# -lt 2 ]; then
-        echo "ERROR: --adapter requires a value (qwenpaw, openclaw, or hermes)" >&2
+        echo "ERROR: --adapter requires a value (openclaw or hermes)" >&2
         exit 2
       fi
       ADAPTER="$2"
@@ -86,7 +85,6 @@ openclaw_effective_config() {
 
 runtime_present() {
   case "$1" in
-    qwenpaw) command -v qwenpaw >/dev/null 2>&1 ;;
     openclaw)
       # -e follows symlinks, so a link to an existing canonical file
       # counts; a dangling link does not.
@@ -115,10 +113,6 @@ reject_hermes_projector_flags() {
 install_adapter() {
   local adapter="$1"
   if [ "${#FORWARD[@]}" -gt 0 ]; then
-    if [ "${adapter}" = "qwenpaw" ]; then
-      echo "ERROR: the qwenpaw adapter takes no options; drop: ${FORWARD[*]}" >&2
-      exit 2
-    fi
     if [ "${adapter}" = "hermes" ]; then
       reject_hermes_projector_flags
       echo "ERROR: the hermes adapter takes no options; drop: ${FORWARD[*]}" >&2
@@ -132,9 +126,9 @@ install_adapter() {
 
 if [ -n "${ADAPTER}" ]; then
   case "${ADAPTER}" in
-    qwenpaw|openclaw|hermes) ;;
+    openclaw|hermes) ;;
     *)
-      echo "ERROR: unknown adapter: ${ADAPTER} (expected qwenpaw, openclaw, or hermes)" >&2
+      echo "ERROR: unknown adapter: ${ADAPTER} (expected openclaw or hermes)" >&2
       usage >&2
       exit 2
       ;;
@@ -147,7 +141,7 @@ if [ -n "${ADAPTER}" ]; then
 fi
 
 ran=0
-for candidate in qwenpaw openclaw hermes; do
+for candidate in openclaw hermes; do
   if runtime_present "${candidate}"; then
     install_adapter "${candidate}"
     ran=1
@@ -155,6 +149,6 @@ for candidate in qwenpaw openclaw hermes; do
 done
 
 if [ "${ran}" -eq 0 ]; then
-  echo "ERROR: no supported Matrix channel runtime found; expected qwenpaw, openclaw, or hermes" >&2
+  echo "ERROR: no supported Matrix channel runtime found; expected openclaw or hermes" >&2
   exit 1
 fi

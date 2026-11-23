@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 
 import json
+import os
 
 import re
 
@@ -47,7 +48,7 @@ from mcp.lifecycle.signal_events import _emit_signal_event, _list_events, _proje
 # are refs proxies), so this direction of the pair is cycle-free.
 from mcp.lifecycle.taskflow import _task_result_from_meta, _validate_task_result_status
 from mcp.lifecycle.transitions import _append_transition_history, _transition_actor
-from mcp.room.notify import _send_project_completion_notification
+from mcp.room.notify import _send_project_completion_notification, _send_requester_completion
 from mcp.room.rooms import _runtime_team_room_id
 from mcp.transport.route import _normalize_reply_route, _reply_route_from_requester
 from .state import (
@@ -191,15 +192,23 @@ def _completion_artifact_registered(arguments: dict[str, Any], task_id: str) -> 
     """C-1: a completed task counts only if a real artifact was registered.
 
     "Registered" means the task's result artifact exists in the workspace
-    (`shared/tasks/<task_id>/result.md`) or the task record carries a
+    (the canonical task report, defaulting to `result.md`) or the task record carries a
     validated result with nonblank task-scoped deliverables. The status alone
     is not evidence of delivery — that is exactly the fake-completion
     loophole this gate removes.
     """
-    if (_task_dir(arguments, task_id) / "result.md").is_file():
-        return True
     task_meta = _load_authoritative_task_optional(arguments, task_id)
+    if not task_meta:
+        return (_task_dir(arguments, task_id) / "result.md").is_file()
     if not isinstance(task_meta, dict) or task_meta.get("task_id") != task_id:
+        return False
+    from mcp.common.paths import _task_result_path
+    try:
+        if _task_result_path(arguments, task_id, task_meta.get("result_path") or None)[1].is_file():
+            return True
+    except ValueError:
+        return False
+    if task_meta.get("result_path"):
         return False
     result, errors = _task_result_from_meta(task_meta)
     return not errors and any(path.strip() for path in result["deliverables"])
@@ -241,12 +250,35 @@ def _resolve_task_continuation(task: dict[str, Any], resolution: str) -> None:
     task["continuation"] = continuation
 
 
-def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any], *, main_task_id: str = "") -> dict[str, Any]:
     if _role(arguments) != "leader":
         raise ValueError("accept_task_result requires leader role")
-    project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
+    project_id = str(payload.get("projectId") or payload.get("project_id") or "")
+    if main_task_id:
+        from mcp.lifecycle.plans import _load_main_plan, _sync_main_plan
+        project = _load_main_plan(arguments, main_task_id)
+        if project.get("status") != "in_progress":
+            raise ValueError("acceptance requires an active main task")
+        project_id = str(project.get("project_id") or "")
+        state_path = _task_state_path(arguments, main_task_id)
+        plan_dir = _task_dir(arguments, main_task_id)
+        report_path = f"shared/tasks/{main_task_id}/result.md"
+        def sync_plan():
+            node = next(n for n in project["tasks"] if n["task_id"] == task_id)
+            return _sync_main_plan(arguments, main_task_id, task_update=(task_id, {"status": node["status"]}))
+        def write_plan():
+            pass  # The main Task's spec.md and tasks metadata are the plan.
+    else:
+        project_id = _safe_id(project_id, "projectId")
+        project = _read_json(_project_state_path(arguments, project_id))
+        state_path = _project_state_path(arguments, project_id)
+        plan_dir = _project_dir(arguments, project_id)
+        report_path = f"shared/projects/{project_id}/result.md"
+        def sync_plan():
+            return _sync_project(arguments, project_id)
+        def write_plan():
+            _write_project_plan(plan_dir, project)
     task_id = _safe_id(payload.get("taskId") or payload.get("task_id"), "taskId")
-    project = _read_json(_project_state_path(arguments, project_id))
     if not project:
         raise ValueError("project not found")
     task_meta = _read_json(_task_state_path(arguments, task_id))
@@ -269,6 +301,8 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             "protocol enforcement is enabled",
         )
     task_project_id = _first_text(task_meta.get("project_id"), task_meta.get("projectId"))
+    if main_task_id and task_meta.get("main_task_id") != main_task_id:
+        raise ValueError("task does not belong to this main task")
     if task_project_id and task_project_id != project_id:
         raise ValueError("task does not belong to project")
     if task_meta:
@@ -331,12 +365,14 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
     if not accepted and node_status == "completed":
         result_status_value = "REVISION_NEEDED"
         node_status = "revision"
+    if node_status == "completed" and any(node.get("parent_task_id") == task_id and node.get("status") != "completed" for node in project.get("tasks", [])):
+        raise ValueError(f"task {task_id} has unfinished subtasks")
     current_node_status = _project_task_status(project, task_id)
     if current_node_status in TERMINAL_TASK_STATUSES:
         if current_node_status != node_status:
             raise ValueError(f"task result already decided as {current_node_status}")
         try:
-            _write_project_plan(_project_dir(arguments, project_id), project)
+            write_plan()
         except OSError as exc:
             return _persisted_state_failure_result(
                 tool="projectflow",
@@ -345,7 +381,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
                 task=task_meta or None,
                 project=project,
             )
-        if not _sync_project(arguments, project_id):
+        if not sync_plan():
             return _sync_failure_result({
                 "tool": "projectflow",
                 "action": "accept_task_result",
@@ -395,6 +431,8 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             "submissionId": persisted_submission_id or None,
             "nodeStatus": current_node_status,
             "accepted": current_node_status == "completed",
+            "readyNodes": _ready_nodes(project) if project.get("plan_type") != "loop" else [],
+            "readyLoopNodes": _ready_loop_nodes(project) if project.get("plan_type") == "loop" else [],
             "reused": True,
             "repairedTaskFence": repaired_task_fence,
             "publishedArtifacts": [],
@@ -436,14 +474,16 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
                 if isinstance(item, dict) and not item.get("resolved"):
                     item["resolved"] = True
     result_status = str(result_status_value or "SUCCESS")
-    if node_status == "completed":
+    parents = {node.get("parent_task_id") for node in project.get("tasks", []) if node.get("parent_task_id")}
+    execution_tasks = [node for node in project.get("tasks", []) if node.get("task_id") not in parents]
+    if node_status == "completed" and all(node.get("status") == "completed" for node in execution_tasks):
         project["requester_report"] = {
             "pending": True,
             "reason": "task_result_accepted",
             "task_id": task_id,
             "result_status": result_status,
             "summary": str(payload.get("summary") or ""),
-            "report_path": f"shared/projects/{project_id}/result.md",
+            "report_path": report_path,
         }
     else:
         requester_report = project.get("requester_report") if isinstance(project.get("requester_report"), dict) else {}
@@ -452,7 +492,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             requester_report["reason"] = f"task_result_{node_status}"
             project["requester_report"] = requester_report
     try:
-        _write_json(_project_state_path(arguments, project_id), project)
+        _write_json(state_path, project)
     except OSError as exc:
         if legacy_identity_persisted:
             return _persisted_state_failure_result(
@@ -467,7 +507,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             error=exc,
         )
     try:
-        _write_project_plan(_project_dir(arguments, project_id), project)
+        write_plan()
     except OSError as exc:
         return _persisted_state_failure_result(
             tool="projectflow",
@@ -476,7 +516,7 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
             task=task_meta or None,
             project=project,
         )
-    if not _sync_project(arguments, project_id):
+    if not sync_plan():
         return _sync_failure_result({
             "tool": "projectflow",
             "action": "accept_task_result",
@@ -537,10 +577,13 @@ def _accept_task_result(arguments: dict[str, Any], payload: dict[str, Any]) -> d
         "submissionId": persisted_submission_id or None,
         "nodeStatus": node_status,
         "accepted": node_status == "completed",
+        "readyNodes": _ready_nodes(project) if project.get("plan_type") != "loop" else [],
+        "readyLoopNodes": _ready_loop_nodes(project) if project.get("plan_type") == "loop" else [],
         "publishedArtifacts": published_artifacts,
         "notificationNeeded": _notification_needed(
             "accept_task_result",
             project,
+            task_meta or None,
             summary=f"accept_task_result: {task_id} -> {node_status}",
             include_reply_route=requester_report_pending,
         ),
@@ -638,6 +681,9 @@ def _project_id_for_pull(arguments: dict[str, Any], payload: dict[str, Any]) -> 
 # with a retryable error instead. Read-only actions tolerate a failed pull
 # and serve local state.
 _PROJECTFLOW_MUTATING_ACTIONS = frozenset({
+    "advance_project",
+    "plan_dag",
+    "plan_loop",
     "accept_task_result",
     "record_loop_iteration",
     "pause_project",
@@ -645,6 +691,113 @@ _PROJECTFLOW_MUTATING_ACTIONS = frozenset({
     "complete_project",
     "replan_project",
 })
+
+
+def _advance_project(arguments: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+    if _role(arguments) != "leader":
+        raise ValueError("advance_project requires Leader role")
+    if project.get("dispatch_mode") != "automatic":
+        return {"ok": True, "assignments": [], "skipped": "manual dispatch"}
+    paused, _ = _loop_pause_state(project)
+    if paused or project.get("status") not in {"active", "running"}:
+        raise ValueError("automatic dispatch requires an active, unpaused project")
+    assignments = []
+    for node in _ready_nodes(project):
+        if node.get("status") != "planned":
+            continue
+        if not node.get("spec") or not node.get("assigned_to"):
+            raise ValueError("automatic dispatch requires a persisted spec and assignee")
+        result = refs.resolve("_taskflow")({**arguments, "action": "delegate_task", "role": "leader", "decisionClass": "r3", "payload": {
+            "projectId": project["project_id"], "taskId": node["task_id"], "assignedTo": node["assigned_to"],
+            "roomId": project["room_id"], "spec": node["spec"]}})
+        assignments.append(result)
+        if not result.get("ok"):
+            return {"ok": False, "assignments": assignments, "retryable": result.get("retryable", False), "error": result.get("error")}
+    return {"ok": True, "assignments": assignments}
+
+
+def _start_project(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    if _role(arguments) != "leader":
+        raise ValueError("start_project requires Leader role")
+    project_id = _safe_id(payload.get("projectId"), "projectId")
+    raw_tasks = payload.get("tasks")
+    if not isinstance(raw_tasks, list) or not raw_tasks:
+        raise ValueError("start_project requires a nonempty tasks plan")
+    common_spec = payload.get("spec", "")
+    if not isinstance(common_spec, str):
+        raise ValueError("start_project spec must be text")
+    if common_spec.strip():
+        parents = {t.get("parentTaskId") or t.get("parent_task_id") for t in raw_tasks if isinstance(t, dict)}
+        raw_tasks = [
+            {**t, "spec": "# Original request\n" + common_spec.strip() + "\n\n# Your assignment\n" + t["spec"]}
+            if isinstance(t, dict) and (t.get("taskId") or t.get("task_id")) not in parents
+            and isinstance(t.get("spec"), str) and t["spec"].strip() else t
+            for t in raw_tasks
+        ]
+    tasks = _normalize_tasks(raw_tasks, {})
+    _validate_task_graph(tasks)
+    if payload.get("dispatchMode") == "automatic":
+        parents = {t.get("parent_task_id") for t in tasks}
+        missing = [t["task_id"] + " (" + ", ".join(
+            field for field, key in (("spec", "spec"), ("assignedTo", "assigned_to")) if not t.get(key)
+        ) + ")" for t in tasks if t["task_id"] not in parents and (not t.get("spec") or not t.get("assigned_to"))]
+        if missing:
+            raise ValueError("automatic dispatch requires a spec and assignedTo for every execution task; missing: " + "; ".join(missing))
+        if os.getenv("TEAMHARNESS_COORDINATION_URL"):
+            from mcp.transport.coordination import native_team_members
+            members = native_team_members(str(payload.get("teamId") or _runtime_team_name()))
+            eligible = {identity for member in members if member.get("nativeCoordinationSupported") is True
+                        for identity in (member.get("name"), member.get("matrixUserID")) if identity}
+            unavailable = sorted({t["assigned_to"] for t in tasks if t["task_id"] not in parents and t["assigned_to"] not in eligible})
+            if unavailable:
+                raise ValueError("native coordination is unavailable for assignees: " + ", ".join(unavailable)
+                                 + "; supported registered assignees: " + ", ".join(sorted(eligible)))
+    specs = {str(t.get("taskId") or t.get("task_id")): str(t.get("spec") or "").strip() for t in raw_tasks}
+    existing = _read_json(_project_state_path(arguments, project_id))
+    if existing:
+        def shape(nodes):
+            return [(t["task_id"], t.get("assigned_to"), t.get("parent_task_id"), t.get("depends_on", []), t.get("spec", "")) for t in nodes]
+        if shape(existing.get("tasks", [])) != shape(tasks) or existing.get("requester") != payload.get("requester", ""):
+            raise ValueError("start_project retry must preserve the original plan and requester")
+        project = existing
+        room_id = str(project.get("room_id") or "")
+        if not room_id:
+            raise ValueError("existing project has no task room; resume it through normal project tools")
+    else:
+        ready = _ready_nodes({"tasks": tasks})
+        if any(not specs.get(t["task_id"]) or not t.get("assigned_to") for t in ready):
+            raise ValueError("each initially ready task requires spec and assignedTo")
+        from mcp.room.matrix import _assignee_matrix_id
+        invite = list(dict.fromkeys(_assignee_matrix_id(t.get("assigned_to", "")) for t in tasks if t.get("assigned_to")))
+        if "" in invite:
+            raise ValueError("assignedTo must resolve to a full Matrix ID in the runtime roster")
+        room = refs.resolve("_roomflow")({**arguments, "action": "create_task_room", "payload": {**payload, "invite": invite}})
+        if not room.get("ok"):
+            return {**room, "action": "start_project"}
+        room_id = room["roomId"]
+        created = _projectflow({**arguments, "action": "create_project", "payload": {**payload, "tasks": raw_tasks, "roomId": room_id}})
+        if not created.get("ok"):
+            return {**created, "action": "start_project", "roomId": room_id}
+        project = created["project"]
+    assignments = []
+    for node in _ready_nodes(project):
+        task_id = node["task_id"]
+        if node.get("status") != "planned" or not specs.get(task_id):
+            continue
+        result = refs.resolve("_taskflow")({**arguments, "action": "delegate_task", "role": "leader", "decisionClass": "r3", "payload": {
+            "projectId": project_id, "taskId": task_id, "assignedTo": node["assigned_to"],
+            "roomId": room_id, "spec": specs[task_id]}})
+        assignments.append(result)
+        if not result.get("ok"):
+            return {"ok": False, "tool": "projectflow", "action": "start_project", "roomId": room_id,
+                    "project": project, "assignments": assignments, "retryable": result.get("retryable", False), "error": result.get("error")}
+    project = _read_json(_project_state_path(arguments, project_id)) or project
+    # The caller just supplied these specs. Keep them durably for execution,
+    # without feeding the same full plan back into the next model turn.
+    receipt = {k: v for k, v in project.items() if k != "tasks"}
+    receipt["tasks"] = [{k: v for k, v in node.items() if k != "spec"} for node in project.get("tasks", [])]
+    return {"ok": True, "tool": "projectflow", "action": "start_project", "roomId": room_id,
+            "project": receipt, "assignments": assignments, "reused": bool(existing), "readyNodes": _ready_nodes(receipt)}
 
 
 def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -663,8 +816,12 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             # their write-back (_sync_project) could clobber a Controller
             # pause/resume/replan that this worker has not seen. Fail with a
             # retryable error; read actions tolerate the stale state.
-            if action in _PROJECTFLOW_MUTATING_ACTIONS:
+            if action in _PROJECTFLOW_MUTATING_ACTIONS or (action == "start_project" and _project_state_path(arguments, pid).exists()):
                 return _pull_failed_response("projectflow", action)
+        if action == "start_project":
+            return _start_project(arguments, payload)
+        if action == "advance_project":
+            return _advance_project(arguments, _read_json(_project_state_path(arguments, pid)))
         if action == "list_events":
             # Team-scoped read: no project id, so the pull block above is a
             # no-op for it (no projectId in the payload).
@@ -680,23 +837,42 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "status": "active",
                 "tasks": [],
             }
+            if "tasks" in payload:
+                if not isinstance(payload["tasks"], list):
+                    raise ValueError("tasks must be a list")
+                project["tasks"] = _normalize_tasks(payload["tasks"], {})
+                _validate_task_graph(project["tasks"])
+                project["plan_type"] = "dag"
+            if payload.get("roomId"):
+                project["room_id"] = _canonical_room_id(payload["roomId"])
+            if payload.get("dispatchMode") == "automatic":
+                project["dispatch_mode"] = "automatic"
             reply_route = _normalize_reply_route(payload.get("replyRoute") or payload.get("reply_route"))
             if not reply_route:
                 reply_route = _reply_route_from_requester(project["requester"])
             if reply_route:
                 project["reply_route"] = reply_route
+            requester_route = _normalize_reply_route(payload.get("requesterReplyRoute"))
+            if requester_route:
+                project["requester_reply_route"] = requester_route
             source_room_id = _source_room_id_from_payload(payload, reply_route)
             if source_room_id:
                 project["source_room_id"] = source_room_id
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
-            _sync_project(arguments, project_id)
+            if not _sync_project(arguments, project_id):
+                return _sync_failure_result({
+                    "tool": "projectflow",
+                    "action": action,
+                    "project": project,
+                }, action)
             return {
                 "ok": True,
                 "tool": "projectflow",
                 "action": action,
                 "project": project,
+                "readyNodes": _ready_nodes(project),
                 "notificationNeeded": _notification_needed(action, project),
             }
 
@@ -735,6 +911,9 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 "plan_type": "dag",
                 "tasks": [task_node],
             }
+            requester_route = _normalize_reply_route(payload.get("requesterReplyRoute"))
+            if requester_route:
+                project["requester_reply_route"] = requester_route
             reply_route = _normalize_reply_route(payload.get("replyRoute") or payload.get("reply_route"))
             if not reply_route:
                 reply_route = _reply_route_from_requester(project["requester"])
@@ -748,7 +927,12 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(_project_state_path(arguments, project_id), project)
             _write_project_plan(project_dir, project)
-            _sync_project(arguments, project_id)
+            if not _sync_project(arguments, project_id):
+                return _sync_failure_result({
+                    "tool": "projectflow",
+                    "action": action,
+                    "project": project,
+                }, action)
 
             task_dir = _task_dir(arguments, task_id)
             task_dir.mkdir(parents=True, exist_ok=True)
@@ -778,7 +962,15 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             return _resolve_project(arguments, payload)
 
         if action == "accept_task_result":
-            return _accept_task_result(arguments, payload)
+            result = _accept_task_result(arguments, payload)
+            if result.get("ok") and result.get("accepted"):
+                project = result.get("project") or {}
+                if project.get("dispatch_mode") == "automatic" and project.get("status") in {"active", "running"}:
+                    result["dispatch"] = _advance_project(arguments, project)
+                    if not result["dispatch"].get("ok"):
+                        return {**result, "ok": False, "retryable": True,
+                                "error": "result accepted; downstream dispatch needs retry"}
+            return result
 
         if action == "mark_requester_report_sent":
             return _mark_requester_report_sent(arguments, payload)
@@ -798,7 +990,12 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
-            _sync_project(arguments, project_id)
+            if not _sync_project(arguments, project_id):
+                return _sync_failure_result({
+                    "tool": "projectflow",
+                    "action": action,
+                    "project": project,
+                }, action)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -881,7 +1078,12 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             project_dir = _project_dir(arguments, project_id)
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
-            _sync_project(arguments, project_id)
+            if not _sync_project(arguments, project_id):
+                return _sync_failure_result({
+                    "tool": "projectflow",
+                    "action": action,
+                    "project": project,
+                }, action)
             return {
                 "ok": True,
                 "tool": "projectflow",
@@ -1110,11 +1312,22 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             }
 
         if action in {"pause_project", "resume_project", "complete_project"}:
+            report = payload.get("report") if action == "complete_project" else None
+            if report is not None and (_role(arguments) != "leader" or not isinstance(report, str) or not report.strip()):
+                raise ValueError("a final report requires Leader approval and nonempty report text")
             project_id = _safe_id(payload.get("projectId") or payload.get("project_id"), "projectId")
             state_path = _project_state_path(arguments, project_id)
             project = _read_json(state_path)
             if not project:
                 raise ValueError("project not found")
+            if action == "complete_project" and project.get("dispatch_mode") == "automatic" and report is None:
+                saved_report = _project_dir(arguments, project_id) / "result.md"
+                if not saved_report.is_file() or not saved_report.read_text(encoding="utf-8").strip():
+                    raise ValueError("automatic completion requires a final report; pass payload.report with your verified user report")
+            if report is not None:
+                paused, _ = _loop_pause_state(project)
+                if paused or project.get("status") not in {"active", "running", "completed"}:
+                    raise ValueError("a final report requires an active, unpaused project")
             if action == "pause_project":
                 project["status"] = "paused"
             elif action == "resume_project":
@@ -1148,6 +1361,16 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         )
                 else:
                     problems: list[str] = []
+                    parents = {task.get("parent_task_id") for task in tasks if isinstance(task, dict) and task.get("parent_task_id")}
+                    if report is not None:
+                        if any(not isinstance(task, dict) or task.get("status") in {"cancelled", "blocked", "revision"} for task in tasks):
+                            raise ValueError("a final report cannot override a cancelled or unresolved task")
+                        leaves = [task for task in tasks if task.get("task_id") not in parents]
+                        if not leaves or any(task.get("status") != "completed" or not _completion_artifact_registered(arguments, task["task_id"]) for task in leaves):
+                            raise ValueError("a final report requires every execution leaf to be accepted with artifacts")
+                        for node in tasks:
+                            if node.get("task_id") in parents:
+                                node["status"] = "completed"
                     for task in tasks:
                         if not isinstance(task, dict):
                             problems.append("<unknown> (invalid)")
@@ -1157,7 +1380,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                         if status != "completed":
                             problems.append(f"{task_id} (status={status or 'unknown'})")
                             continue
-                        if not _completion_artifact_registered(arguments, task_id):
+                        if task_id not in parents and not _completion_artifact_registered(arguments, task_id):
                             problems.append(f"{task_id} (artifact=missing)")
                     if problems:
                         raise ValueError(
@@ -1169,6 +1392,10 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     loop["status"] = "completed"
                     project["loop"] = loop
             project_dir = _project_dir(arguments, project_id)
+            if report is not None:
+                report_path = project_dir / "result.md"
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(report.strip() + "\n", encoding="utf-8")
             _write_json(state_path, project)
             _write_project_plan(project_dir, project)
             # P0 ordering (PR review 2026-09-14): the terminal state is
@@ -1218,13 +1445,16 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
                 project["projectNotification"] = _send_project_completion_notification(
                     arguments, project, project_id
                 )
-                if project.get("projectCompletionEventId"):
+                project["requesterNotification"] = _send_requester_completion(arguments, project, project_id)
+                if project.get("projectCompletionEventId") or project.get("requesterCompletionEventId"):
                     # Persist the recorded event id (and the notification
                     # result) so a retried complete_project reuses the
                     # event. If this write is lost, the stable txn id
                     # (project-<id>-success) makes the retry deduplicate
                     # at the homeserver and re-record the id.
                     _write_json(state_path, project)
+                    if project.get("requesterCompletionEventId"):
+                        project["completionNotificationSynced"] = _sync_project(arguments, project_id)
             result = {
                 "ok": True,
                 "tool": "projectflow",
@@ -1234,6 +1464,7 @@ def _projectflow(arguments: dict[str, Any]) -> dict[str, Any]:
             }
             if action == "complete_project":
                 result["notification"] = project.get("projectNotification")
+                result["requesterNotification"] = project.get("requesterNotification")
             publish_artifacts = _payload_bool_field(payload, ("publishArtifacts", "publish_artifacts"), False)
             if action == "complete_project" and publish_artifacts and (project_dir / "result.md").is_file():
                 result["publishedArtifacts"] = _publish_project_artifacts(

@@ -147,8 +147,8 @@ def test_adapter_manifests_share_the_bundle_version() -> None:
                 f"{manifest}: adapter version must match bundle {bundle_version}"
             )
             tracked += 1
-    assert tracked >= 4, (
-        "expected at least the four adapter manifests to be covered, "
+    assert tracked >= 3, (
+        "expected at least the three adapter manifests to be covered, "
         f"checked {tracked}"
     )
 
@@ -227,7 +227,6 @@ def test_matrix_bundle_manifest_form() -> None:
     adapters = manifest.get("adapters")
     assert isinstance(adapters, list), "agentteams-matrix adapters must be a list"
     expected = [
-        ("qwenpaw", "adapters/qwenpaw"),
         ("openclaw", "adapters/openclaw"),
         ("hermes", "adapters/hermes"),
     ]

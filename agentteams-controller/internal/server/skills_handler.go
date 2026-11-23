@@ -371,12 +371,10 @@ func summarizeFindings(findings []skillscan.SkillUploadFinding) string {
 //
 //	file   the skill zip (single top-level directory, 64 MB max)
 //	scope  "team" (→ teams/<t>/skills/<name>/) | "deployment"
-//	       (→ agents/global/skills/<name>/, admin only)
+//	       (→ agents/global/skills/<name>/, admin or platform Manager)
 //	team   Team CR name (required when scope=team)
 //
-// Flow: role gate (403 — manager/leader/worker are already denied by the
-// authorizer; the handler re-checks) → structure validation (400) →
-// team-scope check (403/404, the same matrix as the ?team= catalog) →
+// Flow: role and scope checks (403/404) → structure validation (400) →
 // scan ① (best-effort: block → 422 with findings; unavailable → proceed
 // with scan.status="skipped" + a warning log) → exact-copy mirror
 // (Overwrite + Remove: a re-upload replaces stale files).
@@ -386,11 +384,10 @@ func (h *SkillsHandler) UploadSkill(w http.ResponseWriter, r *http.Request) {
 	caller := auth.CallerFromContext(r.Context())
 	logger := log.FromContext(r.Context())
 
-	// Role gate (handler layer — the authorizer already denies
-	// manager/leader/worker; both layers are pinned by tests).
-	if caller == nil || (caller.Role != auth.RoleAdmin && caller.Role != auth.RoleHuman) {
+	// Only the platform Manager can publish shared skills as an Agent.
+	if caller == nil || (caller.Role != auth.RoleAdmin && caller.Role != auth.RoleManager && caller.Role != auth.RoleHuman) {
 		httputil.WriteError(w, http.StatusForbidden,
-			"skill upload is admin (any scope) or L2 human (own team) only")
+			"skill upload requires admin, platform Manager (deployment), or L2 human (own team)")
 		return
 	}
 
@@ -426,8 +423,8 @@ func (h *SkillsHandler) UploadSkill(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "deployment":
-		if caller.Role != auth.RoleAdmin {
-			httputil.WriteError(w, http.StatusForbidden, "scope=deployment is admin only")
+		if caller.Role != auth.RoleAdmin && caller.Role != auth.RoleManager {
+			httputil.WriteError(w, http.StatusForbidden, "scope=deployment requires admin or platform Manager")
 			return
 		}
 	default:

@@ -4,8 +4,6 @@ on:
   pull_request:
     paths:
       - 'helm/**'
-      - 'install/agentteams-install.sh'
-      - 'install/agentteams-install.ps1'
       - 'install/agentteams-dashboard-tests.sh'
       - 'install/test*install*'
       - 'install/agentteams-apply.sh'
@@ -20,8 +18,7 @@ on:
       - '.github/workflows/build-rc.yml'
       - '.github/workflows/build-deepseek-harness.yml'
       - '.github/workflows/release.yml'
-      - 'openhuman/scripts/openhuman-worker-entrypoint.sh'
-      - 'tests/test_openhuman_native_tools.py'
+      - 'openhuman'
       - 'tests/check-agentteams-rename-defaults.sh'
       - 'tests/check-installer-pre-1.2-env-compat.sh'
       - 'tests/check-installer-token-plan-models.sh'
@@ -45,6 +42,8 @@ on:
       - 'tests/check-unified-harness-versions.sh'
       - 'tests/check-unified-harness-versions.ps1'
       - 'tests/check-manager-dm-room.sh'
+      - 'tests/check-matrix-login-session.sh'
+      - 'tests/lib/matrix-client.sh'
       - 'tests/check-installer-codex-image.sh'
       - 'tests/check-installer-codex-image.ps1'
       - 'tests/check-teamharness-acceptance-observer.sh'
@@ -85,6 +84,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Checkout website installer contract fixtures
+        uses: actions/checkout@v4
+        with:
+          repository: agentteams-group/agentteams-group.github.io
+          ref: 4ad3228780e1b0e8b6d53c110e914d90720b34f5
+          path: .installer-source
+          persist-credentials: false
 
       - name: Check AgentTeams rename contracts
         run: bash tests/check-agentteams-rename-defaults.sh
@@ -165,11 +172,11 @@ jobs:
       - name: Check shared Manager Harness images
         run: bash tests/check-manager-shared-images.sh
 
-      - name: Check OpenHuman native role tools
-        run: python3 tests/test_openhuman_native_tools.py
-
       - name: Check Manager room discovery
         run: bash tests/check-manager-dm-room.sh
+
+      - name: Check shared Matrix Admin test session
+        run: bash tests/check-matrix-login-session.sh
 
       - name: Check TeamHarness acceptance observer
         run: bash tests/check-teamharness-acceptance-observer.sh
@@ -177,6 +184,7 @@ jobs:
       - name: Check image build and release workflows
         run: |
           python3 -m pip install PyYAML==6.0.3
+          git submodule update --init -- qwenpaw
           python3 tests/test-build-workflows.py
 
       - name: Check QwenPaw installer runtime options
@@ -224,11 +232,18 @@ jobs:
         with:
           version: v3.14.0
 
-      - name: Add dependency repos
-        run: helm repo add higress.io https://higress.io/helm-charts
-
       - name: Build dependencies
-        run: helm dependency build helm/agentteams/
+        run: |
+          if helm repo add higress.io https://higress.io/helm-charts; then
+            helm dependency build helm/agentteams/
+          else
+            # The official regional mirror also publishes the pinned Higress chart.
+            helm repo add higress-mirror https://higress.cn/helm-charts
+            version=$(helm dependency list helm/agentteams/ | awk '$1 == "higress" {print $2}')
+            test -n "$version"
+            mkdir -p helm/agentteams/charts
+            helm pull higress-mirror/higress --version "$version" --destination helm/agentteams/charts
+          fi
 
       - name: Lint
         run: helm lint helm/agentteams/

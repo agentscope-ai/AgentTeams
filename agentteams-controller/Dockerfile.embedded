@@ -16,7 +16,7 @@ ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
 ARG AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest
 
 # ============ Stage 1: Tuwunel Matrix Server ============
-FROM ${HIGRESS_REGISTRY}/higress/tuwunel:20260216 AS tuwunel
+FROM higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/tuwunel:2.0.0-agentteams AS tuwunel
 
 # ============ Stage 2: MinIO Object Storage ============
 FROM ${HIGRESS_REGISTRY}/higress/minio:20260216 AS minio
@@ -32,6 +32,8 @@ FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS agentteams-controller
 
 # ============ Final Image: Based on Higress all-in-one ============
 FROM ${HIGRESS_REGISTRY}/higress/all-in-one:2.2.5
+
+LABEL io.agentteams.unified-entry="1"
 
 RUN mkdir -p /var/log/agentteams
 
@@ -80,15 +82,15 @@ COPY shared/lib/ /opt/agentteams/scripts/lib/
 RUN chmod +x /opt/agentteams/scripts/init/*.sh
 
 # Agent templates (builtin AGENTS.md, skills for worker, copaw-worker, hermes-worker, team-leader)
-COPY manager/agent/worker-agent/ /opt/agentteams/agent/worker-agent/
-COPY manager/agent/copaw-worker-agent/ /opt/agentteams/agent/copaw-worker-agent/
-COPY manager/agent/hermes-worker-agent/ /opt/agentteams/agent/hermes-worker-agent/
-COPY manager/agent/team-leader-agent/ /opt/agentteams/agent/team-leader-agent/
+COPY --from=agentteams-controller /opt/agentteams/agent/worker-agent/ /opt/agentteams/agent/worker-agent/
+COPY --from=agentteams-controller /opt/agentteams/agent/copaw-worker-agent/ /opt/agentteams/agent/copaw-worker-agent/
+COPY --from=agentteams-controller /opt/agentteams/agent/hermes-worker-agent/ /opt/agentteams/agent/hermes-worker-agent/
+COPY --from=agentteams-controller /opt/agentteams/agent/team-leader-agent/ /opt/agentteams/agent/team-leader-agent/
 COPY manager/agent/skills/ /opt/agentteams/agent/skills/
 COPY manager/agent/worker-skills/ /opt/agentteams/agent/worker-skills/
 
 # Plugin packages (skill catalog "plugin" source: plugin.yaml + skills/ trees)
-COPY plugins/ /opt/agentteams/plugins/
+COPY --from=agentteams-controller /opt/agentteams/plugins/ /opt/agentteams/plugins/
 COPY --from=agentteams-controller /opt/agentteams/agent/manager-agent/ /opt/agentteams/agent/manager-agent/
 
 # ---- Ports ----

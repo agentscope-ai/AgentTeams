@@ -569,6 +569,46 @@ func TestUpdateTeamMembershipAndHeartbeat(t *testing.T) {
 	}
 }
 
+func TestUpdateTeamAdmin(t *testing.T) {
+	initial := &v1beta1.TeamAdminSpec{Name: "alice"}
+	for _, tc := range []struct {
+		name string
+		body string
+		want *v1beta1.TeamAdminSpec
+	}{
+		{"replace", `{"admin":{"name":"bob"}}`, &v1beta1.TeamAdminSpec{Name: "bob"}},
+		{"remove", `{"admin":null}`, nil},
+		{"omitted", `{"teamName":"Alpha"}`, initial},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			team := &v1beta1.Team{ObjectMeta: metav1.ObjectMeta{Name: "alpha-team", Namespace: "default"}, Spec: v1beta1.TeamSpec{Admin: initial}}
+			k8s := fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithObjects(team).Build()
+			handler := NewResourceHandler(k8s, "default", nil, "", nil)
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/teams/alpha-team", strings.NewReader(tc.body))
+			req.SetPathValue("name", "alpha-team")
+			rec := httptest.NewRecorder()
+			handler.UpdateTeam(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("update status = %d: %s", rec.Code, rec.Body.String())
+			}
+			var stored v1beta1.Team
+			if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(team), &stored); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(stored.Spec.Admin, tc.want) {
+				t.Fatalf("admin = %#v, want %#v", stored.Spec.Admin, tc.want)
+			}
+			var resp TeamResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(resp.Admin, tc.want) {
+				t.Fatalf("response admin = %#v, want %#v", resp.Admin, tc.want)
+			}
+		})
+	}
+}
+
 func TestUpdateTeamHumanMembers(t *testing.T) {
 	initial := []v1beta1.TeamMemberSpec{{Name: "alice", Role: "member"}}
 	for _, tc := range []struct {

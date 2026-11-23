@@ -22,6 +22,13 @@ spec:
                 modelProvider:
                   type: string
                   description: Name of the AI gateway Model API to use as the LLM provider.
+                llmHeartbeatEnabled:
+                  type: boolean
+                  description: >
+                    Enable OpenClaw model-driven autonomous checks. Defaults off for
+                    ordinary Workers. An omitted Leader setting inherits the Team
+                    heartbeat cadence; explicit false overrides it. Independent
+                    scheduled jobs and health reporting are unaffected.
                 subagentModel:
                   type: string
                   description: >
@@ -484,6 +491,11 @@ spec:
                 agentStatus:
                   type: string
                   description: "Worker runtime task-level state self-reported by the heartbeat: idle / running / disabled; empty when not reported."
+                skillWarnings:
+                  type: array
+                  description: "Non-blocking skill load or enable warnings reported by the runtime."
+                  items:
+                    type: string
                 runningTaskCount:
                   type: integer
                   description: "Number of active runtime tasks reported by the worker heartbeat; absent when unknown."

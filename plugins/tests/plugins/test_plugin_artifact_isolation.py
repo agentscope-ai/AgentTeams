@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 
 import pytest
 
@@ -31,3 +32,15 @@ def test_reused_output_directory_does_not_publish_unrelated_archive(tmp_path):
     assert "agentteams-teamharness.tar.gz" in names
     for artifact in manifest["artifacts"]:
         assert hashlib.sha256((tmp_path / artifact["name"]).read_bytes()).hexdigest() == artifact["sha256"]
+
+    source = ROOT / "plugins/teamharness"
+    bundle = ROOT / "plugins/agentteams-teamharness"
+    skill = "skills/team/task-management/SKILL.md"
+    for entry in ("contracts", "mcp", "prompts", "skills"):
+        assert (bundle / entry).is_symlink()
+        assert (bundle / entry).resolve() == (source / entry).resolve()
+    with tarfile.open(tmp_path / "agentteams-teamharness.tar.gz") as archive:
+        for entry in (skill, "mcp/common/task_receipt.py"):
+            assert archive.getmember(entry).isfile()
+            assert archive.extractfile(entry).read() == (source / entry).read_bytes()
+    assert names == ["agentteams-teamharness.tar.gz"]

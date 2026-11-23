@@ -8,7 +8,7 @@ description: "Use for TeamHarness message delivery details after a flow has deci
 This skill expands the TEAMS.md Communication Contract.
 
 It only handles message delivery protocols. It does not choose Direct Reply,
-Quick Task, or Project Work. It does not create rooms, delegate tasks, check
+Task Work, or Project Work. It does not create rooms, delegate tasks, check
 Worker results, or accept project state.
 
 For ordinary direct replies and lightweight one-off answers in the current
@@ -48,9 +48,10 @@ route is exactly that current room.
 ## Requester Report Delivery Protocol
 
 Use this protocol only after project state says a requester report is needed,
-for example after accepted project progress or a blocker that must be surfaced
-to the requester. When project state has a pending requester report, delivery
-to that requester route is mandatory.
+for example after final acceptance or a blocker that requires the requester to
+act. Keep ordinary intermediate progress in the Task room; do not wake a
+Manager to supervise each step. When the verified final requester report is
+pending, delivery to that requester route is mandatory.
 
 Prefer `reply_route`:
 
@@ -102,7 +103,7 @@ room/session; answer directly instead.
 ## Task Room Request Message
 
 Use this shape when a Source channel / requester room has created or reused a
-Matrix task room and must hand Quick Task or Project Work to the same Leader in
+Matrix task room and must hand manual Project Work to the same Leader in
 that task room.
 
 The message text should be a compact task request, not a Worker assignment and
@@ -130,7 +131,7 @@ returns `delivery.sent: "matrix_self_trigger"`, stop in the source session.
 
 ### PROJECT_REQUESTED Self Trigger
 
-Use this only for same-agent Quick Task or Project Work handoff from any
+Use this only for same-agent manual Project Work handoff from any
 requester/source session, such as DingTalk group, Matrix DM, or another Matrix
 room, into a target Matrix task room. The tool sends a Matrix event with a
 TeamHarness trigger marker; the QwenPaw Matrix channel accepts that marked self

@@ -7,7 +7,7 @@ This guide follows the recommended local deployment path. You will install Agent
 ## What you will have
 
 - An AgentTeams instance running on your local machine.
-- A Manager you can talk to through Element Web.
+- A Manager you can talk to through Dashboard (or the optional Element Web client).
 - A Worker created and managed by the Manager.
 - A visible task history involving a Human, the Manager, and the Worker.
 
@@ -26,10 +26,10 @@ This guide follows the recommended local deployment path. You will install Agent
 Run the installer in a terminal:
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
-With no explicit version, the Bash installer checks the recommended Manager, embedded controller and Dashboard images against your container engine's architecture before saving configuration. Worker images are pulled when you create Workers. Missing image tags or architectures trigger a check of the bundled fallback; connection or authentication errors stop installation. Upgrades never fall back automatically. Dashboard and DeepSeek Harness keep their independent image versions.
+With no explicit version, the Bash installer checks the recommended Manager, embedded controller and Dashboard images against your container engine's architecture before saving configuration. Worker images are pulled when you create Workers. Missing image tags or architectures trigger a check of the bundled fallback; connection or authentication errors stop installation. Upgrades never fall back automatically. Core v1.2.7 publishes all six Harness images with the `v1.2.7` tag; Dashboard uses its own version, `v1.4.1` for this release.
 
 Wait for Dashboard to open. The installer copies the login password to your clipboard and prefills the username as `admin`; paste the password and sign in. If the browser or clipboard is unavailable, use the URL and credentials printed in the terminal.
 
@@ -42,7 +42,6 @@ After a successful installation, the terminal prints:
 - The Dashboard login URL (and an optional Element Web URL).
 - The administrator username and password.
 - The Higress Console URL.
-- The Dashboard URL, when enabled.
 - The locations of the configuration file, data volume, and Manager workspace.
 
 Save the login information before continuing.
@@ -139,6 +138,7 @@ After these checks pass, you have completed the smallest end-to-end AgentTeams w
 
 ## Next steps
 
+- Read the [Dashboard Guide](usage/dashboard.md) for conversations, teams, human attention, files, and Tracing.
 - Read the [AgentTeams Overview](overview.md) for the roles, components, and deployment modes.
 - Try software delivery, research, localization, incident analysis, long-running collaboration, and adding and using a custom Skill in [AgentTeams Use Cases](usage/use-cases.md).
 - Use the [Local Deployment Guide](usage/deployment/local.md) for model, port, domain, storage, runtime, and automated installation options.
@@ -152,5 +152,5 @@ After these checks pass, you have completed the smallest end-to-end AgentTeams w
 The following command removes AgentTeams containers, networks, data volumes, configuration files, and the local workspace. Run it only after confirming that you no longer need the data:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```

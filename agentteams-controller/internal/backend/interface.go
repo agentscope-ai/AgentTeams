@@ -302,14 +302,24 @@ type ServiceBackend interface {
 
 // WorkerResult holds the result of a worker operation.
 type WorkerResult struct {
-	Name            string       `json:"name"`
-	Backend         string       `json:"backend"`
-	DeploymentMode  string       `json:"deployment_mode"`
-	Status          WorkerStatus `json:"status"`
-	ContainerID     string       `json:"container_id,omitempty"`
-	AppID           string       `json:"app_id,omitempty"`
-	RawStatus       string       `json:"raw_status,omitempty"`
-	ConsoleHostPort string       `json:"console_host_port,omitempty"`
+	dockerProcessExited bool         // Docker inspect confirmed Running=false and PID=0.
+	Name                string       `json:"name"`
+	Backend             string       `json:"backend"`
+	DeploymentMode      string       `json:"deployment_mode"`
+	Status              WorkerStatus `json:"status"`
+	ContainerID         string       `json:"container_id,omitempty"`
+	// InstanceID changes on every actual container start, including a restart
+	// of the same container/Pod. Recovery must not use CR generation or a
+	// notification delivery lease as an execution generation.
+	HandoffSpecHash string `json:"handoff_spec_hash,omitempty"`
+	HandoffLabel    string `json:"handoff_label,omitempty"`
+	InstanceID      string `json:"instance_id,omitempty"`
+	Runtime         string `json:"runtime,omitempty"` // Runtime recorded on the actual backend instance.
+	AgentRole       string `json:"-"`                 // Role from the actual container environment, when available.
+	TeamName        string `json:"-"`
+	AppID           string `json:"app_id,omitempty"`
+	RawStatus       string `json:"raw_status,omitempty"`
+	ConsoleHostPort string `json:"console_host_port,omitempty"`
 
 	// Message carries a human-readable status detail from the backend.
 	// Populated when Ready condition is False with a non-empty message

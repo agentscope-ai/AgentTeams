@@ -21,6 +21,11 @@ RELEASE = workflow('release.yml')
 
 
 class BuildWorkflowTests(unittest.TestCase):
+    def test_release_runtime_smokes_follow_the_requested_release_version(self):
+        self.assertEqual(RELEASE['env']['DEEPSEEK_HARNESS_WORKER_VERSION'], '${{ inputs.version }}')
+        self.assertEqual(RELEASE['env']['CODEX_WORKER_IMAGE'],
+                         'higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:${{ inputs.version }}')
+
     def test_worker_consumers_checkout_submodules_and_track_gitlink(self):
         for name, job_name in [('test-controller.yml', 'matrix-bundle-core'),
                                ('test-manager.yml', 'manager-tools')]:
@@ -87,7 +92,8 @@ class BuildWorkflowTests(unittest.TestCase):
                                      'push-openhuman-worker', 'IS_PODMAN=' + podman,
                                      'VERSION=v1.2.7'], cwd=ROOT, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('openhuman/Dockerfile', result.stdout)
+            self.assertIn('./openhuman/', result.stdout)
+            self.assertIn('--build-context agentteams=.', result.stdout)
             self.assertIn('agentteams/agentteams-harness-openhuman:v1.2.7', result.stdout)
         self.assertIn('agentteams-harness-openhuman',
                       next(s['run'] for s in RELEASE['jobs']['release']['steps']
@@ -156,8 +162,8 @@ class BuildWorkflowTests(unittest.TestCase):
                 result = subprocess.run(['make', '-n', target, 'IS_PODMAN=' + podman],
                                         cwd=ROOT, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn('--build-context teamharness_trace=./plugins/teamharness/adapters/qwenpaw', result.stdout)
-                self.assertTrue((ROOT / 'plugins/teamharness/adapters/qwenpaw/task_trace.py').is_file())
+                self.assertIn('--build-context teamharness_trace=./qwenpaw/adapters/teamharness', result.stdout)
+                self.assertTrue((ROOT / 'qwenpaw/adapters/teamharness/task_trace.py').is_file())
 
     def test_openclaw_base_builds_on_native_runners(self):
         self.assertEqual(BUILD['jobs']['openclaw-base']['uses'], './.github/workflows/build-openclaw-base.yml')

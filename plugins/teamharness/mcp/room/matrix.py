@@ -160,3 +160,26 @@ def _team_human_matrix_ids() -> list[str]:
     return ids
 
 
+
+
+def _auto_join_task_humans(room_id: str, team_name: str) -> dict[str, Any]:
+    """Accept scoped Human invitations through the Controller, without user tokens."""
+    from mcp.artifact.sync import _controller_base_url, _controller_bearer_token
+    base, token = _controller_base_url(), _controller_bearer_token()
+    if not base or not token or not team_name:
+        return {"skipped": True}
+    target = base + "/api/v1/teams/" + urllib.parse.quote(team_name, safe="") + "/task-rooms/" + urllib.parse.quote(room_id, safe="") + "/join-humans"
+    request = urllib.request.Request(target, data=b"{}", method="POST",
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            result = json.load(response)
+        if not isinstance(result, dict):
+            raise ValueError("invalid membership receipt")
+        return result
+    except urllib.error.HTTPError as exc:
+        if exc.code in {404, 405}:
+            return {"skipped": True, "reason": "controller_upgrade_required"}
+        return {"error": "task room auto-join unavailable", "status": exc.code}
+    except (OSError, ValueError):
+        return {"error": "task room auto-join unavailable"}

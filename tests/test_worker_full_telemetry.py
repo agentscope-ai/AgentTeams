@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,103 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 import at_telemetry as telemetry
+
+
+def test_qwenpaw_api_turn_uses_coordination_metadata(monkeypatch):
+    from types import SimpleNamespace
+    import at_runtime_adapters as adapters
+    callbacks = []
+    captured = []
+    monkeypatch.setattr(adapters.wrapt, 'wrap_function_wrapper', lambda module, name, callback: callbacks.append(callback))
+    monkeypatch.setattr(adapters, 'start_turn', lambda fields, request: captured.append(fields) or object())
+    monkeypatch.setattr(adapters, 'enrich_task', lambda fields, workspace: fields)
+    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(incoming=lambda content: {}, remember_reply=lambda *a: None))
+    async def stream(iterator, span, fields):
+        async for item in iterator:
+            yield item
+    monkeypatch.setattr(telemetry, 'trace_stream', stream)
+    adapters.qwenpaw_runtime(object())
+    meta = {'room_id': '!task:test', 'task_id': 'atomic-1', 'project_id': 'request-1', 'execution_generation': 2}
+    request = SimpleNamespace(session_id='coordination-task:atomic-1:dispatch-1', user_id='@requester:test',
+        channel_meta={}, request_context={'teamharness_coordination': meta})
+    runtime = SimpleNamespace(_normalize=lambda value: value, workspace=SimpleNamespace(workspace_dir=None))
+    async def wrapped(*args, **kwargs):
+        yield 'ok'
+    async def run():
+        return [item async for item in callbacks[0](wrapped, runtime, (request,), {})]
+    assert asyncio.run(run()) == ['ok']
+    assert captured[0]['agentteams.task.id'] == 'atomic-1'
+    assert captured[0]['agentteams.room.id'] == '!task:test'
+    assert captured[0]['agentteams.project.id'] == 'request-1'
+    assert captured[0]['agentteams.execution.generation'] == 2
+
+
+@pytest.mark.parametrize('event_id,expected', [
+    ('recovery:team-a/task-1:3', None),
+    ('$matrix-event:server', None),
+    ('recovery:team-a/task-1:0', None),
+    ('recovery:team-a/task-1:not-a-generation', None),
+    (None, None),
+])
+def test_hermes_recovery_trace_retains_task_and_execution_generation(monkeypatch, event_id, expected):
+    from types import SimpleNamespace
+    import at_runtime_adapters as adapters
+    callbacks, captured = [], []
+    monkeypatch.setattr(adapters.wrapt, 'wrap_function_wrapper', lambda module, name, callback: callbacks.append(callback))
+    monkeypatch.setattr(adapters, 'start_turn', lambda fields, request: captured.append(fields) or trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT))
+    monkeypatch.setattr(adapters, 'enrich_task', lambda fields, workspace: fields)
+    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(remember_reply=lambda *args: None, incoming=lambda *args: {}))
+    adapters.hermes_turn(object())
+    result = callbacks[0](lambda *args, **kwargs: {'ok': True},
+                          SimpleNamespace(session_id='native-session', _chat_id='!task:server'),
+                          ('resume',), {'persist_user_platform_id': event_id})
+    assert result == {'ok': True}
+    fields = captured[0]
+    assert fields['agentteams.runtime.session_id'] == 'native-session'
+    if expected:
+        assert (fields['agentteams.team.id'], fields['agentteams.task.id'], fields['agentteams.execution.generation']) == expected
+    else:
+        assert 'agentteams.task.id' not in fields
+        assert 'agentteams.execution.generation' not in fields
+
+
+def test_local_runtime_events_keep_model_tool_failures_without_content(tmp_path, monkeypatch):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'shared/lib'))
+    monkeypatch.setenv('AGENTTEAMS_LOG_DIR', str(tmp_path))
+    monkeypatch.setenv('MODEL_API_KEY', 'secret-model-key')
+    provider = TracerProvider()
+    provider.add_span_processor(telemetry.RuntimeLogProcessor())
+    tracer = provider.get_tracer('test')
+    for kind, attrs, reason in [
+        ('model', {'gen_ai.operation.name': 'chat', 'gen_ai.request.model': 'test-model'}, 'HTTP 401 api_key=secret-model-key'),
+        ('tool', {'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 'shell'}, 'command exited 127'),
+    ]:
+        with tracer.start_as_current_span(kind, attributes={**attrs, 'gen_ai.input.messages': 'PRIVATE PROMPT',
+                                                           'gen_ai.tool.call.arguments': 'PRIVATE ARGUMENTS'}) as span:
+            span.set_status(trace.Status(trace.StatusCode.ERROR, reason))
+    records = [json.loads(line) for line in (tmp_path / 'events.jsonl').read_text().splitlines()]
+    ends = [record for record in records if record['event'].endswith('.end')]
+    assert [record['status'] for record in ends] == ['failed', 'failed']
+    assert 'HTTP 401' in ends[0]['error']
+    assert '127' in ends[1]['error']
+    raw = json.dumps(records)
+    for private in ['secret-model-key', 'PRIVATE PROMPT', 'PRIVATE ARGUMENTS']:
+        assert private not in raw
+    provider.shutdown()
+
+
+def test_local_only_bootstrap_does_not_create_a_remote_exporter(tmp_path):
+    environment = {**os.environ, 'AGENTTEAMS_OTEL_ENABLED': 'false', 'AGENTTEAMS_LOG_CAPTURED': '1',
+                   'AGENTTEAMS_LOG_NATIVE_EVENTS': '1', 'AGENTTEAMS_OTEL_RUNTIME': 'hermes',
+                   'AGENTTEAMS_LOG_DIR': str(tmp_path),
+                   'PYTHONPATH': os.pathsep.join(str(Path(__file__).resolve().parents[1] / path)
+                                               for path in ['shared/lib', 'shared/lib/telemetry'])}
+    result = subprocess.run([sys.executable, '-c',
+        'import at_telemetry as t; import os; '
+        'assert os.environ["AGENTTEAMS_OTEL_CAPTURE_CONTENT"] == "false"; '
+        'assert all(not isinstance(p, t.BatchSpanProcessor) for p in t._provider._active_span_processor._span_processors)'],
+        env=environment, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
 
 
 def test_team_identity_follows_projected_runtime_across_reassignment(tmp_path, monkeypatch):
@@ -51,7 +149,7 @@ def test_agentscope_middleware_import_order_does_not_break_worker_startup(tmp_pa
     (package / 'agent/_agent.py').write_text('class Agent:\n    def __init__(self, middlewares=None): self.middlewares = middlewares\n    async def reply(self): pass\n')
     environment = {**os.environ, 'AGENTTEAMS_OTEL_ENABLED': 'true', 'AGENTTEAMS_OTEL_RUNTIME': 'qwenpaw',
                    'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'shared/lib/telemetry') + os.pathsep + str(tmp_path)}
-    result = subprocess.run([sys.executable, '-c', 'from agentscope.agent import Agent; from agentscope.middleware import TracingMiddleware; assert isinstance(Agent().middlewares[0], TracingMiddleware)'],
+    result = subprocess.run([sys.executable, '-c', 'from agentscope.agent import Agent; from agentscope.middleware import TracingMiddleware; assert isinstance(Agent().middlewares[0], TracingMiddleware); agent = Agent(middlewares=[TracingMiddleware()]); assert len(agent.middlewares) == 1; assert type(agent.middlewares[0]) is not TracingMiddleware'],
                             env=environment, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
@@ -129,9 +227,19 @@ def test_async_generator_context_is_detached_before_yield_and_close():
 
 
 def test_returned_tool_errors_are_detected():
+    assert telemetry.tool_error({'state': 'error', 'content': [{'type': 'text', 'text': 'File not found: /tmp/missing'}]}) == 'File not found: /tmp/missing'
     assert telemetry.tool_error('{"error":"file missing"}')
     assert telemetry.tool_error({"exit_code": 2, "stdout": ""})
     assert not telemetry.tool_error({"exit_code": 0, "stdout": "error count: 0"})
+
+
+def test_denied_and_wrapped_tool_failures_are_detected():
+    assert telemetry.tool_error({"state": "denied", "content": [{"type": "text", "text": "Approval timed out after 300s"}]}) == "Approval timed out after 300s"
+    assert telemetry.tool_error({"ok": False})
+    assert telemetry.tool_error({"content": [{"type": "text", "text": '{"ok": false, "tool": "taskflow", "error": "invalid artifact path"}'}]}) == "invalid artifact path"
+    assert not telemetry.tool_error({"content": [{"type": "text", "text": "No error found"}]})
+    assert not telemetry.tool_error({"content": [{"type": "text", "text": '{"ok": true}'}]})
+    assert not telemetry.tool_error({"state": "success", "content": [{"type": "text", "text": '{"ok": false, "error": "example data"}'}]})
 
 
 def test_runtime_handles_in_request_are_not_serialized_as_json():
@@ -169,6 +277,44 @@ def test_matrix_carrier_links_workers_without_reusing_session(monkeypatch):
     assert "agentteams.session.id" not in received
     assert "agentteams.task.id" not in received
     assert telemetry._correlation.get() == {}
+
+
+def test_delayed_receipt_preserves_origin_trace_across_failure_and_restart(monkeypatch, tmp_path):
+    from at_trace_transport import remember_reply
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'shared/lib'))
+    from agentteams_receipts import Receipts
+    monkeypatch.setenv('AGENTTEAMS_OTEL_ENABLED', 'true')
+    provider = TracerProvider()
+    turn = provider.get_tracer('fixture').start_span('actual model turn')
+    metadata = {'otel_delivery': {}}
+    remember_reply(turn, {'agentteams.turn.id': 'actual-turn'}, metadata)
+    turn.end()
+    outbox = Receipts(tmp_path)
+    outbox.enqueue('!room:test', '$input', 'completed', trace_context=metadata['otel_delivery'])
+    seen = []
+    def failed(*args):
+        seen.append((args, trace.get_current_span().get_span_context().trace_id))
+        raise OSError('own synthetic transport failure')
+    with provider.get_tracer('fixture').start_as_current_span('unrelated configuration request') as ambient:
+        outbox.flush(failed)
+        Receipts(tmp_path).flush(lambda *args: seen.append((args, trace.get_current_span().get_span_context().trace_id)))
+        assert trace.get_current_span().get_span_context().trace_id == ambient.get_span_context().trace_id
+    assert len(seen) == 2 and seen[0] == seen[1]
+    assert seen[0][1] == turn.get_span_context().trace_id
+
+
+def test_receipt_without_origin_does_not_inherit_background_request(monkeypatch, tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'shared/lib'))
+    from agentteams_receipts import Receipts
+    monkeypatch.setenv('AGENTTEAMS_OTEL_ENABLED', 'true')
+    outbox = Receipts(tmp_path)
+    outbox.enqueue('!room:test', '$input', 'read')
+    provider = TracerProvider()
+    seen = []
+    with provider.get_tracer('fixture').start_as_current_span('unrelated configuration request') as ambient:
+        outbox.flush(lambda *args: seen.append(trace.get_current_span().get_span_context().is_valid))
+        assert trace.get_current_span().get_span_context().trace_id == ambient.get_span_context().trace_id
+    assert seen == [False]
 
 
 def test_export_normalizes_returned_tool_error_and_redacts(monkeypatch):
@@ -359,3 +505,70 @@ def test_http_propagates_business_baggage_only_to_local_api(monkeypatch):
                 assert ("baggage" in request.headers) == (host == "localhost")
     finally:
         telemetry._correlation.reset(correlation)
+
+
+def test_task_identity_arriving_after_turn_start_reaches_children_and_carrier(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import at_runtime_adapters as adapters
+    from at_trace_transport import carrier, incoming
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qwenpaw/adapters/teamharness"))
+    from task_trace import find_task_trace_context
+    monkeypatch.setattr(adapters, "task_resolver", lambda: find_task_trace_context)
+    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
+    provider = TracerProvider()
+    provider.add_span_processor(telemetry.IdentityProcessor())
+    tracer = provider.get_tracer("test")
+    fields = {"agentteams.room.id": "!room:test", "agentteams.turn.id": "turn"}
+    correlation = telemetry._correlation.set(fields)
+    root = tracer.start_span("worker.turn")
+    active = telemetry._active_turn.set(root)
+    agent = SimpleNamespace(workspace_dir=tmp_path)
+    try:
+        adapters.refresh_task_span(agent)
+        assert "agentteams.task.id" not in root.attributes
+        task_dir = tmp_path / "shared/tasks/one"
+        task_dir.mkdir(parents=True)
+        (task_dir / "meta.json").write_text(json.dumps({"task_id": "one", "project_id": "project", "room_id": "!room:test", "assigned_to": "@alice:test", "status": "in_progress"}))
+        adapters.refresh_task_span(agent)
+        assert root.attributes["agentteams.task.id"] == "one"
+        assert root.attributes["agentteams.project.id"] == "project"
+        with trace.use_span(root, end_on_exit=False):
+            with tracer.start_as_current_span("model") as child:
+                assert child.attributes["agentteams.task.id"] == "one"
+                received = incoming({"com.agentteams.trace": carrier()}, room_id="!other:test")
+                assert received["agentteams.upstream.task_id"] == "one"
+                assert received["agentteams.project.id"] == "project"
+        # An unrelated trace must not pick up the cached task from this turn.
+        with tracer.start_as_current_span("unrelated") as unrelated:
+            assert "agentteams.task.id" not in unrelated.attributes
+    finally:
+        telemetry._active_turn.reset(active)
+        telemetry._correlation.reset(correlation)
+        root.end()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize('generation', [None, 4])
+def test_hermes_native_trace_uses_verified_current_frame(monkeypatch, generation):
+    from types import SimpleNamespace
+    import at_runtime_adapters as adapters
+    callbacks, captured = [], []
+    metadata = {'room_id': '!canonical:test', 'event_id': '$canonical-event', 'task_id': 'task-actual',
+        'team_id': 'team-actual', 'teamharness_coordination': {'id': 'a' * 32, 'kind': 'task_assigned'}}
+    if generation is not None:
+        metadata['execution_generation'] = generation
+    monkeypatch.setitem(sys.modules, 'hermes_matrix.public_tasks', SimpleNamespace(
+        current_turn=SimpleNamespace(get=lambda: SimpleNamespace(trace_metadata=lambda: metadata))))
+    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(remember_reply=lambda *a: None, incoming=lambda *a: {}))
+    monkeypatch.setattr(adapters.wrapt, 'wrap_function_wrapper', lambda module, name, callback: callbacks.append(callback))
+    monkeypatch.setattr(adapters, 'start_turn', lambda fields, request: captured.append(fields) or trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT))
+    monkeypatch.setattr(adapters, 'enrich_task', lambda fields, workspace: fields)
+    adapters.hermes_turn(object())
+    callbacks[0](lambda *a, **kw: {'ok': True}, SimpleNamespace(session_id='opaque:other-task:999'), (), {})
+    actual = captured[0]
+    assert actual['agentteams.task.id'] == 'task-actual'
+    assert actual['agentteams.event.id'] == '$canonical-event'
+    assert actual['agentteams.room.id'] == '!canonical:test'
+    assert actual['agentteams.coordination.id'] == 'a' * 32
+    assert actual['agentteams.coordination.kind'] == 'task_assigned'
+    assert actual.get('agentteams.execution.generation') == generation

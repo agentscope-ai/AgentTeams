@@ -267,6 +267,22 @@ func (c *MinIOAdminClient) buildWorkerPolicy(workerName, bucket, teamName string
 			},
 		)
 	}
+	// Native sync must not bypass Task CAS or overwrite Worker configuration.
+	// The Controller writes these control objects with its own storage identity.
+	statements = append(statements, s3PolicyStatement{
+		Effect: "Deny",
+		Action: []string{"s3:PutObject", "s3:DeleteObject"},
+		Resource: []string{
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/runtime.yaml", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/compat-config.json*", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/state.json", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/matrix/state.json", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/matrix/events/*", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/agents/*/runtime/sessions/*", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/shared/tasks/*/meta.json", bucket),
+			fmt.Sprintf("arn:aws:s3:::%s/teams/*/shared/tasks/*/meta.json", bucket),
+		},
+	})
 	return s3Policy{
 		Version:   "2012-10-17",
 		Statement: statements,

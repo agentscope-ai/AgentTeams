@@ -170,8 +170,8 @@ func TestMinIOAdminClient_BuildWorkerPolicy(t *testing.T) {
 	if policy.Version != "2012-10-17" {
 		t.Errorf("Version = %q", policy.Version)
 	}
-	if len(policy.Statement) != 4 {
-		t.Fatalf("expected 4 statements, got %d", len(policy.Statement))
+	if len(policy.Statement) != 5 {
+		t.Fatalf("expected 5 statements, got %d", len(policy.Statement))
 	}
 
 	locationStmt := policy.Statement[0]
@@ -332,8 +332,8 @@ func TestMinIOAdminClient_BuildManagerPolicy(t *testing.T) {
 
 	policy := c.buildWorkerPolicy("default", "agentteams-storage", "", true)
 
-	if len(policy.Statement) != 3 {
-		t.Fatalf("expected 3 statements, got %d", len(policy.Statement))
+	if len(policy.Statement) != 4 {
+		t.Fatalf("expected 4 statements, got %d", len(policy.Statement))
 	}
 
 	// Verify manager prefix in list conditions

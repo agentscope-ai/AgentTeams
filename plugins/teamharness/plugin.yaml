@@ -51,6 +51,9 @@ skills:
     - id: task-delegation
       path: skills/team/task-delegation
       roles: [leader]
+    - id: task-management
+      path: skills/team/task-management
+      roles: [leader]
     - id: task-execution
       path: skills/team/task-execution
       roles: [worker, remote-member]
@@ -69,9 +72,7 @@ mcp:
         - artifact
         - projectflow
         - taskflow
-adapters:
-  - id: qwenpaw
-    path: adapters/qwenpaw
+adapters: []
 package:
   include:
     - plugin.yaml
@@ -79,4 +80,3 @@ package:
     - skills/
     - mcp/
     - adapters/
-    - scripts/

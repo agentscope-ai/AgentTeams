@@ -52,6 +52,9 @@ type ProjectHandler struct {
 	namespace    string
 	oss          oss.StorageClient
 	matrix       matrix.Client // for intervention notifications; nil to skip
+	taskAssigned func()        // local queue hint after a durable assignment commit
+	recovery     *TaskRecoveryHandler
+	coordination *CoordinationHandler
 }
 
 // NewProjectHandler creates a handler reading project state from object storage.
@@ -66,19 +69,22 @@ func NewProjectHandler(c client.Client, namespace string, o oss.StorageClient, m
 // --- internal model (mirrors meta.json, tolerant to extra fields) ---
 
 type projectMeta struct {
-	ProjectID       string            `json:"project_id"`
-	Title           string            `json:"title"`
-	Status          string            `json:"status"`
-	PlanType        string            `json:"plan_type"`
-	TeamID          string            `json:"team_id"`
-	Mode            string            `json:"mode"`
-	Source          string            `json:"source,omitempty"`
-	Tasks           []projectTaskMeta `json:"tasks"`
-	Loop            *loopMeta         `json:"loop,omitempty"`
-	Requester       string            `json:"requester,omitempty"`
-	RequesterReport map[string]any    `json:"requester_report,omitempty"`
-	ReplyRoute      map[string]any    `json:"reply_route,omitempty"`
-	SourceRoomID    string            `json:"source_room_id,omitempty"`
+	ProjectID           string            `json:"project_id"`
+	Title               string            `json:"title"`
+	Status              string            `json:"status"`
+	PlanType            string            `json:"plan_type"`
+	TeamID              string            `json:"team_id"`
+	Mode                string            `json:"mode"`
+	DispatchMode        string            `json:"dispatch_mode,omitempty"`
+	RoomID              string            `json:"room_id,omitempty"`
+	Source              string            `json:"source,omitempty"`
+	Tasks               []projectTaskMeta `json:"tasks"`
+	Loop                *loopMeta         `json:"loop,omitempty"`
+	Requester           string            `json:"requester,omitempty"`
+	RequesterReport     map[string]any    `json:"requester_report,omitempty"`
+	ReplyRoute          map[string]any    `json:"reply_route,omitempty"`
+	RequesterReplyRoute map[string]any    `json:"requester_reply_route,omitempty"`
+	SourceRoomID        string            `json:"source_room_id,omitempty"`
 	// human-intervention audit fields (written by the lifecycle write API;
 	// tolerated by json.Unmarshal when absent, and passed through here so
 	// consumers can show who paused/resumed and why).
@@ -106,8 +112,11 @@ type projectMeta struct {
 
 type projectTaskMeta struct {
 	TaskID       string                    `json:"task_id"`
+	RevisionOf   string                    `json:"revision_of,omitempty"`
+	ParentTaskID string                    `json:"parent_task_id,omitempty"`
 	Title        string                    `json:"title"`
 	AssignedTo   string                    `json:"assigned_to"`
+	Spec         string                    `json:"spec,omitempty"`
 	DependsOn    []string                  `json:"depends_on"`
 	Status       string                    `json:"status"`
 	Cancellation *taskCancellationDecision `json:"cancellation,omitempty"`
@@ -299,10 +308,11 @@ type workflowValues struct {
 }
 
 type workflowNode struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Status   string `json:"status"`
-	Assignee string `json:"assignee,omitempty"`
+	ID           string `json:"id"`
+	ParentTaskID string `json:"parent_task_id,omitempty"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	Assignee     string `json:"assignee,omitempty"`
 }
 
 type workflowEdge struct {
@@ -349,6 +359,9 @@ type interruptConfig struct {
 // project's owning scope and never fall back across team/global boundaries.
 type taskDetail struct {
 	TaskID       string `json:"task_id"`
+	ParentTaskID string `json:"parent_task_id,omitempty"`
+	RoomID       string `json:"room_id,omitempty"`
+	SourceRoomID string `json:"source_room_id,omitempty"`
 	ProjectID    string `json:"project_id,omitempty"`
 	Status       string `json:"status,omitempty"`
 	SpecPath     string `json:"spec_path,omitempty"`
@@ -717,7 +730,7 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	h.listProjects(w, r, false)
 }
 
-// ListTasks lists graph tasks using the same authoritative project scope.
+// ListTasks lists Task-owned plans and legacy Project graphs in the same team scope.
 func (h *ProjectHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	h.listProjects(w, r, true)
 }
@@ -873,6 +886,11 @@ func (h *ProjectHandler) listProjects(w http.ResponseWriter, r *http.Request, ta
 	// Deterministic ordering across prefixes.
 	sort.Slice(projects, func(i, j int) bool { return projects[i].ProjectID < projects[j].ProjectID })
 	if tasksOnly {
+		tasks, err = h.appendMainTasks(r.Context(), tasks, prefixes, accessible, teamFilter)
+		if err != nil {
+			writeError(w, 503, "task index unavailable")
+			return
+		}
 		sort.Slice(tasks, func(i, j int) bool {
 			return tasks[i].TeamID+"/"+tasks[i].ProjectID+"/"+tasks[i].TaskID < tasks[j].TeamID+"/"+tasks[j].ProjectID+"/"+tasks[j].TaskID
 		})
@@ -1060,6 +1078,12 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 	}
 
 	completed := map[string]bool{}
+	parents := map[string]bool{}
+	for _, t := range graphTasks {
+		if t.ParentTaskID != "" {
+			parents[t.ParentTaskID] = true
+		}
+	}
 	for _, t := range graphTasks {
 		if t.Status == "completed" {
 			completed[t.TaskID] = true
@@ -1068,10 +1092,11 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 			interrupts = append(interrupts, workflowInterrupt{ID: t.TaskID, Value: "blocked"})
 		}
 		nodes = append(nodes, workflowNode{
-			ID:       t.TaskID,
-			Name:     t.Title,
-			Status:   normalizeTaskStatus(t.Status),
-			Assignee: t.AssignedTo,
+			ID:           t.TaskID,
+			ParentTaskID: t.ParentTaskID,
+			Name:         t.Title,
+			Status:       normalizeTaskStatus(t.Status),
+			Assignee:     t.AssignedTo,
 		})
 		for _, dep := range t.DependsOn {
 			edges = append(edges, workflowEdge{Source: dep, Target: t.TaskID, Conditional: false})
@@ -1101,7 +1126,7 @@ func (h *ProjectHandler) buildWorkflow(meta *projectMeta, team string, includeTa
 			// Checking the raw status (not the normalized output) avoids
 			// treating "" or unknown statuses as pending — upstream skips
 			// those, so a consumer must not see them as executable.
-			if t.Status != "planned" && t.Status != "assigned" {
+			if parents[t.TaskID] || t.Status != "planned" && t.Status != "assigned" {
 				continue
 			}
 			allDone := true
@@ -1288,6 +1313,8 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) ([]task
 		}
 		detail := taskDetail{
 			TaskID:       str(taskIDFromRaw(raw, res.taskID)),
+			RoomID:       str(raw["room_id"]),
+			SourceRoomID: str(raw["source_room_id"]),
 			Status:       str(raw["status"]),
 			SpecPath:     str(raw["spec_path"]),
 			AssignedTo:   str(raw["assigned_to"]),
@@ -1314,6 +1341,12 @@ func (h *ProjectHandler) readTasksDetail(meta *projectMeta, team string) ([]task
 	out := make([]taskDetail, 0, len(taskIDs))
 	for _, id := range taskIDs {
 		if d, ok := detailByTask[id]; ok {
+			for _, t := range graphTasks {
+				if t.TaskID == id {
+					d.ParentTaskID = t.ParentTaskID
+					break
+				}
+			}
 			out = append(out, d)
 		}
 	}
@@ -3244,6 +3277,10 @@ func (h *ProjectHandler) GetProjectMeta(w http.ResponseWriter, r *http.Request) 
 	if failed {
 		return
 	}
+	if caller := authpkg.CallerFromContext(r.Context()); caller != nil && caller.Role == authpkg.RoleWorker && !callerMatchesStorageTeam(caller, pwc.team, pwc.crToEffective) {
+		writeError(w, http.StatusForbidden, "worker can only read project meta in its own team")
+		return
+	}
 	data, err := h.oss.GetObject(r.Context(), pwc.key)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "read project meta: "+err.Error())
@@ -4004,6 +4041,7 @@ func normalizeReplanTasks(raw []json.RawMessage, previous map[string]projectTask
 		}
 		out = append(out, projectTaskMeta{
 			TaskID:       taskID,
+			ParentTaskID: replanParentTaskID(m, prev.ParentTaskID),
 			Title:        title,
 			AssignedTo:   assignee,
 			DependsOn:    deps,
@@ -4074,7 +4112,37 @@ func validateTaskGraph(tasks []projectTaskMeta) error {
 			return err
 		}
 	}
+	byID := map[string]projectTaskMeta{}
+	for _, task := range tasks {
+		byID[task.TaskID] = task
+	}
+	for _, task := range tasks {
+		path := map[string]bool{task.TaskID: true}
+		for parent := task.ParentTaskID; parent != ""; parent = byID[parent].ParentTaskID {
+			if !ids[parent] {
+				return fmt.Errorf("task %s has unknown parent: %s", task.TaskID, parent)
+			}
+			if path[parent] {
+				return fmt.Errorf("task parent cycle detected: %s", parent)
+			}
+			path[parent] = true
+		}
+	}
+	for _, task := range tasks {
+		if task.ParentTaskID != "" && byID[task.ParentTaskID].Status == "completed" && task.Status != "completed" {
+			return fmt.Errorf("task %s has unfinished subtasks", task.ParentTaskID)
+		}
+	}
 	return nil
+}
+
+func replanParentTaskID(raw map[string]any, previous string) string {
+	for _, key := range []string{"parentTaskId", "parent_task_id"} {
+		if value, ok := raw[key]; ok {
+			return strings.TrimSpace(str(value))
+		}
+	}
+	return previous
 }
 
 // firstString returns the first non-empty string among values.

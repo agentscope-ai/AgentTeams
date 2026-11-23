@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -485,13 +486,29 @@ func (k *K8sBackend) Status(ctx context.Context, name string) (*WorkerResult, er
 	}
 
 	return &WorkerResult{
-		Name:           name,
-		Backend:        "k8s",
-		DeploymentMode: DeployCloud,
-		Status:         status,
-		Message:        message,
-		RawStatus:      rawStatus,
+		Name:            name,
+		Backend:         "k8s",
+		DeploymentMode:  DeployCloud,
+		Status:          status,
+		InstanceID:      podInstanceID(pod),
+		Runtime:         pod.Labels[v1beta1.LabelRuntime],
+		HandoffLabel:    pod.Labels[RuntimeHandoffLabel],
+		HandoffSpecHash: pod.Labels[RuntimeHandoffSpecLabel],
+		Message:         message,
+		RawStatus:       rawStatus,
 	}, nil
+}
+
+func podInstanceID(pod *corev1.Pod) string {
+	if pod.DeletionTimestamp != nil || pod.UID == "" {
+		return ""
+	}
+	for _, container := range pod.Status.ContainerStatuses {
+		if container.Name == "worker" && container.State.Running != nil && container.ContainerID != "" {
+			return string(pod.UID) + "/" + container.ContainerID + "/" + container.State.Running.StartedAt.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	return ""
 }
 
 func podContainerFailureStatus(statusGroups ...[]corev1.ContainerStatus) (WorkerStatus, string, string, bool) {

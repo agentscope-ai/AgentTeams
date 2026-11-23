@@ -18,6 +18,7 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/credprovider"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/executor"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/skillscan"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -104,6 +105,8 @@ type MemberRuntimeConfigDeployRequest struct {
 	// the merged result). Empty means no subagent override is declared and
 	// the runtime keeps its current/unset setting.
 	SubagentModel string
+	Heartbeat     *agentconfig.HeartbeatConfig
+	Observability *observability.WorkerSettings
 
 	MatrixUserID   string
 	PersonalRoomID string
@@ -127,10 +130,17 @@ type MemberRuntimeConfigDeployRequest struct {
 	TeamAdminName     string
 	TeamAdminMatrixID string
 	TeamMembers       []RuntimeConfigTeamMember
+	MatrixAllowLists  *RuntimeMatrixAllowLists
 
 	// DropTeamContext forces a standalone runtime.yaml even when an older
 	// team-scoped runtime.yaml exists for the same runtime name.
 	DropTeamContext bool
+}
+
+// RuntimeMatrixAllowLists holds the resolved Team policy for one Worker.
+type RuntimeMatrixAllowLists struct {
+	GroupAllowFrom []string
+	DMAllowFrom    []string
 }
 
 // RuntimeConfigTeamMember is a non-secret roster entry projected into
@@ -176,6 +186,7 @@ type WorkerCoordinationRequest struct {
 // InjectHeartbeatRequest describes heartbeat config injection into a leader's openclaw.json.
 type InjectHeartbeatRequest struct {
 	WorkerName string
+	Runtime    string
 	Enabled    bool
 	Every      string // e.g. "30m"
 }
@@ -314,6 +325,14 @@ func resolvedSubagentModel(req WorkerDeployRequest) string {
 	return req.Spec.SubagentModel
 }
 
+func workerChannelPolicy(spec *v1beta1.ChannelPolicySpec) *agentconfig.ChannelPolicy {
+	if spec == nil {
+		return nil
+	}
+	return &agentconfig.ChannelPolicy{GroupAllowExtra: spec.GroupAllowExtra, GroupDenyExtra: spec.GroupDenyExtra,
+		DMAllowExtra: spec.DmAllowExtra, DMDenyExtra: spec.DmDenyExtra}
+}
+
 // DeployWorkerConfig generates and pushes all configuration files to OSS:
 // openclaw.json, SOUL.md, mcporter config, Matrix password, agent file sync,
 // AGENTS.md merge with builtin section + coordination context, builtin skills.
@@ -351,29 +370,21 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 	}
 
 	// --- openclaw.json ---
-	var channelPolicy *agentconfig.ChannelPolicy
-	if req.Spec.ChannelPolicy != nil {
-		channelPolicy = &agentconfig.ChannelPolicy{
-			GroupAllowExtra: req.Spec.ChannelPolicy.GroupAllowExtra,
-			GroupDenyExtra:  req.Spec.ChannelPolicy.GroupDenyExtra,
-			DMAllowExtra:    req.Spec.ChannelPolicy.DmAllowExtra,
-			DMDenyExtra:     req.Spec.ChannelPolicy.DmDenyExtra,
-		}
-	}
 
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
-		WorkerName:        req.Name,
-		PersonalRoomID:    req.PersonalRoomID,
-		MatrixToken:       req.MatrixToken,
-		GatewayKey:        req.GatewayKey,
-		ModelName:         req.Spec.Model,
-		ModelProvider:     req.Spec.ModelProvider,
-		SubagentModelName: resolvedSubagentModel(req),
-		AIGatewayURL:      req.AIGatewayURL,
-		TeamLeaderName:    req.TeamLeaderName,
-		ChannelPolicy:     channelPolicy,
-		Heartbeat:         req.Heartbeat,
-		Runtime:           req.Spec.Runtime,
+		WorkerName:          req.Name,
+		PersonalRoomID:      req.PersonalRoomID,
+		MatrixToken:         req.MatrixToken,
+		GatewayKey:          req.GatewayKey,
+		ModelName:           req.Spec.Model,
+		ModelProvider:       req.Spec.ModelProvider,
+		SubagentModelName:   resolvedSubagentModel(req),
+		AIGatewayURL:        req.AIGatewayURL,
+		TeamLeaderName:      req.TeamLeaderName,
+		ChannelPolicy:       workerChannelPolicy(req.Spec.ChannelPolicy),
+		Heartbeat:           req.Heartbeat,
+		LlmHeartbeatEnabled: req.Spec.LlmHeartbeatEnabled,
+		Runtime:             req.Spec.Runtime,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)
@@ -782,7 +793,7 @@ func (d *Deployer) InjectWorkerCoordination(ctx context.Context, req WorkerCoord
 func (d *Deployer) InjectHeartbeatConfig(ctx context.Context, req InjectHeartbeatRequest) error {
 	agentPrefix := fmt.Sprintf("agents/%s", req.WorkerName)
 	existing, _ := d.oss.GetObject(ctx, agentPrefix+"/openclaw.json")
-	updated := agentconfig.InjectHeartbeat(existing, req.Enabled, req.Every)
+	updated := agentconfig.InjectHeartbeat(existing, req.Enabled, req.Every, req.Runtime)
 	return d.oss.PutObject(ctx, agentPrefix+"/openclaw.json", updated)
 }
 
@@ -1596,8 +1607,16 @@ func (d *Deployer) DeployManagerConfig(ctx context.Context, req ManagerDeployReq
 	// Matrix client filters all DMs to that wrong localpart, and the agent
 	// silently never sees admin messages. See commit 3f8f84b which fixed this
 	// originally before the controller refactor accidentally reverted it.
+	var managerHeartbeat *agentconfig.HeartbeatConfig
+	if req.Spec.Runtime == "openclaw" || req.Spec.Runtime == "" {
+		managerHeartbeat = &agentconfig.HeartbeatConfig{
+			Enabled: req.Spec.Config.HeartbeatInterval != "0m",
+			Every:   req.Spec.Config.HeartbeatInterval,
+		}
+	}
 	configJSON, err := d.agentConfig.GenerateOpenClawConfig(agentconfig.WorkerConfigRequest{
 		WorkerName:    "manager",
+		Heartbeat:     managerHeartbeat,
 		MatrixToken:   req.MatrixToken,
 		GatewayKey:    req.GatewayKey,
 		ModelName:     req.Spec.Model,

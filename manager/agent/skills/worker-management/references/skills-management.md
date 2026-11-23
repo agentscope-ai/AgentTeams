@@ -58,6 +58,6 @@ Never install an attached archive into the Manager's own `~/skills/` directory.
 
 ## Key facts
 
-- `file-sync`, `task-progress`, `project-participation` are default skills — always included, cannot be removed
+- **Use `task-execution` for task collaboration**. The controller installs it as a builtin Worker skill.
 - Skills are Manager-controlled: Workers cannot modify their own skills (local→remote sync excludes `skills/**`)
 - After writing any file a Worker needs, always notify them to `file-sync`

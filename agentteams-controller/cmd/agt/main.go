@@ -36,12 +36,18 @@ Environment variables:
 	rootCmd.AddCommand(updateCmd())
 	rootCmd.AddCommand(deleteCmd())
 	rootCmd.AddCommand(projectCmd())
+	rootCmd.AddCommand(taskCmd())
+	rootCmd.AddCommand(taskRoomCmd())
 	rootCmd.AddCommand(tracingCmd())
+	rootCmd.AddCommand(monitoringCmd())
+	rootCmd.AddCommand(logsCmd())
 	rootCmd.AddCommand(workerCmd())
 	rootCmd.AddCommand(messageCmd())
 	rootCmd.AddCommand(statusCmd())
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(llmPreflightCmd())
+	rootCmd.AddCommand(gatewayCmd())
+	rootCmd.AddCommand(skillCmd())
 	rootCmd.AddCommand(rotateCmd())
 	return rootCmd
 }

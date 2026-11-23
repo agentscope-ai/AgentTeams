@@ -28,7 +28,7 @@ Worker 由 **CR** 描述。除在 Matrix 里让 Manager 创建外，你还可以
 | **qwenpaw** | `/root/agentteams-fs/agents/<worker-name>/`（QwenPaw 配置在 `.qwenpaw/`） | QwenPaw 2.x 路径；从 `copaw` 切换时会在恢复持久化数据后，将旧 `.copaw/` 状态迁移到 `.qwenpaw/`。共享数据：`/root/agentteams-fs/shared/`。 |
 | **hermes** | `/root/agentteams-fs/agents/<worker-name>/`（`HOME` 即工作区，与 OpenClaw 相同的镜像根） | Hermes 状态在目录内 **`.hermes/`**（如 `.hermes/config.yaml`、`state.db`）。 |
 
-Controller 中已包含 OpenHuman 后端，但当前发布的 Worker CRD enum 尚不接受显式的 `spec.runtime: openhuman`。在业务代码单独修正该契约前，不应按普通 Worker CR 流程创建 OpenHuman Worker。
+当前 Worker CRD 也接受 `deepseek-harness`、`openhuman` 和 `codex`。其工作目录约定由对应 Harness 维护；参见[运行时/镜像选择](deployment/kubernetes.md#34-默认-worker-runtime)与 [Codex 接入说明](../../usage/integrations/codex.md)。
 
 ## 安装
 
@@ -117,15 +117,15 @@ agt get workers amy-ai -o json | jq '.skills'
 - `name` 只能包含字母、数字、点、下划线和连字符，并且必须以字母或数字开头。
 - `scripts/`、`references/` 等附属文件应与 `SKILL.md` 一起放入 ZIP；Dashboard 会保留 Skill 根目录下的完整文件结构。
 
-#### 从资源中心的市场分发
+#### 从资产中心的技能目录分发
 
-1. 打开 Dashboard，进入左侧导航**资源中心**分组下的**市场**。
+1. 打开 Dashboard，进入左侧导航**资产中心**分组下的**技能**。
 2. 如果 Skill 尚未加入市场，点击右上角的**上传技能**，选择 Skill ZIP，点击**解析预览**确认名称和描述，再点击**上传**。
 3. 在市场列表中找到目标 Skill，点击该行操作区的发送图标（**分发到 Worker**）。
 4. 在**分发技能到 Worker**弹窗中选择一个或多个目标 Worker。
 5. 点击**分发到 N 个 Worker**，等待各 Worker 的上传、分配和加载结果。
 
-也可以从 **Workers → 目标 Worker → 详情 → 上传技能包**直接为单个 Worker 上传 Skill ZIP。
+也可以从 **成员与团队 → 团队与Agent → 目标 Worker → 上传技能包**直接为单个 Worker 上传 Skill ZIP。
 
 创建或编辑 Worker 时，也可以在表单的**技能**字段中选择市场或 Nacos 中已有的 Skill。保存 Worker 后，Dashboard 会将尚未就位的完整 Skill 同步到该 Worker 的规范持久化目录，核对并补齐 `spec.skills`，最后尝试重启 Worker。上传或 `spec.skills` 更新失败会作为部分失败显示，不会被误报为安装成功。
 
@@ -138,7 +138,7 @@ Dashboard 会校验 ZIP 和 `SKILL.md`，保留 Skill 根目录下的全部文�
 - 如果重新加载成功，页面会显示该 Worker 的安装或重启完成结果。
 - 如果重启未确认，已经上传的文件和分配记录不会丢失；页面会报告部分失败，后续 Controller reconcile 可以继续使该分配生效，无需重新上传。
 
-可以重新打开 **Workers → 目标 Worker → 详情**，在“已分发技能”中确认 Skill 名称。若需要验证 runtime 已经实际加载，而不只是文件已经存在，应让该 Worker 确认它能够发现并使用对应 Skill。
+可以重新打开 **成员与团队 → 团队与Agent → 目标 Worker**，在“已分发技能”中确认 Skill 名称。若需要验证 runtime 已经实际加载，而不只是文件已经存在，应让该 Worker 确认它能够发现并使用对应 Skill。
 
 Dashboard 分发会更新 `Worker.spec.skills`，因此该 Skill 应出现在 `agt get workers <name> -o json | jq '.skills'` 中。Controller 后续 reconcile 可能要求 Manager 恢复声明式 Skill，但 Dashboard 分发的 Skill 不强制要求 Manager 保留源文件。规范 Worker 副本仍然存在时会忽略 Manager 恢复失败；该副本缺失且 Manager 也无法恢复时，Worker 会记录非阻塞告警。对于远程 Skill 分配，请求的版本或标签刷新失败时也会记录非阻塞告警，并保留已有的规范副本。告警只标明 Skill 及请求的版本或标签，不包含远程源地址中的凭据。
 

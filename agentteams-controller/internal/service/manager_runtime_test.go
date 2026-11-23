@@ -47,7 +47,7 @@ func TestQwenPawManagerUsesMemberRuntimeContract(t *testing.T) {
 
 func TestQwenPawManagerEnvUsesSharedHarness(t *testing.T) {
 	b := NewWorkerEnvBuilder(config.WorkerEnvDefaults{})
-	for _, runtime := range []string{"openclaw", "qwenpaw", "hermes", "deepseek-harness", "openhuman"} {
+	for _, runtime := range []string{"openclaw", "qwenpaw", "hermes", "deepseek-harness", "openhuman", "codex"} {
 		env := b.BuildManager("default", &ManagerProvisionResult{MatrixToken: "manager-token", GatewayKey: "manager-key"}, v1beta1.ManagerSpec{Runtime: runtime})
 		for key, want := range map[string]string{
 			"AGENTTEAMS_AGENT_ROLE":          "manager",
@@ -178,7 +178,7 @@ func TestManagerHarnessSwitchPreservesActiveCommunicationPolicy(t *testing.T) {
 }
 
 func TestManagerRoleProjectionAcrossHarnesses(t *testing.T) {
-	for _, runtime := range []string{"openclaw", "hermes", "openhuman", "deepseek-harness", "qwenpaw"} {
+	for _, runtime := range []string{"openclaw", "hermes", "openhuman", "deepseek-harness", "qwenpaw", "codex"} {
 		t.Run(runtime, func(t *testing.T) {
 			ctx := context.Background()
 			store := ossfake.NewMemory()

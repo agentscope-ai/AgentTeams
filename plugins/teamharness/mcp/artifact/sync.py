@@ -18,7 +18,7 @@ from mcp.common import refs
 from mcp.common.config import _runtime_team_name
 from mcp.common.io import _read_json
 from mcp.common.payload import _first_text
-from mcp.common.paths import _project_dir, _project_state_path, _task_dir, _task_state_path
+from mcp.common.paths import _project_dir, _project_state_path, _task_dir, _task_state_path, _task_result_path
 
 # Call-time lookups (common.refs): monkeypatch-sensitive names resolve
 # against the bound mcp/server.py namespace at call time.
@@ -226,11 +226,15 @@ def _push_task_files(
     """
     task_prefix = f"shared/tasks/{task_id}"
     if result_paths is not None:
-        local_task_dir = _task_dir(arguments, task_id)
         meta_path = f"{task_prefix}/meta.json"
         payload_paths: list[str] = []
-        if (local_task_dir / "result.md").is_file():
-            payload_paths.append(f"{task_prefix}/result.md")
+        try:
+            task = _read_json(_task_state_path(arguments, task_id), {})
+            source, report = _task_result_path(arguments, task_id, task.get("result_path") or None)
+        except ValueError:
+            return False
+        if report.is_file():
+            payload_paths.append(source)
         for path in result_paths:
             if path != meta_path and path not in payload_paths:
                 payload_paths.append(path)
@@ -364,6 +368,11 @@ def _merge_project_pause_state(
     merged = dict(local_meta or {})
     if snapshot is None:
         return merged
+    # Execution authority is never taken from a cached native session.
+    if "execution" in snapshot:
+        merged["execution"] = copy.deepcopy(snapshot["execution"])
+    else:
+        merged.pop("execution", None)
     remote_status = str(snapshot.get("status") or "")
     if remote_status == "paused":
         # A durable pause is never cleared by a client write (round 10);
@@ -824,6 +833,8 @@ def _commit_task_meta(
         method="PUT",
     )
     request.add_header("Content-Type", "application/json")
+    if os.getenv("AGENTTEAMS_PROCESS_ID"):
+        request.add_header("X-AgentTeams-Process-ID", os.environ["AGENTTEAMS_PROCESS_ID"])
     if if_none_match:
         # Create-if-absent: the consistent read saw no remote object.
         request.add_header("If-None-Match", "*")

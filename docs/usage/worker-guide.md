@@ -28,7 +28,7 @@ Full field reference: [Declarative Resource Management](resource-management.md).
 | **qwenpaw** | `/root/agentteams-fs/agents/<worker-name>/` (QwenPaw config in `.qwenpaw/`) | QwenPaw 2.x path. When switching from `copaw`, persisted state is restored before the legacy `.copaw/` state is migrated to `.qwenpaw/`. Shared data: `/root/agentteams-fs/shared/`. |
 | **hermes** | `/root/agentteams-fs/agents/<worker-name>/` (`HOME` equals workspace, same mirror root as OpenClaw) | Hermes policy/state under **`.hermes/`** inside that directory (e.g. `.hermes/config.yaml`, `state.db`). |
 
-The Controller contains an OpenHuman backend, but the shipped Worker CRD enum does not currently accept an explicit `spec.runtime: openhuman`. Until that contract is fixed in a separate business-code change, do not create an OpenHuman Worker through the normal Worker CR flow.
+The current Worker CRD also accepts `deepseek-harness`, `openhuman`, and `codex`. Their workspace conventions are maintained with their Harnesses; see [runtime/image selection](deployment/kubernetes.md#34-default-worker-runtime) and [Codex integration](integrations/codex.md).
 
 ## Installation
 
@@ -119,13 +119,13 @@ The upload package must meet these requirements:
 
 #### Distribute from the Resource Center marketplace
 
-1. Open the Dashboard and select **资源中心 (Resource Center) → 市场 (Marketplace)** in the left navigation.
+1. Open the Dashboard and select **资产中心 (Asset Center) → 技能 (Skills)** in the left navigation.
 2. If the Skill is not yet in the marketplace, click **上传技能 (Upload Skill)** in the upper-right corner, choose the Skill ZIP, click **解析预览 (Parse Preview)** to confirm its name and description, and then click **上传 (Upload)**.
 3. Find the target Skill in the marketplace and click the send icon labeled **分发到 Worker (Distribute to Worker)** in that row's action area.
 4. Select one or more target Workers in the **分发技能到 Worker (Distribute Skill to Worker)** dialog.
 5. Click **分发到 N 个 Worker (Distribute to N Workers)** and wait for each Worker's upload, assignment, and reload result.
 
-You can also upload a Skill ZIP directly to one Worker through **Workers → target Worker → 详情 (Details) → 上传技能包 (Upload Skill Package)**.
+You can also upload a Skill ZIP directly to one Worker through **成员与团队 (Members & Teams) → 团队与Agent (Teams & Agents) → target Worker → 上传技能包 (Upload Skill Package)**.
 
 When creating or editing a Worker, you can also select existing marketplace or Nacos Skills in the form's **技能 (Skills)** field. After saving the Worker, the Dashboard synchronizes any missing complete Skill packages to that Worker's canonical persistent directory, reconciles `spec.skills`, and then attempts to restart the Worker. Upload or `spec.skills` update failures are shown as partial failures rather than reported as successful installations.
 
@@ -138,7 +138,7 @@ The Dashboard validates the ZIP and `SKILL.md`, preserves all files under the Sk
 - On a successful reload, the UI shows the installation or restart result for that Worker.
 - If the restart is not confirmed, the uploaded files and assignment remain available. The UI reports a partial failure, and a subsequent Controller reconcile can still make the assignment effective without another upload.
 
-Reopen **Workers → target Worker → 详情 (Details)** and confirm the Skill under **已分发技能 (Distributed Skills)**. To verify runtime availability rather than only file presence, ask that Worker to confirm it can discover and use the Skill.
+Reopen **成员与团队 (Members & Teams) → 团队与Agent (Teams & Agents) → target Worker** and confirm the Skill under **已分发技能 (Distributed Skills)**. To verify runtime availability rather than only file presence, ask that Worker to confirm it can discover and use the Skill.
 
 Dashboard distribution updates `Worker.spec.skills`, so the Skill should appear in `agt get workers <name> -o json | jq '.skills'`. A later Controller reconcile may ask the Manager to restore a declared Skill, but the Manager is not required to keep a source copy for Dashboard-distributed Skills. Manager recovery failure is ignored while the canonical Worker copy exists; if that copy is missing and the Manager cannot restore it, the Worker receives a non-blocking warning. For a remote Skill assignment, failure to refresh the requested version or label also produces a non-blocking warning while retaining any existing canonical copy. The warning identifies the Skill and requested version or label, but omits remote source credentials.
 

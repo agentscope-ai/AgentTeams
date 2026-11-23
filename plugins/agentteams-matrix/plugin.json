@@ -8,11 +8,6 @@
   "contract": "contract.yaml",
   "adapters": [
     {
-      "id": "qwenpaw",
-      "path": "adapters/qwenpaw",
-      "pluginId": "agentteams-matrix-channel"
-    },
-    {
       "id": "openclaw",
       "path": "adapters/openclaw",
       "pluginId": "agentteams-matrix-channel"

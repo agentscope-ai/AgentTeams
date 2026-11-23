@@ -28,7 +28,7 @@ if [ -d "$_cli_prefix/bin" ]; then PATH="$_cli_prefix/bin:$PATH"; export PATH; f
 # Env var names checked (names only, never values):
 #   qwen (verified against qwen 0.25.0):
 #     DASHSCOPE_API_KEY        Qwen Cloud provider key; referenced by this
-#                              repo's installer (install/agentteams-install.sh)
+#                              repo's installer (bash <(curl -fsSL https://agentteams.cloud/install.sh))
 #     QWEN_OAUTH_DYNAMIC_TOKEN OAuth dynamic-token form; found in the qwen
 #                              0.25.0 CLI bundle
 #     QWEN_API_KEY             provider key for the qwen endpoint; found in

@@ -23,16 +23,17 @@ func updateCmd() *cobra.Command {
 
 func updateWorkerCmd() *cobra.Command {
 	var (
-		name       string
-		model      string
-		runtime    string
-		image      string
-		identity   string
-		soul       string
-		skills     string
-		packageURI string
-		expose     string
-		state      string
+		name                string
+		model               string
+		runtime             string
+		image               string
+		identity            string
+		soul                string
+		skills              string
+		packageURI          string
+		expose              string
+		state               string
+		llmHeartbeatEnabled bool
 	)
 
 	cmd := &cobra.Command{
@@ -59,6 +60,9 @@ func updateWorkerCmd() *cobra.Command {
 			}
 
 			req := map[string]interface{}{}
+			if cmd.Flags().Changed("llm-heartbeat-enabled") {
+				req["llmHeartbeatEnabled"] = llmHeartbeatEnabled
+			}
 			setIfNotEmpty(req, "model", model)
 			setIfNotEmpty(req, "runtime", runtime)
 			setIfNotEmpty(req, "image", image)
@@ -92,6 +96,7 @@ func updateWorkerCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
+	cmd.Flags().BoolVar(&llmHeartbeatEnabled, "llm-heartbeat-enabled", false, "Enable or disable OpenClaw model-driven autonomous checks")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman|deepseek-harness|codex)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
@@ -232,7 +237,7 @@ func updateManagerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Manager name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID")
 	cmd.Flags().StringVar(&modelProvider, "model-provider", "", "LLM provider name (empty clears the binding)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|hermes|openhuman)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|deepseek-harness|openhuman|codex)")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&soul, "soul", "", "Manager SOUL.md content")
 	return cmd

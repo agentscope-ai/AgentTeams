@@ -1,0 +1,158 @@
+{
+  "task_id": "live-codex-hermes-09",
+  "case": "09",
+  "scope": "one real codex-to-hermes in-progress continuation",
+  "mode": "replace",
+  "sources": {
+    "core": "2c90bccfedb563cbf94e3e1a932fd2effd7b5e23",
+    "codex": "1cbc9665d0d69ef18b467ce2cdaca284596e73ed",
+    "hermes": "0b0892f3aad69c9e655a41a3a95902f8ea1e1185"
+  },
+  "native_recovery_sessions": {
+    "hermes": [
+      {
+        "timestamp": "2026-11-16T17:31:12.779930+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "6edcc38ae9f54cc8bfaf065532014fb9",
+        "event": "task.recovery.session",
+        "task_id": "live-codex-hermes-09",
+        "team_id": "recovery-team",
+        "generation": 2,
+        "session_id": "20261116_173112_214622f6",
+        "checkpoint_version": 4,
+        "reused": false
+      }
+    ],
+    "hermes_cache": [
+      {
+        "timestamp": "2026-11-16T17:32:16.948729+00:00",
+        "runtime": "hermes",
+        "role": "standalone",
+        "agent_name": "agent-a",
+        "boot_id": "6edcc38ae9f54cc8bfaf065532014fb9",
+        "event": "task.recovery.cache",
+        "task_id": "live-codex-hermes-09",
+        "team_id": "recovery-team",
+        "session_id": "20261116_173112_214622f6",
+        "expires_at": 1794936736.9402244,
+        "checkpoint_digest": "a2cb3e0e63621fe95aed2762fc1f51d3b1bbbcc456043923b9f514dd9baf434a"
+      }
+    ],
+    "codex": {
+      "thread_id": "01a1e568-6d35-7252-b1c9-765de6684ef4",
+      "runtime": "codex",
+      "expires_at": 1794936627.6840973,
+      "checkpoint_digest": "85e653403d1c9a32f66c9c2925538dfb70a21f6a3a55be09ac63401b8be45860"
+    }
+  },
+  "generation_before": 1,
+  "generation_after": 2,
+  "checkpoint_before": 4,
+  "checkpoint_after": 10,
+  "execution": {
+    "generation": 2,
+    "instance_id": "docker/70dc49e99cc128b70257f09ab9e5ac4bc0016f5367b541cc630f16a4f38dab79/2026-11-16T17:31:06.207836259Z",
+    "process_id": "1:1794850266365941043:6edcc38ae9f54cc8bfaf065532014fb9",
+    "runtime": "hermes",
+    "state": "active",
+    "checkpoint": {
+      "version": 10,
+      "completed_steps": [
+        "one",
+        "two",
+        "three"
+      ],
+      "remaining_steps": [],
+      "operation": {
+        "id": "fixture:live-codex-hermes-09:three",
+        "state": "verified",
+        "evidence": "Persisted step output SHA256=941489f0035d983b0f3d00972b6a304409dee60e5924f566a429c063ef8b9cf6; ledger count=1"
+      },
+      "artifacts": [
+        {
+          "key": "teams/recovery-team/shared/tasks/live-codex-hermes-09/output/step-one.json",
+          "sha256": "e8a657ceb9e20d82951340acb1df96dcdbe06ac6dadf6a350ed5667ce0dac4de",
+          "size": 104
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-codex-hermes-09/output/step-two.json",
+          "sha256": "2b63bc16a2d4e4dad0f13cb64ca1504c1d5b8dbd4768a1cf7034133634b25626",
+          "size": 104
+        },
+        {
+          "key": "teams/recovery-team/shared/tasks/live-codex-hermes-09/output/step-three.json",
+          "sha256": "941489f0035d983b0f3d00972b6a304409dee60e5924f566a429c063ef8b9cf6",
+          "size": 106
+        }
+      ],
+      "result": {
+        "key": "teams/recovery-team/shared/tasks/live-codex-hermes-09/result.md",
+        "sha256": "42b1c9b9d6ddbcd536074581f78cc7782ed0581b46720c52f5225f151776a89a",
+        "size": 776
+      },
+      "delivery": "delivered",
+      "reply_txn": "task-reply:9b4f15a29d34dc1227c10252bba6db47c573a640a881be6c1ecc5e9a27fb0bb2",
+      "reply_event": "$mY8VoHUwIcs8QkGb3566rMA4V2WtzaZg2t5S4xdMfu4",
+      "saved_at": "2026-11-16T17:32:16.936071034Z"
+    }
+  },
+  "ledger": [
+    {
+      "step": "one",
+      "generation": 1,
+      "process_id": "7:1794850107471856803:7351d60954da40fc8e24dc59c0c8d711"
+    },
+    {
+      "step": "two",
+      "generation": 2,
+      "process_id": "1:1794850266365941043:6edcc38ae9f54cc8bfaf065532014fb9"
+    },
+    {
+      "step": "three",
+      "generation": 2,
+      "process_id": "1:1794850266365941043:6edcc38ae9f54cc8bfaf065532014fb9"
+    }
+  ],
+  "artifacts_verified": [
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-hermes-09/output/step-one.json",
+      "sha256": "e8a657ceb9e20d82951340acb1df96dcdbe06ac6dadf6a350ed5667ce0dac4de",
+      "size": 104
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-hermes-09/output/step-two.json",
+      "sha256": "2b63bc16a2d4e4dad0f13cb64ca1504c1d5b8dbd4768a1cf7034133634b25626",
+      "size": 104
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-hermes-09/output/step-three.json",
+      "sha256": "941489f0035d983b0f3d00972b6a304409dee60e5924f566a429c063ef8b9cf6",
+      "size": 106
+    },
+    {
+      "key": "teams/recovery-team/shared/tasks/live-codex-hermes-09/result.md",
+      "sha256": "42b1c9b9d6ddbcd536074581f78cc7782ed0581b46720c52f5225f151776a89a",
+      "size": 776
+    }
+  ],
+  "docker_order_ns": {
+    "die": 1794850265683100260,
+    "destroy": 1794850265711405985,
+    "create": 1794850266172368310
+  },
+  "matrix": {
+    "reply_event": "$mY8VoHUwIcs8QkGb3566rMA4V2WtzaZg2t5S4xdMfu4",
+    "report_copies": 1,
+    "external_matrix_inputs_after_stop": [],
+    "native_read_sources": [
+      "$SEgkchvAXAIKmnlgC8Il2CHM-C6Z2Ft8eZP_7NUBVv8"
+    ],
+    "read_receipt_events": [
+      "$ibGxLFkZO5QEjVo156qyCG2nybxqDCrFPrWqOJKklUo"
+    ]
+  },
+  "fixture_prefix": "recovery-1631-live-20261117",
+  "authoritative_report_verified": true
+}

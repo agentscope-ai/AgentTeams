@@ -91,7 +91,7 @@ test_manager_owned_and_local_runtime_files_stay_local() {
     state_dir="${tmpdir}/state"
     remote_prefix="agentteams/agentteams-storage/agents/alice"
     mkdir -p "${workspace}/results" "${workspace}/credentials" \
-        "${workspace}/.openclaw/matrix" "${state_dir}" "${tmpdir}/bin"
+        "${workspace}/.openclaw/matrix" "${workspace}/.openclaw/credentials/matrix" "${state_dir}" "${tmpdir}/bin"
 
     cat > "${tmpdir}/bin/mc" <<'EOF'
 #!/bin/bash
@@ -107,6 +107,7 @@ EOF
     printf '{}\n' > "${workspace}/openclaw.json"
     printf 'secret\n' > "${workspace}/credentials/token"
     printf 'crypto\n' > "${workspace}/.openclaw/matrix/state"
+    printf 'device\n' > "${workspace}/.openclaw/credentials/matrix/credentials.json"
     printf 'task result\n' > "${workspace}/results/output.md"
 
     worker_sync_push_once "${workspace}" "${remote_prefix}" "${state_dir}"
@@ -149,6 +150,13 @@ EOF
         fail "large change set did not collapse to one operation"
     grep -Fq "mirror ${workspace}/ ${remote_prefix}/ --overwrite" "${FAKE_MC_LOG}" ||
         fail "large change set did not use mirror"
+    grep -Fq -- '--exclude runtime/compat-config.json*' "${FAKE_MC_LOG}" ||
+        fail "bulk mirror would upload derived credentials"
+
+    for pattern in "runtime/state.json" "runtime/matrix/**" "runtime/sessions/**"; do
+        grep -Fq -- "--exclude ${pattern}" "${FAKE_MC_LOG}" ||
+            fail "bulk mirror would overwrite shared Worker state"
+    done
 
     unset AGENTTEAMS_WORKER_SYNC_MIRROR_THRESHOLD
     rm -rf "${tmpdir}"
@@ -232,6 +240,18 @@ test_coding_cli_prefix_is_synced
 if worker_sync_should_push "credentials/.config-pull.fixture/merged.json"; then
     fail "temporary config would be uploaded"
 fi
+for _runtime_file in runtime/state.json runtime/matrix/state.json runtime/matrix/events/input.json runtime/matrix/results/result.txt runtime/sessions/codex/task.json runtime/runtime.yaml runtime/compat-config.json runtime/compat-config.json.migrate.fixture runtime/compat-config.json.bak credentials/.runtime-config-fixture; do
+    if worker_sync_should_push "${_runtime_file}"; then
+        fail "Controller configuration or derived credentials would be uploaded"
+    fi
+done
+worker_sync_should_push "runtime/matrix-bridge-state.json" ||
+    fail "legacy delivery state must remain durable until its migration"
 python3 "${SCRIPT_DIR}/test-worker-config-pull.py"
 
 echo "PASS: worker file sync"
+
+
+if worker_sync_should_push ".openclaw/credentials/matrix/credentials.json"; then
+    fail "native Matrix device credentials would be uploaded without their crypto store"
+fi

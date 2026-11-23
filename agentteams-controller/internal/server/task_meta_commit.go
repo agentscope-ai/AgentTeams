@@ -191,6 +191,18 @@ func (h *ProjectHandler) resolveTaskMetaCommitKey(
 			}
 		}
 		hits = filtered
+	} else if caller != nil && (caller.Role == authpkg.RoleWorker || caller.Role == authpkg.RoleTeamLeader) && caller.Team != "" {
+		// A managed member already has one trusted Team scope. Repeated IDs in
+		// other Teams must not force the Agent to reconstruct deployment facts.
+		filtered := hits[:0]
+		for _, candidate := range hits {
+			if callerMatchesStorageTeam(caller, candidate.team, crToEffective) {
+				filtered = append(filtered, candidate)
+			}
+		}
+		if len(filtered) > 0 {
+			hits = filtered
+		}
 	}
 	switch len(hits) {
 	case 0:
@@ -238,7 +250,11 @@ func (h *ProjectHandler) resolveTaskMetaCommitKey(
 // scoped access check.
 func (h *ProjectHandler) taskMetaPrefixes(ctx context.Context) ([]string, map[string]string, error) {
 	var teams v1beta1.TeamList
-	if err := h.client.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
+	reader := h.configReader
+	if reader == nil {
+		reader = h.client
+	}
+	if err := reader.List(ctx, &teams, client.InNamespace(h.namespace)); err != nil {
 		return nil, nil, err
 	}
 	prefixes := make([]string, 0, len(teams.Items))
@@ -345,7 +361,16 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "task meta commit body must be a JSON object, not null")
 		return
 	}
+	if ifNoneMatch == "*" && !h.validateExecutionCommit(w, r, nil, body) {
+		return
+	}
 	if ifNoneMatch == "*" {
+		if !validateTaskCancellationCommit(w, nil, body) || !validateTaskPlanCommit(w, nil, body) || !validateTaskReviewCommit(w, nil, body) || !validateTaskNotificationsCommit(w, nil, body) || !validateTaskSubmissionCommit(w, nil, body) || !validateTaskCompletionCommit(w, nil, body) || !validateTaskOriginCommit(w, nil, body) {
+			return
+		}
+		if !validateTaskFileIndexCommit(w, nil, body) {
+			return
+		}
 		h.putTaskMetaCreateIfAbsent(w, r, taskID, body)
 		return
 	}
@@ -376,6 +401,15 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	currentStatus, currentStatusPresent, _ := exactTaskStatus(current)
+	if !validateTaskCancellationCommit(w, current, body) || !validateTaskPlanCommit(w, current, body) || !validateTaskReviewCommit(w, current, body) || !validateTaskNotificationsCommit(w, current, body) || !validateTaskSubmissionCommit(w, current, body) || !validateTaskCompletionCommit(w, current, body) || !validateTaskOriginCommit(w, current, body) {
+		return
+	}
+	if !validateTaskFileIndexCommit(w, current, body) {
+		return
+	}
+	if !h.validateExecutionCommit(w, r, current, body) {
+		return
+	}
 	// The commit must not drop the status: a task meta without one is not a
 	// state any runtime can interpret, and no legitimate client omits it
 	// (the sync commits the merged record).
@@ -445,6 +479,10 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validateMainTaskAuthority(w, current, body, authpkg.CallerFromContext(r.Context())) {
+		return
+	}
+
 	// The unified exit is the STRICT conditional write, exactly like the
 	// project meta commit: a backend whose If-Match can degrade to
 	// compare-then-put — or that does not implement it — is rejected with
@@ -465,6 +503,13 @@ func (h *ProjectHandler) PutTaskMeta(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeError(w, http.StatusInternalServerError, "commit task meta: "+err.Error())
 		}
+		return
+	}
+	if bodyStatus == "assigned" && h.taskAssigned != nil {
+		h.taskAssigned()
+	}
+	if err := h.advanceMainTaskExecution(r.Context(), key, body); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "execution committed; main task phase update needs retry")
 		return
 	}
 	committed, err := h.oss.StatMeta(r.Context(), key)
@@ -555,6 +600,10 @@ func (h *ProjectHandler) putTaskMetaCreateIfAbsent(
 		return
 	}
 
+	if !validateMainTaskAuthority(w, nil, body, caller) {
+		return
+	}
+
 	// The object must not exist: an existing record (a concurrent create,
 	// possibly already cancelled) is a conflict — the caller re-reads it
 	// versioned and converges on it.
@@ -585,6 +634,10 @@ func (h *ProjectHandler) putTaskMetaCreateIfAbsent(
 		default:
 			writeError(w, http.StatusInternalServerError, "create task meta: "+err.Error())
 		}
+		return
+	}
+	if err := h.advanceMainTaskExecution(ctx, key, body); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "execution created; main task phase update needs retry")
 		return
 	}
 	committed, err := h.oss.StatMeta(ctx, key)
@@ -1382,12 +1435,31 @@ func (h *ProjectHandler) checkStatusLane(
 		}
 		return true
 	}
+	if curStatus == "assigned" && bodStatus == "prepared" && preparesTaskReassignment(cur, bod) {
+		return true
+	}
 	if !legalStatusTransition(curStatus, bodStatus) {
 		writeError(w, http.StatusForbidden,
 			"the requested status transition is not allowed by the task lifecycle contract")
 		return false
 	}
 	return true
+}
+
+// A fresh delegation may replace an assignment before any Worker has claimed
+// it. Keep the Task undiscoverable until its new assignment is delivered.
+func preparesTaskReassignment(cur, next map[string]json.RawMessage) bool {
+	if _, claimed := cur["execution"]; claimed {
+		return false
+	}
+	oldAssignee, _ := recordStringField(cur, "assigned_to")
+	newAssignee, _ := recordStringField(next, "assigned_to")
+	oldAccount, newAccount := canonicalAccount(oldAssignee), canonicalAccount(newAssignee)
+	oldTxn, _ := recordStringField(cur, "notifyTxn")
+	newTxn, _ := recordStringField(next, "notifyTxn")
+	_, tookOldEvent := next["eventId"]
+	return oldAccount != "" && newAccount != "" && oldAccount != newAccount &&
+		strings.TrimSpace(newTxn) != "" && newTxn != oldTxn && !tookOldEvent
 }
 
 // validateW2DecisionAuthority is the server-side W2 decision-authority guard
@@ -1432,6 +1504,27 @@ func (h *ProjectHandler) validateW2DecisionAuthority(
 		return false
 	}
 	if !h.checkStatusLane(w, cur, bod, class) {
+		return false
+	}
+	return true
+}
+
+// A subtask's plan membership is immutable; only a decision authority may
+// write the coordinating main Task. Worker execution never mutates its parent.
+func validateMainTaskAuthority(w http.ResponseWriter, before, after []byte, caller *authpkg.CallerIdentity) bool {
+	var old, next map[string]any
+	_ = json.Unmarshal(before, &old)
+	_ = json.Unmarshal(after, &next)
+	if old != nil {
+		for _, key := range []string{"main_task_id", "task_kind"} {
+			if coordinationString(old, key) != coordinationString(next, key) {
+				writeError(w, 403, "task plan membership is immutable")
+				return false
+			}
+		}
+	}
+	if coordinationString(next, "task_kind") == "main" && classifyCommitActor(caller) != actorDecider {
+		writeError(w, 403, "execution worker cannot write a coordinating main task")
 		return false
 	}
 	return true

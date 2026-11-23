@@ -105,6 +105,8 @@ Mermaid 输出（`?format=mermaid`）对齐 LangGraph 的 `draw_mermaid` 助手�
   "tasks_detail": [
     {
       "task_id": "t1",
+      "room_id": "!execution:matrix.local",
+      "source_room_id": "!assistant:matrix.local",
       "project_id": "demo-project-001",
       "status": "completed",
       "spec_path": "shared/tasks/t1/spec.md",
@@ -120,6 +122,8 @@ Mermaid 输出（`?format=mermaid`）对齐 LangGraph 的 `draw_mermaid` 助手�
 ```
 
 `tasks_detail` 仅在 `?includeTasks=true` 时出现。它透传项目级 `nodes[]` 摘要不包含的 TaskMeta 字段：`spec_path`（任务规格文件）、`summary` / `result_status` / `result_path`（提交结果）、`deliverables`（产物清单）、`cancel_reason`（取消原因）、`history`（任务状态转换审计轨迹，最早在前，条目为 `{ts, from, to, action, actor, note?}`）以及用于约束 accept/cancel 决定的不透明 `submission_id`。TaskMeta 只从项目所属作用域读取：团队项目读取 `teams/{team}/shared/tasks/{id}/meta.json`，standalone 项目读取 `shared/tasks/{id}/meta.json`，不跨作用域回退。`task_id` 或 `project_id` 不匹配的 TaskMeta 会被拒绝。没有 TaskMeta 文件的任务（如尚未委派）会被跳过；单个任务读取错误也会跳过，避免一个坏任务拖垮整个响应。
+
+`tasks_detail[].room_id` 是任务执行的协作房间，`source_room_id` 是发起任务的原对话。两者互不替代；旧 TaskMeta 未记录时省略对应字段。
 
 节点状态归一化为前端友好枚举：
 

@@ -724,6 +724,43 @@ func TestPutTaskMeta_WorkerStatusTransition(t *testing.T) {
 	}
 }
 
+func TestPutTaskMeta_LeaderPreparesReassignmentBeforeExecution(t *testing.T) {
+	leader := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "alpha-lead", Team: "alpha-team"}
+	worker := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	for _, tc := range []struct {
+		name   string
+		caller *authpkg.CallerIdentity
+		change func(before, after map[string]any)
+		want   int
+	}{
+		{"leader reassigns", leader, nil, http.StatusOK},
+		{"worker reassigns", worker, nil, http.StatusForbidden},
+		{"old notification transaction", leader, func(_, after map[string]any) { after["notifyTxn"] = "old-notify" }, http.StatusForbidden},
+		{"old assignment event", leader, func(_, after map[string]any) { after["eventId"] = "$old" }, http.StatusForbidden},
+		{"same assignee", leader, func(_, after map[string]any) { after["assigned_to"] = "@alpha-dev:example.test" }, http.StatusForbidden},
+		{"execution already claimed", leader, func(before, after map[string]any) {
+			execution := map[string]any{"generation": 1, "state": "active"}
+			before["execution"], after["execution"] = execution, execution
+		}, http.StatusForbidden},
+		{"acknowledged", leader, func(before, _ map[string]any) { before["status"] = "in_progress" }, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			h := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
+			before := taskMeta(map[string]any{"status": "assigned", "assigned_to": "@alpha-dev:example.test", "notifyTxn": "old-notify", "eventId": "$old"})
+			after := taskMeta(map[string]any{"status": "prepared", "assigned_to": "@alpha-qa:example.test", "notifyTxn": "next-notify"})
+			if tc.change != nil {
+				tc.change(before, after)
+			}
+			putTask(store, taskMetaKey, before)
+			rec := putTaskMetaRequest(t, h, "t1", taskMetaETag(t, store, taskMetaKey), taskMetaBody(after), tc.caller)
+			if rec.Code != tc.want {
+				t.Fatalf("prepare reassignment: %d %s, want %d", rec.Code, rec.Body, tc.want)
+			}
+		})
+	}
+}
+
 // 7. decision_status_history is append-only for a worker: existing entries
 // are kept verbatim, new entries may be appended.
 func TestPutTaskMeta_WorkerDecisionHistory(t *testing.T) {

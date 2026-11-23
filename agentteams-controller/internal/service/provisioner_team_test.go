@@ -87,6 +87,21 @@ func newFakeTeamMatrix() *fakeTeamMatrix {
 	}
 }
 
+func TestProvisionTeamRoomsUsesAliasNameWithoutChangingDisplayName(t *testing.T) {
+	matrixClient := newFakeTeamMatrix()
+	p := NewProvisioner(ProvisionerConfig{Matrix: matrixClient, AdminUser: "admin"})
+	_, err := p.ProvisionTeamRooms(context.Background(), TeamRoomRequest{
+		TeamName: "Release smoke", TeamAliasName: "release-smoke", LeaderName: "lead",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := matrixClient.createRooms[0]
+	if room.RoomAliasName != "agentteams-team-release-smoke" || room.Name != "Team: Release smoke" {
+		t.Fatalf("alias=%q display name=%q", room.RoomAliasName, room.Name)
+	}
+}
+
 func (f *fakeTeamMatrix) EnsureUser(context.Context, matrix.EnsureUserRequest) (*matrix.UserCredentials, error) {
 	return &matrix.UserCredentials{
 		Password:    "matrix-password",
@@ -577,6 +592,35 @@ func TestProvisionWorkerTeamMemberRoomMeta(t *testing.T) {
 	}
 }
 
+func TestProvisionWorkerJoinsOnlyInvitedManagerAuthority(t *testing.T) {
+	for _, tc := range []struct {
+		name, teamLeader string
+		wantManager      bool
+	}{
+		{name: "manager and standalone worker", wantManager: true},
+		{name: "team worker uses Leader authority", teamLeader: "lead"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			matrixClient := newFakeTeamMatrix()
+			p := NewProvisioner(ProvisionerConfig{
+				Matrix: matrixClient, Gateway: fakeGateway{}, AdminUser: "admin", ManagerEnabled: true,
+				Creds: fakeCredentialStore{"default": {MatrixToken: "manager-token"}},
+			})
+			result, err := p.ProvisionWorker(context.Background(), WorkerProvisionRequest{Name: "dev", TeamLeaderName: tc.teamLeader})
+			if err != nil {
+				t.Fatal(err)
+			}
+			joined := false
+			for _, call := range matrixClient.joins {
+				joined = joined || (call.roomID == result.RoomID && call.userID == "manager-token")
+			}
+			if joined != tc.wantManager {
+				t.Fatalf("Manager joined Worker room = %v, want %v", joined, tc.wantManager)
+			}
+		})
+	}
+}
+
 func TestProvisionManagerWritesDirectRoomMeta(t *testing.T) {
 	matrixClient := newFakeTeamMatrix()
 	p := NewProvisioner(ProvisionerConfig{
@@ -592,6 +636,9 @@ func TestProvisionManagerWritesDirectRoomMeta(t *testing.T) {
 	}
 	if result.RoomID != "!manager:localhost" {
 		t.Fatalf("manager room=%q, want !manager:localhost", result.RoomID)
+	}
+	if got := matrixClient.joins; !reflect.DeepEqual(got, []roomUserCall{{roomID: result.RoomID, userID: result.MatrixToken}}) {
+		t.Fatalf("Manager room joins=%v, want one join with the provisioned Manager credentials", got)
 	}
 	state := requireRoomState(t, matrixClient, "!manager:localhost")
 	if got := state.content["roomKind"]; got != "direct_room" {
@@ -825,6 +872,24 @@ func TestProvisionTeamRoomsInvitesCoordinatorMembersLikeTeamAdmin(t *testing.T) 
 	}
 	if !reflect.DeepEqual(members, wantMembers) {
 		t.Fatalf("humanMembers=%v, want %v", members, wantMembers)
+	}
+}
+
+func TestTeamOrdinaryMemberHasRoomMembershipWithoutCoordinatorAuthority(t *testing.T) {
+	p := NewProvisioner(ProvisionerConfig{Matrix: newFakeTeamMatrix(), AdminUser: "admin"})
+	members := []v1beta1.TeamMemberSpec{
+		{Name: "alice", Role: "coordinator"},
+		{Name: "bob", Role: "member"},
+	}
+	if got := p.resolveTeamMemberMatrixIDs(members); !reflect.DeepEqual(got, []string{"@alice:localhost", "@bob:localhost"}) {
+		t.Fatalf("room members = %v", got)
+	}
+	if got := p.resolveTeamCoordinatorMatrixIDs(nil, members); !reflect.DeepEqual(got, []string{"@alice:localhost"}) {
+		t.Fatalf("coordinators = %v", got)
+	}
+	members[0].Role = "member"
+	if got := p.resolveTeamCoordinatorMatrixIDs(nil, members); len(got) != 0 {
+		t.Fatalf("demoted user retained coordinator authority: %v", got)
 	}
 }
 

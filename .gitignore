@@ -76,3 +76,6 @@ build-manifest.json
 /output/observability-demo/
 /output/native/
 /output/native-acceptance/
+
+# Website-owned installer fixtures for cross-repository contract tests
+.installer-source/

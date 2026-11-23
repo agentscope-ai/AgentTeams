@@ -15,7 +15,7 @@ set -u
 PASS=0
 FAIL=0
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
-INSTALL_SCRIPT="${TESTS_DIR}/agentteams-install.sh"
+INSTALL_SCRIPT="${TESTS_DIR}/../.installer-source/public/install.sh"
 
 if [ ! -f "${INSTALL_SCRIPT}" ]; then
     echo "ERROR: install script not found at ${INSTALL_SCRIPT}"
@@ -91,8 +91,8 @@ fi
 
 # Test 1c: Default dashboard version is independent of AGENTTEAMS_VERSION
 dashboard_version_line=$(grep -E 'AGENTTEAMS_DASHBOARD_VERSION=.*:-' "${INSTALL_SCRIPT}" | head -1)
-if echo "${dashboard_version_line}" | grep -q 'v1\.4\.0'; then
-    pass "Dashboard has independent default version (v1.4.0)"
+if echo "${dashboard_version_line}" | grep -q 'v1\.4\.1'; then
+    pass "Dashboard has independent default version (v1.4.1)"
 else
     fail "Dashboard default version line: ${dashboard_version_line}"
 fi
@@ -205,10 +205,10 @@ else
             fail "Makefile missing ${target} target"
         fi
     done
-    if grep -q '^DASHBOARD_VERSION ?= v1\.4\.0$' "${MAKEFILE}"; then
-        pass "Makefile dashboard default version = v1.4.0"
+    if grep -q '^DASHBOARD_VERSION ?= v1\.4\.1$' "${MAKEFILE}"; then
+        pass "Makefile dashboard default version = v1.4.1"
     else
-        fail "Makefile dashboard default version is not v1.4.0"
+        fail "Makefile dashboard default version is not v1.4.1"
     fi
 fi
 
@@ -216,8 +216,8 @@ fi
 
 section "Test 8: PowerShell Dashboard support"
 
-if grep -q '^function Start-AgentTeamsDashboard' "${TESTS_DIR}/agentteams-install.ps1" && \
-   grep -q '^    Start-AgentTeamsDashboard' "${TESTS_DIR}/agentteams-install.ps1"; then
+if grep -q '^function Start-AgentTeamsDashboard' "${TESTS_DIR}/../.installer-source/public/install.ps1" && \
+   grep -q '^    Start-AgentTeamsDashboard' "${TESTS_DIR}/../.installer-source/public/install.ps1"; then
     pass "PowerShell installer starts Dashboard"
 else
     fail "PowerShell installer does not start Dashboard"
@@ -368,35 +368,9 @@ section "Test 15: Executable non-interactive step_dashboard"
 
 # Extract a function from the install script by tracking brace depth.
 extract_function() {
-    local func_name="$1"
-    local file="$2"
-    local start_line
-    start_line=$(grep -n "^${func_name}() {" "${file}" | head -1 | cut -d: -f1)
-    if [ -z "${start_line}" ]; then
-        return 1
-    fi
-    local depth=0
-    local line_num=0
-    local end_line=0
-    while IFS= read -r line; do
-        line_num=$((line_num + 1))
-        if [ "${line_num}" -lt "${start_line}" ]; then
-            continue
-        fi
-        # Count opening and closing braces
-        local opens closes
-        opens=$(echo "${line}" | tr -cd '{' | wc -c)
-        closes=$(echo "${line}" | tr -cd '}' | wc -c)
-        depth=$((depth + opens - closes))
-        if [ "${depth}" -eq 0 ] && [ "${line_num}" -gt "${start_line}" ]; then
-            end_line="${line_num}"
-            break
-        fi
-    done < "${file}"
-    if [ "${end_line}" -eq 0 ]; then
-        return 1
-    fi
-    sed -n "${start_line},${end_line}p" "${file}"
+    local func_name="$1" file="$2"
+    grep -q "^${func_name}() {" "$file" || return 1
+    sed -n "/^${func_name}() {/,/^}/p" "$file"
 }
 
 # Test 15a: Execute step_dashboard in non-interactive mode
@@ -458,8 +432,8 @@ if echo "${_exec_result}" | grep -q "EXTRACTION_FAILED\|FUNCTION_NOT_FOUND"; the
     fail "Exec non-interactive enabled: cannot verify (extraction failed)"
 else
     # Test 15a: Version is correct
-    if echo "${_exec_result}" | grep -q "RESULT_VERSION=v1.4.0"; then
-        pass "Exec non-interactive: default version = v1.4.0"
+    if echo "${_exec_result}" | grep -q "RESULT_VERSION=v1.4.1"; then
+        pass "Exec non-interactive: default version = v1.4.1"
     else
         fail "Exec non-interactive: wrong version (got: $(echo "${_exec_result}" | grep RESULT_VERSION))"
     fi
@@ -472,7 +446,7 @@ else
     fi
 
     # Test 15c: Image contains correct tag
-    if echo "${_exec_result}" | grep -q "RESULT_IMAGE=.*agentteams-dashboard:v1.4.0"; then
+    if echo "${_exec_result}" | grep -q "RESULT_IMAGE=.*agentteams-dashboard:v1.4.1"; then
         pass "Exec non-interactive: image tag matches version"
     else
         fail "Exec non-interactive: wrong image tag"
@@ -831,7 +805,7 @@ else
     else
         fail "Exec quick-start: wrong port (got: $(echo "${_qs_result}" | grep RESULT_PORT))"
     fi
-    if echo "${_qs_result}" | grep -q "RESULT_IMAGE=.*agentteams-dashboard:v1.4.0"; then
+    if echo "${_qs_result}" | grep -q "RESULT_IMAGE=.*agentteams-dashboard:v1.4.1"; then
         pass "Exec quick-start: image tag matches default version"
     else
         fail "Exec quick-start: wrong image (got: $(echo "${_qs_result}" | grep RESULT_IMAGE))"

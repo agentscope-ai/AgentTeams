@@ -1,0 +1,225 @@
+"""Worker execution recovery shared by native Harness adapters and Task tools.
+
+Native sessions are caches. Only a claimed authoritative Task can start work;
+delivery-only recovery never enters the model. No Matrix cursor is discarded.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+class RecoveryConflict(ValueError):
+    pass
+
+
+class RecoveryUnavailable(ValueError):
+    """A failed request is not proof that execution ownership was lost."""
+
+
+class Recovery:
+    def __init__(self, *, request=None, device_delivery=False):
+        self.device_delivery = device_delivery
+        self.request = request or self._request
+        self.process = os.environ["AGENTTEAMS_PROCESS_ID"]
+
+    def _request(self, method, path, body=None, etag=None, *, create=False, response_etag=False):
+        token = Path(os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE") or "/var/run/secrets/agentteams/token").read_text().strip()
+        headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json",
+                   "X-AgentTeams-Process-ID": self.process}
+        if self.device_delivery:
+            headers["X-AgentTeams-Reply-Scope"] = "device-v1"
+        if create and etag:
+            raise ValueError("Use one conditional write precondition")
+        if create:
+            headers["If-None-Match"] = "*"
+        elif etag:
+            headers["If-Match"] = etag
+        request = urllib.request.Request(os.environ["AGENTTEAMS_CONTROLLER_URL"].rstrip("/") + "/api/v1/" + path,
+            data=json.dumps(body).encode() if body is not None else None, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                payload = json.load(response)
+                return (payload, response.headers.get("ETag")) if response_etag else payload
+        except urllib.error.HTTPError as error:
+            if error.code in {403, 404, 409, 412}:
+                raise RecoveryConflict(error.read().decode()[:1024]) from error
+            raise RecoveryUnavailable(f"Task recovery request failed (HTTP {error.code}); read the current Task before retrying") from error
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise RecoveryUnavailable("Task recovery connection failed; read the current Task before retrying") from error
+
+    def discover(self):
+        return self.request("GET", "tasks/recoverable")
+
+    @staticmethod
+    def task_path(task_id, team):
+        return "tasks/" + urllib.parse.quote(task_id, safe="") + "/execution?team=" + urllib.parse.quote(team, safe="")
+
+    def claim(self, snapshot, entry):
+        return self.request("POST", self.task_path(entry["task"]["task_id"], entry["team_id"]),
+            {"action": "claim", "instance_id": snapshot["instance_id"], "process_id": self.process}, entry["etag"])
+
+    def checkpoint(self, task_id, team, checkpoint, *, release=False, expected_identity=None, expected_digest=None):
+        snapshot = self.discover()
+        entry = next((e for e in snapshot["tasks"] if e["task"]["task_id"] == task_id and e["team_id"] == team), None)
+        if entry is None:
+            raise RecoveryConflict("Task was cancelled, reassigned or is no longer recoverable")
+        execution = entry["task"].get("execution", {})
+        if execution.get("process_id") != self.process or execution.get("instance_id") != snapshot["instance_id"]:
+            raise RecoveryConflict("Task is not owned by this process")
+        if expected_identity is not None and any(execution.get(key) != expected_identity.get(key)
+                                                for key in ('generation', 'instance_id', 'process_id')):
+            raise RecoveryConflict('Native tool execution ownership changed')
+        if expected_digest is not None and self.digest(execution.get('checkpoint')) != expected_digest:
+            raise RecoveryConflict('Native tool checkpoint changed before commit')
+        return self.request("POST", self.task_path(task_id, team),
+            {"action": "release" if release else "checkpoint", "instance_id": snapshot["instance_id"],
+             "process_id": self.process, "checkpoint": checkpoint}, entry["etag"])
+
+    def current(self, task_id, team):
+        snapshot = self.discover()
+        return next((e["task"] for e in snapshot["tasks"]
+                     if e["task"]["task_id"] == task_id and e["team_id"] == team), None)
+
+    def tools_current(self, identity, *, verification=False):
+        task = self.current(identity['task_id'], identity['team_id'])
+        execution = task.get('execution', {}) if task else {}
+        if (not task or execution.get('process_id') != self.process
+                or any(execution.get(key) != identity.get(key) for key in ('generation', 'instance_id', 'process_id'))):
+            raise RecoveryConflict('Native tool execution ownership was replaced')
+        if execution.get('state') not in ({'active', 'needs_verification'} if verification else {'active'}):
+            raise RecoveryConflict('Native unconfirmed operation requires verification before normal admission')
+        return task
+
+    def begin_tools(self, identity, calls):
+        from task_operation import begin
+        task = self.tools_current(identity)
+        original = task['execution'].get('checkpoint')
+        operation, cp = begin(original, [identity['team_id'], identity['task_id']], calls)
+        self.checkpoint(identity['task_id'], identity['team_id'], cp,
+                        expected_identity=identity, expected_digest=self.digest(original))
+        return operation
+
+    def finish_tools(self, identity, operation, results):
+        from task_operation import result_bytes, finish
+        task = self.tools_current(identity, verification=True)
+        original = task['execution'].get('checkpoint')
+        data = result_bytes(original, operation, results)
+        digest = hashlib.sha256(data).hexdigest()
+        key = f"teams/{identity['team_id']}/shared/tasks/{identity['task_id']}/checkpoints/tools-{digest}.txt"
+        subprocess.run(['mc', 'pipe', os.environ['AGENTTEAMS_STORAGE_PREFIX'].rstrip('/') + '/' + key],
+                       input=data, check=True, capture_output=True, timeout=30)
+        cp = finish(original, operation, {'key': key, 'sha256': digest, 'size': len(data)})
+        return self.checkpoint(identity['task_id'], identity['team_id'], cp,
+                               expected_identity=identity, expected_digest=self.digest(original))
+
+    def save_reply(self, task_id, team, text):
+        task = self.current(task_id, team)
+        if task is None:
+            raise RecoveryConflict("Task is no longer assigned to this Worker")
+        cp = dict(task["execution"].get("checkpoint") or {})
+        if cp.get("result") and (cp.get("delivery") != "delivered" or task["status"] == "submitted"):
+            raise RecoveryConflict("A saved reply already exists; recover its delivery instead")
+        data = text.encode()
+        digest = hashlib.sha256(data).hexdigest()
+        key = f"teams/{team}/shared/tasks/{task_id}/checkpoints/reply-{digest}.txt"
+        # mc receives bytes on stdin; no shell or native-session format is used.
+        subprocess.run(["mc", "pipe", os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/" + key],
+                       input=data, check=True, capture_output=True, timeout=30)
+        version = cp.get("version", 0) + 1
+        if self.device_delivery:
+            cp["reply_attempt"] = {"state": "ready"}
+        else:
+            cp.pop("reply_attempt", None)
+        cp.pop("reply_event", None)
+        cp.update(version=version, result={"key": key, "sha256": digest, "size": len(data)},
+                  delivery="pending", reply_txn="task-reply:" + hashlib.sha256(f"{team}/{task_id}/{version}/{digest}".encode()).hexdigest())
+        return self.checkpoint(task_id, team, cp)
+
+    def prepare_reply(self, task_id, team, text):
+        """Fence a native final callback and prefer an already saved report.
+
+        A Task tool can release execution after submission. The same verified
+        process may reclaim it for delivery; a replaced process cannot.
+        """
+        snapshot = self.discover()
+        entry = next((e for e in snapshot["tasks"] if e["task"]["task_id"] == task_id and e["team_id"] == team), None)
+        execution = entry["task"].get("execution", {}) if entry else {}
+        if execution.get("process_id") != self.process or execution.get("instance_id") != snapshot["instance_id"]:
+            raise RecoveryConflict("Native reply execution was replaced or is no longer recoverable")
+        # submit_task permits a summary without a report file. While this
+        # process still owns active execution, persist its final answer before
+        # asking claim to recover an already persisted submitted report.
+        final_report = entry["task"]["status"] in {"submitted", "completed"} and entry["task"].get("result_path")
+        if execution.get("state") == "active" and not (execution.get("checkpoint") or {}).get("result") and not final_report:
+            return self.save_reply(task_id, team, text), text
+        claimed = self.claim(snapshot, entry)
+        cp = claimed["execution"].get("checkpoint") or {}
+        if cp.get("delivery") == "pending":
+            return claimed, claimed["saved_result"]
+        if cp.get("delivery") == "delivered" and claimed["task"]["status"] == "submitted":
+            return claimed, ""
+        return self.save_reply(task_id, team, text), text
+
+    def delivered(self, task_id, team, event_id):
+        task = self.current(task_id, team)
+        if task is None:
+            raise RecoveryConflict("Task delivery ownership changed")
+        cp = dict(task["execution"]["checkpoint"])
+        cp.update(version=cp["version"] + 1, delivery="delivered", reply_event=event_id)
+        return self.checkpoint(task_id, team, cp)
+
+    def interrupted(self, task_id, team):
+        """Keep the last durable checkpoint; registered operations retain their own state."""
+
+    @staticmethod
+    def session_usable(session, task, runtime, *, now=None):
+        """The native adapter must additionally verify the session exists."""
+        cp = task.get("execution", {}).get("checkpoint")
+        return bool(session and session.get("runtime") == runtime
+            and session.get("expires_at", 0) > (time.time() if now is None else now)
+            and session.get("checkpoint_digest") == Recovery.digest(cp))
+
+    @staticmethod
+    def digest(checkpoint):
+        return hashlib.sha256(json.dumps(checkpoint, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    @staticmethod
+    def resume_text(task):
+        execution = task["execution"]
+        checkpoint = execution.get("checkpoint")
+        if task.get('task_plan_id'):
+            return ("Continue your existing Task through the common task protocol and its prepared output directory. "
+                "Your framework owns durable execution checkpoints and receipt recovery; do not call legacy taskflow/projectflow "
+                "or manufacture checkpoints. Do not replay an unconfirmed operation. Canonical or native unknown effects require "
+                "authoritative verification before reasoning or further tools. Preserve verified work and submit only the current "
+                "Task's outputs with the common task tool.\n"
+                + json.dumps({'task_id': task['task_id'], 'team_id': task.get('team_id'), 'status': task['status'],
+                    'generation': execution['generation'], 'checkpoint': checkpoint}, ensure_ascii=False))
+        return ("Recover your existing Task from the authoritative task system. Do not create a new task.\n"
+            "Before a new external side effect, record its operation identity with checkpoint_task. If an operation is "
+            "started or unknown, verify its external outcome and save evidence before continuing; do not rerun it. "
+            "Continue from the last saved progress. Repeat unsaved reasoning or replayable work when needed. "
+            "Pull and verify referenced artifacts before using them. "
+            "Save artifacts before committing their checkpoint. A read receipt or ACK is not a checkpoint.\n"
+            "Use taskflow.checkpoint_task at step boundaries. If your assigned executor already persists these "
+            "checkpoints, invoke it unchanged; do not pre-register its operation IDs or commit a duplicate checkpoint "
+            "outside its protocol. Call submit_task directly with the same Task ID once prior operations are verified. "
+            "It saves its own canonical result; do not register submission itself as a started operation.\n"
+            + json.dumps({"task_id": task["task_id"], "team_id": task.get("team_id"),
+                "status": task["status"], "title": task.get("title"), "spec": task.get("spec"),
+                "project_id": task.get("project_id"), "main_task_id": task.get("main_task_id"),
+                "generation": execution["generation"], "checkpoint": checkpoint,
+                "history": task.get("history", [])[-10:]}, ensure_ascii=False))
+
+
+def enabled():
+    return bool(os.getenv("AGENTTEAMS_CONTROLLER_URL") and os.getenv("AGENTTEAMS_PROCESS_ID")
+                and os.getenv("AGENTTEAMS_AGENT_ROLE", "worker") in {"standalone", "worker", "remote-member", "leader", "team_leader"})

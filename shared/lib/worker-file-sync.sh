@@ -29,8 +29,9 @@ worker_sync_should_push() {
 
     case "${relative_path}" in
         openclaw.json | config/mcporter.json | mcporter-servers.json | \
+            runtime/runtime.yaml | runtime/compat-config.json* | runtime/state.json | runtime/matrix/* | runtime/sessions/* | \
             credentials/* | .agents/* | .cache/* | .npm/* | .local/* | .mc/* | \
-            .last-pull | .openclaw/matrix/* | .openclaw/canvas/* | *.lock)
+            .last-pull | .openclaw/matrix/* | .openclaw/credentials/matrix/* | .openclaw/canvas/* | *.lock)
             return 1
             ;;
     esac
@@ -45,10 +46,12 @@ worker_sync_mirror_all() {
         --exclude "openclaw.json" \
         --exclude "config/mcporter.json" --exclude "mcporter-servers.json" --exclude ".agents/**" \
         --exclude "credentials/**" \
+        --exclude "runtime/runtime.yaml" --exclude "runtime/compat-config.json*" \
+        --exclude "runtime/state.json" --exclude "runtime/matrix/**" --exclude "runtime/sessions/**" \
         --exclude ".cache/**" --exclude ".npm/**" \
         --exclude ".local/**" --exclude ".mc/**" --exclude "*.lock" \
         --exclude ".last-pull" \
-        --exclude ".openclaw/matrix/**" --exclude ".openclaw/canvas/**"
+        --exclude ".openclaw/matrix/**" --exclude ".openclaw/credentials/matrix/**" --exclude ".openclaw/canvas/**"
 }
 
 worker_sync_push_once() {

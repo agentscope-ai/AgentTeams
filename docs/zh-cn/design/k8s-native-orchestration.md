@@ -225,7 +225,7 @@ controller-runtime
 
 **Embedded 与 Helm（打包）：**
 
-- **Embedded**——`install/agentteams-install.sh` 启动 **`agentteams-controller`**（镜像打包了 Higress、Tuwunel、MinIO、Element Web 与控制器二进制）。随后控制器把 **`agentteams-manager`** 与每个 **Worker** 作为独立容器创建在相同 Docker/Podman 宿主上。
+- **Embedded**——`bash <(curl -fsSL https://agentteams.cloud/install.sh)` 启动 **`agentteams-controller`**（镜像打包了 Higress、Tuwunel、MinIO、Element Web 与控制器二进制）。随后控制器把 **`agentteams-manager`** 与每个 **Worker** 作为独立容器创建在相同 Docker/Podman 宿主上。
 - **Helm / incluster**——Chart [`helm/agentteams`](../../../helm/agentteams) 把相同逻辑组件以 Kubernetes 工作负载部署（网关、homeserver、存储、controller Deployment，以及由 CR 生成的 Manager/Worker Pod）。CRD 语义与 embedded 一致；只有后端驱动不同。
 
 两种模式共享 reconciler；后端镜像了 Kubernetes 抽象 CRI/CSI/CNI 的方式。
@@ -484,7 +484,7 @@ Worker 后端未来可以在每个 Worker 之下接入 NemoClaw——AgentTeams 
 ### 8.1 Embedded 模式（开发 / 小团队）
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -sSL https://agentteams.cloud/install.sh)
 ```
 
 粗略最低配置：2 CPU、4 GB 内存、Docker/Podman。你得到 **`agentteams-controller`**（基础设施 + 控制器）加上独立的 **`agentteams-manager`** 容器；Worker 创建时作为附加容器出现。

@@ -32,15 +32,7 @@ ROOM_A = "!a:hs.example"
 ROOM_B = "!b:hs.example"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CHANNEL_MODULE_PATH = (
-    REPO_ROOT
-    / "plugins"
-    / "agentteams-matrix"
-    / "adapters"
-    / "qwenpaw"
-    / "agentteams_matrix"
-    / "channel.py"
-)
+CHANNEL_MODULE_PATH = Path(__file__).resolve().parents[3] / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py"
 
 
 def _entry(sender, body, message_id=None, media_parts=None, sender_id=None):

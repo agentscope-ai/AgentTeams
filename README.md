@@ -31,6 +31,8 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 ## News
 
+- **2026-11-20**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.8) — AgentTeams v1.2.8: improves Team delivery from assignment through execution, submission, and acceptance, reducing coordination overhead and context consumption; strengthens main-task/subtask coordination, task-room archival, and Worker recovery across six Harnesses; adds conversation stop/redirect controls, message read status, native approvals, and runtime diagnostics; pairs with Dashboard v1.4.3 for refreshed task boards and team management; and supports a unified Higress entry for `/api` and `/dashboard`.
+- **2026-11-12**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.7) — AgentTeams v1.2.7: simplifies one-command startup and data-preserving upgrades; unifies image names and versions for six Harness runtimes, with Managers reusing OpenClaw/QwenPaw images; expands Tracing queries across agents, teams, sessions, and tasks; pairs with Dashboard v1.4.1 for unified team and Agent management, clearer tool-call progress, and fixes across models, MCP, Skills, files, and login.
 - **2026-11-08**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.6) — AgentTeams v1.2.6: pairs with Dashboard v1.4.0 for a refreshed workspace, voice input, and optional QwenPaw/Hermes session tracing; adds task pause/resume controls and a team attention inbox; strengthens multi-user permissions and model grants; expands runtime configuration, human file areas, and S3-compatible storage; updates the experimental DeepSeek Harness Worker image to v0.1.1; and improves Matrix collaboration and upgrade reliability.
 - **2026-10-16**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.5) — AgentTeams v1.2.5: strengthens coding-tool delegation, Worker configuration management, and in-place QwenPaw runtime upgrades; ships with Dashboard v1.3.1 by default; and fixes multiple issues in MCP registration, Matrix message collaboration, and Worker recovery.
 - **2026-09-20**: [Release Notes](https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.4) — AgentTeams v1.2.4: adds TeamHarness task state history, progress tracking, and completion notifications; upgrades to QwenPaw 2.2.1 and Dashboard v1.2.4.9; expands team permissions, auditing, and skill management; introduces the experimental DeepSeek Harness Worker; and improves Worker state persistence and installation reliability.
@@ -72,12 +74,12 @@ AgentTeams does not compete with other Agent runtimes. Instead of implementing A
 
 **macOS / Linux:**
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/install.sh)
 ```
 
 **Windows (PowerShell 7+ recommended):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+iwr -UseBasicParsing https://agentteams.cloud/install.ps1 | iex
 ```
 
 The default command starts the local services and Dashboard without configuration questions. API keys, embedding and Worker runtimes can be configured later. For the interactive setup, add `--manual` (PowerShell: `-Manual`).
@@ -98,22 +100,22 @@ Run the same command again and confirm once to keep the original accounts, model
 
 ```bash
 # Upgrade to latest (preserves all data)
-bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+bash <(curl -fsSL https://agentteams.cloud/install.sh)
 
 # Upgrade to specific version
-AGENTTEAMS_VERSION=v1.2.5 bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh)
+AGENTTEAMS_VERSION=v1.2.7 bash <(curl -fsSL https://agentteams.cloud/install.sh)
 ```
 
 ## Uninstall
 
 **macOS / Linux:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.sh) uninstall
+bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1'); & ([scriptblock]::Create($s)) uninstall
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; $s=$wc.DownloadString('https://agentteams.cloud/install.ps1'); & ([scriptblock]::Create($s)) uninstall
 ```
 
 This removes all AgentTeams containers (Manager, Workers, docker-proxy), Docker volume, network, env file, workspace directory, and install log.
@@ -187,8 +189,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
 | `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
 | `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
-| `manager.runtime` | no | Manager runtime: OpenClaw uses `openclaw` (default); CoPaw uses `qwenpaw` in the current chart, with `copaw` retained as a compatibility alias. Managers do not support Hermes or DeepSeek Harness |
-| `worker.defaultRuntime` | no | The chart provides default image values for `openclaw` (default), `copaw`, `hermes`, experimental `deepseek-harness`, and `openhuman`; the current CRD rejects an explicit `spec.runtime: openhuman`, and QwenPaw Workers require an explicit `spec.image` |
+| `manager.runtime` | no | Current source chart: `openclaw` (default), `qwenpaw`, `hermes`, `deepseek-harness`, or `openhuman`; `copaw` is a QwenPaw compatibility alias. The Harness image is selected automatically unless overridden |
+| `worker.defaultRuntime` | no | `openclaw` (chart default), `qwenpaw`, `hermes`, `deepseek-harness`, `openhuman`, or `codex`; legacy `copaw` requires an explicitly pinned old image |
 
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 
@@ -202,13 +204,16 @@ helm install agentteams higress.io/agentteams \
 ```
 
 <details>
-<summary>Using alternative runtimes (CoPaw Manager + Hermes Workers)</summary>
+<summary>Using alternative runtimes (QwenPaw Manager + Hermes Workers)</summary>
+
+Run from the root of the current source checkout:
 
 ```bash
-helm install agentteams higress.io/agentteams \
-  -n agentteams-system --create-namespace --devel \
+helm dependency build helm/agentteams
+helm install agentteams ./helm/agentteams \
+  -n agentteams-system --create-namespace \
+  --set global.imageTag=v1.2.7 \
   --set manager.runtime=qwenpaw \
-  --set manager.image.repository=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-qwenpaw \
   --set worker.defaultRuntime=hermes \
   --set credentials.llmApiKey=<your-api-key> \
   --set credentials.llmBaseUrl=https://your-provider.example.com/v1 \
@@ -217,7 +222,7 @@ helm install agentteams higress.io/agentteams \
   --set gateway.publicURL=http://localhost:18080
 ```
 
-When selecting the CoPaw Manager, set both `manager.runtime=qwenpaw` and the `agentteams-manager-qwenpaw` image. Configure Worker default images through `worker.defaultImage.<runtime>`.
+The current source chart selects the QwenPaw Harness image automatically. Configure shared Harness images through `worker.defaultImage.<runtime>` and override `manager.image` only for custom images. See the [Kubernetes guide](docs/usage/deployment/kubernetes.md) for chart/image version selection.
 
 </details>
 
@@ -383,6 +388,8 @@ The `copaw` value remains available for compatibility with existing CoPaw Worker
 agt update worker --runtime hermes
 ```
 
+Harness implementations are maintained in independent `agentteams-group` repositories: [OpenClaw](https://github.com/agentteams-group/agentteams-harness-openclaw), [QwenPaw](https://github.com/agentteams-group/agentteams-harness-qwenpaw), [Hermes](https://github.com/agentteams-group/agentteams-harness-hermes), [DeepSeek](https://github.com/agentteams-group/agentteams-harness-deepseek), [OpenHuman](https://github.com/agentteams-group/agentteams-harness-openhuman), [Codex](https://github.com/agentteams-group/agentteams-harness-codex). Core pins their source revisions for builds.
+
 ## Architecture
 
 ```
@@ -425,6 +432,8 @@ Worker Alice    Worker Bob              Worker Charlie
 
 ## Documentation
 
+Start with the [Dashboard Guide](docs/usage/dashboard.md) for the v1.4.1 workspace, model setup, teams, files, and Tracing.
+
 Browse the [documentation directory](docs/), or start with the overview and quickstart:
 
 | | |
@@ -442,6 +451,7 @@ Browse the [documentation directory](docs/), or start with the overview and quic
 | [docs/usage/module-update.md](docs/usage/module-update.md) | Module update & distribution: Millforge channels, release index, and the three install planes (also available in [中文](docs/zh-cn/usage/module-update.md)) |
 | [docs/usage/higress-gateway-api.md](docs/usage/higress-gateway-api.md) | Higress gateway external API reference (LLM / MCP / exposed ports / Console) (also available in [中文](docs/zh-cn/usage/higress-gateway-api.md)) |
 | [docs/usage/development.md](docs/usage/development.md) | Contributing and local dev (also available in [中文](docs/zh-cn/usage/development.md)) |
+| [Harness integration guide](docs/design/harness-integration-guide.md) | Runtime onboarding, Task collaboration, recovery, and acceptance criteria (中文) |
 
 The remaining design documents (skill catalog, worker channels/chats APIs, room power levels, capability foundation, human update / audit / AI-routes APIs, L2/L3 scoped access, member runtime config contract, team skills, agent pod template, TeamHarness v0.1 boundary) are indexed in the [中文 documentation table](README.zh-CN.md) — all are also available under `docs/zh-cn/design/`, except a few (`docs/design/internal/`, part of `docs/design/teamharness/`) that are natively written in Chinese upstream.
 

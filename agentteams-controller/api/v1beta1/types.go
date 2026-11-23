@@ -188,6 +188,10 @@ type Worker struct {
 type WorkerSpec struct {
 	Model         string `json:"model"`
 	ModelProvider string `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
+	// LlmHeartbeatEnabled controls OpenClaw's model-driven autonomous checks.
+	// Nil defaults off for ordinary Workers and inherits the Team cadence for Leaders.
+	// Health reporting and independent scheduled jobs are unaffected.
+	LlmHeartbeatEnabled *bool `json:"llmHeartbeatEnabled,omitempty"`
 	// SubagentModel optionally names a (cheaper/faster) model used by
 	// spawned subagents instead of the worker's primary model. It must be
 	// a model id served by the team's AI gateway (free string; the
@@ -452,9 +456,11 @@ type WorkerStatus struct {
 	LastRunAt string `json:"lastRunAt,omitempty"`
 	// LastFinishAt is the runtime-reported timestamp of the last task finish
 	// (RFC3339 UTC, from the QwenPaw agent-status endpoint).
-	LastFinishAt string              `json:"lastFinishAt,omitempty"`
-	Message      string              `json:"message,omitempty"`
-	ExposedPorts []ExposedPortStatus `json:"exposedPorts,omitempty"`
+	LastFinishAt string `json:"lastFinishAt,omitempty"`
+	// SkillWarnings are non-blocking skill load/enable failures reported by the runtime.
+	SkillWarnings []string            `json:"skillWarnings,omitempty"`
+	Message       string              `json:"message,omitempty"`
+	ExposedPorts  []ExposedPortStatus `json:"exposedPorts,omitempty"`
 
 	// BackendRuntime records the backend type currently used for this worker's container.
 	// Set after successful creation or backend switch.
@@ -570,7 +576,7 @@ type TeamAdminSpec struct {
 type TeamMemberSpec struct {
 	Name         string `json:"name"`
 	MatrixUserID string `json:"matrixUserId,omitempty"`
-	Role         string `json:"role,omitempty"` // coordinator (default)
+	Role         string `json:"role,omitempty"` // coordinator (default) or member
 }
 
 type TeamStatus struct {
@@ -773,8 +779,10 @@ type HumanStatus struct {
 	InitialPassword             string   `json:"initialPassword,omitempty"` // Set on creation, shown once
 	DisplayNameSyncedGeneration int64    `json:"displayNameSyncedGeneration,omitempty"`
 	Rooms                       []string `json:"rooms,omitempty"`
-	EmailSent                   bool     `json:"emailSent,omitempty"`
-	Message                     string   `json:"message,omitempty"`
+	// ManagerRooms retains personal DM mappings across demotion/re-promotion.
+	ManagerRooms map[string]string `json:"managerRooms,omitempty"`
+	EmailSent    bool              `json:"emailSent,omitempty"`
+	Message      string            `json:"message,omitempty"`
 }
 
 // EffectiveUsername returns the Matrix localpart for a Human.

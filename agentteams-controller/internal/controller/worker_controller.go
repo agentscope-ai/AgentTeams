@@ -10,6 +10,7 @@ import (
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
@@ -48,6 +49,8 @@ const (
 type WorkerReconciler struct {
 	client.Client
 	ObservabilityReader client.Reader
+	RuntimeStore        *service.WorkerRuntimeStore
+	HandoffMatrix       service.WorkerHandoffMatrix
 
 	Provisioner                 service.WorkerProvisioner
 	Deployer                    service.WorkerDeployer
@@ -193,6 +196,31 @@ func edgeHeartbeatStale(lastHeartbeat string, timeout time.Duration) bool {
 // member reconcile phases, and writes runtime state back to Worker.Status.
 func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worker, state *MemberState) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
+	var targetHandoff *service.WorkerHandoff
+	var handoffETag string
+	if w.Annotations[service.WorkerRuntimeHandoffAnnotation] != "" && r.RuntimeStore != nil {
+		record, etag, err := r.RuntimeStore.ResumeStop(ctx, w.Spec.EffectiveWorkerName(w.Name))
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		op := record.Handoff
+		if op != nil && op.Phase != "completed" {
+			switch op.Phase {
+			case "stopping", "stopped":
+				return r.reconcileHandoffSource(ctx, w, op, etag, state)
+			case "creating", "recovering":
+				if w.Spec.DesiredState() == "Running" && w.Spec.DesiredContainerMan() {
+					if w.Spec.Runtime != op.TargetRuntime {
+						return reconcile.Result{RequeueAfter: handoffPoll}, r.applyHandoffTargetSpec(ctx, w, op)
+					}
+					if w.Spec.Image != "" && w.Spec.Image != op.TargetImage {
+						return reconcile.Result{}, fmt.Errorf("Worker image changed during handoff")
+					}
+					targetHandoff, handoffETag = op, etag
+				}
+			}
+		}
+	}
 
 	deps := MemberDeps{
 		ObservabilityReader:         r.ObservabilityReader,
@@ -240,6 +268,25 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if err != nil {
 		return reconcile.Result{}, err
 	}
+	// Runtime identity comes from registered Team membership, independently of
+	// the standalone infrastructure owner. Include startup-only identity in the
+	// applied hash so joining, changing role, and leaving converge once.
+	if inTeam {
+		mctx.AgentRole = teamRole
+		h := fnv.New64a()
+		data, _ := json.Marshal([]string{mctx.AppliedSpecHash, mctx.TeamName, teamRole.String()})
+		_, _ = h.Write(data)
+		mctx.AppliedSpecHash = fmt.Sprintf("%x", h.Sum64())
+	} else {
+		mctx.TeamName = ""
+	}
+	mctx.SpecChanged = w.Status.SpecHash != "" && w.Status.SpecHash != mctx.AppliedSpecHash
+	if targetHandoff == nil && r.RuntimeStore != nil && mctx.SpecChanged && effectiveSpec.DesiredContainerMan() && effectiveSpec.DesiredState() == "Running" && !isEdgeWorker(w) {
+		handled, err := r.beginDesiredRuntimeHandoff(ctx, w, mctx)
+		if err != nil || handled {
+			return reconcile.Result{RequeueAfter: handoffPoll}, err
+		}
+	}
 	effectiveRuntime := backend.ResolveRuntime(effectiveSpec.Runtime, r.DefaultRuntime)
 	configOwnedByTeam := inTeam && backend.UsesMemberRuntimeConfig(effectiveRuntime)
 	skillsBeforeConfig := backend.UsesMemberRuntimeConfig(effectiveRuntime)
@@ -262,6 +309,12 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	}
 	if inTeam && teamRole == RoleTeamLeader {
 		configContext.Role = RoleTeamLeader
+		if effectiveRuntime == backend.RuntimeOpenClaw {
+			configContext.TeamHeartbeat, err = r.owningTeamHeartbeat(ctx, w)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+		}
 	}
 	// Team-wide subagent model default (read-time merge). Only workers
 	// without an explicit value consult the team, and only when they are
@@ -365,9 +418,15 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	if !skillsBeforeConfig {
 		reconcileMemberSkills(ctx, deps, configContext, state)
 	}
-	if res, err := ReconcileMemberContainer(ctx, deps, mctx, state); err != nil || res.RequeueAfter > 0 {
+	var containerResult reconcile.Result
+	if targetHandoff != nil {
+		containerResult, err = r.reconcileHandoffTarget(ctx, w, deps, mctx, state, targetHandoff, handoffETag)
+	} else {
+		containerResult, err = ReconcileMemberContainer(ctx, deps, mctx, state)
+	}
+	if err != nil || containerResult.RequeueAfter > 0 {
 		applyMemberStateToWorker(w, state)
-		return res, err
+		return containerResult, err
 	}
 	applyDeploymentTargetStatus(w, mctx)
 	svcName, err := ReconcileMemberService(ctx, &mctx, &deps)
@@ -387,7 +446,11 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 	}
 	_ = ReconcileMemberExpose(ctx, deps, mctx, state)
 	applyMemberStateToWorker(w, state)
-	w.Status.SpecHash = mctx.AppliedSpecHash
+	// Sleeping retains the old container. Its applied hash must survive a
+	// Harness/image update so waking deletes it instead of starting it again.
+	if mctx.Spec.DesiredState() == "Running" {
+		w.Status.SpecHash = mctx.AppliedSpecHash
+	}
 	applyDeploymentTargetStatus(w, mctx)
 
 	// Hot-apply a changed subagent model to the running worker process
@@ -567,6 +630,9 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 		return reconcile.Result{RequeueAfter: reconcileInterval}, nil
 	}
 
+	if result, err := r.finishDeletingHandoffSource(ctx, w); err != nil || result.RequeueAfter > 0 {
+		return result, err
+	}
 	deps := MemberDeps{
 		ObservabilityReader:         r.ObservabilityReader,
 		Provisioner:                 r.Provisioner,
@@ -660,6 +726,21 @@ func (r *WorkerReconciler) reconcileManagerAccess(ctx context.Context, w *v1beta
 		}
 	}
 
+}
+
+func (r *WorkerReconciler) owningTeamHeartbeat(ctx context.Context, w *v1beta1.Worker) (*agentconfig.HeartbeatConfig, error) {
+	var teams v1beta1.TeamList
+	if err := r.List(ctx, &teams, client.InNamespace(w.Namespace)); err != nil {
+		return nil, fmt.Errorf("list teams for heartbeat: %w", err)
+	}
+	for _, team := range teams.Items {
+		for _, member := range team.Spec.WorkerMembers {
+			if member.Name == w.Name && member.Role == RoleTeamLeader.String() {
+				return &agentconfig.HeartbeatConfig{Enabled: team.Spec.HeartbeatEvery != "" && team.Spec.HeartbeatEvery != "0m", Every: team.Spec.HeartbeatEvery}, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 func (r *WorkerReconciler) teamRoleForWorker(ctx context.Context, namespace, workerName string) (MemberRole, bool, error) {
@@ -912,6 +993,11 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Contro
 	// the new Human object alone no longer names a removed grant.
 	bldr = bldr.Watches(&v1beta1.Human{}, handler.EnqueueRequestsFromMapFunc(r.humanToWorkerRequests))
 
+	// Team updates can change a running Worker's role without editing its spec.
+	// The handler maps both versions on update, including removed members.
+	bldr = bldr.Watches(&v1beta1.Team{}, handler.EnqueueRequestsFromMapFunc(teamWorkerRequests),
+		builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+
 	if r.Backend != nil {
 		ctx := context.Background()
 		// Watch Pods when the K8s ("pod") backend is registered & available.
@@ -943,6 +1029,18 @@ func (r *WorkerReconciler) SetupWithManager(mgr ctrl.Manager) (controller.Contro
 	}
 
 	return bldr.Build(r)
+}
+
+func teamWorkerRequests(_ context.Context, obj client.Object) []reconcile.Request {
+	team := obj.(*v1beta1.Team)
+	requests := make([]reconcile.Request, 0, len(team.Spec.WorkerMembers))
+	for _, member := range team.Spec.WorkerMembers {
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKey{
+			Namespace: team.Namespace,
+			Name:      member.Name,
+		}})
+	}
+	return requests
 }
 
 // WorkerPodMapFunc returns a MapFunc for routing Pod events to Worker reconcile
@@ -991,10 +1089,11 @@ func WorkerPodMapFunc(namespace string) handler.MapFunc {
 // which owning reconcilers write to status.specHash after a successful
 // reconcile. Sandbox resources no longer store this hash.
 func hashAppliedWorkerSpec(spec v1beta1.WorkerSpec) string {
-	spec.Model = ""          // config-only: written to openclaw.json/runtime.yaml
-	spec.McpServers = nil    // config-only: written to mcporter/runtime config
-	spec.AccessEntries = nil // permission-only: resolved when credentials are issued
-	spec.AgentIdentity = nil // config-only: written to runtime.yaml
+	spec.LlmHeartbeatEnabled = nil // config-only: written to openclaw.json
+	spec.Model = ""                // config-only: written to openclaw.json/runtime.yaml
+	spec.McpServers = nil          // config-only: written to mcporter/runtime config
+	spec.AccessEntries = nil       // permission-only: resolved when credentials are issued
+	spec.AgentIdentity = nil       // config-only: written to runtime.yaml
 	spec.CredentialBindings = nil
 	spec.State = nil          // exclude lifecycle state from hash
 	spec.IdleTimeout = ""     // exclude controller-side autosleep policy from hash

@@ -12,6 +12,18 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 import at_telemetry as telemetry
 
 
+def test_coordination_identity_does_not_depend_on_native_session_format():
+    event = {'id': 'a' * 32, 'kind': 'task_submitted'}
+    for session in ['opaque-native-thread', 'another-sdk-session']:
+        fields = telemetry.turn_fields(session, metadata={'event_id': '$actual', 'room_id': '!room:test',
+                                                         'teamharness_coordination': event})
+        assert fields['agentteams.coordination.id'] == event['id']
+        assert fields['agentteams.coordination.kind'] == event['kind']
+        assert fields['agentteams.event.id'] == '$actual'
+        assert fields['agentteams.runtime.session_id'] == session
+        assert 'agentteams.execution.generation' not in fields
+
+
 def test_concurrent_turns_do_not_share_identity(monkeypatch):
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "demo-worker")
     monkeypatch.setenv("AGENTTEAMS_OTEL_RUNTIME", "qwenpaw")

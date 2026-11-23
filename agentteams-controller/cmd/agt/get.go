@@ -554,23 +554,24 @@ func getManagersCmd() *cobra.Command {
 // ---------------------------------------------------------------------------
 
 type workerResp struct {
-	Name             string                   `json:"name"`
-	WorkerName       string                   `json:"workerName,omitempty"`
-	Phase            string                   `json:"phase"`
-	ContainerManaged bool                     `json:"containerManaged"`
-	State            string                   `json:"state,omitempty"`
-	Model            string                   `json:"model,omitempty"`
-	Runtime          string                   `json:"runtime,omitempty"`
-	Image            string                   `json:"image,omitempty"`
-	Identity         string                   `json:"identity,omitempty"`
-	Skills           []string                 `json:"skills,omitempty"`
-	McpServers       []map[string]interface{} `json:"mcpServers,omitempty"`
-	ContainerState   string                   `json:"containerState,omitempty"`
-	MatrixUserID     string                   `json:"matrixUserID,omitempty"`
-	RoomID           string                   `json:"roomID,omitempty"`
-	Message          string                   `json:"message,omitempty"`
-	Team             string                   `json:"team,omitempty"`
-	Role             string                   `json:"role,omitempty"`
+	LlmHeartbeatEnabled *bool                    `json:"llmHeartbeatEnabled,omitempty"`
+	Name                string                   `json:"name"`
+	WorkerName          string                   `json:"workerName,omitempty"`
+	Phase               string                   `json:"phase"`
+	ContainerManaged    bool                     `json:"containerManaged"`
+	State               string                   `json:"state,omitempty"`
+	Model               string                   `json:"model,omitempty"`
+	Runtime             string                   `json:"runtime,omitempty"`
+	Image               string                   `json:"image,omitempty"`
+	Identity            string                   `json:"identity,omitempty"`
+	Skills              []string                 `json:"skills,omitempty"`
+	McpServers          []map[string]interface{} `json:"mcpServers,omitempty"`
+	ContainerState      string                   `json:"containerState,omitempty"`
+	MatrixUserID        string                   `json:"matrixUserID,omitempty"`
+	RoomID              string                   `json:"roomID,omitempty"`
+	Message             string                   `json:"message,omitempty"`
+	Team                string                   `json:"team,omitempty"`
+	Role                string                   `json:"role,omitempty"`
 }
 
 type workerListResp struct {

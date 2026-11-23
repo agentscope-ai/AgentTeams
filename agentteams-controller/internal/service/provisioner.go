@@ -49,6 +49,7 @@ type WorkerDeprovisionRequest struct {
 // TeamRoomRequest describes rooms to create for a team.
 type TeamRoomRequest struct {
 	TeamName             string
+	TeamAliasName        string
 	LeaderName           string
 	LeaderCredentialName string
 	WorkerNames          []string
@@ -497,6 +498,16 @@ func (p *Provisioner) ProvisionWorker(ctx context.Context, req WorkerProvisionRe
 			logger.Info("worker joined own room", "name", workerName, "roomID", roomID)
 		}
 	}
+	// A standalone Worker room is also the Manager-to-Leader handoff route
+	// when that Worker later leads a Team. Accept the configured authority's
+	// existing invitation using its own token before a Task can use the room.
+	if authorityID == managerMatrixID && p.managerEnabled {
+		if token, err := p.AgentMatrixToken(ctx, "manager", "default"); err == nil {
+			if err := p.matrix.JoinRoom(ctx, roomID, token); err != nil {
+				logger.Error(err, "failed to join Manager into its Worker room (non-fatal)", "name", workerName, "roomID", roomID)
+			}
+		}
+	}
 
 	// Step 5: Gateway consumer and authorization
 	logger.Info("creating gateway consumer", "consumer", consumerName)
@@ -823,6 +834,10 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 	}
 
 	teamMeta := teamRoomMeta(req, teamAdminID, leaderMatrixID, p.matrix.UserID)
+	teamAliasName := req.TeamAliasName
+	if teamAliasName == "" {
+		teamAliasName = req.TeamName
+	}
 	teamRoom, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
 		Name:          fmt.Sprintf("Team: %s", req.TeamName),
 		Topic:         fmt.Sprintf("Team room for %s", req.TeamName),
@@ -830,7 +845,7 @@ func (p *Provisioner) ProvisionTeamRooms(ctx context.Context, req TeamRoomReques
 		PowerLevels:   teamRoomPowerLevels,
 		CreatorToken:  req.TeamAdminActorToken,
 		InitialState:  roomMetaState(teamMeta),
-		RoomAliasName: roomAliasLocalpart("team", req.TeamName),
+		RoomAliasName: roomAliasLocalpart("team", teamAliasName),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("team room creation failed: %w", err)
@@ -1548,6 +1563,11 @@ func (p *Provisioner) ProvisionManager(ctx context.Context, req ManagerProvision
 	if err := p.matrix.SetRoomState(ctx, roomID, roomMetaEventType, "", managerMeta, ""); err != nil {
 		return nil, fmt.Errorf("set manager admin DM room meta: %w", err)
 	}
+	if userCreds.AccessToken != "" {
+		if err := p.matrix.JoinRoom(ctx, roomID, userCreds.AccessToken); err != nil {
+			logger.Error(err, "failed to join Manager into its Admin DM (non-fatal)", "name", managerName, "roomID", roomID)
+		}
+	}
 
 	if err := p.creds.Save(ctx, managerName, creds); err != nil {
 		logger.Error(err, "failed to persist credentials (non-fatal)")
@@ -1861,8 +1881,8 @@ func (p *Provisioner) BackfillLegacyPasswords(ctx context.Context) error {
 		}
 
 		creds.MatrixPassword = password
-		// Clear cached AS token — it's no longer valid after password reset
-		// and legacy mode will obtain a new token via password login.
+		// Clear the stored AS token so legacy mode obtains a fresh token
+		// through password login.
 		creds.MatrixToken = ""
 		if err := p.creds.Save(ctx, name, creds); err != nil {
 			logger.Error(err, "failed to save backfilled credentials", "name", name)
@@ -1899,4 +1919,20 @@ func (p *Provisioner) ManagerGatewayKey(ctx context.Context, name string) (strin
 		return "", fmt.Errorf("manager gateway credentials unavailable")
 	}
 	return creds.GatewayKey, nil
+}
+
+// AgentMatrixToken reads an existing runtime identity for Controller-owned
+// progress projection. It never logs in, rotates credentials or grants access.
+func (p *Provisioner) AgentMatrixToken(ctx context.Context, kind, name string) (string, error) {
+	var creds *WorkerCredentials
+	var err error
+	if kind == "manager" {
+		creds, err = p.creds.Load(ctx, name)
+	} else {
+		creds, err = p.loadWorkerCredentials(ctx, name)
+	}
+	if err != nil || creds == nil || creds.MatrixToken == "" {
+		return "", fmt.Errorf("agent Matrix credentials unavailable")
+	}
+	return creds.MatrixToken, nil
 }

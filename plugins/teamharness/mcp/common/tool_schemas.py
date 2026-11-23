@@ -1,9 +1,11 @@
-# TOOL_SCHEMAS registration table for the 8 MCP tools (W1-a2: real module)
+# TOOL_SCHEMAS registration table for the MCP tools.
 from __future__ import annotations
 
 from typing import Any
+from mcp.common.task_cli import TASK_SCHEMA
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    "task": TASK_SCHEMA,
     "health": {
         "description": (
             "Check TeamHarness MCP server availability and basic tool wiring. "
@@ -73,7 +75,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "target": {
                     "type": "string",
                     "description": (
-                        "Matrix room target for cross-room sends, for example "
+                        "Matrix room or user target for cross-room sends, for example user:@leader:domain or "
                         "room:!room:domain. For PROJECT_REQUESTED self-trigger, "
                         "pass the target task room as a room:!room:domain string."
                     ),
@@ -146,6 +148,24 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "text": {
                     "type": "string",
                     "description": "Plain message text for ordinary cross-room or external sends. message and body aliases are also accepted.",
+                },
+                "requesterReplyRoute": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "description": "Original requester route supplied by the runtime; preserve it across handoffs.",
+                },
+                "tasks": {
+                    "type": "array",
+                    "description": "For Manager-to-Leader handoff, register each original main Task before delivery. Pass an array, not serialized JSON; preserve taskId, title and complete spec.",
+                    "items": {
+                        "type": "object",
+                        "required": ["taskId", "title", "spec"],
+                        "properties": {
+                            "taskId": {"type": "string"},
+                            "title": {"type": "string"},
+                            "spec": {"type": "string"},
+                        },
+                    },
                 },
                 "dryRun": {
                     "type": "boolean",
@@ -347,11 +367,13 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "projectflow": {
         "description": (
-            "Manage durable TeamHarness project state only after Quick Task "
-            "or Project Work mode is selected: create quick projects, create "
-            "projects, plan or update DAG and Loop work, query ready nodes, "
-            "and record loop iterations. Do not use for ordinary direct "
-            "replies or one-off checks. complete_project persists the "
+            "Manage explicitly requested Project Work, never ordinary direct replies. "
+            "For ordinary task requests use task create/plan, including multiple workers "
+            "or dependencies. Manage existing projects, including DAG and Loop "
+            "plans, query ready nodes, and record loop iterations. "
+            "start_project combines task-room creation, "
+            "initial DAG storage and first ready assignments; supply create_project "
+            "fields plus tasks with specs for initially ready nodes. complete_project persists the "
             "terminal state locally and syncs it to shared storage before "
             "the PROJECT_COMPLETED event is emitted; if that sync fails the "
             "action returns a retryable failure with the event withheld, so "
@@ -363,6 +385,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "action": {
                     "type": "string",
                     "enum": [
+                        "start_project",
+                        "advance_project",
                         "create_project",
                         "create_quick_project",
                         "resolve_project",
@@ -416,7 +440,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "tasks": {
                     "type": "array",
-                    "description": "DAG or Loop task nodes. Each node needs taskId (or task_id), not id; use assignedTo and dependsOn for assignment and dependencies.",
+                    "description": "DAG or Loop task nodes. Each node needs taskId (or task_id), not id; use parentTaskId for a subtask's parent, assignedTo for its Worker and dependsOn for execution prerequisites. A coordinating parent is not delegated to a Worker.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -424,6 +448,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                             "title": {"type": "string"},
                             "assignedTo": {"type": "string"},
                             "dependsOn": {"type": "array", "items": {"type": "string"}},
+                            "parentTaskId": {"type": "string"},
                         },
                         "additionalProperties": True,
                     },
@@ -444,6 +469,14 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "sourceRoomId": {
                     "type": "string",
                     "description": "Stable external requester room/conversation id to persist with external project and task state.",
+                },
+                "spec": {
+                    "type": "string",
+                    "description": "For start_project, the shared original contract materialized into each execution leaf's spec; leaf specs still define their own assignments.",
+                },
+                "report": {
+                    "type": "string",
+                    "description": "Verified final user report for complete_project; saved before terminal state and delivery.",
                 },
                 "accepted": {
                     "type": "boolean",
@@ -475,9 +508,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "taskflow": {
         "description": (
-            "Coordinate bounded TeamHarness tasks after a project node is ready: "
+            "Compatibility operations for existing legacy tasks and attention governance. For new main-task collaboration use the task tool or agt task CLI. Project is optional existing membership, never created implicitly. "
+            "For advance_task pass mainTaskId; for accept_task_result pass payload {mainTaskId, taskId, submissionId, resultStatus, accepted}. "
             "leader delegates and checks tasks; worker or remote-member "
-            "acknowledges and submits results; worker or leader raises in-flight "
+            "acknowledges and submits results; a leader can also ACK and submit its own assigned subtasks. worker or leader raises in-flight "
             "attention (approval / decision / escalation) with request_attention. "
             "Do not use for direct questions, readiness checks, or ordinary "
             "conversation."
@@ -493,17 +527,24 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "action": {
                     "type": "string",
                     "enum": [
+                        "start_task",
+                        "advance_task",
+                        "accept_task_result",
+                        "complete_task",
                         "delegate_task",
                         "ack_task",
                         "submit_task",
                         "check_task",
                         "cancel_task",
                         "report_progress",
+                        "checkpoint_task",
                         "request_attention",
                         "review_task",
                     ],
                     "description": (
-                        "Task lifecycle operation. report_progress records a "
+                        "Task lifecycle operation. checkpoint_task saves payload.checkpoint with the next version, completed_steps, remaining_steps, operation (id/state/evidence), persisted artifacts (key/sha256/size), and optional saved result and pending delivery. Persist artifacts first; this action verifies their digests. "
+                        "Use before/after an external side effect and at step boundaries. submit_task saves its own canonical "
+                        "result. Call it directly after prior operations are verified. report_progress records a "
                         "non-terminal progress note on an in-flight task (state "
                         "unchanged, no leader notification). request_attention "
                         "pulls a human decision (kind: approval / decision / "
@@ -545,16 +586,31 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "payload": {
                     "type": "object",
-                    "description": "Task payload; flat arguments are also accepted.",
+                    "description": "Task payload; flat arguments are also accepted. advance_task requires mainTaskId. accept_task_result requires mainTaskId (the coordinating main), taskId (the execution subtask), submissionId, resultStatus and accepted.",
                     "additionalProperties": True,
+                },
+                "mainTaskId": {
+                    "type": "string",
+                    "description": "Coordinating main Task ID, required for advance_task and accept_task_result; distinct from the execution taskId.",
                 },
                 "spec": {
                     "type": "string",
-                    "description": "Task execution contract for delegate_task.",
+                    "description": "Original request for start_task; execution contract for delegate_task.",
                 },
                 "summary": {
                     "type": "string",
-                    "description": "Worker result summary for submit_task.",
+                    "description": "Required non-blank result summary for submit_task, including when resultMarkdown is supplied.",
+                },
+                "report": {
+                    "type": "string",
+                    "description": "Required verified final report text for complete_task; saves the main Task result and notifies the requester.",
+                },
+                "resultMarkdown": {
+                    "type": "string",
+                    "description": (
+                        "Optional complete result.md body saved with submit_task. "
+                        "Omit to preserve an existing report; retries require identical text."
+                    ),
                 },
                 "deliverables": {
                     "type": "array",
@@ -592,7 +648,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "decisionClass": {
                     "type": "string",
-                    "description": "Delegate_task decision class r1..r6 (contracts/decision-classes.json); required while the protocol.enforce switch is on.",
+                    "description": "Use r3 for delegate_task, including first assignment. Other classes: r1 result acceptance, r2 cancellation, r4 loop review, r5 project lifecycle, r6 attention escalation. Required while protocol.enforce is on.",
                 },
                 "workspaceDir": {
                     "type": "string",

@@ -4,6 +4,7 @@ import inspect
 import importlib.metadata
 import logging
 import os
+import re
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -104,19 +105,33 @@ def qwenpaw_runtime(module):
             args = (request, *args[1:])
         else:
             kwargs = {**kwargs, "request": request}
+        metadata = dict(getattr(request, "channel_meta", {}) or {})
+        coordination = (getattr(request, "request_context", {}) or {}).get("teamharness_coordination")
+        if isinstance(coordination, dict):
+            metadata.update(coordination)
         fields = telemetry.turn_fields(getattr(request, "session_id", "") or "unassigned",
                                       user_id=getattr(request, "user_id", ""),
-                                      metadata=getattr(request, "channel_meta", {}) or {})
+                                      metadata=metadata)
         from at_trace_transport import incoming
-        fields.update(incoming({"com.agentteams.trace": (getattr(request, "channel_meta", {}) or {}).get("otel_carrier", {})}))
+        fields.update(incoming({"com.agentteams.trace": metadata.get("otel_carrier", {})}))
         fields = enrich_task(fields, getattr(instance.workspace, "workspace_dir", None))
         span = start_turn(fields, request)
         from at_trace_transport import remember_reply
-        remember_reply(span, fields, getattr(request, "channel_meta", None))
+        remember_reply(span, fields, metadata)
         async for item in telemetry.trace_stream(wrapped(*args, **kwargs), span, fields):
             yield item
 
     wrapt.wrap_function_wrapper(module, "Runtime.run", run)
+
+
+def refresh_task_span(agent):
+    root = telemetry._active_turn.get()
+    if root is None or not root.is_recording() or root.attributes.get("agentteams.task.id"):
+        return
+    rc = getattr(agent, "_request_context", {}) or {}
+    fields = enrich_task(telemetry._correlation.get(), rc.get("workspace_dir") or getattr(agent, "workspace_dir", None))
+    with bind(fields):
+        telemetry.IdentityProcessor().on_start(root)
 
 
 def agentscope(module):
@@ -134,6 +149,7 @@ def agentscope(module):
             telemetry.set_io(span, input=getattr(call, "input", None))
             async for item in telemetry.trace_stream(next_handler(**input_kwargs), span, fields):
                 yield item
+            refresh_task_span(agent)
 
         async def on_check_permission(self, agent, input_kwargs, next_handler):
             with telemetry.operation("tool.permission") as span:
@@ -145,6 +161,7 @@ def agentscope(module):
                 return result
 
         async def on_compress_context(self, agent, input_kwargs, next_handler):
+            refresh_task_span(agent)
             with telemetry.operation("context.compress") as span:
                 telemetry.set_io(span, input=input_kwargs)
                 result = await next_handler(**input_kwargs)
@@ -155,6 +172,9 @@ def agentscope(module):
         # AgentScope's public middleware API captures model context, tools,
         # tool-call IDs, usage, agent state and errors without SDK double counting.
         middlewares = list((args[4] if len(args) > 4 else kwargs.get("middlewares")) or [])
+        # QwenPaw already supplies the standard middleware. Replace that
+        # instance so our outcome/task hooks run without double instrumentation.
+        middlewares = [WorkerTracingMiddleware() if type(m) is TracingMiddleware else m for m in middlewares]
         if not any(isinstance(m, TracingMiddleware) for m in middlewares):
             middlewares.insert(0, WorkerTracingMiddleware())
         if len(args) > 4:
@@ -195,14 +215,26 @@ def agentscope(module):
 
 def hermes_turn(module):
     def run(wrapped, instance, args, kwargs):
-        fields = telemetry.turn_fields(str(getattr(instance, "session_id", "")), metadata={
+        metadata = {
             "room_id": getattr(instance, "_chat_id", ""),
             "event_id": kwargs.get("persist_user_platform_id", ""),
-        })
+        }
+        # Read the runtime's current verified frame; native session IDs are opaque.
+        try:
+            from hermes_matrix.public_tasks import current_turn
+        except ImportError:
+            current = None
+        else:
+            current = current_turn.get()
+        if current is not None:
+            metadata.update(current.trace_metadata())
+        fields = telemetry.turn_fields(str(getattr(instance, "session_id", "")), metadata=metadata)
         if kwargs.get("task_id"):
             fields["agentteams.runtime.task_id"] = str(kwargs["task_id"])
         if getattr(instance, "_parent_session_id", None):
             fields["agentteams.runtime.parent_session_id"] = str(instance._parent_session_id)
+        from at_trace_transport import incoming
+        fields.update(incoming({"com.agentteams.trace": metadata.get("otel_carrier", {})}))
         fields = enrich_task(fields, os.getenv("AGENTTEAMS_WORKER_HOME") or os.getenv("HOME"))
         with bind(fields):
             with trace.use_span(start_turn(fields, {"message": args[0] if args else kwargs.get("user_message"),

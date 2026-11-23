@@ -4,6 +4,18 @@ This guide explains how to deploy AgentTeams multi-agent collaboration platform 
 
 ---
 
+## Quick Start (recommended)
+
+Run this in PowerShell to start the local services and Dashboard without configuration questions:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
+```
+
+Dashboard opens at `http://127.0.0.1:13000/` with `admin` prefilled and the generated password copied to the clipboard. If desktop integration is unavailable, use the terminal output. No model API key is required to install; open the Manager conversation and choose **Configure model** before chatting. Continue with the [Dashboard Guide](../dashboard.md).
+
+The numbered walkthrough below is the **manual setup** path (`-Manual`). Its terminal screenshots illustrate interactive configuration, not the default Quick Start.
+
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
@@ -109,12 +121,18 @@ Other OpenAI-compatible model services (such as OpenAI, DeepSeek, etc.) are also
 2. In the PowerShell window, copy and paste the following command, then press Enter:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
 ```
 
 > **Note**: This command temporarily allows the current PowerShell window to execute scripts (without affecting system security policy), then downloads and runs the AgentTeams installation script from the network.
 
-After the installation script starts, you'll see the AgentTeams installation wizard. Follow the terminal prompts to proceed.
+To follow the manual configuration walkthrough below, use this command instead of the default command above:
+
+```powershell
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing https://agentteams.cloud/install.ps1).Content)) -Manual
+```
+
+The manual wizard asks for the following configuration. If you used Quick Start, continue in Dashboard; you do not need to repeat installation.
 
 ![PowerShell Running Installation Script - Installation logs and language selection](../../zh-cn/images/windows-deploy/powershell-install-start.png)
 
@@ -398,20 +416,17 @@ If you selected "Allow external access" during installation, you can manage your
 When a new version is released, simply re-run the installation command in PowerShell to upgrade in-place:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
 ```
 
-When the installation script detects an existing installation, it will prompt you to choose:
+The default upgrade requires one confirmation and preserves data, accounts, model configuration and workspaces. It backs up the environment file and prepares images before replacing services. Existing Worker containers remain in place during normal embedded upgrades. Use `-Manual` to review individual settings; clean reinstall is a separate destructive manual choice.
 
-- **In-place upgrade** (Recommended): Preserves all data, configuration, and workspaces, only updates container images
-- **Clean reinstall**: Deletes all data and starts fresh
-
-> During upgrade, **`agentteams-controller`**, **`agentteams-manager`**, and Worker containers may be recreated. Workers are stateless — data in MinIO / the Docker volume is preserved according to your upgrade choices.
+See [upgrade details](../../../install/README.md#upgrade-an-existing-local-installation) for Dashboard version handling and the separate database backup/rollback workflow.
 
 To upgrade to a specific version:
 
 ```powershell
-$env:AGENTTEAMS_VERSION="v1.2.2"; Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')
+$env:AGENTTEAMS_VERSION="v1.2.7"; Set-ExecutionPolicy Bypass -Scope Process -Force; $wc=New-Object Net.WebClient; $wc.Encoding=[Text.Encoding]::UTF8; iex $wc.DownloadString('https://agentteams.cloud/install.ps1')
 ```
 
 ---
@@ -421,10 +436,10 @@ $env:AGENTTEAMS_VERSION="v1.2.2"; Set-ExecutionPolicy Bypass -Scope Process -For
 Run the following command in PowerShell to stop and remove all AgentTeams containers, Docker volumes, and configuration files:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1' -UseBasicParsing).Content } uninstall"
+Set-ExecutionPolicy Bypass -Scope Process -Force; Invoke-Expression "& { $(Invoke-WebRequest -Uri 'https://agentteams.cloud/install.ps1' -UseBasicParsing).Content } uninstall"
 ```
 
-This mirrors `install/agentteams-install.sh uninstall`: **`agentteams-controller`**, **`agentteams-manager`**, Worker containers, optional **`agentteams-docker-proxy`**, the data volume, env file, network, etc.
+This mirrors `bash <(curl -fsSL https://agentteams.cloud/install.sh) uninstall`: **`agentteams-controller`**, **`agentteams-manager`**, Worker containers, optional **`agentteams-docker-proxy`**, the data volume, env file, network, etc.
 
 > **Note**: Uninstallation may preserve the Manager workspace directory (`%USERPROFILE%\agentteams-manager`) depending on script version — delete it manually if you want every host-side file removed.
 

@@ -137,7 +137,7 @@ chmod 600 ~/.agentteams-llm-key
   AGENTTEAMS_DEFAULT_WORKER_RUNTIME=<plan> \
   AGENTTEAMS_LOCAL_ONLY=<plan> \
   AGENTTEAMS_ADMIN_USER=admin \
-  bash <(curl -sSL https://raw.githubusercontent.com/agentscope-ai/AgentTeams/<plan>/install/agentteams-install.sh)
+  bash <(curl -sSL https://agentteams.cloud/install.sh)
   ```
   For a custom (non-built-in) model, also set
   `AGENTTEAMS_MODEL_CONTEXT_WINDOW`, `AGENTTEAMS_MODEL_MAX_TOKENS`,
@@ -152,7 +152,7 @@ chmod 600 ~/.agentteams-llm-key
     the plan and re-run (this is a plan defect, not a host problem).
   - `curl`/download failure → check host egress/proxy; alternative:
     clone the repository at the pinned tag and run
-    `bash install/agentteams-install.sh` locally.
+    `bash <(curl -fsSL https://agentteams.cloud/install.sh)` locally.
   - model connectivity check fails → the installer names the failing
     check; in order: re-check the key file (human re-places it), the
     Base URL (ends in `/v1` for `openai-compat`), the model ID, the
@@ -222,7 +222,7 @@ Honest record of what this playbook has been exercised against:
 
 | Check | Status | Evidence |
 |---|---|---|
-| Every env variable referenced exists in `install/agentteams-install.sh` | verified (static) | the variable set matches the [Local Deployment Guide](local.md#common-environment-variables) table, which tracks the installer script |
+| Every env variable referenced exists in `bash <(curl -fsSL https://agentteams.cloud/install.sh)` | verified (static) | the variable set matches the [Local Deployment Guide](local.md#common-environment-variables) table, which tracks the installer script |
 | `uninstall` subcommand, port table, verification commands | verified (static) | match the Local Deployment Guide |
 | Empty-environment → working live drill on a Docker host | **pending** | the authoring environment has no container runtime; the drill must be run on a real host, and the results (duration, every failure hit and its recovery path) recorded here |
 

@@ -17,13 +17,7 @@ statement of ``AgentTeamsMatrixChannel.send``, so a whitespace-only final
 output crashes the delivery path instead of being handled as an ordinary
 (non-NO_REPLY) send.
 
-This test pins the detector contract on both shipped copies of the module:
-
-  1. the live ``plugins/agentteams-matrix-channel`` implementation, and
-  2. the QwenPaw bundle adapter copy under
-     ``plugins/agentteams-matrix/adapters/qwenpaw`` (``channel.py`` is the
-     bundle-owned exception in the copy-drift contract, so the two files can
-     diverge and must be pinned to the same behavior).
+This test pins the QwenPaw channel detector contract.
 
 NOTE: channel.py imports the qwenpaw runtime (schemas / BaseChannel). This
 module runs for real in the dedicated matrix-channel CI job (which installs
@@ -43,29 +37,12 @@ pytest.importorskip("nio")
 pytest.importorskip("qwenpaw")
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CHANNEL_COPY_PATHS = {
-    "channel": (
-        REPO_ROOT
-        / "plugins"
-        / "agentteams-matrix-channel"
-        / "agentteams_matrix"
-        / "channel.py"
-    ),
-    "bundle_adapter": (
-        REPO_ROOT
-        / "plugins"
-        / "agentteams-matrix"
-        / "adapters"
-        / "qwenpaw"
-        / "agentteams_matrix"
-        / "channel.py"
-    ),
-}
+CHANNEL_PATH = REPO_ROOT / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py"
 
 
-def _load_copy(label: str, path: Path):
+def _load_channel(path: Path):
     spec = importlib.util.spec_from_file_location(
-        f"agentteams_matrix_channel_{label}", path
+        "agentteams_matrix_no_reply_test", path
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -74,9 +51,7 @@ def _load_copy(label: str, path: Path):
     return module
 
 
-COPIES = {
-    label: _load_copy(label, path) for label, path in CHANNEL_COPY_PATHS.items()
-}
+CHANNEL = _load_channel(CHANNEL_PATH)
 
 # (text, expected) — the detector contract.
 CASES = [
@@ -102,26 +77,13 @@ CASES = [
 
 
 @pytest.mark.parametrize("text,expected", CASES)
-@pytest.mark.parametrize("label", sorted(COPIES))
-def test_no_reply_final_line_contract(label, text, expected):
-    detector = COPIES[label]._ends_with_no_reply_control
+def test_no_reply_final_line_contract(text, expected):
+    detector = CHANNEL._ends_with_no_reply_control
     assert detector(text) is expected
 
 
-@pytest.mark.parametrize("text,expected", CASES)
-def test_copies_agree(text, expected):
-    """The channel copy and the bundle adapter copy stay behaviorally in sync."""
-    results = {
-        label: COPIES[label]._ends_with_no_reply_control(text)
-        for label in sorted(COPIES)
-    }
-    assert len(set(results.values())) == 1
-    assert next(iter(results.values())) is expected
-
-
-@pytest.mark.parametrize("label", sorted(COPIES))
-def test_whitespace_only_does_not_raise(label):
+def test_whitespace_only_does_not_raise():
     """The historical crash: whitespace-only text raised IndexError."""
-    detector = COPIES[label]._ends_with_no_reply_control
+    detector = CHANNEL._ends_with_no_reply_control
     for text in (" ", "\n", " \n\t\n  "):
         detector(text)  # must not raise

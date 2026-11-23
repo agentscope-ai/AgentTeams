@@ -44,7 +44,7 @@ from typing import Any
 import pytest
 
 
-MCP_DIR = Path(__file__).resolve().parents[2] / "agentteams-teamharness" / "mcp"
+MCP_DIR = (Path(__file__).resolve().parents[2] / "agentteams-teamharness" / "mcp").resolve()
 LEGACY_MCP_DIR = Path(__file__).resolve().parents[2] / "teamharness" / "mcp"
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
@@ -1072,7 +1072,7 @@ def test_r6_parity_distinct_members_without_account_id(
         "task_id": TASK_ID,
         "project_id": PROJECT_ID,
         "status": "assigned",
-        "assigned_to": WORKER_A,
+        "assigned_to": "worker",
     })
 
     _set_runtime_member(monkeypatch, tmp_path, {"name": "worker"}, "worker-config.json")
@@ -1104,7 +1104,7 @@ def test_r6_parity_trusted_identity_beats_payload_evasion(
         "task_id": TASK_ID,
         "project_id": PROJECT_ID,
         "status": "assigned",
-        "assigned_to": WORKER_A,
+        "assigned_to": "worker",
     })
 
     _set_runtime_member(monkeypatch, tmp_path, {"name": "worker"}, "worker-config.json")
@@ -1154,7 +1154,7 @@ def test_r7_parity_trusted_default_member_self_review_forbidden(
         "task_id": TASK_ID,
         "project_id": PROJECT_ID,
         "status": "assigned",
-        "assigned_to": WORKER_A,
+        "assigned_to": "default",
     })
 
     # The member's trusted runtime identity is literally "default".
@@ -1187,7 +1187,7 @@ def test_r7_parity_trusted_concrete_member_control_unchanged(
         "task_id": TASK_ID,
         "project_id": PROJECT_ID,
         "status": "assigned",
-        "assigned_to": WORKER_A,
+        "assigned_to": "worker",
     })
 
     _set_runtime_member(monkeypatch, tmp_path, {"name": "worker"}, "worker-config.json")
@@ -1215,7 +1215,7 @@ def test_r7_parity_distinct_trusted_member_reviews_default_named_submitter(
         "task_id": TASK_ID,
         "project_id": PROJECT_ID,
         "status": "assigned",
-        "assigned_to": WORKER_A,
+        "assigned_to": "default",
     })
 
     _set_runtime_member(monkeypatch, tmp_path, {"name": "default"}, "worker-config.json")

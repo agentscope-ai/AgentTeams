@@ -5,8 +5,8 @@ set -euo pipefail
 # Verify that QwenPaw is a first-class local installer runtime.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASH_INSTALLER="${ROOT_DIR}/install/agentteams-install.sh"
-POWERSHELL_INSTALLER="${ROOT_DIR}/install/agentteams-install.ps1"
+BASH_INSTALLER="${ROOT_DIR}/.installer-source/public/install.sh"
+POWERSHELL_INSTALLER="${ROOT_DIR}/.installer-source/public/install.ps1"
 INTEGRATION_WORKFLOW="${ROOT_DIR}/.github/workflows/test-integration.yml"
 RELEASE_WORKFLOW="${ROOT_DIR}/.github/workflows/release.yml"
 
@@ -114,9 +114,9 @@ for manager_crd in \
         fail "Manager CRD must keep accepting legacy CoPaw: ${manager_crd}"
 done
 
-# Fork CI must exercise the PR-built QwenPaw Manager directly.
-grep -Fq 'AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE: agentteams/manager-qwenpaw:latest' \
+# CI sets the Make variable for the QwenPaw Manager to the shared Harness build.
+grep -Fq 'LOCAL_MANAGER_QWENPAW=agentteams/agentteams-harness-qwenpaw:latest' \
     "${INTEGRATION_WORKFLOW}" ||
-    fail "Integration CI must map the QwenPaw runtime to the PR-built Manager image"
+    fail "Integration CI must map the QwenPaw runtime to the PR-built QwenPaw Harness image"
 
 echo "PASS: QwenPaw Manager and Worker are first-class local installer options"

@@ -38,22 +38,23 @@ trap _cleanup EXIT
 
 minio_setup
 
-_get_higress_consumers_or_fail() {
+_get_higress_consumers() {
     local label="$1"
+    local on_error="${2:-log_fail}"
     local consumers
 
     if ! higress_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}" > /dev/null 2>&1; then
-        log_fail "Unable to log in to Higress before ${label}"
+        "${on_error}" "Unable to log in to Higress before ${label}"
         return 1
     fi
 
     if ! consumers=$(higress_get_consumers 2>/dev/null); then
-        log_fail "Unable to query Higress consumers during ${label}"
+        "${on_error}" "Unable to query Higress consumers during ${label}"
         return 1
     fi
 
     if ! echo "${consumers}" | jq -e '.data | type == "array"' >/dev/null 2>&1; then
-        log_fail "Higress consumers response during ${label} is not valid JSON with a data array"
+        "${on_error}" "Higress consumers response during ${label} is not valid JSON with a data array"
         return 1
     fi
 
@@ -114,7 +115,7 @@ fi
 log_section "Snapshot Pre-Delete State"
 
 HIGRESS_CONSUMERS_JSON=""
-if _get_higress_consumers_or_fail "pre-delete snapshot"; then
+if _get_higress_consumers "pre-delete snapshot"; then
     CONSUMERS_BEFORE="${HIGRESS_CONSUMERS_JSON}"
     if _higress_consumer_exists; then
         log_pass "Higress consumer 'worker-${TEST_WORKER}' exists before delete"
@@ -163,7 +164,7 @@ DEADLINE=$(( $(date +%s) + 120 ))
 while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
     HIGRESS_CONSUMERS_JSON=""
     HIGRESS_QUERY_OK=0
-    if _get_higress_consumers_or_fail "post-delete wait"; then
+    if _get_higress_consumers "post-delete wait" log_info; then
         HIGRESS_QUERY_OK=1
     fi
     AGENT_DIR_LISTING=$(_minio_agent_dir_listing)
@@ -194,7 +195,7 @@ fi
 
 # (b) Higress consumer removed
 HIGRESS_CONSUMERS_JSON=""
-if _get_higress_consumers_or_fail "post-delete assertion"; then
+if _get_higress_consumers "post-delete assertion"; then
     CONSUMERS_AFTER="${HIGRESS_CONSUMERS_JSON}"
     if _higress_consumer_exists; then
         log_fail "Higress consumer 'worker-${TEST_WORKER}' still present after delete"

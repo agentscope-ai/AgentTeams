@@ -32,8 +32,7 @@ pytest.importorskip("qwenpaw")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHANNEL_MODULE_PATH = (
     REPO_ROOT
-    / "plugins"
-    / "agentteams-matrix-channel"
+    / "qwenpaw/adapters/matrix"
     / "agentteams_matrix"
     / "channel.py"
 )
@@ -224,3 +223,84 @@ def test_quiet_tool_output_turn_keeps_the_done_marker(monkeypatch):
     send_meta[PLACEHOLDER_KEY] = True
     _complete(channel, send_meta)
     assert captured == ["已完成"]
+
+
+@pytest.mark.parametrize("outcome", ["confirmed", "rejected", "notice"])
+@pytest.mark.parametrize("placeholder", [False, True])
+def test_only_acknowledged_manager_final_text_completes_source(monkeypatch, outcome, placeholder):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    spec = importlib.util.spec_from_file_location("_manager_final_channel", REPO_ROOT / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    cls = module.AgentTeamsMatrixChannel
+    for base in cls.__mro__[1:]:
+        if "_on_process_completed" in base.__dict__:
+            monkeypatch.setattr(base, "_on_process_completed", None)
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
+    channel = cls(process=lambda *a, **kw: None, share_session_in_group=True)
+    channel._session_receipts = SimpleNamespace(complete=AsyncMock())
+    channel._send_typing = AsyncMock()
+    channel._prepare_room_send = AsyncMock()
+    channel._evaluate_send_gate = lambda *_a: ("pass", 0)
+    response = SimpleNamespace(event_id="$reply" if outcome != "rejected" else None)
+    channel._client = SimpleNamespace(joined_members=AsyncMock(return_value=None),
+                                       room_send=AsyncMock(return_value=response))
+
+    async def send(to, text, meta):
+        await channel._room_send_with_retry(to, "m.room.message", {
+            "msgtype": "m.notice" if outcome == "notice" else "m.text", "body": text,
+        })
+    async def edit(to, meta, text, **kwargs):
+        assert kwargs["msgtype"] == "m.text"
+        await send(to, text, meta)
+
+    channel.send = send
+    channel._edit_thread_root = edit
+    trace_context = {"source_event_id": "$source"}
+    metadata = {module._MATRIX_STREAMING_FINAL_TEXT_KEY: "final answer", "room_id": ROOM,
+                "event_id": "$source", module._MATRIX_PLACEHOLDER_THREAD_ROOT_KEY: placeholder,
+                "otel_delivery": trace_context}
+    asyncio.run(channel._on_process_completed(SimpleNamespace(), ROOM, metadata))
+    if outcome == "confirmed":
+        channel._session_receipts.complete.assert_awaited_once_with(ROOM, "$source", trace_context=trace_context)
+    else:
+        channel._session_receipts.complete.assert_not_awaited()
+
+
+def test_manager_completion_receipt_retries_from_the_shared_outbox(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "shared/lib"))
+    monkeypatch.setenv("AGENTTEAMS_AGENT_ROLE", "manager")
+    monkeypatch.setenv("AGENTTEAMS_WORKER_HOME", str(tmp_path))
+    from agentteams_receipts import RECEIPT_TYPE
+    import agentteams_receipts
+
+    path = CHANNEL_MODULE_PATH.with_name("session_receipts.py")
+    spec = importlib.util.spec_from_file_location("_manager_session_receipts", path)
+    receipts = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(receipts)
+    channel = SimpleNamespace(homeserver="http://fixture.invalid", _client=SimpleNamespace(access_token="fixture"))
+    failed = Mock(side_effect=OSError("first delivery interrupted"))
+    succeeded = Mock(return_value={"event_id": "$completed"})
+
+    async def run():
+        monkeypatch.setattr(agentteams_receipts, "matrix_request", lambda *_: failed)
+        original = receipts.SessionReceipts(channel, tmp_path / "sessions")
+        await original.complete(ROOM, "$source")
+        await original.flush()
+        monkeypatch.setattr(agentteams_receipts, "matrix_request", lambda *_: succeeded)
+        restored = receipts.SessionReceipts(channel, tmp_path / "sessions")
+        await restored.flush()
+        await restored.flush()
+
+    asyncio.run(run())
+    succeeded.assert_called_once()
+    assert failed.call_args == succeeded.call_args
+    assert succeeded.call_args.args[2] == {
+        "version": 1, "status": "completed", "m.relates_to": {"rel_type": RECEIPT_TYPE, "event_id": "$source"},
+    }

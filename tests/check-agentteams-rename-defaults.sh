@@ -20,11 +20,6 @@ if matches="$(git grep -nIi "${legacy_brand}" -- . "${archive_paths[@]}" 2>/dev/
         case "${match}" in
             install/agentteams-dashboard-tests.sh:*)
                 ;;
-            install/agentteams-install.sh:*"${legacy_brand}-controller"* | \
-            install/agentteams-install.sh:*"/var/run/${legacy_brand}/cli-token"* | \
-            install/agentteams-install.sh:*"older ${legacy_brand_title} images"* | \
-            install/agentteams-install.sh:*"AgentTeams/${legacy_brand_title} images"*)
-                ;;
             *)
                 unexpected_matches="${unexpected_matches}${unexpected_matches:+$'\n'}${match}"
                 ;;
@@ -47,8 +42,6 @@ fi
 required_paths=(
     agentteams-controller/go.mod
     helm/agentteams/Chart.yaml
-    install/agentteams-install.sh
-    install/agentteams-install.ps1
     shared/lib/agentteams-env.sh
 )
 for path in "${required_paths[@]}"; do

@@ -9,15 +9,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 MANIFEST = REPO_ROOT / "plugins" / "teamharness" / "plugin.yaml"
-BUILD_SCRIPT = (
-    REPO_ROOT
-    / "plugins"
-    / "teamharness"
-    / "adapters"
-    / "qwenpaw"
-    / "scripts"
-    / "build-qwenpaw-plugin.rb"
-)
+BUILD_SCRIPT = REPO_ROOT / "qwenpaw/adapters/teamharness/scripts/build-qwenpaw-plugin.rb"
 
 
 def _manifest_version() -> str:
@@ -54,12 +46,20 @@ def test_build_qwenpaw_native_plugin_package(tmp_path: Path) -> None:
         assert f"{root}/task_trace.py" in names
         assert f"{root}/teamharness/plugin.yaml" in names
         assert f"{root}/teamharness/trace.py" not in names
-        assert f"{root}/teamharness/prompts/team/TEAMS.md" in names
         assert f"{root}/teamharness/prompts/agent/worker.md" in names
+        for path in (
+            "prompts/team/TEAMS.md",
+            "prompts/agent/leader.md",
+            "skills/team/task-management/SKILL.md",
+        ):
+            source_path = REPO_ROOT / "plugins/teamharness" / path
+            assert archive.read(f"{root}/teamharness/{path}") == source_path.read_bytes()
         assert f"{root}/teamharness/skills/team/communication/SKILL.md" in names
         assert f"{root}/teamharness/skills/team/roomflow/SKILL.md" in names
         assert f"{root}/teamharness/qwenpaw-skills/communication/SKILL.md" in names
         assert f"{root}/teamharness/mcp/server.py" in names
+        assert f"{root}/teamharness/mcp/common/task_receipt.py" in names
+        assert f"{root}/teamharness/mcp/common/task_cli.py" in names
         assert f"{root}/teamharness/mcp/message_tool.py" in names
         assert f"{root}/teamharness/mcp/roomflow_tool.py" in names
         assert not any(name.startswith(f"{root}/teamharness/hooks/") for name in names)
@@ -71,6 +71,15 @@ def test_build_qwenpaw_native_plugin_package(tmp_path: Path) -> None:
         assert project_skill.startswith("---\n")
         assert "name: teamharness-project-management" in project_skill
         assert "payload` as a JSON object" in project_skill
+
+        # The full Skill can be loaded after the shorter Manager system policy.
+        # Its phase-ending rule must not contradict multi-request intake.
+        task_skill = archive.read(f"{root}/teamharness/skills/team/task-management/SKILL.md").decode("utf-8")
+        exposed_task_skill = archive.read(f"{root}/teamharness/qwenpaw-skills/task-management/SKILL.md").decode("utf-8")
+        assert exposed_task_skill == task_skill
+        phase_end = re.search(r"After a valid durable ([^.]+)\.", task_skill)
+        assert phase_end and "create" not in phase_end.group(1)
+        assert "Creating one Task does not settle the others" in task_skill
 
         manifest = json.loads(archive.read(f"{root}/plugin.json"))
         extract_dir = tmp_path / "extract"

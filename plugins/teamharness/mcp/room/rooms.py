@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 
 import json
+import os
 
 import time
 
@@ -27,6 +28,7 @@ from mcp.common.payload import _payload, _safe_id, _string_list
 from mcp.common.paths import _optional_workspace_dir
 from mcp.roomflow_tool import RoomDescribeDeps, describe_room as _describe_room_impl
 from .matrix import (
+    _auto_join_task_humans,
     _ensure_matrix_room_members,
     _matrix_env,
     _matrix_invite_to_room,
@@ -253,6 +255,7 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
             _ensure_matrix_room_members(existing_room_id, invite)
             _write_matrix_room_meta(existing_room_id, room_meta)
             base["accountable"] = _verify_accountable_in_room(existing_room_id, accountable)
+            base["membership"] = _auto_join_task_humans(existing_room_id, str(room_meta.get("teamName") or ""))
         except ValueError as exc:
             return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": str(exc)}
         except urllib.error.HTTPError as exc:
@@ -305,6 +308,7 @@ def _create_task_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dic
     _write_roomflow_project_room_binding(binding, room_id, base)
     try:
         base["accountable"] = _verify_accountable_in_room(room_id, accountable)
+        base["membership"] = _auto_join_task_humans(room_id, str(room_meta.get("teamName") or ""))
     except urllib.error.HTTPError as exc:
         error = exc.read().decode("utf-8", errors="replace")[:200]
         return {"ok": False, "tool": "roomflow", "action": "create_task_room", "error": f"Matrix API error: HTTP {exc.code}: {error}"}
@@ -436,13 +440,18 @@ def _archive_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[st
     if arguments.get("dryRun"):
         base["dryRun"] = True
         return base
-    try:
-        homeserver, token = _matrix_env("roomflow")
-    except ValueError as exc:
-        return {"ok": False, "tool": "roomflow", "action": "archive_room", "error": str(exc)}
+    controller = os.getenv("AGENTTEAMS_CONTROLLER_URL", "").strip().rstrip("/")
+    token = os.getenv("AGENTTEAMS_AUTH_TOKEN", "").strip()
+    if not token:
+        try:
+            token = Path(os.environ["AGENTTEAMS_AUTH_TOKEN_FILE"]).read_text().strip()
+        except (OSError, KeyError):
+            pass
+    if not controller or not token:
+        return {"ok": False, "tool": "roomflow", "action": "archive_room", "error": "Controller archive capability and your Agent credential are required; leaving a room is not task archival"}
     encoded_room = urllib.parse.quote(room_id, safe="")
     request = urllib.request.Request(
-        f"{homeserver}/_matrix/client/v3/rooms/{encoded_room}/leave",
+        f"{controller}/api/v1/task-rooms/{encoded_room}/archive",
         data=b"{}",
         headers={
             "Authorization": f"Bearer {token}",
@@ -454,13 +463,10 @@ def _archive_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[st
         with urllib.request.urlopen(request, timeout=10):
             pass
     except urllib.error.HTTPError as exc:
-        error = exc.read().decode("utf-8", errors="replace")[:200]
-        if "M_NOT_FOUND" in error:
-            base["note"] = "already left"
-            return base
-        return {"ok": False, "tool": "roomflow", "action": "archive_room", "error": f"Matrix API error: HTTP {exc.code}: {error}"}
+        exc.close()
+        return {"ok": False, "tool": "roomflow", "action": "archive_room", "error": f"Controller archive failed: HTTP {exc.code}"}
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        return {"ok": False, "tool": "roomflow", "action": "archive_room", "error": f"Matrix API error: {exc}"}
+        return {"ok": False, "tool": "roomflow", "action": "archive_room", "error": f"Controller archive request failed: {type(exc).__name__}"}
     base["archived"] = True
     return base
 

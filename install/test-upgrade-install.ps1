@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $tokens = $null
 $errors = $null
-$source = Join-Path $PSScriptRoot 'agentteams-install.ps1'
+$source = Join-Path $PSScriptRoot '../.installer-source/public/install.ps1'
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($source, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
 $definitions = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
@@ -90,7 +90,10 @@ try {
     Reset-Fixture
     $script:config = @{DASHBOARD_VERSION='v1.3.1'; DASHBOARD_IMAGE='registry.example/agentteams/agentteams-dashboard:v1.3.1'}
     Prepare-UpgradeDashboard
-    if ($script:config.DASHBOARD_VERSION -ne 'v1.4.0' -or $script:config.DASHBOARD -ne '1') { throw 'Old default Dashboard was not upgraded' }
+    if ($script:config.DASHBOARD_VERSION -ne 'v1.4.1' -or $script:config.DASHBOARD -ne '1') { throw 'Old default Dashboard was not upgraded' }
+    $script:config = @{DASHBOARD_VERSION='v1.4.0'; DASHBOARD_IMAGE='registry.example/agentteams/agentteams-dashboard:v1.4.0'}
+    Prepare-UpgradeDashboard
+    if ($script:config.DASHBOARD_VERSION -ne 'v1.4.1') { throw 'Dashboard 1.4.0 default was not upgraded' }
     $script:config = @{DASHBOARD_VERSION='v1.3.1'; DASHBOARD_IMAGE='custom/dashboard:pinned'; DASHBOARD='0'}
     Prepare-UpgradeDashboard
     if ($script:config.DASHBOARD_IMAGE -ne 'custom/dashboard:pinned' -or $script:config.DASHBOARD -ne '0') { throw 'Custom Dashboard configuration was changed' }

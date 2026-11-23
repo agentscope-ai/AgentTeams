@@ -42,7 +42,7 @@ if (-not $ContainerCmd) {
     Write-Host "[AgentTeams Import ERROR] Neither docker nor podman found." -ForegroundColor Red
     Write-Host ""
     Write-Host "Docker is required to run AgentTeams. Install Docker Desktop first, then install AgentTeams:" -ForegroundColor Yellow
-    Write-Host "  Set-ExecutionPolicy Bypass -Scope Process -Force; `$wc=New-Object Net.WebClient; `$wc.Encoding=[Text.Encoding]::UTF8; iex `$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')"
+    Write-Host "  Set-ExecutionPolicy Bypass -Scope Process -Force; `$wc=New-Object Net.WebClient; `$wc.Encoding=[Text.Encoding]::UTF8; iex `$wc.DownloadString('https://agentteams.cloud/install.ps1')"
     exit 1
 }
 
@@ -58,7 +58,7 @@ if ($mgrRunning -notmatch "agentteams-manager") {
         Write-Host "  $ContainerCmd start agentteams-manager"
     } else {
         Write-Host "AgentTeams does not appear to be installed. Install it first:" -ForegroundColor Yellow
-        Write-Host "  Set-ExecutionPolicy Bypass -Scope Process -Force; `$wc=New-Object Net.WebClient; `$wc.Encoding=[Text.Encoding]::UTF8; iex `$wc.DownloadString('https://raw.githubusercontent.com/agentscope-ai/AgentTeams/main/install/agentteams-install.ps1')"
+        Write-Host "  Set-ExecutionPolicy Bypass -Scope Process -Force; `$wc=New-Object Net.WebClient; `$wc.Encoding=[Text.Encoding]::UTF8; iex `$wc.DownloadString('https://agentteams.cloud/install.ps1')"
     }
     exit 1
 }

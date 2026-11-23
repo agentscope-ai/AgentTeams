@@ -7,8 +7,8 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-bash_installer="$root/install/agentteams-install.sh"
-ps_installer="$root/install/agentteams-install.ps1"
+bash_installer="$root/.installer-source/public/install.sh"
+ps_installer="$root/.installer-source/public/install.ps1"
 en_docs="$root/docs/usage/resource-management.md"
 zh_docs="$root/docs/zh-cn/usage/resource-management.md"
 

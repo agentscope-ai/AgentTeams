@@ -28,7 +28,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BUNDLE_MCP_DIR = REPO_ROOT / "plugins" / "agentteams-teamharness" / "mcp"
-LEGACY_MCP_DIR = REPO_ROOT / "plugins" / "teamharness" / "mcp"
 LEGACY_PAUSE_GATE = (
     REPO_ROOT / "plugins" / "tests" / "teamharness" / "test_pause_gate.py"
 )
@@ -51,25 +50,15 @@ def _load_pause_gate_module() -> Any:
 pause_gate = _load_pause_gate_module()
 
 
-def _purge_legacy_mcp_modules() -> None:
-    """Drop ``mcp*`` modules imported from the LEGACY tree so the bundle
-    server binds to its own (byte-identical) copy: a cached legacy
-    ``mcp`` package would otherwise shadow the bundle's through
-    sys.modules and the parity run would silently test the wrong tree.
-    Only modules whose files live under the legacy tree are dropped."""
-    legacy_root = LEGACY_MCP_DIR.as_posix() + "/"
-    for name in [
-        name
-        for name, module in sys.modules.items()
-        if name == "mcp" or name.startswith("mcp.")
-    ]:
-        file = getattr(sys.modules[name], "__file__", None)
-        if file is not None and file.startswith(legacy_root):
+def _purge_mcp_modules() -> None:
+    """Clear cached MCP modules, including namespace packages without a file."""
+    for name in list(sys.modules):
+        if name == "mcp" or name.startswith("mcp."):
             del sys.modules[name]
 
 
 def _load_bundle_server() -> Any:
-    _purge_legacy_mcp_modules()
+    _purge_mcp_modules()
     spec = importlib.util.spec_from_file_location(
         "teamharness_mcp_server_pause_gate_parity_test",
         BUNDLE_MCP_DIR / "server.py",
@@ -209,3 +198,18 @@ def test_parity_presend_refresh_failure_suppresses_send(
     pause_gate.test_presend_refresh_failure_suppresses_send(
         server, tmp_path, monkeypatch
     )
+
+
+@pytest.mark.parametrize("action", ["plan_dag", "plan_loop"])
+def test_project_plan_sync_failure_does_not_release_work_in_bundle(server, tmp_path, monkeypatch, action):
+    pause_gate.test_project_plan_sync_failure_does_not_release_work(server, tmp_path, monkeypatch, action)
+
+
+@pytest.mark.parametrize("action", ["plan_dag", "plan_loop"])
+def test_project_planning_refuses_unreadable_state_in_bundle(server, tmp_path, monkeypatch, action):
+    pause_gate.test_project_planning_refuses_an_unreadable_authoritative_state(server, tmp_path, monkeypatch, action)
+
+
+@pytest.mark.parametrize("action", ["create_project", "create_quick_project"])
+def test_project_creation_sync_failure_cannot_announce_success_in_bundle(server, tmp_path, monkeypatch, action):
+    pause_gate.test_project_creation_sync_failure_cannot_announce_success(server, tmp_path, monkeypatch, action)

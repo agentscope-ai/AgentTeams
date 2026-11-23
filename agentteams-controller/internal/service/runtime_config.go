@@ -1,12 +1,20 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 	"sigs.k8s.io/yaml"
 )
 
@@ -24,6 +32,56 @@ const (
 
 func memberRuntimeConfigObjectKey(runtimeName string) string {
 	return fmt.Sprintf("agents/%s/runtime/runtime.yaml", runtimeName)
+}
+
+// WorkerRuntimeConfigGeneration binds a native cache to the Controller's
+// current desired config. Never infer it from a Harness-private config file.
+func WorkerRuntimeConfigGeneration(ctx context.Context, store oss.StorageClient, name, runtime string) (int64, error) {
+	if _, err := workerMatrixPrefix(name); err != nil {
+		return 0, err
+	}
+	data, err := store.GetObject(ctx, memberRuntimeConfigObjectKey(name))
+	if err != nil {
+		return 0, err
+	}
+	var doc memberRuntimeConfigDocument
+	if yaml.Unmarshal(data, &doc) != nil || doc.APIVersion != "agentteams.io/v1beta1" || doc.Kind != memberRuntimeConfigKind || doc.Member.RuntimeName != name || doc.Member.Runtime != runtime || doc.Storage.MemberPrefix != "agents/"+name || doc.Metadata.Generation < 0 {
+		return 0, fmt.Errorf("Worker runtime configuration identity unavailable")
+	}
+	return doc.Metadata.Generation, nil
+}
+
+// A Worker CR generation also changes for lifecycle operations such as restart.
+// The public configuration version changes only when its effective content does.
+func preserveRuntimeConfigGeneration(ctx context.Context, store oss.StorageClient, key string, doc *memberRuntimeConfigDocument) error {
+	data, err := store.GetObject(ctx, key)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var previous memberRuntimeConfigDocument
+	if err := yaml.Unmarshal(data, &previous); err != nil {
+		return err
+	}
+	oldGeneration := previous.Metadata.Generation
+	old, next := previous, *doc
+	old.Metadata, next.Metadata = memberRuntimeConfigMetadata{}, memberRuntimeConfigMetadata{}
+	a, err := json.Marshal(old)
+	if err != nil {
+		return err
+	}
+	b, err := json.Marshal(next)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(a, b) {
+		doc.Metadata.Generation = oldGeneration
+	} else if doc.Metadata.Generation <= oldGeneration {
+		doc.Metadata.Generation = oldGeneration + 1
+	}
+	return nil
 }
 
 // Managers use the same desired-state contract as team members. The CR name
@@ -96,6 +154,9 @@ type memberRuntimeConfigMember struct {
 
 type memberRuntimeConfigMatrix struct {
 	AccessToken string `json:"accessToken,omitempty"`
+	// Transport is the Controller-resolved endpoint/policy, independent of
+	// native device state. Credentials are resolved through their bindings.
+	Transport map[string]any `json:"transport,omitempty"`
 }
 
 type memberRuntimeConfigDesired struct {
@@ -111,6 +172,13 @@ type memberRuntimeConfigDesired struct {
 	Channels           *memberRuntimeConfigChannels      `json:"channels,omitempty"`
 	Skills             []string                          `json:"skills,omitempty"`
 	State              string                            `json:"state"`
+	Heartbeat          *memberRuntimeConfigHeartbeat     `json:"heartbeat,omitempty"`
+	Observability      *observability.WorkerSettings     `json:"observability,omitempty"`
+}
+
+type memberRuntimeConfigHeartbeat struct {
+	Enabled bool   `json:"enabled"`
+	Every   string `json:"every"`
 }
 
 type memberRuntimeConfigModel struct {
@@ -178,6 +246,7 @@ type memberRuntimeConfigAgentIdentityData struct {
 type memberRuntimeConfigCredentials struct {
 	MatrixTokenEnv          string `json:"matrixTokenEnv"`
 	GatewayKeyEnv           string `json:"gatewayKeyEnv"`
+	TraceHeadersEnv         string `json:"traceHeadersEnv,omitempty"`
 	StorageAccessKeyEnv     string `json:"storageAccessKeyEnv"`
 	StorageSecretKeyEnv     string `json:"storageSecretKeyEnv"`
 	ServiceAccountTokenPath string `json:"serviceAccountTokenPath"`
@@ -206,6 +275,12 @@ func (d *Deployer) DeployMemberRuntimeConfig(ctx context.Context, req MemberRunt
 	}
 	if doc.Team == nil && !req.DropTeamContext {
 		d.preserveExistingRuntimeTeamContext(ctx, runtimeName, &doc)
+	}
+	if err := d.projectRuntimeMatrixTransport(ctx, runtimeName, &doc, req.MatrixAllowLists); err != nil {
+		return err
+	}
+	if err := preserveRuntimeConfigGeneration(ctx, d.oss, memberRuntimeConfigObjectKey(runtimeName), &doc); err != nil {
+		return fmt.Errorf("read runtime config generation: %w", err)
 	}
 	payload, err := yaml.Marshal(doc)
 	if err != nil {
@@ -267,6 +342,12 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 		doc.Member.PersonalRoomID = req.PersonalRoomID
 	}
 	applyRuntimeTeamContext(&doc, req)
+	if err := d.projectRuntimeMatrixTransport(ctx, runtimeName, &doc, req.MatrixAllowLists); err != nil {
+		return err
+	}
+	if err := preserveRuntimeConfigGeneration(ctx, d.oss, key, &doc); err != nil {
+		return fmt.Errorf("read runtime config generation: %w", err)
+	}
 
 	payload, err := yaml.Marshal(doc)
 	if err != nil {
@@ -274,6 +355,81 @@ func (d *Deployer) MergeMemberRuntimeTeamContext(ctx context.Context, req Member
 	}
 	if err := d.oss.PutObject(ctx, key, payload); err != nil {
 		return fmt.Errorf("write runtime config: %w", err)
+	}
+	return nil
+}
+
+func (d *Deployer) projectRuntimeMatrixTransport(ctx context.Context, name string, doc *memberRuntimeConfigDocument, policy *RuntimeMatrixAllowLists) error {
+	var config struct {
+		Channels struct {
+			Matrix map[string]any `json:"matrix"`
+		} `json:"channels"`
+		Messages struct {
+			GroupChat struct {
+				HistoryLimit *int `json:"historyLimit"`
+			} `json:"groupChat"`
+		} `json:"messages"`
+	}
+	if backend.UsesMemberRuntimeConfig(doc.Member.Runtime) && d.agentConfig != nil {
+		// A fresh YAML-native Worker has no OpenClaw file. Generate its
+		// transport from the same Controller settings as file-based Workers.
+		channel := d.agentConfig.WorkerMatrixChannel(agentconfig.WorkerConfigRequest{
+			WorkerName: name, PersonalRoomID: doc.Member.PersonalRoomID,
+			ChannelPolicy: workerChannelPolicy(doc.Desired.ChannelPolicy),
+		})
+		if policy != nil {
+			channel["groupAllowFrom"] = append([]string{}, policy.GroupAllowFrom...)
+			channel["dm"].(map[string]any)["allowFrom"] = append([]string{}, policy.DMAllowFrom...)
+		} else if doc.Team != nil && doc.Matrix != nil && doc.Matrix.Transport != nil {
+			// A standalone reconcile may preserve the Team controller's last
+			// document. Its Team membership and resolved allowlists stay together.
+			for _, key := range []string{"groupAllowFrom", "dm"} {
+				if previous, ok := doc.Matrix.Transport[key]; ok {
+					channel[key] = previous
+				}
+			}
+		}
+		config.Channels.Matrix = channel
+	} else {
+		// File-based Workers can also carry Human grants and operator-owned
+		// entries in their existing Worker-level compatibility projection.
+		body, err := d.oss.GetObject(ctx, "agents/"+name+"/openclaw.json")
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read Worker Matrix projection: %w", err)
+		}
+		if err := json.Unmarshal(body, &config); err != nil {
+			return fmt.Errorf("decode Worker Matrix projection: %w", err)
+		}
+	}
+	if config.Channels.Matrix == nil {
+		return nil
+	}
+	transport := map[string]any{}
+	for _, key := range []string{"homeserver", "encryption", "groupPolicy", "groupAllowFrom", "requireMention", "freeResponseRooms", "autoThread", "dmMentionThreads", "historyLimit"} {
+		if value, ok := config.Channels.Matrix[key]; ok {
+			transport[key] = value
+		}
+	}
+	if dm, ok := config.Channels.Matrix["dm"].(map[string]any); ok {
+		policy := map[string]any{}
+		for _, key := range []string{"policy", "allowFrom"} {
+			if value, ok := dm[key]; ok {
+				policy[key] = value
+			}
+		}
+		transport["dm"] = policy
+	}
+	if _, ok := transport["historyLimit"]; !ok && config.Messages.GroupChat.HistoryLimit != nil {
+		transport["historyLimit"] = *config.Messages.GroupChat.HistoryLimit
+	}
+	if len(transport) != 0 {
+		if doc.Matrix == nil {
+			doc.Matrix = &memberRuntimeConfigMatrix{}
+		}
+		doc.Matrix.Transport = transport
 	}
 	return nil
 }
@@ -298,6 +454,11 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		CredentialBindings: copyCredentialBindings(req.Spec.CredentialBindings),
 		Skills:             runtimeSkillNames(req.Spec),
 		State:              req.Spec.DesiredState(),
+		Observability:      req.Observability,
+	}
+	if role != "manager" {
+		heartbeat := agentconfig.ResolveLLMHeartbeat(req.Spec.LlmHeartbeatEnabled, req.Heartbeat)
+		desired.Heartbeat = &memberRuntimeConfigHeartbeat{Enabled: heartbeat.Enabled, Every: heartbeat.Every}
 	}
 	if req.Spec.Model != "" && !isNativeConfigModel(req.Spec.Model) {
 		gatewayURL := strings.TrimSpace(req.AIGatewayURL)
@@ -373,6 +534,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		Credentials: memberRuntimeConfigCredentials{
 			MatrixTokenEnv:          "AGENTTEAMS_WORKER_MATRIX_TOKEN",
 			GatewayKeyEnv:           "AGENTTEAMS_WORKER_GATEWAY_KEY",
+			TraceHeadersEnv:         "OTEL_EXPORTER_OTLP_HEADERS",
 			StorageAccessKeyEnv:     "AGENTTEAMS_FS_ACCESS_KEY",
 			StorageSecretKeyEnv:     "AGENTTEAMS_FS_SECRET_KEY",
 			ServiceAccountTokenPath: "/var/run/secrets/agentteams/token",
@@ -585,6 +747,12 @@ func (d *Deployer) preserveExistingRuntimeTeamContext(ctx context.Context, runti
 		return
 	}
 	doc.Team = existing.Team
+	if existing.Matrix != nil && existing.Matrix.Transport != nil && backend.UsesMemberRuntimeConfig(doc.Member.Runtime) {
+		if doc.Matrix == nil {
+			doc.Matrix = &memberRuntimeConfigMatrix{}
+		}
+		doc.Matrix.Transport = existing.Matrix.Transport
+	}
 	if existing.Member.Role != "" {
 		doc.Member.Role = existing.Member.Role
 	}

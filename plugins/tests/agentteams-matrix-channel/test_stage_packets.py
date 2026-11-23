@@ -21,9 +21,9 @@ class StagePacketTest(unittest.TestCase):
     def setUpClass(cls):
         root = Path(__file__).resolve().parents[3] if len(Path(__file__).resolve().parents) > 3 else Path("/nonexistent")
         cls.root = root
-        path = root / "plugins/agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py"
+        path = root / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py"
         if not path.exists():
-            path = Path("/opt/agentteams/qwenpaw-builtin/plugins/agentteams-matrix-channel/agentteams_matrix/channel.py")
+            path = Path("/opt/agentteams/qwenpaw-builtin/qwenpaw/adapters/matrix/agentteams_matrix/channel.py")
             core_root = path.parents[1]
         else:
             core_root = root / "plugins/agentteams-matrix"

@@ -146,13 +146,8 @@ OPENCLAW_BASE_PUSH_ARG  = --build-arg OPENCLAW_BASE_IMAGE=$(OPENCLAW_BASE_IMAGE)
 qwenpaw/adapters/teamharness/plugin.py:
 	git submodule update --init -- qwenpaw
 
-stage-agent-assets: | qwenpaw/adapters/teamharness/plugin.py ## Assemble shared role prompts and skills for Controller images
+stage-agent-assets: ## Assemble shared role prompts and skills for Controller images
 	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins && cp -r ./manager/agent ./agentteams-controller/agent && cp -RP ./plugins ./agentteams-controller/plugins
-	@set -e; for file in $$(find plugins/teamharness/adapters/qwenpaw plugins/agentteams-matrix/adapters/qwenpaw -type l); do \
-		dest="./agentteams-controller/$$file"; \
-		cp -L "$$file" "$$dest.payload"; \
-		mv -f "$$dest.payload" "$$dest"; \
-	done
 	@rm -rf ./agentteams-controller/plugins/agentteams-teamharness ./agentteams-controller/plugins/tests
 	@mkdir -p ./agentteams-controller/agent/manager-agent
 	@cp ./plugins/teamharness/prompts/manager/*.md ./agentteams-controller/agent/manager-agent/
@@ -230,7 +225,7 @@ build-qwenpaw-worker push-qwenpaw-worker: | qwenpaw/adapters/teamharness/plugin.
 
 build-qwenpaw-worker: build-agentteams-controller ## Build the shared QwenPaw Harness image
 	@echo "==> Building QwenPaw Worker image: $(LOCAL_QWENPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
-	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
+	OUT_DIR=dist/adapters/qwenpaw ruby qwenpaw/adapters/teamharness/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) --build-context agentteams=. $(DOCKER_BUILD_ARGS) \
 		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
@@ -454,7 +449,7 @@ endif
 
 push-qwenpaw-worker: push-agentteams-controller ## Build + push multi-arch QwenPaw Harness image
 	@echo "==> Building + pushing multi-arch QwenPaw Worker: $(QWENPAW_WORKER_TAG) [$(MULTIARCH_PLATFORMS)]"
-	OUT_DIR=dist/adapters/qwenpaw ruby plugins/teamharness/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
+	OUT_DIR=dist/adapters/qwenpaw ruby qwenpaw/adapters/teamharness/scripts/build-qwenpaw-plugin.rb plugins/teamharness/plugin.yaml >/dev/null
 	OUT_DIR=dist/adapters/qwenpaw ruby plugins/workerflow/adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb plugins/workerflow/plugin.yaml >/dev/null
 ifeq ($(IS_PODMAN),1)
 	-podman manifest rm $(QWENPAW_WORKER_TAG) 2>/dev/null

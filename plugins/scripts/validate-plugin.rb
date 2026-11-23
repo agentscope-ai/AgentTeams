@@ -78,7 +78,7 @@ if manifest.key?("entry")
 
   puts "ok: #{name} #{version}"
   exit 0
-elsif manifest.key?("adapters") && !%w[prompts skills mcp].any? { |key| manifest.key?(key) }
+elsif manifest.key?("entry") || !Array(manifest["adapters"]).empty? && !%w[prompts skills mcp].any? { |key| manifest.key?(key) }
   bundle_requires = manifest.fetch("requires") { fail!("requires is required for bundle plugins") }
   fail!("requires must be a map") unless bundle_requires.is_a?(Hash)
   %w[agentteams contracts tool_schema].each do |key|
@@ -143,7 +143,9 @@ Array(manifest["adapters"]).each do |adapter|
   assert_file(path / "README.md")
 end
 
-assert_file(plugin_root / "scripts/install.sh")
-assert_file(plugin_root / "scripts/uninstall.sh")
+if manifest.key?("entry") || !Array(manifest["adapters"]).empty?
+  assert_file(plugin_root / "scripts/install.sh")
+  assert_file(plugin_root / "scripts/uninstall.sh")
+end
 
 puts "ok: #{name} #{version}"

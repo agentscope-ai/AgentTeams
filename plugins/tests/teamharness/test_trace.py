@@ -27,9 +27,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TRACE_MODULE_PATH = (
-    REPO_ROOT / "plugins" / "teamharness" / "adapters" / "qwenpaw" / "task_trace.py"
+    REPO_ROOT / "qwenpaw/adapters/teamharness" / "task_trace.py"
 )
-ADAPTER_PATH = REPO_ROOT / "plugins" / "teamharness" / "adapters" / "qwenpaw" / "plugin.py"
+ADAPTER_PATH = REPO_ROOT / "qwenpaw/adapters/teamharness" / "plugin.py"
 
 
 def _load_trace_module():
@@ -787,7 +787,7 @@ class LegacyAdapterMonkeyPatchTraceTests:
 
         mod = _load_adapter_module()
 
-        with patch.object(mod, "PLUGIN_DIR", REPO_ROOT / "plugins" / "teamharness" / "adapters" / "qwenpaw"):
+        with patch.object(mod, "PLUGIN_DIR", REPO_ROOT / "qwenpaw/adapters/teamharness"):
             result = mod.install_task_trace_processor()
 
         assert isinstance(result, dict)

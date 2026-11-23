@@ -9,14 +9,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-@pytest.fixture(params=["legacy", "bundle"])
-def matrix_channel(monkeypatch, request):
+@pytest.fixture
+def matrix_channel(monkeypatch):
     pytest.importorskip("qwenpaw.app.channels.base")
-    root = Path(__file__).resolve().parents[2]
-    path = root / ("agentteams-matrix-channel/agentteams_matrix/channel.py"
-                   if request.param == "legacy" else "agentteams-matrix/adapters/qwenpaw/agentteams_matrix/channel.py")
-    # The bundle parity tests also import an older adapter with this package
-    # name. Load the actual image-owned plugin independently of that cache.
+    root = Path(__file__).resolve().parents[3]
+    path = root / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py"
     spec = importlib.util.spec_from_file_location("_reload_delivery_channel", path)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)

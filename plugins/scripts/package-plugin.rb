@@ -69,14 +69,6 @@ Dir.mktmpdir("teamharness-plugin-") do |tmp|
   staging = Pathname.new(tmp) / name
   staging.mkpath
   includes.each { |entry| copy_entry(plugin_root, staging, entry) }
-  # Source links point to the pinned Harness checkout. Release artifacts
-  # carry the actual files so consumers can install without that checkout.
-  Dir.glob((staging / "adapters/qwenpaw/**/*").to_s).each do |item|
-    next unless File.symlink?(item)
-    relative = Pathname.new(item).relative_path_from(staging)
-    FileUtils.rm_f(item)
-    copy_entry(plugin_root, staging, relative)
-  end
   prune_generated(staging)
 
   file_count = Dir.glob((staging / "**/*").to_s, File::FNM_DOTMATCH).count do |item|

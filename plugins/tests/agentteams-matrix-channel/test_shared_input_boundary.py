@@ -16,10 +16,10 @@ sys.path.insert(0, str(ROOT / "shared/lib"))
 from task_recovery import RecoveryUnavailable
 
 
-@pytest.fixture(params=["agentteams-matrix-channel", "agentteams-matrix/adapters/qwenpaw"])
-def channel_module(request):
-    path = ROOT / "plugins" / request.param / "agentteams_matrix/channel.py"
-    spec = importlib.util.spec_from_file_location("shared_input_channel_" + request.param.replace("/", "_"), path)
+@pytest.fixture
+def channel_module():
+    path = ROOT / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py"
+    spec = importlib.util.spec_from_file_location("shared_input_channel", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)

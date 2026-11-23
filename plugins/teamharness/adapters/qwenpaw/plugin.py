@@ -1,1 +1,0 @@
-../../../../qwenpaw/adapters/teamharness/plugin.py

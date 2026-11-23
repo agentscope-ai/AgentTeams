@@ -19,8 +19,7 @@ pytest.importorskip("nio")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHANNEL_MODULE_PATH = (
     REPO_ROOT
-    / "plugins"
-    / "agentteams-matrix-channel"
+    / "qwenpaw/adapters/matrix"
     / "agentteams_matrix"
     / "channel.py"
 )
@@ -268,7 +267,7 @@ def test_bundle_entry_long_text_encrypts(tmp_path):
     with the live tree."""
     script = tmp_path / "bundle_long_text_probe.py"
     script.write_text(_BUNDLE_SCRIPT, encoding="utf-8")
-    bundle_root = REPO_ROOT / "plugins" / "agentteams-matrix" / "adapters" / "qwenpaw"
+    bundle_root = REPO_ROOT / "qwenpaw/adapters/matrix"
     result = subprocess.run(
         [sys.executable, str(script), str(bundle_root), str(tmp_path)],
         capture_output=True,
@@ -322,7 +321,7 @@ def test_bundle_entry_large_message_survives_a_rejected_summary(tmp_path):
     attachment when the server rejects the preview."""
     script = tmp_path / "bundle_long_text_probe.py"
     script.write_text(_BUNDLE_SCRIPT, encoding="utf-8")
-    bundle_root = REPO_ROOT / "plugins" / "agentteams-matrix" / "adapters" / "qwenpaw"
+    bundle_root = REPO_ROOT / "qwenpaw/adapters/matrix"
     result = subprocess.run(
         [sys.executable, str(script), str(bundle_root), str(tmp_path), "8192"],
         capture_output=True,

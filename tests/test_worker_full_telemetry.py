@@ -511,7 +511,7 @@ def test_task_identity_arriving_after_turn_start_reaches_children_and_carrier(tm
     from types import SimpleNamespace
     import at_runtime_adapters as adapters
     from at_trace_transport import carrier, incoming
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins/teamharness/adapters/qwenpaw"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qwenpaw/adapters/teamharness"))
     from task_trace import find_task_trace_context
     monkeypatch.setattr(adapters, "task_resolver", lambda: find_task_trace_context)
     monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")

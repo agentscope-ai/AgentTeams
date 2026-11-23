@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("nio")
 pytest.importorskip("qwenpaw")
 
-path = Path(__file__).resolve().parents[3] / "plugins/agentteams-matrix-channel/agentteams_matrix/channel.py"
+path = Path(__file__).resolve().parents[3] / "qwenpaw/adapters/matrix/agentteams_matrix/channel.py"
 spec = importlib.util.spec_from_file_location("direct_control_channel", path)
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
@@ -21,16 +21,6 @@ spec.loader.exec_module(module)
 
 ROOM, HUMAN, AGENT = "!direct:test", "@human:test", "@agent:test"
 CONTROL, EXECUTION = "com.agentteams.control", "com.agentteams.execution"
-
-
-@pytest.fixture(autouse=True, params=["agentteams-matrix-channel", "agentteams-matrix/adapters/qwenpaw"])
-def channel_implementation(request, monkeypatch):
-    target = Path(__file__).resolve().parents[3] / "plugins" / request.param / "agentteams_matrix/channel.py"
-    implementation = importlib.util.spec_from_file_location("direct_control_" + request.param.replace("/", "_"), target)
-    loaded = importlib.util.module_from_spec(implementation)
-    monkeypatch.setitem(sys.modules, implementation.name, loaded)
-    implementation.loader.exec_module(loaded)
-    monkeypatch.setattr(sys.modules[__name__], "module", loaded)
 
 
 def channel():

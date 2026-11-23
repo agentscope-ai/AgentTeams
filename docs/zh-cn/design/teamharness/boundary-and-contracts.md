@@ -11,7 +11,7 @@ TeamHarness 拥有：
 - 稳定的团队协作提示词与角色提示词。
 - 用于组织、通信、共享文件、项目、任务委派与任务执行的团队协作技能。
 - 用于团队消息、共享文件、项目流、任务流与插件健康的显式 MCP 工具。
-- 单个插件 tarball，默认经 AgentTeams `agt` CLI 安装，并兼容 LoongSuite `plugin-probe` 以用于本地运行时。
+- Core 提供共享 Task 协议和资源，托管 QwenPaw 镜像打包 QwenPaw Harness 适配器。
 
 TeamHarness 不拥有：
 

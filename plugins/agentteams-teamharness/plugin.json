@@ -9,11 +9,6 @@
   "contract": "contract.yaml",
   "adapters": [
     {
-      "id": "qwenpaw",
-      "path": "adapters/qwenpaw",
-      "pluginId": "teamharness"
-    },
-    {
       "id": "openclaw",
       "path": "adapters/openclaw",
       "pluginId": "agentteams-teamharness"

@@ -16,7 +16,8 @@ for package in Path('/tmp/runtime-overlay').iterdir():
 PY
 COPY shared/lib/ /opt/agentteams/scripts/lib/
 COPY qwenpaw/adapters/teamharness/task_trace.py /opt/agentteams/scripts/lib/telemetry/at_task_trace.py
-COPY plugins/agentteams-matrix-channel/ /opt/agentteams/qwenpaw-builtin/plugins/agentteams-matrix-channel/
+COPY qwenpaw/adapters/matrix/ /opt/agentteams/qwenpaw-builtin/plugins/agentteams-matrix-channel/
+COPY plugins/agentteams-matrix/core/ /opt/agentteams/qwenpaw-builtin/plugins/agentteams-matrix-channel/core/
 COPY ${RUNTIME}/scripts/${RUNTIME}-worker-entrypoint.sh /opt/agentteams/scripts/${RUNTIME}-worker-entrypoint.sh
 RUN ${VENV_PATH}/bin/python - <<'PY'
 import hashlib

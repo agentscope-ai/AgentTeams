@@ -36,8 +36,7 @@ pytest.importorskip("qwenpaw")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHANNEL_MODULE_PATH = (
     REPO_ROOT
-    / "plugins"
-    / "agentteams-matrix-channel"
+    / "qwenpaw/adapters/matrix"
     / "agentteams_matrix"
     / "channel.py"
 )
@@ -51,7 +50,7 @@ sys.modules["agentteams_matrix_channel"] = channel_module
 _spec.loader.exec_module(channel_module)
 
 AgentTeamsMatrixChannel = channel_module.AgentTeamsMatrixChannel
-MIN_SYNC_TIMEOUT_MS = channel_module._MIN_SYNC_TIMEOUT_MS
+MIN_SYNC_TIMEOUT_MS = channel_module.MIN_SYNC_TIMEOUT_MS
 
 
 def _make_channel(**overrides):

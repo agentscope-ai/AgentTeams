@@ -331,10 +331,10 @@ entries, task audit history the last 50.
 |------|-----------------|------------------------|--------|
 | Token | no cap; `tokens_used` is a passive ledger | recorded only; never blocks | `plugins/teamharness/mcp/project/flow.py` |
 | Human touch | `request_attention` options ≤ 10 when provided (unique string ids); `ask_user` loop decision parks the loop in `waiting_user` | malformed requests rejected; open request must not be self-resolved | `plugins/teamharness/mcp/lifecycle/taskflow.py`, `plugins/teamharness/mcp/project/flow.py` |
-| Retry — Matrix room send | 3 retries; backoff 1.0 s × 2^attempt + 0–0.5 s jitter; `retry_after_ms` preferred; 5xx/429/network only; single `tx_id` | exhaustion logs an error and fails (raises or returns the error) | `plugins/agentteams-matrix-channel/agentteams_matrix/channel.py` |
+| Retry — Matrix room send | 3 retries; backoff 1.0 s × 2^attempt + 0–0.5 s jitter; `retry_after_ms` preferred; 5xx/429/network only; single `tx_id` | exhaustion logs an error and fails (raises or returns the error) | `qwenpaw/adapters/matrix/agentteams_matrix/channel.py` |
 | Retry — shared-storage sync | 3 attempts (backoffs 0.1 s, 0.25 s); metadata read 3 attempts | project sync returns `False`; callers must handle failure | `plugins/teamharness/mcp/artifact/sync.py` |
-| Timeout — Matrix sync | 30 s default; configurable | sync request uses the configured timeout | `plugins/agentteams-matrix-channel/agentteams_matrix/channel.py` |
-| Timeout — typing indicator | 30 s server; 25 s renewal; 120 s max duration | indicator dropped | `plugins/agentteams-matrix-channel/agentteams_matrix/channel.py` |
+| Timeout — Matrix sync | 30 s default; configurable | sync request uses the configured timeout | `qwenpaw/adapters/matrix/agentteams_matrix/channel.py` |
+| Timeout — typing indicator | 30 s server; 25 s renewal; 120 s max duration | indicator dropped | `qwenpaw/adapters/matrix/agentteams_matrix/channel.py` |
 | Timeout — LLM first content / idle | 300 s each (`AGENTTEAMS_LLM_STREAM_TIMEOUT_S`) | that wait times out; no total-stream deadline is implied | `manager/scripts/init/start-qwenpaw-manager.sh` |
 | Timeout — task attention deadline | optional; no default; caller sets `timeoutAt` | attention becomes overdue only when a deadline was provided | `plugins/teamharness/mcp/lifecycle/taskflow.py` |
 | Budget — loop iterations | simple 3 / standard 5 / full 10; explicit `iteration_budget` wins; no tier = no budget | `over_budget` flagged, work not truncated | `plugins/teamharness/mcp/common/constants.py`, `plugins/teamharness/mcp/project/flow.py` |

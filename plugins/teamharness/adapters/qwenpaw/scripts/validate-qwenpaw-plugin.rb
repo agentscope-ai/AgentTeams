@@ -1,1 +1,0 @@
-../../../../../qwenpaw/adapters/teamharness/scripts/validate-qwenpaw-plugin.rb

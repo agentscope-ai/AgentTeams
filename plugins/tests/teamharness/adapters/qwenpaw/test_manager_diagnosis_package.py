@@ -11,11 +11,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[5]
 
 
-@pytest.mark.parametrize("package", ["teamharness", "agentteams-teamharness"])
-def test_packaged_manager_and_leader_can_load_shared_diagnosis(tmp_path, monkeypatch, package):
-    source = ROOT / "plugins" / package
+def test_packaged_manager_and_leader_can_load_shared_diagnosis(tmp_path, monkeypatch):
+    source = ROOT / "plugins/teamharness"
     result = subprocess.run(
-        ["ruby", str(source / "adapters/qwenpaw/scripts/build-qwenpaw-plugin.rb"), str(source / "plugin.yaml")],
+        ["ruby", str(ROOT / "qwenpaw/adapters/teamharness/scripts/build-qwenpaw-plugin.rb"), str(source / "plugin.yaml")],
         cwd=ROOT, env={**os.environ, "OUT_DIR": str(tmp_path)},
         text=True, capture_output=True, check=True,
     )
@@ -23,7 +22,7 @@ def test_packaged_manager_and_leader_can_load_shared_diagnosis(tmp_path, monkeyp
     with zipfile.ZipFile(archive_path) as archive:
         archive.extractall(tmp_path / "extracted")
     plugin_path = next((tmp_path / "extracted").glob("*/plugin.py"))
-    spec = importlib.util.spec_from_file_location("diagnosis_package_" + package.replace("-", "_"), plugin_path)
+    spec = importlib.util.spec_from_file_location("diagnosis_package", plugin_path)
     plugin = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(plugin)
     expected = (source / "skills/agent/task-diagnosis/SKILL.md").read_bytes()
@@ -50,7 +49,6 @@ def test_controller_image_context_contains_manager_diagnosis(tmp_path, target):
     shutil.copytree(ROOT / "manager/agent", tmp_path / "manager/agent")
     shutil.copytree(ROOT / "plugins/teamharness", tmp_path / "plugins/teamharness", symlinks=True)
     shutil.copytree(ROOT / "plugins/agentteams-matrix", tmp_path / "plugins/agentteams-matrix", symlinks=True)
-    shutil.copytree(ROOT / "qwenpaw/adapters", tmp_path / "qwenpaw/adapters")
     compatibility = tmp_path / "plugins/agentteams-teamharness"
     compatibility.mkdir()
     (compatibility / "plugin.yaml").write_text("compatibility plugin")
@@ -73,10 +71,9 @@ if sys.argv[1:2] == ['build'] or sys.argv[1:3] == ['buildx', 'build']:
     leader = Path('agentteams-controller/agent/team-leader-agent')
     public = Path('plugins/teamharness')
     assert Path('agentteams-controller/plugins/teamharness/plugin.yaml').is_file()
-    for bundle, native in [('teamharness', 'teamharness'), ('agentteams-matrix', 'matrix')]:
-        payload = Path('agentteams-controller/plugins') / bundle / 'adapters/qwenpaw/plugin.py'
-        assert not payload.is_symlink()
-        assert payload.read_bytes() == (Path('qwenpaw/adapters') / native / 'plugin.py').read_bytes()
+    for bundle in ['teamharness', 'agentteams-matrix']:
+        assert not (Path('agentteams-controller/plugins') / bundle / 'adapters/qwenpaw').exists()
+    assert not Path('agentteams-controller/plugins/agentteams-matrix-channel').exists()
     assert not Path('agentteams-controller/plugins/agentteams-teamharness').exists()
     assert not Path('agentteams-controller/plugins/tests').exists()
     for template in ['worker-agent', 'hermes-worker-agent', 'openhuman-worker-agent', 'copaw-worker-agent']:

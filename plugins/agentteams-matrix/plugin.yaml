@@ -8,8 +8,6 @@ requires:
   contracts: "1"
   tool_schema: "1"
 adapters:
-  - id: qwenpaw
-    path: adapters/qwenpaw
   - id: openclaw
     path: adapters/openclaw
   - id: hermes

@@ -870,6 +870,26 @@ func TestUserID(t *testing.T) {
 	}
 }
 
+// TestNewTuwunelClient_DefaultClientHasTimeout pins the #1703 regression:
+// a client built with a nil *http.Client must not fall back to the
+// unbounded http.DefaultClient.
+func TestNewTuwunelClient_DefaultClientHasTimeout(t *testing.T) {
+	c := NewTuwunelClient(Config{Domain: "matrix.example.com:8080"}, nil)
+	if c.http.Timeout <= 0 {
+		t.Fatalf("nil http.Client fell back to an unbounded client (Timeout=%v)", c.http.Timeout)
+	}
+	if c.http.Timeout != DefaultHTTPTimeout {
+		t.Errorf("default client Timeout = %v, want %v", c.http.Timeout, DefaultHTTPTimeout)
+	}
+
+	// An explicitly supplied client is used verbatim so callers that need
+	// different bounds (e.g. long-polling sync) can pass their own client.
+	custom := &http.Client{Timeout: 5 * time.Second}
+	if got := NewTuwunelClient(Config{Domain: "d"}, custom); got.http != custom {
+		t.Error("explicitly supplied http.Client was not used verbatim")
+	}
+}
+
 func TestEnsureUser_OrphanRecovery(t *testing.T) {
 	var (
 		registerCalls int32

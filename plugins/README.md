@@ -45,6 +45,14 @@ Two distribution paths exist:
   materializes it in portable releases. Controller and Embedded images ship
   the canonical `plugins/teamharness/` tree.
 
+## OpenClaw Sidecar Source
+
+The optional [OpenClaw sidecar plugin](https://github.com/agentteams-group/agentteams-harness-openclaw/tree/main/plugins/agentteams-matrix-openclaw)
+is maintained in its Harness repository. Its source is no longer in Core;
+the shared Matrix library remains here. The managed image continues to use
+native Matrix by default. Existing sidecar installations retain their plugin
+identity, configuration, credentials and upgrade/rollback paths.
+
 ## QwenPaw Source and Upgrade
 
 The [QwenPaw Harness](https://github.com/agentteams-group/agentteams-harness-qwenpaw)

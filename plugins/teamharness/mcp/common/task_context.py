@@ -25,6 +25,12 @@ def prepare_event(event, call):
     if not isinstance(event, dict):
         raise ValueError("verified task event required")
     kind = event.get("kind")
+    if kind == "assistant_digest":
+        if any(event.get(key) for key in ("task_id", "main_task_id", "project_id")):
+            raise ValueError("assistant reminder cannot select a business Task")
+        # Teams notification authority is checked before this boundary. This
+        # control turn has no Task begin/get/accept/complete operation to prepare.
+        return {}
     if kind == "handoff":
         identities = event.get("pending_task_ids")
         if (not isinstance(identities, list) or not 0 < len(identities) <= 50

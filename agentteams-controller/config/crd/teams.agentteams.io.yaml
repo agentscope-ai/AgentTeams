@@ -182,6 +182,8 @@ spec:
                   type: string
                 leaderDMRoomID:
                   type: string
+                assistantRecipient:
+                  type: string
                 leaderReady:
                   type: boolean
                 readyWorkers:

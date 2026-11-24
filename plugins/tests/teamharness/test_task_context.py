@@ -16,6 +16,14 @@ def assignment():
     return event, result
 
 
+def test_assistant_is_a_verified_control_turn_without_business_task_operations():
+    def no_task(_arguments):
+        raise AssertionError("assistant reminder must not prepare a business Task")
+    assert context.prepare_event({"kind": "assistant_digest"}, no_task) == {}
+    with pytest.raises(ValueError):
+        context.prepare_event({"kind": "assistant_digest", "task_id": "foreign"}, no_task)
+
+
 def test_prepared_assignment_uses_backend_canonical_identity():
     event, result = assignment()
     prepared = context.prepare("task_assigned", event, result)

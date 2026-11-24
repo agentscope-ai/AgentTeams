@@ -583,10 +583,13 @@ type TeamStatus struct {
 	Phase          string `json:"phase,omitempty"` // Pending/Active/Degraded/Failed
 	TeamRoomID     string `json:"teamRoomID,omitempty"`
 	LeaderDMRoomID string `json:"leaderDMRoomID,omitempty"`
-	LeaderReady    bool   `json:"leaderReady,omitempty"`
-	ReadyWorkers   int    `json:"readyWorkers,omitempty"`
-	TotalWorkers   int    `json:"totalWorkers,omitempty"`
-	Message        string `json:"message,omitempty"`
+	// AssistantRecipient binds the private room to its Human identity.
+	// Leader replacement preserves it; Admin replacement creates a separate DM.
+	AssistantRecipient string `json:"assistantRecipient,omitempty"`
+	LeaderReady        bool   `json:"leaderReady,omitempty"`
+	ReadyWorkers       int    `json:"readyWorkers,omitempty"`
+	TotalWorkers       int    `json:"totalWorkers,omitempty"`
+	Message            string `json:"message,omitempty"`
 	// Members carries per-member state (one entry per leader + worker).
 	// TeamReconciler sorts the slice by Name for stable status patches and
 	// deterministic test assertions.

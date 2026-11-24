@@ -20,7 +20,7 @@ Two distribution paths exist:
 | `teamharness` | `teamharness` | Shared prompts, skills and MCP tools | Harness-independent | Bundled with Core |
 | `agentteams-teamharness` | `agentteams-teamharness` | Bundle referencing the shared TeamHarness source | OpenClaw / Hermes | Bundle lifecycle scripts |
 | `agentteams-matrix` | `agentteams-matrix` | Shared Matrix core and portable runtime adapters | OpenClaw / Hermes | Bundle lifecycle scripts |
-| [`agentteams-matrix-openclaw`](https://github.com/agentteams-group/agentteams-harness-openclaw/tree/main/plugins/agentteams-matrix-openclaw) | `agentteams-matrix-openclaw` | Optional OpenClaw Harness-owned channel plugin (JS plugin + Python sidecar) | OpenClaw | Harness plugin path (`openclaw.plugin.json`, `install.sh`); native Matrix remains the default |
+| `agentteams-matrix-openclaw` | `agentteams-matrix-openclaw` | OpenClaw channel plugin (JS plugin + Python sidecar) | OpenClaw | OpenClaw adapter path (`openclaw.plugin.json`, `install.sh`) |
 | `qwen-code-bridge` | `qwen-code-bridge` | QwenPaw plugin (`type: general`) with `entry.backend: plugin.py` + `entry.frontend: frontend/index.js` | QwenPaw 2.2.x | `qwenpaw plugin install` / `POST /api/plugins/upload` / Millforge module `qwenpaw-qwencode-bridge` |
 | `agentteams-manager-tools` | `agentteams-manager-tools` | QwenPaw tool plugin (`type: tool`) | QwenPaw (manager) | shipped in the controller/manager image (`plugins/` → `/opt/agentteams/plugins/`) |
 | `agentteams-upgrade` | `agentteams-upgrade` | QwenPaw general plugin (`type: general`) | QwenPaw | shipped in the controller/manager image |
@@ -44,6 +44,14 @@ Two distribution paths exist:
   `plugins/agentteams-teamharness/` bundle references the shared source and
   materializes it in portable releases. Controller and Embedded images ship
   the canonical `plugins/teamharness/` tree.
+
+## OpenClaw Sidecar Source
+
+The optional [OpenClaw sidecar plugin](https://github.com/agentteams-group/agentteams-harness-openclaw/tree/main/plugins/agentteams-matrix-openclaw)
+is maintained in its Harness repository. Its source is no longer in Core;
+the shared Matrix library remains here. The managed image continues to use
+native Matrix by default. Existing sidecar installations retain their plugin
+identity, configuration, credentials and upgrade/rollback paths.
 
 ## QwenPaw Source and Upgrade
 

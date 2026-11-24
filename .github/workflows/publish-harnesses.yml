@@ -19,7 +19,7 @@ on:
         description: 'Build only one runtime when recovering a failed platform'
         type: choice
         default: all
-        options: [all, openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
+        options: [all, openclaw, qwenpaw, hermes, deepseek, openhuman, codex, opencode]
       architecture:
         description: 'Build only one architecture; partial builds require publish=false'
         type: choice
@@ -36,6 +36,7 @@ concurrency:
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
   CODEX_REF: 860b07d4027ea2bd48c0d4f4885b9a9612d1b446
+  OPENCODE_REF: 318d1524535398d67a4a876fe07b966689d57361
 
 jobs:
   prepare:
@@ -55,9 +56,10 @@ jobs:
           PUBLISH: ${{ inputs.publish }}
         run: |
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          [[ "$RUNTIME" =~ ^(all|openclaw|qwenpaw|hermes|deepseek|openhuman|codex)$ ]] || exit 1
+          [[ "$RUNTIME" =~ ^(all|openclaw|qwenpaw|hermes|deepseek|openhuman|codex|opencode)$ ]] || exit 1
           [[ "$ARCHITECTURE" =~ ^(all|amd64|arm64)$ ]] || exit 1
           [[ "$PUBLISH" != true || "$ARCHITECTURE" == all ]] || exit 1
+          # Experimental OpenCode is opt-in until its full admission passes.
           runtimes='["openclaw","qwenpaw","hermes","deepseek","openhuman","codex"]'
           architectures='["amd64","arm64"]'
           if [[ "$RUNTIME" != all ]]; then runtimes="[\"$RUNTIME\"]"; fi
@@ -146,6 +148,12 @@ jobs:
           repository: agentteams-group/agentteams-harness-codex
           ref: ${{ env.CODEX_REF }}
           path: codex-harness
+      - uses: actions/checkout@v4
+        if: matrix.runtime == 'opencode'
+        with:
+          repository: agentteams-group/agentteams-harness-opencode
+          ref: ${{ env.OPENCODE_REF }}
+          path: opencode-harness
       - uses: ruby/setup-ruby@v1
         if: matrix.runtime == 'qwenpaw'
         with:

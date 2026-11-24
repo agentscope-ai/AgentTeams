@@ -171,6 +171,14 @@ build-agentteams-controller: stage-agent-assets ## Build agentteams-controller i
 		./agentteams-controller/
 	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins
 
+OPENCODE_HARNESS_DIR ?= opencode-harness
+LOCAL_OPENCODE_WORKER ?= agentteams/agentteams-harness-opencode:latest
+.PHONY: build-opencode-worker
+build-opencode-worker: build-agentteams-controller ## Build experimental OpenCode Worker/Leader image from its independent checkout
+	docker build $(PLATFORM_FLAG) --build-context at=. $(DOCKER_BUILD_ARGS) \
+		--build-arg AGENTTEAMS_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER_BUILD_IMAGE) \
+		-t $(LOCAL_OPENCODE_WORKER) $(OPENCODE_HARNESS_DIR)
+
 build-manager: build-worker ## Alias the shared OpenClaw Harness as the legacy Manager image
 	docker tag $(LOCAL_WORKER) $(LOCAL_MANAGER)
 

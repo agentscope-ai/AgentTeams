@@ -114,6 +114,16 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         raise ValueError("task plan does not match the admitted handoff")
     if action == "complete" and (not context.get("completion") or identity != context["completion"]):
         raise ValueError("task completion does not match the accepted main task")
+    if action == "complete" and not arguments.get("artifacts"):
+        names = set()
+        for accepted in (context.get("context") or {}).get("acceptedResults", []):
+            for artifact in (accepted.get("candidate") or {}).get("artifacts", []):
+                name = artifact.get("name")
+                if name in names:
+                    return {"result": {"ok": False, "effect": "none", "error": "final_artifact_selection_required",
+                            "message": "Accepted results contain repeated output filenames. Select the final deliverable set explicitly with artifactId values from acceptedResults; exclude superseded intermediate versions."},
+                            "phaseComplete": False}
+                names.add(name)
     if action in {"accept", "reject"}:
         arguments["submissionId"] = receipts.prepared_submission_id(arguments, review)
     source = ""

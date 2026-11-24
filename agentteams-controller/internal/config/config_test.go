@@ -191,6 +191,24 @@ func TestBackendConfigsResolveCodexWorkerImage(t *testing.T) {
 	}
 }
 
+func TestBackendConfigsResolveOpenCodeWorkerImage(t *testing.T) {
+	for _, image := range []string{"", "example.test/opencode:custom"} {
+		t.Run(image, func(t *testing.T) {
+			t.Setenv("AGENTTEAMS_OPENCODE_WORKER_IMAGE", image)
+			cfg := LoadConfig()
+			for name, got := range map[string]string{
+				"docker":  cfg.DockerConfig().OpenCodeWorkerImage,
+				"k8s":     cfg.K8sConfig().OpenCodeWorkerImage,
+				"sandbox": cfg.SandboxConfig().OpenCodeWorkerImage,
+			} {
+				if got != image {
+					t.Errorf("%s OpenCodeWorkerImage = %q, want %q", name, got, image)
+				}
+			}
+		})
+	}
+}
+
 func TestBackendConfigsIncludeDeepSeekHarnessWorkerImage(t *testing.T) {
 	t.Setenv("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:test")
 

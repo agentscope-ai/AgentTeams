@@ -95,6 +95,8 @@ def test_closure_requires_all_public_nodes_accepted():
     prepared = context.prepare("main_task_ready", event, result)
     assert prepared["completion"] == "main"
     assert prepared["context"]["acceptedResults"][0]["review"]["id"] == "r1"
+    assert "final deliverable set" in prepared["fact"]
+    assert "superseded intermediate" in prepared["fact"]
     result["task"]["nodes"][0]["status"] = "submitted"
     with pytest.raises(ValueError): context.prepare("main_task_ready", event, result)
 

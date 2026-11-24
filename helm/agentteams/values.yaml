@@ -354,6 +354,9 @@ worker:
     codex:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex
       tag: "v1.2.8"            # shared v1.2.8 Harness release; override supported
+    opencode:
+      repository: ""          # experimental; set an explicitly built candidate
+      tag: ""                 # required when repository is configured
   defaultRuntime: "openclaw"
   resources:
     requests:

@@ -82,7 +82,7 @@ REGISTRY_ARG = --build-arg HIGRESS_REGISTRY=$(HIGRESS_REGISTRY)
 BUILTIN_VERSION_ARG = --build-arg BUILTIN_VERSION=$(VERSION)
 
 # Named build context for shared libraries (requires BuildKit / Docker 23+)
-SHARED_LIB_CTX = --build-context shared=./shared/lib
+SHARED_LIB_CTX = --build-context agentteams=. --build-context shared=./shared/lib
 
 # Multi-arch build configuration
 # Platforms for multi-arch builds (comma-separated, no spaces)

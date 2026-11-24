@@ -61,7 +61,17 @@ if minio_wait_for_file "${RESULT_PATH}" 300 "${TASK_ID}"; then
     RESULT=$(minio_read_file "${RESULT_PATH}")
     assert_contains "${RESULT}" "${TASK_ID}" "Task README contains the current task marker"
 else
-    log_fail "Task README missing from shared storage"
+    if minio_file_exists "${RESULT_PATH}"; then
+        log_fail "Task README exists but its current task marker was not verified within 300s"
+        RESULT=$(minio_read_file "${RESULT_PATH}")
+        if [[ "${RESULT}" == *"${TASK_ID}"* ]]; then
+            log_info "The current task marker appeared after the verification deadline"
+        else
+            log_info "The remote README is still missing the exact marker: ${TASK_ID}"
+        fi
+    else
+        log_fail "Task README missing from shared storage"
+    fi
 fi
 
 ALICE_USER="@alice:${TEST_MATRIX_DOMAIN}"

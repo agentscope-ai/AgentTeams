@@ -32,6 +32,7 @@ type CoordinationHandler struct {
 	projectEvent      func(context.Context, coordinationEvent, string, string, string, string, string) (string, error)
 	projectArtifact   func(context.Context, coordinationEvent, taskFinalArtifact, string, string) (string, error)
 	taskNotifications *ProjectHandler
+	assistant         *AssistantHandler
 }
 
 type coordinationEvent struct {
@@ -186,6 +187,9 @@ func (h *CoordinationHandler) targetWorker(e *coordinationEvent, w *v1beta1.Work
 }
 
 func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, caller *authpkg.CallerIdentity) (coordinationEvent, error) {
+	if e.Kind == "assistant_digest" {
+		return h.resolveAssistant(ctx, e, caller)
+	}
 	e.Protocol = ""   // Rebuild protocol authority from registered tasks, never caller input.
 	e.Artifacts = nil // Final file authority is rebuilt from the completed Task snapshot.
 	reject := func() (coordinationEvent, error) { return e, errCoordinationRejected }

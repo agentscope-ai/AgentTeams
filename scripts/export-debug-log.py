@@ -422,7 +422,7 @@ def export_matrix_messages(out_dir: Path, since_epoch: float, redact: bool,
 
 
 # ---------------------------------------------------------------------------
-# Agent sessions export (OpenClaw + CoPaw + Hermes)
+# Agent sessions export (OpenClaw + QwenPaw + CoPaw + Hermes)
 # ---------------------------------------------------------------------------
 
 def detect_runtime(container: str) -> tuple[str, str]:
@@ -436,11 +436,13 @@ def detect_runtime(container: str) -> tuple[str, str]:
       Manager (any runtime, HOME=/root/manager-workspace):
         openclaw -> /root/manager-workspace/.openclaw/agents/main/sessions
         hermes   -> /root/manager-workspace/.hermes/sessions
+        qwenpaw  -> /root/manager-workspace/.qwenpaw/workspaces/default/sessions
         copaw    -> /root/manager-workspace/.copaw/workspaces/default/sessions
 
       OpenClaw / Hermes Worker (HOME=/root/agentteams-fs/agents/<name>):
         openclaw -> /root/agentteams-fs/agents/<name>/.openclaw/agents/main/sessions
         hermes   -> /root/agentteams-fs/agents/<name>/.hermes/sessions
+        qwenpaw  -> /root/agentteams-fs/agents/<name>/.qwenpaw/workspaces/default/sessions
 
       CoPaw Worker (HOME=/root/.agentteams-worker/<name>, also reachable via
       /root/agentteams-fs symlink that points to that same dir):
@@ -450,6 +452,7 @@ def detect_runtime(container: str) -> tuple[str, str]:
     candidates: list[tuple[str, str]] = [
         ("openclaw", "/root/manager-workspace/.openclaw/agents/main/sessions"),
         ("hermes",   "/root/manager-workspace/.hermes/sessions"),
+        ("qwenpaw",  "/root/manager-workspace/.qwenpaw/workspaces/default/sessions"),
         ("copaw",    "/root/manager-workspace/.copaw/workspaces/default/sessions"),
     ]
 
@@ -458,6 +461,7 @@ def detect_runtime(container: str) -> tuple[str, str]:
         candidates.extend([
             ("openclaw", f"/root/agentteams-fs/agents/{worker_name}/.openclaw/agents/main/sessions"),
             ("hermes",   f"/root/agentteams-fs/agents/{worker_name}/.hermes/sessions"),
+            ("qwenpaw",  f"/root/agentteams-fs/agents/{worker_name}/.qwenpaw/workspaces/default/sessions"),
             ("copaw",    f"/root/.agentteams-worker/{worker_name}/.copaw/workspaces/default/sessions"),
             ("copaw",    "/root/agentteams-fs/.copaw/workspaces/default/sessions"),
         ])
@@ -472,6 +476,7 @@ def detect_runtime(container: str) -> tuple[str, str]:
         "find / -maxdepth 7 \\( "
         "-path '*/.openclaw/agents/main/sessions' "
         "-o -path '*/.hermes/sessions' "
+        "-o -path '*/.qwenpaw/workspaces/default/sessions' "
         "-o -path '*/.copaw/workspaces/default/sessions' "
         "\\) -type d 2>/dev/null | head -1",
     ).strip()
@@ -480,6 +485,8 @@ def detect_runtime(container: str) -> tuple[str, str]:
             return "openclaw", found
         if "/.hermes/" in found:
             return "hermes", found
+        if "/.qwenpaw/" in found:
+            return "qwenpaw", found
         return "copaw", found
 
     return "", ""
@@ -561,7 +568,7 @@ def export_openclaw_sessions(container: str, sessions_dir: str, since_epoch: flo
 
 
 def export_copaw_sessions(container: str, sessions_dir: str, since_epoch: float,
-                          out_dir: Path, redact: bool) -> tuple[int, int]:
+                          out_dir: Path, redact: bool, *, runtime: str = "copaw") -> tuple[int, int]:
     ls_output = docker_exec(container, f"find '{sessions_dir}' -name '*.json' -type f 2>/dev/null").strip()
     if not ls_output:
         return 0, 0
@@ -579,18 +586,18 @@ def export_copaw_sessions(container: str, sessions_dir: str, since_epoch: float,
             continue
 
         agent = data.get("agent", {})
-        memory = agent.get("memory", {})
-        content = memory.get("content", [])
+        memory = agent.get("state" if runtime == "qwenpaw" else "memory", {})
+        content = [memory.get("context", [])] if runtime == "qwenpaw" else memory.get("content", [])
         if not content:
             continue
 
         basename = os.path.basename(session_path).replace(".json", "")
         header = {
             "type": "session",
-            "runtime": "copaw",
+            "runtime": runtime,
             "agent_name": agent.get("name", ""),
             "session_key": basename,
-            "compressed_summary": memory.get("_compressed_summary", ""),
+            "compressed_summary": memory.get("summary" if runtime == "qwenpaw" else "_compressed_summary", ""),
         }
 
         messages_in_range = []
@@ -600,7 +607,13 @@ def export_copaw_sessions(container: str, sessions_dir: str, since_epoch: float,
             for msg in turn:
                 if not isinstance(msg, dict):
                     continue
-                msg_ts = parse_ts(msg.get("timestamp", ""))
+                timestamp = msg.get("timestamp", "")
+                if runtime == "qwenpaw" and not timestamp:
+                    timestamp = msg.get("created_at", "") or next((
+                        part.get("created_at", "") for part in msg.get("content", [])
+                        if isinstance(part, dict) and part.get("created_at")
+                    ), "")
+                msg_ts = parse_ts(timestamp)
                 if msg_ts >= since_epoch or msg_ts == 0:
                     event = {
                         "type": "message",
@@ -608,7 +621,7 @@ def export_copaw_sessions(container: str, sessions_dir: str, since_epoch: float,
                         "id": msg.get("id", ""),
                         "role": msg.get("role", ""),
                         "name": msg.get("name", ""),
-                        "timestamp": msg.get("timestamp", ""),
+                        "timestamp": timestamp,
                         "content": msg.get("content", []),
                     }
                     if msg.get("metadata"):
@@ -632,7 +645,7 @@ def export_copaw_sessions(container: str, sessions_dir: str, since_epoch: float,
             f.write("\n".join(output_lines) + "\n")
 
         event_count = len(output_lines) - 1
-        print(f"  {container}/{out_filename} (copaw): {event_count} events")
+        print(f"  {container}/{out_filename} ({runtime}): {event_count} events")
         total_sessions += 1
         total_events += event_count
 
@@ -749,7 +762,7 @@ def export_agent_sessions(out_dir: Path, since_epoch: float, redact: bool,
                                           container_dir, redact)
         else:
             s, e = export_copaw_sessions(container, sessions_dir, since_epoch,
-                                         container_dir, redact)
+                                         container_dir, redact, runtime=runtime)
 
         if s == 0:
             if not any(container_dir.iterdir()):

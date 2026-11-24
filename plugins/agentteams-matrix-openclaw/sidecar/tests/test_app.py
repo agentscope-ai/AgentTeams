@@ -2,8 +2,10 @@
 
 Covers: build() wiring (0600 socket, 0700 parent dir), the hello
 handshake (agent name reaches the server), inbound dedupe/echo over a
-real socket, the outbound -> core.send -> ack round trip, and a full
-SIGTERM lifecycle of ``python -m sidecar`` (clean exit, socket removed).
+real socket, the outbound -> core.send -> ack round trip, the
+sync-loop liveness monitor (a finished sync task exits non-zero; a
+live one does not), and a full SIGTERM lifecycle of ``python -m sidecar``
+(clean exit, socket removed).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import time
 import pytest
 
 from sidecar import _core, load_config
-from sidecar.app import build, shutdown
+from sidecar.app import _await_liveness, build, shutdown
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -97,6 +99,46 @@ def runtime(config_path):
 def _start_core(runtime):
     runtime.core_task = asyncio.run_coroutine_threadsafe(runtime.core.run(), runtime.loop)
     assert runtime.transport.started.wait(5), "fake transport did not start"
+
+
+# --- sync-loop liveness -----------------------------------------------------
+
+
+def test_liveness_monitor_exits_when_sync_task_finishes(runtime, config_path):
+    """The sync loop is supposed to run until stop(): when it finishes on
+    its own (the homeserver rejected the access token — the sidecar is
+    deaf), ``_await_liveness`` must exit non-zero so the process
+    supervisor restarts the sidecar instead of running a deaf process."""
+    _start_core(runtime)
+    assert runtime.transport.sync_task is not None
+    # Finish the fake sync task the way the real engine's loop ends on
+    # token invalidation: by returning normally (no exception).
+    runtime.transport.finish_sync_task()
+    stop_event = threading.Event()
+    with pytest.raises(SystemExit) as excinfo:
+        _await_liveness(runtime, stop_event, poll_interval=0.01)
+    assert excinfo.value.code == 1
+
+
+def test_liveness_monitor_returns_on_stop_event_while_sync_task_lives(
+    runtime, config_path
+):
+    """A live sync task must NOT trigger an exit: when the stop event
+    fires, ``_await_liveness`` returns normally (the clean SIGTERM
+    path ends with exit code 0)."""
+    _start_core(runtime)
+    assert runtime.transport.sync_task is not None
+    assert not runtime.transport.sync_task.done()
+    stop_event = threading.Event()
+
+    def stop_soon():
+        time.sleep(0.1)
+        stop_event.set()
+
+    t = threading.Thread(target=stop_soon, daemon=True)
+    t.start()
+    _await_liveness(runtime, stop_event, poll_interval=0.01)  # returns None
+    t.join(5)
 
 
 # --- build() wiring -----------------------------------------------------------------

@@ -115,6 +115,10 @@ def make_ack(event_id: str) -> dict:
     return {"type": "ack", "event_id": event_id}
 
 
+def make_error(code: str, message: str) -> dict:
+    return {"type": "error", "code": code, "message": message}
+
+
 def make_inbound(event: InboundEvent) -> dict:
     return {
         "type": "inbound",

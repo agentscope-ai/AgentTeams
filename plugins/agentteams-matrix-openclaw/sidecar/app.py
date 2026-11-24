@@ -8,6 +8,11 @@ at (fail-closed with an actionable message when absent). Encryption is
 OFF — the same choice as the e2e harness: the AgentTeams homeserver
 runs in clear. SIGTERM/SIGINT shut down cleanly (core stopped, socket
 file removed); a second signal force-exits.
+
+The long-poll sync loop is monitored: when it finishes on its own —
+the homeserver rejected the access token (M_UNKNOWN_TOKEN /
+M_MISSING_TOKEN) — the process exits non-zero so the process
+supervisor restarts it instead of running a deaf sidecar.
 """
 
 from __future__ import annotations
@@ -98,6 +103,17 @@ def build(config) -> SidecarRuntime:
                 log=bridge_log,
             )
 
+        def _on_token_invalid() -> None:
+            # The shared sync engine has already cleared the client's
+            # access token and stopped its long-poll loop (the homeserver
+            # rejected it: M_UNKNOWN_TOKEN / M_MISSING_TOKEN).  The
+            # sidecar cannot re-login — the token comes from the
+            # operator's config — so this only records the failure at
+            # error level; run() sees the dead sync task and exits
+            # non-zero so the process supervisor restarts the process
+            # (and the operator sees that the credential needs fixing).
+            log.error("Matrix token invalidated; exiting for supervisor restart")
+
         bridge = AgentBridge(
             server, config.agent_user, log=bridge_log, media_enricher=_enrich_frame
         )
@@ -111,6 +127,7 @@ def build(config) -> SidecarRuntime:
             store=store,
             state_dir=state_dir,
             encryption=False,
+            on_token_invalid=_on_token_invalid,
         )
         core = core_mod.MatrixCore(
             transport,
@@ -185,6 +202,53 @@ def _worker_supervised(runtime: SidecarRuntime, loop) -> None:
             "(socket %s)",
             runtime.config.socket_path,
         )
+
+
+def _await_liveness(
+    runtime: SidecarRuntime,
+    stop_event: threading.Event,
+    poll_interval: float = 0.5,
+) -> None:
+    """Block until the sidecar is asked to stop; exit non-zero when a
+    long-lived task dies first.
+
+    ``core_task`` (``MatrixCore.run``) is supposed to live until
+    stop() and only finishes early when the transport fails to start;
+    the sync engine task is supposed to live at all — the long-poll
+    loop only finishes when the homeserver rejects the access token
+    (M_UNKNOWN_TOKEN / M_MISSING_TOKEN), after which the sidecar is
+    deaf (it never hears inbound again and every outbound submit
+    fails).  When either task completes, exit non-zero instead of
+    running half-dead: fail-fast, and leave the restart to the
+    process supervisor (systemd runs ``sidecar.sh run``; in the
+    unmanaged background case ``sidecar.sh status`` reports the
+    sidecar not running, so the operator sees the failure instead of
+    a silent deaf process).
+    """
+    sync_task = None
+    while not stop_event.wait(poll_interval):
+        # The sync task exists only once core.run() has started the
+        # transport; pick it up on the first poll that sees it.  A
+        # transport without the attribute (the in-tree test fake
+        # before this fix, or a minimal stand-in) is simply not
+        # monitored.
+        if sync_task is None:
+            sync_task = getattr(runtime.transport, "sync_task", None)
+        if runtime.core_task is not None and runtime.core_task.done():
+            exc = runtime.core_task.exception()
+            log.error("core stopped at startup: %r", exc)
+            raise SystemExit(1)
+        if sync_task is not None and sync_task.done():
+            if sync_task.cancelled():
+                detail = "cancelled"
+            else:
+                detail = repr(sync_task.exception())
+            log.error(
+                "sync engine task finished (%s); the sidecar is deaf — "
+                "exiting for supervisor restart",
+                detail,
+            )
+            raise SystemExit(1)
 
 
 def shutdown(
@@ -263,11 +327,7 @@ def run(config) -> None:
             config.socket_path,
             _core.core_dir(),
         )
-        while not stop_event.wait(0.5):
-            if runtime.core_task.done():
-                exc = runtime.core_task.exception()
-                log.error("core stopped at startup: %r", exc)
-                raise SystemExit(1)
+        _await_liveness(runtime, stop_event)
     finally:
         if is_main:
             for signum, handler in previous_handlers.items():

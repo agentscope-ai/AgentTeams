@@ -2,9 +2,9 @@
 
 AgentBridge: own-echo suppression, event-id dedupe, forward shape, and
 on_runtime_output being log-only. run_outbound_worker: acks with the
-event id the core returns, never acks a failed submit, retries the
-"no active connection" window, ignores typing frames, and returns when
-the connection ends.
+event id the core returns, answers a failed submit with the protocol's
+error frame (never an ack), retries the "no active connection" window,
+ignores typing frames, and returns when the connection ends.
 """
 
 from __future__ import annotations
@@ -228,7 +228,12 @@ def test_worker_retries_no_active_connection_then_exits_on_close():
     assert len(transport.sent) == 1
 
 
-def test_worker_does_not_ack_a_failed_submit_and_returns():
+def test_worker_answers_failed_submit_with_error_frame_and_returns():
+    """A failed submit is never acked (an ack would be a lie), but the
+    failure IS surfaced on the wire: an ``error`` frame so the TS
+    client rejects its pending sendOutbound promises instead of
+    hanging on an ack that will never come.  The worker still returns
+    (the supervised runtime restarts it for the next connection)."""
     core_module, transport_module = lib().core, lib().transport
 
     class FailingTransport(transport_module.NioTransport):
@@ -262,7 +267,13 @@ def test_worker_does_not_ack_a_failed_submit_and_returns():
         run_outbound_worker(server, core, loop, log=quiet())  # returns, no raise
     finally:
         stop_core_and_loop(core, loop, loop_thread, core_task)
-    assert server.sent == []  # no ack: a fabricated one would desync the FIFO
+    # No ack (a fabricated one would desync the FIFO) — but the failure
+    # is surfaced on the wire as the protocol's error frame.
+    assert len(server.sent) == 1
+    frame = server.sent[0]
+    assert frame["type"] == "error"
+    assert frame["code"] == "submit_failed"
+    assert "outbound submit failed" in frame["message"]
     assert core.last_error is not None and "submit" in core.last_error
 
 

@@ -10,9 +10,14 @@ so the behaviour lives here once:
     boundary dedupe the plugin's no-requeue design relies on);
   * every ``outbound`` frame is submitted through the core and acked
     with the event id the core returns — never a fabricated one;
-  * a failed submit is NOT acked: a wrong ack would desynchronise the
-    client's FIFO correlation, so the frame is dropped and the
-    connection left to surface the failure;
+  * a failed submit is NOT acked (an ack would be a lie: the send never
+    happened, and a fabricated event id would desynchronise the
+    client's FIFO correlation).  Instead the worker sends the
+    protocol's ``error`` frame before returning: the TS client treats
+    a post-handshake error frame as a terminal failure — it rejects
+    every pending ``sendOutbound`` promise and tears the connection
+    down — so the plugin sees a definite failure instead of hanging
+    on an ack that will never come;
   * ``typing`` frames are ignored (logged only).
 
 The frame builders (``make_inbound`` / ``make_ack`` /
@@ -145,9 +150,27 @@ def run_outbound_worker(
                     core.submit(msg), loop
                 ).result(timeout=submit_timeout)
             except Exception as exc:
-                # No ack: a wrong ack would desync the client's FIFO
-                # correlation. The connection will surface the failure.
+                # No ack — an ack would be a lie (the send never
+                # happened, and a fabricated event id would desync the
+                # client's FIFO correlation).  Send the protocol's
+                # ``error`` frame instead: the TS client treats a
+                # post-handshake error frame as terminal and rejects
+                # every pending sendOutbound promise, so the plugin
+                # sees a definite failure instead of a hung promise.
                 log(f"sidecar worker: submit failed: {exc!r}")
+                try:
+                    server.send(
+                        core_module.make_error(
+                            "submit_failed",
+                            f"outbound submit failed: {exc}",
+                        )
+                    )
+                    log("sidecar worker: sent submit_failed error frame")
+                except Exception as send_exc:
+                    log(
+                        "sidecar worker: could not deliver the "
+                        f"submit_failed error frame: {send_exc!r}"
+                    )
                 return
             server.send(core_module.make_ack(event_id))
             log(f"acked outbound with {event_id}")

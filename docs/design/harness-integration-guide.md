@@ -251,3 +251,5 @@ python3 tests/task-protocol/summarize_runs.py /path/to/evidence/runs --source FU
 - 模型路由须明确。测试账号不支持某种 SDK 的自定义模型入口时，记录实际请求是否到达网关；只有用户明确同意才可另选账号模型，不能把路由降级写成自动兜底，也不能宣称三个运行时用了相同模型。
 
 真实 SDK 的本地协议夹具只证明原生结束和持久化边界；混合 Task 实跑、保留数据切换与完整准入认证分别记录。中途更换镜像造成的未知工具结果保留为失败/人工干预，不能补成干净成功。
+
+原生直出 Trace 仍须带共享可见性字段：真实 Worker 身份、`langfuse.user.id`、原生 session、`agentteams/worker-turn/runtime` 标签以及 Task/Team/Room 关联。仅有 OTLP 到达或能用内部 Langfuse API 找到 Trace，不代表经过 Dashboard 权限过滤后可见。模型/工具 span 按真实原生事件分类，使用实际返回的 token 字段；没有提供的数量保持未知。核对 SDK 自己登记的进行中工具时，`needs_verification` 不是执行权丢失：先比较 generation/instance/process，不能把自己的正常工具打断再重试推理。

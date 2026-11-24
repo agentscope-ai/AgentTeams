@@ -1147,7 +1147,7 @@ if authorization:
 package_server = mcp.get(package_mcp_name) or {}
 if package_server.get("url") != package_mcp_url or not package_server.get("enabled"):
     problems.append("package_mcp:api")
-if "workerflow" in mcp:
+if (mcp.get("workerflow") or {}).get("enabled"):
     problems.append("unexpected:workerflow")
 for key in ("teamharness",):
     client = mcp.get(key) or {}

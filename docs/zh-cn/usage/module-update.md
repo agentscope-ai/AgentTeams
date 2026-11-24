@@ -226,5 +226,5 @@ curl -s "http://<controller>/api/v1/workers/worker-a/plugins" \
 ## 相关文档
 
 * [插件清单](../../../plugins/README.md) — `plugins/` 下有什么、各种形态怎么装。
-* [Qwen Code bridge](../../../plugins/qwen-code-bridge/README.md) — 第一个经该通道发布的 worker 插件。
+* [Qwen Code bridge](https://github.com/agentteams-group/agentteams-harness-qwenpaw/tree/main/plugins/qwen-code-bridge) — 第一个经该通道发布的 worker 插件；源码和打包由 QwenPaw Harness 仓库维护。
 * [本地部署](deployment/local.md) — 镜像式升级。

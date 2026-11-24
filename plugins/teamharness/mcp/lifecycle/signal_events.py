@@ -1,11 +1,15 @@
-# signal contract emission and event listing (W1-a2: real module)
+# signal contract emission, event listing, and retention (W1-a2: real module)
 from __future__ import annotations
 
 import base64
+import datetime
 
 import hashlib
 
 import json
+import os
+
+import re
 
 from pathlib import Path
 
@@ -15,8 +19,8 @@ from typing import Any
 # transitions.py: mcp/ on sys.path makes the identity identical in both
 # `import server` and `import mcp.server` modes.
 from mcp.common import refs
-from mcp.common.config import _runtime_team_name
-from mcp.common.io import _utc_timestamp
+from mcp.common.config import _load_runtime_config, _runtime_team_name, _section
+from mcp.common.io import _utc_timestamp, _write_json
 from mcp.common.paths import _workspace_dir
 
 _filesync = refs.proxy("_filesync")
@@ -109,6 +113,327 @@ def _project_audit_seq(project: dict[str, Any] | Any) -> int:
     return seq
 
 
+# S2 event retention (#1702). The live stream under shared/events/{team_id}/
+# used to grow unboundedly: one immutable file per event and no cleanup
+# anywhere in the plugin, while every list_events read paid O(N) file reads.
+# Events are the output of a project's lifecycle, so retention keys off the
+# project's lifecycle state instead of a per-event TTL: once a project is
+# terminal (project meta status == "completed" — the terminal state written
+# by Go CompleteProject and Python complete_project) or its last activity is
+# older than the configured window (retention.days, default 30), the
+# project's live event files are merged into one archive object
+# shared/events/{team_id}/{project_id}-archive-YYYYMMDD.json, the local source
+# files are deleted, and the MinIO mirror is pruned best-effort. The archive
+# object is NOT part of the live stream (list_events and the Go read surface
+# both read live event files only); it is the retained audit copy. The
+# semantics are registered in contracts/signal-mapping.json under "retention".
+
+_RETENTION_DEFAULT_DAYS = 30
+_RETENTION_SWEEP_EVERY_N_EMITS = 16
+_RETENTION_MAX_SWEEP_AGE = datetime.timedelta(hours=24)
+_RETENTION_STATE_NAME = ".retention.state"
+_RECENT_WINDOW_MIN_FILES = 20
+_ARCHIVE_NAME_RE = re.compile(r"^(?P<project_id>.+)-archive-(?P<date>\d{8})\.json$")
+
+
+def _retention_days() -> int:
+    """The retention window in days (configurable, default 30).
+
+    The TEAMHARNESS_RETENTION_DAYS environment variable wins when set (the
+    repo env-override pattern), else the TEAMHARNESS_RUNTIME_CONFIG
+    retention.days key (JSON or YAML). Non-numeric or negative values fall
+    back to the default.
+    """
+    raw = os.getenv("TEAMHARNESS_RETENTION_DAYS", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            return _RETENTION_DEFAULT_DAYS
+        return value if value >= 0 else _RETENTION_DEFAULT_DAYS
+    days = _section(_load_runtime_config(), "retention").get("days")
+    if isinstance(days, bool):
+        return _RETENTION_DEFAULT_DAYS
+    if isinstance(days, (int, float)):
+        value = int(days)
+    else:
+        # The simple-YAML scalar loader returns strings.
+        try:
+            value = int(str(days or "").strip())
+        except ValueError:
+            return _RETENTION_DEFAULT_DAYS
+    return value if value >= 0 else _RETENTION_DEFAULT_DAYS
+
+
+def _read_retention_state(events_dir: Path) -> dict[str, Any]:
+    path = events_dir / _RETENTION_STATE_NAME
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _file_mtime_or_zero(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _project_last_activity(meta: dict[str, Any], meta_path: Path) -> datetime.datetime | None:
+    """The project's last activity: the meta 'updated_at'/'created_at'
+    field (RFC3339) when present, else the local meta file's mtime."""
+    raw = str(meta.get("updated_at") or meta.get("created_at") or "").strip()
+    if raw:
+        try:
+            parsed = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+            return parsed.astimezone(datetime.timezone.utc)
+    try:
+        return datetime.datetime.fromtimestamp(meta_path.stat().st_mtime, datetime.timezone.utc)
+    except OSError:
+        return None
+
+
+def _event_project_id(workspace: Path, ev: dict[str, Any], task_project_cache: dict[str, str]) -> str:
+    """Best-effort project attribution for one live event object.
+
+    Order: payload.project_id (every Python emitter stamps it), then the
+    task meta's project_id for task-level events (the SIG-MISMATCH emitters
+    stamp neither), then a project path in the event's ref (project-level
+    events carry shared/projects/{pid}/... — the same pattern as the Go
+    read-side attribution). Returns "" when nothing resolves: such events
+    are left live forever (never delete what cannot be attributed).
+    """
+    payload = ev.get("payload")
+    if isinstance(payload, dict):
+        pid = str(payload.get("project_id") or "").strip()
+        if pid:
+            return pid
+    task_id = str(ev.get("task_id") or "").strip()
+    if task_id:
+        if task_id in task_project_cache:
+            return task_project_cache[task_id]
+        project_id = ""
+        meta_path = workspace / "shared" / "tasks" / task_id / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            meta = None
+        if isinstance(meta, dict):
+            project_id = str(meta.get("project_id") or "").strip()
+        task_project_cache[task_id] = project_id
+        if project_id:
+            return project_id
+    ref = str(ev.get("ref") or "")
+    match = re.search(r"/projects/([^/]+)/", ref)
+    if match:
+        return match.group(1)
+    return ""
+
+
+def _read_archive(archive_path: Path) -> dict[str, Any]:
+    """The existing archive object (extension target) or a fresh skeleton."""
+    if archive_path.exists():
+        try:
+            data = json.loads(archive_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        if isinstance(data, dict) and isinstance(data.get("events"), list):
+            return data
+    return {
+        "archive": True,
+        "version": 1,
+        "team_id": "",
+        "project_id": "",
+        "archived_at": _utc_timestamp(),
+        "reason": "",
+        "event_count": 0,
+        "events": [],
+    }
+
+
+def _retention_sweep(arguments: dict[str, Any], team_id: str) -> None:
+    """Merge-and-archive the live event files of terminal or expired projects.
+
+    Best-effort end to end: every failure is swallowed here or by the
+    caller, so retention never blocks an emit or a read. Per project the
+    order is: write the archive locally -> push the archive to the MinIO
+    mirror -> delete the local source files -> prune the mirrored source
+    objects. When the archive push fails, the local source files are kept
+    (nothing is ever lost; the next sweep retries).
+    """
+    workspace = _workspace_dir(arguments)
+    events_dir = workspace / "shared" / "events" / team_id
+    if not events_dir.is_dir():
+        return
+    days = _retention_days()
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Candidate projects from the local project metas.
+    candidates: dict[str, str] = {}
+    projects_root = workspace / "shared" / "projects"
+    if projects_root.is_dir():
+        for meta_path in sorted(projects_root.glob("*/meta.json")):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(meta, dict):
+                continue
+            project_id = meta_path.parent.name
+            status = str(meta.get("status") or "").strip().lower()
+            if status == "completed":
+                candidates[project_id] = "project_completed"
+                continue
+            if days > 0:
+                last_activity = _project_last_activity(meta, meta_path)
+                if last_activity is not None and (now - last_activity) > datetime.timedelta(days=days):
+                    candidates[project_id] = "expired"
+    if not candidates:
+        return
+
+    # Live event files (archive objects are retention output, never input:
+    # they carry no top-level event_id and are skipped by name).
+    live_files: list[tuple[Path, dict[str, Any]]] = []
+    for path in sorted(events_dir.glob("*.json")):
+        if not path.is_file() or _ARCHIVE_NAME_RE.match(path.name):
+            continue
+        try:
+            ev = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(ev, dict) and isinstance(ev.get("event_id"), str):
+            live_files.append((path, ev))
+
+    # Attribute each live event to a candidate project (events that cannot
+    # be attributed to a candidate stay live).
+    by_project: dict[str, list[tuple[Path, dict[str, Any]]]] = {pid: [] for pid in candidates}
+    task_project_cache: dict[str, str] = {}
+    for path, ev in live_files:
+        project_id = _event_project_id(workspace, ev, task_project_cache)
+        if project_id in by_project:
+            by_project[project_id].append((path, ev))
+
+    today = now.strftime("%Y%m%d")
+    for project_id, items in by_project.items():
+        if not items:
+            continue
+        archive_name = f"{project_id}-archive-{today}.json"
+        archive_path = events_dir / archive_name
+        archive = _read_archive(archive_path)
+        archive["archive"] = True
+        archive["version"] = 1
+        archive["team_id"] = team_id
+        archive["project_id"] = project_id
+        archive["reason"] = candidates[project_id]
+        archive["archived_at"] = _utc_timestamp()
+        existing_ids = {
+            e.get("event_id") for e in archive["events"] if isinstance(e, dict)
+        }
+        fresh = [(p, e) for p, e in items if e.get("event_id") not in existing_ids]
+        if not fresh:
+            continue
+        merged = [e for _, e in fresh]
+        merged.sort(key=lambda e: (str(e.get("occurred_at") or ""), str(e.get("event_id") or "")))
+        archive["events"].extend(merged)
+        archive["events"].sort(key=lambda e: (str(e.get("occurred_at") or ""), str(e.get("event_id") or "")))
+        archive["event_count"] = len(archive["events"])
+        _write_json(archive_path, archive)
+
+        # Mirror the archive BEFORE deleting anything local.
+        sync_args = dict(arguments)
+        sync_args.update({"action": "push", "path": f"shared/events/{team_id}/{archive_name}"})
+        try:
+            result = _filesync(sync_args)
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)}
+        if not (isinstance(result, dict) and result.get("ok")):
+            # Keep the local source files; the next sweep retries.
+            continue
+
+        # Delete the local source files, then prune the mirror objects.
+        prune_failures = 0
+        for path, _ev in fresh:
+            try:
+                path.unlink()
+            except OSError:
+                continue  # the file stays live; retried on the next sweep
+            prune_args = dict(arguments)
+            prune_args.update({"action": "delete", "path": f"shared/events/{team_id}/{path.name}"})
+            try:
+                prune = _filesync(prune_args)
+            except Exception as exc:
+                prune = {"ok": False, "error": str(exc)}
+            if not (isinstance(prune, dict) and prune.get("ok")):
+                error = str((prune or {}).get("error") or "").lower()
+                if "does not exist" in error:
+                    continue  # already absent == pruned
+                prune_failures += 1
+                if prune_failures >= 5:
+                    # Cap the mc command storm; the remaining objects are
+                    # pruned by a later sweep (or a manual filesync delete).
+                    break
+
+
+def _maybe_run_retention(arguments: dict[str, Any], team_id: str, *, emit_occurred: bool) -> None:
+    """Throttled retention trigger (#1702 requirement c).
+
+    Called at the tail of every signal event emit and on every list_events
+    call. The check itself is O(1) — one small state file under
+    shared/events/{team_id}/ — while the full sweep runs at most every
+    _RETENTION_SWEEP_EVERY_N_EMITS emits, plus a max-lag backstop so an idle
+    team's terminal projects still get archived on the next emit or
+    list_events. Never raises: retention must never block the caller's
+    flow.
+    """
+    try:
+        events_dir = _workspace_dir(arguments) / "shared" / "events" / team_id
+        if not events_dir.is_dir():
+            return
+        state = _read_retention_state(events_dir)
+        count = state.get("emit_count")
+        if isinstance(count, bool) or not isinstance(count, int):
+            count = 0
+        now = datetime.datetime.now(datetime.timezone.utc)
+        last: datetime.datetime | None = None
+        last_raw = str(state.get("last_sweep_at") or "").strip()
+        if last_raw:
+            try:
+                parsed = datetime.datetime.fromisoformat(last_raw.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+                last = parsed.astimezone(datetime.timezone.utc)
+            except ValueError:
+                last = None
+        if emit_occurred:
+            count += 1
+        due = (
+            (emit_occurred and count >= _RETENTION_SWEEP_EVERY_N_EMITS)
+            or last is None
+            or (now - last) >= _RETENTION_MAX_SWEEP_AGE
+        )
+        if not due:
+            if emit_occurred:
+                _write_json(events_dir / _RETENTION_STATE_NAME, {
+                    "emit_count": count,
+                    "last_sweep_at": last_raw,
+                })
+            return
+        _retention_sweep(arguments, team_id)
+        _write_json(events_dir / _RETENTION_STATE_NAME, {
+            "emit_count": 0,
+            "last_sweep_at": _utc_timestamp(),
+        })
+    except Exception:
+        pass  # retention must never block the caller's flow
+
+
 def _emit_signal_event(
     arguments: dict[str, Any],
     emitter: str,
@@ -195,6 +520,10 @@ def _emit_signal_event(
         _filesync(sync_args)
     except Exception:
         pass  # mirror push is warn-only
+    # Retention trigger (#1702, requirement c): an O(1) state-file check per
+    # emit; the full sweep runs every _RETENTION_SWEEP_EVERY_N_EMITS emits.
+    # Never raises.
+    _maybe_run_retention(arguments, team_id, emit_occurred=True)
     return True
 
 
@@ -215,8 +544,29 @@ def _list_events(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str
     sides must accept BOTH forms (this decoder re-pads before decoding).
     If either side changes its cursor encoding, sync the other side's
     decoder and this note.
+
+    Retention (#1702): before reading, a throttled best-effort sweep may
+    merge-and-archive a terminal or expired project's live event files
+    (event-store maintenance, not a project/task state mutation — see the
+    durability.json note). Archive objects are NOT part of the live stream
+    on either read surface, so archived events leave list_events results.
+
+    Fast path (#1702, contract "retention.fast_path"): the payload key
+    `recent` (boolean, opt-in) reads only the most-recently-written
+    `max(20, 4 * limit)` live event files (mtime order — event ids are
+    sha256-based, so filename order is not time order) and serves pages
+    newest-first, resuming strictly before the page's oldest event.
+    Approximate whenever the window does not cover every live file
+    (declared in the response with "approximate": true); the default read
+    is unchanged.
     """
     team = str(payload.get("team") or _runtime_team_name() or "").strip() or "global"
+    # Best-effort lazy retention trigger (#1702 requirement c): before
+    # reading the stream, a throttled sweep may merge-and-archive a
+    # terminal or expired project's live event files (event-store
+    # maintenance, not a project/task state mutation — durability.json
+    # note). Never raises.
+    _maybe_run_retention(arguments, team, emit_occurred=False)
     since = str(payload.get("since") or "").strip()
     types = payload.get("types")
     if isinstance(types, list) and types:
@@ -226,6 +576,7 @@ def _list_events(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str
     else:
         type_set = None
     task_id = str(payload.get("taskId") or payload.get("task_id") or "").strip() or None
+    recent = bool(payload.get("recent") or False)
     try:
         limit = int(payload.get("limit") or 50)
     except (TypeError, ValueError):
@@ -250,15 +601,40 @@ def _list_events(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str
             }
     events: list[dict[str, Any]] = []
     events_dir = _workspace_dir(arguments) / "shared" / "events" / team
+    live_files_total = 0
+    window_files_read = 0
     if events_dir.is_dir():
-        for path in sorted(events_dir.glob("*.json")):
-            try:
-                ev = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if not isinstance(ev, dict) or not isinstance(ev.get("event_id"), str):
-                continue
-            events.append(ev)
+        if recent:
+            # mtime-sorted recent window (#1702 fast path): event ids are
+            # sha256-based (contract id_rule), so filename order is NOT
+            # time order — take the most-recently-written live files
+            # instead. Archive objects are skipped by name: they are
+            # retention output, not live stream content.
+            files = [
+                p for p in events_dir.glob("*.json")
+                if p.is_file() and not _ARCHIVE_NAME_RE.match(p.name)
+            ]
+            files.sort(key=_file_mtime_or_zero, reverse=True)
+            live_files_total = len(files)
+            window = files[: max(_RECENT_WINDOW_MIN_FILES, 4 * limit)]
+            window_files_read = len(window)
+            for path in window:
+                try:
+                    ev = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if not isinstance(ev, dict) or not isinstance(ev.get("event_id"), str):
+                    continue
+                events.append(ev)
+        else:
+            for path in sorted(events_dir.glob("*.json")):
+                try:
+                    ev = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if not isinstance(ev, dict) or not isinstance(ev.get("event_id"), str):
+                    continue
+                events.append(ev)
     if type_set is not None:
         events = [e for e in events if e.get("event_type") in type_set]
     if task_id:
@@ -266,6 +642,38 @@ def _list_events(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str
     if since:
         # RFC3339 UTC 'Z' timestamps: lexicographic == chronological.
         events = [e for e in events if str(e.get("occurred_at") or "") >= since]
+    if recent:
+        # Newest first within the window; the cursor anchor is the page's
+        # OLDEST event and the next page resumes strictly BEFORE it (same
+        # base64url(ts \x00 id) encoding; recent-mode cursors only resume
+        # in recent mode — contract "retention.fast_path").
+        events.sort(
+            key=lambda e: (str(e.get("occurred_at") or ""), str(e.get("event_id") or "")),
+            reverse=True,
+        )
+        if after is not None:
+            events = [
+                e for e in events
+                if (str(e.get("occurred_at") or ""), str(e.get("event_id") or "")) < after
+            ]
+        page = events[:limit]
+        next_cursor: str | None = None
+        if len(events) > limit:
+            last_ts = str(events[limit - 1].get("occurred_at") or "")
+            last_id = str(events[limit - 1].get("event_id") or "")
+            next_cursor = base64.urlsafe_b64encode(f"{last_ts}\x00{last_id}".encode("utf-8")).decode("ascii")
+        return {
+            "ok": True,
+            "tool": "projectflow",
+            "action": "list_events",
+            "team": team,
+            "events": page,
+            "count": len(page),
+            "next_cursor": next_cursor,
+            "recent": True,
+            "window_files": window_files_read,
+            "approximate": live_files_total > window_files_read,
+        }
     events.sort(key=lambda e: (str(e.get("occurred_at") or ""), str(e.get("event_id") or "")))
     if after is not None:
         events = [

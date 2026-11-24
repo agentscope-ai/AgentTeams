@@ -131,5 +131,28 @@
     "attention.raised": ["SIG-ATTENTION"],
     "attention.resolved": ["SIG-ATTENTION"],
     "attention.overdue": ["SIG-ATTENTION"]
+  },
+  "retention": {
+    "retention_version": "1.0.0",
+    "status": "enforced-in-python-mcp",
+    "description": "S2 event store lifecycle (#1702). The live stream under shared/events/{team_id}/ is one immutable file per event; without cleanup it grows unboundedly while every list_events read pays O(N) file reads. Retention merges a project's live event files into one archive object once the project is terminal or expired, deletes the local source files, and prunes the MinIO mirror best-effort. The contract 'version' field above is the id_rule version (pinned by the cross-language fixed vector and the Go TestContractCoversAllEmitters), so registering this store-lifecycle section does not bump it.",
+    "triggers": {
+      "project_completed": "project meta status == 'completed' (the terminal lifecycle state written by Go CompleteProject and Python complete_project)",
+      "expired": "project last activity (meta updated_at when present, else the local meta file mtime) older than retention.days (default 30; configurable via TEAMHARNESS_RUNTIME_CONFIG retention.days, TEAMHARNESS_RETENTION_DAYS env override)"
+    },
+    "attribution": "an event file is attributed to a project via payload.project_id (every Python emitter stamps it), then the task meta's project_id for task-level events, then a shared/projects/{project_id}/ path in the event's ref (the Go read-side pattern); an event that cannot be attributed to a candidate project is left live forever",
+    "archive": {
+      "path": "shared/events/{team_id}/{project_id}-archive-YYYYMMDD.json",
+      "shape": "{archive: true, version: 1, team_id, project_id, archived_at (last write time), reason ('project_completed' | 'expired'), event_count, events: [the original 11-field event objects, (occurred_at, event_id) ascending]}",
+      "merge_semantics": "an existing same-day archive object is extended without duplicating event_ids; the source files are deleted locally only after the archive object is pushed to the MinIO mirror (a failed archive push keeps the local source files for the next sweep)",
+      "stream_semantics": "archive objects are NOT part of the live stream: both read surfaces (projectflow list_events and the controller's GET /api/v1/projects/{id}/signal-events) read live event files only, so archived events leave list_events results; the archive object is the retained audit copy (local + MinIO mirror) and is tolerated-and-skipped by object listings that expect one event per object (no top-level event_id)"
+    },
+    "mirror_sync": "the pruned source objects are removed from the MinIO mirror with filesync action delete (new in #1702); prune failures are warn-only and never block emission or reads, and an object already absent counts as pruned",
+    "execution_timing": "at the tail of every Python signal event emit (an O(1) state-file check under shared/events/{team_id}/.retention.state; the full sweep runs every 16 emits) and lazily on every projectflow list_events call; a 24h max-lag backstop re-runs the sweep when the last one is older. list_events stays read-only with respect to project/task state (see durability.json notes).",
+    "fast_path": {
+      "parameter": "projectflow list_events payload 'recent' (boolean, opt-in)",
+      "mechanism": "event ids are sha256-based (id_rule above), so filename order is NOT time order; the fast path sorts the live event files by mtime (newest first), reads at most window_files = max(20, 4 * limit) of them, applies the same filters, and serves pages newest-first; the cursor anchor is the page's oldest event and the next page resumes strictly before it (same base64url(ts + NUL + id) encoding; recent-mode cursors only resume in recent mode)",
+      "approximation": "events in live files older than the window are not scanned: filtered queries may miss older matches, and page 1 is the newest events rather than the oldest ones. The response carries 'approximate': true whenever the window did not cover every live file; the default (exact) read is unchanged and remains the full-directory ascending stream shared with the Go read surface."
+    }
   }
 }

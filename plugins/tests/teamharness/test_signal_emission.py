@@ -9,14 +9,19 @@ Covers the Python side of the shared contract:
 - submit_task / accept_task_result: SIG-COMPLETE
 - idempotency: an emit-level retry of the same operation is one object on
   disk, while a later operation (advanced state bytes) gets a new object
+- retention (#1702): terminal/expired projects get their live event files
+  merged into one archive object (sources deleted, mirror pruned), and the
+  mtime-sorted recent-window fast path serves bounded newest-first pages
 """
 
 from __future__ import annotations
 
 import base64
+import datetime
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -681,3 +686,228 @@ print(json.dumps(module._projectflow(args)))
     assert bundle_result.get("ok") is True, bundle_result
     # Both entries resume from the same Go cursor with the same page.
     assert json.dumps(bundle_result, sort_keys=True) == json.dumps(live_result, sort_keys=True)
+# ---------------------------------------------------------------------------
+# S2 event retention (#1702): terminal/expired project events merge into one
+# archive object, local sources are deleted, the MinIO mirror is pruned —
+# plus the mtime-sorted recent-window fast path and the emit-tail throttle.
+# ---------------------------------------------------------------------------
+
+def _seed_event(directory: Path, event_id: str, occurred_at: str, *, task_id: str = "", project_id: str | None = None, ref: str = "shared/projects/p1/meta.json") -> None:
+    """Write one live event file with the 11-field contract shape."""
+    payload: dict[str, Any] = {}
+    if project_id is not None:
+        payload["project_id"] = project_id
+    (directory / f"{event_id}.json").write_text(
+        json.dumps({
+            "event_id": event_id,
+            "task_id": task_id,
+            "loop_id": None,
+            "event_type": "SIG-DECISION",
+            "is_signal": True,
+            "source_event": {"origin": "submit", "request_id": None},
+            "ref": ref,
+            "fingerprint": "0" * 64,
+            "iteration_index": None,
+            "payload": payload,
+            "occurred_at": occurred_at,
+        }),
+        encoding="utf-8",
+    )
+
+
+class FakeFilesyncFailPush(FakeFilesync):
+    """Records calls; the push action fails (storage unreachable)."""
+
+    def __call__(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(dict(arguments))
+        if arguments.get("action") == "push":
+            return {
+                "ok": False,
+                "tool": "filesync",
+                "action": "push",
+                "path": arguments.get("path"),
+                "error": "storage unreachable",
+            }
+        return {
+            "ok": True,
+            "tool": "filesync",
+            "action": arguments.get("action"),
+            "path": arguments.get("path"),
+        }
+
+
+def test_retention_sweeps_completed_project_events(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    filesync = FakeFilesync()
+    monkeypatch.setattr(server, "_filesync", filesync)
+    workspace = tmp_path / "agent"
+    team = _team(server)
+    directory = _events_dir(server, workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    _write_project(workspace, "p1", {"project_id": "p1", "title": "P1", "status": "completed", "tasks": [], "history": []})
+    _write_project(workspace, "p2", {"project_id": "p2", "title": "P2", "status": "active", "tasks": [], "history": []})
+    _write_task(workspace, "t1", {"task_id": "t1", "project_id": "p1", "status": "in_progress"})
+
+    # Three p1 events covering the three attribution paths + one p2 event.
+    _seed_event(directory, "ev_a1", "2026-10-01T00:00:01Z", task_id="t1", project_id="p1")
+    _seed_event(directory, "ev_a2", "2026-10-01T00:00:02Z", task_id="t1", project_id=None)
+    _seed_event(directory, "ev_a3", "2026-10-01T00:00:03Z", task_id="", project_id=None, ref="shared/projects/p1/meta.json")
+    _seed_event(directory, "ev_b1", "2026-10-01T00:00:04Z", task_id="", project_id="p2", ref="shared/projects/p2/meta.json")
+
+    # Lazy trigger on list_events: no retention state yet, so the sweep runs
+    # before the stream read.
+    res = server._projectflow(_arguments(workspace, "list_events", team=team))
+    assert res["ok"] is True
+
+    remaining = sorted(p.name for p in directory.glob("*.json"))
+    assert "ev_a1.json" not in remaining
+    assert "ev_a2.json" not in remaining
+    assert "ev_a3.json" not in remaining
+    assert "ev_b1.json" in remaining
+    archives = [name for name in remaining if "p1-archive-" in name]
+    assert len(archives) == 1, remaining
+
+    archive = json.loads((directory / archives[0]).read_text(encoding="utf-8"))
+    assert archive["archive"] is True
+    assert archive["project_id"] == "p1"
+    assert archive["team_id"] == team
+    assert archive["reason"] == "project_completed"
+    assert [e["event_id"] for e in archive["events"]] == ["ev_a1", "ev_a2", "ev_a3"]
+    assert archive["event_count"] == 3
+
+    # ...and list_events serves only the live (p2) event.
+    assert [e["event_id"] for e in res["events"]] == ["ev_b1"]
+
+    # Mirror synced: archive push + one prune per deleted source file.
+    actions = [(c.get("action"), c.get("path")) for c in filesync.calls]
+    assert ("push", f"shared/events/{team}/{archives[0]}") in actions
+    assert ("delete", f"shared/events/{team}/ev_a1.json") in actions
+    assert ("delete", f"shared/events/{team}/ev_a2.json") in actions
+    assert ("delete", f"shared/events/{team}/ev_a3.json") in actions
+    assert ("delete", f"shared/events/{team}/ev_b1.json") not in actions
+
+
+def test_retention_keeps_sources_when_archive_push_fails(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    # Nothing is ever lost: when the archive object cannot reach the mirror,
+    # the local source files stay live.
+    filesync = FakeFilesyncFailPush()
+    monkeypatch.setattr(server, "_filesync", filesync)
+    workspace = tmp_path / "agent"
+    team = _team(server)
+    directory = _events_dir(server, workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    _write_project(workspace, "p1", {"project_id": "p1", "title": "P1", "status": "completed", "tasks": [], "history": []})
+    _seed_event(directory, "ev_a1", "2026-10-01T00:00:01Z", task_id="", project_id="p1", ref="shared/projects/p1/meta.json")
+
+    res = server._projectflow(_arguments(workspace, "list_events", team=team))
+    assert res["ok"] is True
+
+    assert (directory / "ev_a1.json").exists(), "source file must survive a failed archive push"
+    assert any(c.get("action") == "push" for c in filesync.calls)
+    assert not any(c.get("action") == "delete" for c in filesync.calls)
+    # The event stays in the live stream.
+    assert [e["event_id"] for e in res["events"]] == ["ev_a1"]
+
+
+def test_retention_expiry_trigger_uses_retention_days(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    # status "active" but last activity 84 days ago > default 30-day window.
+    filesync = FakeFilesync()
+    monkeypatch.setattr(server, "_filesync", filesync)
+    workspace = tmp_path / "agent"
+    team = _team(server)
+    directory = _events_dir(server, workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    _write_project(workspace, "p1", {"project_id": "p1", "title": "P1", "status": "active",
+                                     "updated_at": "2026-09-01T00:00:00Z", "tasks": [], "history": []})
+    _seed_event(directory, "ev_x1", "2026-09-01T00:00:01Z", task_id="", project_id="p1", ref="shared/projects/p1/meta.json")
+
+    res = server._projectflow(_arguments(workspace, "list_events", team=team))
+    assert res["ok"] is True
+    assert not (directory / "ev_x1.json").exists()
+    archives = [p.name for p in directory.glob("*.json") if "p1-archive-" in p.name]
+    assert len(archives) == 1
+    archive = json.loads((directory / archives[0]).read_text(encoding="utf-8"))
+    assert archive["reason"] == "expired"
+    assert res["events"] == []
+
+
+def test_list_events_recent_window_is_bounded_and_newest_first(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(server, "_filesync", FakeFilesync())
+    workspace = tmp_path / "agent"
+    team = _team(server)
+    directory = _events_dir(server, workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    for i in range(1, 26):
+        _seed_event(directory, f"ev_{i:02d}", f"2026-10-01T00:00:{i:02d}Z", task_id="t1", project_id="p1")
+    # mtime order matches occurred_at order (ev_01 oldest ... ev_25 newest).
+    base = directory.stat().st_mtime
+    for i in range(1, 26):
+        os.utime(directory / f"ev_{i:02d}.json", (base + i, base + i))
+
+    # Exact mode (default): all 25, ascending, no fast-path fields.
+    res_exact = server._projectflow(_arguments(workspace, "list_events", team=team))
+    assert [e["event_id"] for e in res_exact["events"]] == [f"ev_{i:02d}" for i in range(1, 26)]
+    assert "recent" not in res_exact
+    assert "approximate" not in res_exact
+    assert "window_files" not in res_exact
+
+    # recent mode, limit=5: window = max(20, 4*5) = 20 of the 25 files.
+    res = server._projectflow(_arguments(workspace, "list_events", team=team, recent=True, limit=5))
+    assert res["ok"] is True
+    assert res["recent"] is True
+    assert res["window_files"] == 20
+    assert res["approximate"] is True
+    assert [e["event_id"] for e in res["events"]] == ["ev_25", "ev_24", "ev_23", "ev_22", "ev_21"]
+    assert res["next_cursor"] is not None
+
+    # The next page resumes strictly before the anchor (the page's oldest).
+    page2 = server._projectflow(_arguments(workspace, "list_events", team=team, recent=True, limit=5, cursor=res["next_cursor"]))
+    assert [e["event_id"] for e in page2["events"]] == ["ev_20", "ev_19", "ev_18", "ev_17", "ev_16"]
+
+    # Filters still apply inside the window.
+    page_filtered = server._projectflow(_arguments(workspace, "list_events", team=team, recent=True, limit=5, taskId="t1"))
+    assert page_filtered["events"] == res["events"]
+
+
+def test_emit_tail_retention_throttle_runs_sweep_every_n_emits(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    # The emit-tail trigger sweeps only every N emits (O(1) check otherwise).
+    filesync = FakeFilesync()
+    monkeypatch.setattr(server, "_filesync", filesync)
+    workspace = tmp_path / "agent"
+    team = _team(server)
+    directory = _events_dir(server, workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+    _write_project(workspace, "p1", {"project_id": "p1", "title": "P1", "status": "completed", "tasks": [], "history": []})
+    _seed_event(directory, "ev_z1", "2026-10-01T00:00:01Z", task_id="", project_id="p1", ref="shared/projects/p1/meta.json")
+
+    # A recent past sweep: only the emit counter gates the next one.
+    now_iso = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    (directory / server.signal_events._RETENTION_STATE_NAME).write_text(
+        json.dumps({"emit_count": 0, "last_sweep_at": now_iso}), encoding="utf-8"
+    )
+
+    arguments = _arguments(workspace, "list_events")
+    n = server.signal_events._RETENTION_SWEEP_EVERY_N_EMITS
+    for _i in range(n - 1):
+        server.signal_events._maybe_run_retention(arguments, team, emit_occurred=True)
+    assert (directory / "ev_z1.json").exists(), "sweep must not run before the Nth emit"
+    assert not any(c.get("action") == "push" for c in filesync.calls)
+    state = json.loads((directory / server.signal_events._RETENTION_STATE_NAME).read_text(encoding="utf-8"))
+    assert state["emit_count"] == n - 1
+
+    server.signal_events._maybe_run_retention(arguments, team, emit_occurred=True)
+    assert not (directory / "ev_z1.json").exists(), "sweep runs on the Nth emit"
+    assert any(c.get("action") == "push" for c in filesync.calls)
+    assert any(name.startswith("p1-archive-") for name in os.listdir(directory))
+    state = json.loads((directory / server.signal_events._RETENTION_STATE_NAME).read_text(encoding="utf-8"))
+    assert state["emit_count"] == 0
+
+    # A list_events after the sweep does not re-sweep (max-lag not reached).
+    filesync.calls.clear()
+    res = server._projectflow(_arguments(workspace, "list_events", team=team))
+    assert res["ok"] is True
+    assert res["events"] == []
+    assert filesync.calls == []

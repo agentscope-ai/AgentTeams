@@ -218,6 +218,7 @@ jobs:
       - name: Check integration scheduling
         run: |
           python3 tests/check-integration-scheduling.py
+          python3 tests/test-ci-interaction.py
           python3 tests/test-ci-release-tools.py
           python3 tests/test-install-mc.py
           python3 tests/test-release-metrics.py

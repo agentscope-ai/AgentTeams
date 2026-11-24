@@ -14,10 +14,11 @@ type StatusHandler struct {
 	k8s       client.Client
 	namespace string
 	kubeMode  string
+	version   string
 }
 
-func NewStatusHandler(k8s client.Client, namespace, kubeMode string) *StatusHandler {
-	return &StatusHandler{k8s: k8s, namespace: namespace, kubeMode: kubeMode}
+func NewStatusHandler(k8s client.Client, namespace, kubeMode, version string) *StatusHandler {
+	return &StatusHandler{k8s: k8s, namespace: namespace, kubeMode: kubeMode, version: version}
 }
 
 func (h *StatusHandler) Healthz(w http.ResponseWriter, _ *http.Request) {
@@ -67,8 +68,14 @@ type VersionResponse struct {
 }
 
 func (h *StatusHandler) Version(w http.ResponseWriter, _ *http.Request) {
+	v := h.version
+	if v == "" {
+		// Handlers built without an explicit version (e.g. test rig
+		// ServerDeps) fall back to the historical value.
+		v = "dev"
+	}
 	httputil.WriteJSON(w, http.StatusOK, VersionResponse{
-		Controller: "dev",
+		Controller: v,
 		KubeMode:   h.kubeMode,
 	})
 }

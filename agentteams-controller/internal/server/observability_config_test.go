@@ -137,7 +137,7 @@ func TestObservabilityApplyPreservesWorkerEnvAndRejectsStaleRevision(t *testing.
 }
 
 func TestObservabilityApplySupportsManagedRuntimes(t *testing.T) {
-	for _, runtime := range []string{"qwenpaw", "hermes", "openclaw", "deepseek-harness", "codex", "openhuman"} {
+	for _, runtime := range []string{"qwenpaw", "hermes", "openclaw", "deepseek-harness", "codex", "openhuman", "opencode"} {
 		t.Run(runtime, func(t *testing.T) {
 			h := tracingFixture(t)
 			saveTraceBackend(t, h, "http://langfuse")

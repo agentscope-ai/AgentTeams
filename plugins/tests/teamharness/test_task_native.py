@@ -66,6 +66,25 @@ def test_phase_admission_reuses_the_public_lifecycle_without_model(bridge):
     assert len(calls) == 1
 
 
+def test_completion_requires_explicit_selection_for_competing_output_names(bridge, monkeypatch):
+    import task_canonical
+    monkeypatch.setattr(task_canonical, 'admit', lambda _: {'ok': True})
+    context = {'role': 'leader', 'completion': 'main', 'context': {'acceptedResults': [
+        {'candidate': {'artifacts': [{'name': 'app.py', 'artifactId': 'old', 'version': 'v1'}]}},
+        {'candidate': {'artifacts': [{'name': 'app.py', 'artifactId': 'final', 'version': 'v2'}]}}]}}
+    arguments = {'action': 'complete', 'taskId': 'main', 'report': 'Final project'}
+    calls = []
+    def call(args):
+        calls.append(args)
+        return {'ok': False, 'effect': 'none'}
+    result = bridge.invoke({'operation': 'task', 'arguments': arguments, 'context': context}, call=call)
+    assert calls == []
+    assert result['result']['error'] == 'final_artifact_selection_required'
+    assert result['result']['effect'] == 'none' and result['phaseComplete'] is False
+    bridge.invoke({'operation': 'task', 'arguments': {**arguments, 'artifacts': ['final']}, 'context': context}, call=call)
+    assert calls == [{**arguments, 'artifacts': ['final']}]
+
+
 def test_creation_coverage_tracks_exact_sources_without_forcing_a_task_for_questions(bridge):
     sources = [
         {"inputId": "input-a", "eventId": "$first", "roomId": "!room:test", "userId": "@human:test"},

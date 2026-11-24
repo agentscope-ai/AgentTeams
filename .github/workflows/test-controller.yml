@@ -18,6 +18,8 @@ on:
       - 'tests/test_task_recovery*.py'
       - 'tests/test-skill-runtime-warnings.py'
       - 'tests/test_harness_session_receipts.py'
+      - 'tests/test_export_debug_log.py'
+      - 'scripts/export-debug-log.py'
       - 'tests/lib/matrix-client.sh'
       - 'openhuman'
       - 'hermes'
@@ -54,6 +56,8 @@ on:
       - 'tests/test_task_recovery*.py'
       - 'tests/test-skill-runtime-warnings.py'
       - 'tests/test_harness_session_receipts.py'
+      - 'tests/test_export_debug_log.py'
+      - 'scripts/export-debug-log.py'
       - 'tests/lib/matrix-client.sh'
       - 'openhuman'
       - 'hermes'
@@ -99,6 +103,7 @@ jobs:
           node-version: '24'
       - uses: dtolnay/rust-toolchain@stable
       - run: python3 -m unittest discover -s tests -p test_harness_session_receipts.py -v
+      - run: python3 -m unittest discover -s tests -p test_export_debug_log.py -v
       - run: cargo test --locked --manifest-path openhuman/tests/session-receipts/Cargo.toml
 
   test:

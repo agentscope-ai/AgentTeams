@@ -19,7 +19,7 @@ def project(record, harness, worker, compatibility=None):
     if record.get("apiVersion") != "agentteams.io/v1beta1" or record.get("kind") != "MemberRuntimeConfig":
         raise ValueError("Unsupported Worker runtime configuration format")
     member = record.get("member", {})
-    if harness not in {"codex", "hermes", "qwenpaw", "deepseek-harness", "openclaw", "openhuman"}:
+    if harness not in {"codex", "hermes", "qwenpaw", "deepseek-harness", "openclaw", "openhuman", "opencode"}:
         raise ValueError("Unsupported Worker Harness")
     if member.get("runtime") != harness or member.get("runtimeName") != worker:
         raise ValueError("Worker runtime configuration identity does not match this process")

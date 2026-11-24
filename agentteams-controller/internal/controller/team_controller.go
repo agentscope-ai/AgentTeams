@@ -65,6 +65,7 @@ type TeamReconciler struct {
 
 type teamAdminActor struct {
 	MatrixUserID string
+	HumanUID     string
 	Token        string
 	Username     string
 }
@@ -333,6 +334,9 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	workerRuntimeNames := teamWorkerRuntimeNames(members, leaderRef.Name)
 
 	rooms, err := r.Provisioner.ProvisionTeamRooms(ctx, service.TeamRoomRequest{
+		LeaderDMRoomID:       t.Status.LeaderDMRoomID,
+		LeaderDMRecipient:    t.Status.AssistantRecipient,
+		AdminUID:             adminActor.HumanUID,
 		TeamName:             teamRuntimeName,
 		TeamAliasName:        teamRoomAliasName(t),
 		LeaderName:           leaderRuntimeName,
@@ -348,6 +352,7 @@ func (r *TeamReconciler) reconcileTeam(ctx context.Context, t *v1beta1.Team, pat
 	}
 	t.Status.TeamRoomID = rooms.TeamRoomID
 	t.Status.LeaderDMRoomID = rooms.LeaderDMRoomID
+	t.Status.AssistantRecipient = service.TeamAssistantRecipient(adminActor.MatrixUserID, adminActor.HumanUID)
 	r.syncTeamRoomHumanStatuses(ctx, t.Namespace, t.Name, rooms.TeamRoomID, derivedTeam.Spec.HumanMembers)
 
 	if err := r.Deployer.EnsureTeamStorage(ctx, teamRuntimeName); err != nil {

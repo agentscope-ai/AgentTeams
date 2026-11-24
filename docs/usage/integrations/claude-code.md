@@ -40,7 +40,7 @@ In the Manager's personal Matrix room, ask a registered team to produce a file. 
 
 For an end-to-end check, include a fresh batch ID and several numbers in the request and ask for a JSON file containing the batch ID and their sum. Use `agt task get <task-id> --team <team>` to check the original event ID, the Worker's submission ID, and the Leader's review of that submission. Download the file from the original Matrix room and compare its contents and SHA-256 with the candidate artifact.
 
-This experimental integration supports unencrypted Matrix rooms and the projected model contract. Native read and write tools are available during managed execution. Configure an OTLP HTTP Collector with content capture disabled for acceptance. Record the exact images and collect Matrix events, accepted candidates, downloaded file hashes and native spans for each trial.
+This experimental integration supports unencrypted Matrix rooms and the projected model contract. Native read and write tools are available during managed execution. Configure an OTLP HTTP Collector with content capture disabled for acceptance. Record the exact images and collect Matrix events, accepted candidates, downloaded file hashes and native spans for each trial. Count model attempts using the `claude-code.model.request` spans under each turn, including retries and attempts that ended without a complete reply. Count completed responses separately by response ID.
 
 ## Verify
 

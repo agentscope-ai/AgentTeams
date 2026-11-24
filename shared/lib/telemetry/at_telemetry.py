@@ -432,16 +432,14 @@ def configure(*, local_only=False):
     if os.getenv("AGENTTEAMS_LOG_CAPTURED") == "1":
         provider.add_span_processor(RuntimeLogProcessor())
     os.environ["TRACELOOP_TRACE_CONTENT"] = os.getenv("AGENTTEAMS_OTEL_CAPTURE_CONTENT", "true")
+    from at_runtime_adapters import install, register_hook
     if os.getenv("AGENTTEAMS_OTEL_RUNTIME") != "qwenpaw":
-        try:
+        def instrument_openai(_module):
             from opentelemetry.instrumentation.openai import OpenAIInstrumentor
-        except ModuleNotFoundError as error:
-            # Native runtimes can use the shared tracing helpers without the OpenAI SDK.
-            if error.name != "openai":
-                raise
-        else:
             OpenAIInstrumentor().instrument()
-    from at_runtime_adapters import install
+        # Receipt and transport helpers do not need a model SDK. Install its
+        # tracing wrapper when the runtime actually imports it.
+        register_hook(instrument_openai, "openai")
     install()
     _provider = provider
     return provider

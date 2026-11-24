@@ -27,6 +27,21 @@ def test_source_references_reuse_the_public_canonical_identity(bridge):
         bridge.invoke({'operation': 'sources', 'meta': {'event_id': '$unbound'}})
 
 
+def test_model_result_retains_terminal_facts_without_repeating_canonical_snapshot(bridge):
+    outcome = {'phaseComplete': True, 'receiptId': 'saved', 'fact': 'Submission queued',
+               'extraReceipts': [{'receiptId': 'sent', 'fact': 'Actual send confirmed'}],
+               'result': {'task': {'id': 'own', 'status': 'completed', 'spec': 'Large repeated request'},
+                          'acceptedResults': [{'report': 'Large repeated report'}]}}
+    projected = bridge.invoke({'operation': 'model_result', 'outcome': outcome})
+    assert projected == {'phaseComplete': True, 'receiptId': 'saved', 'fact': 'Submission queued',
+                         'extraReceipts': outcome['extraReceipts'],
+                         'task': {'id': 'own', 'status': 'completed'}}
+    assert outcome['result']['task']['spec'] == 'Large repeated request'
+    for result in ({'ok': False, 'effect': 'none', 'message': 'Fix the input'},
+                   {'task': {'id': 'own'}, 'files': [{'content': 'Requested file content'}]}):
+        assert bridge.invoke({'operation': 'model_result', 'outcome': {'result': result}}) == result
+
+
 def test_json_roster_uses_trusted_native_team_scope_once(bridge):
     calls = []
     def get(route):

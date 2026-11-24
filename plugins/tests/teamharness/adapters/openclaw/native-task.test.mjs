@@ -4,6 +4,7 @@ import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
 
 process.env.AGENTTEAMS_PLUGIN_DIR = fileURLToPath(new URL("../../../../teamharness/", import.meta.url));
 const capture = mkdtempSync(join(tmpdir(), "openclaw-task-capture-"));
@@ -21,7 +22,10 @@ function install(invoke) {
       factory = (ctx) => value.create({ assertInvocationCurrent() {}, ...ctx });
     },
     on(name, callback) { hooks.set(name, callback); },
-  }, { invoke });
+  }, { invoke: (request) => ["model_context", "model_result"].includes(request.operation)
+    ? JSON.parse(execFileSync("python3", [join(process.env.AGENTTEAMS_PLUGIN_DIR, "mcp/common/task_native.py")], {
+      encoding: "utf8", input: JSON.stringify(request),
+    })) : invoke(request) });
   return { hooks, factory };
 }
 
@@ -47,10 +51,28 @@ test("passes the separate native context and injects the verified receipt into n
   const result = await tool.execute("call", args);
   assert.equal(calls[0].context, frame.context);
   assert.equal(calls[0].arguments, args);
-  assert.equal(result.content[0].text, "Verified notification queued");
+  assert.equal(JSON.parse(result.content[0].text).fact, "Verified notification queued");
   assert.equal(checked, 1);
   await assert.rejects(tool.execute("duplicate", args), /notification queued/);
   assert.equal(calls.length, 1);
+});
+
+test("retains actual sent facts, hides protocol-only replies and omits automatic file previews", async () => {
+  const extra = { receiptId: "actual-send", fact: "[Task handoff receipt]\nActual Matrix send" };
+  const frame = { context: { role: "worker" }, prepared: { fact: "Own assignment", context: {
+    inputs: [{ files: [{ path: "/verified/input.html", preview: "Entire upstream HTML" }] }],
+  } } };
+  const plugin = install(async () => ({ phaseComplete: true, receiptId: "submission", fact: "Submission saved",
+    result: { task: { id: "own", status: "completed", spec: "Duplicated task snapshot" } }, extraReceipts: [extra] }));
+  const prompt = await plugin.hooks.get("before_prompt_build")({}, { channelContext: { chat: { agentteamsTask: frame } } });
+  assert(!prompt.prependSystemContext.includes("Entire upstream HTML"));
+  assert(prompt.prependSystemContext.includes("/verified/input.html"));
+  const output = await plugin.factory({ sessionId: "own", toolBindings: { agentteamsTask: frame } }).execute("call", {});
+  assert(!JSON.stringify(output).includes("Duplicated task snapshot"));
+  assert(JSON.stringify(output).includes("Actual Matrix send"));
+  assert.equal(frame.finishedDisplay, "NO_REPLY");
+  assert.deepEqual(frame.terminalReceipts.at(-1), extra);
+  assert.equal(frame.prepared.context.inputs[0].files[0].preview, "Entire upstream HTML");
 });
 
 test("keeps refreshed Human bodies out of tool output and retains the pre-model checkpoint fence", async () => {

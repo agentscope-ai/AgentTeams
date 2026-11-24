@@ -64,11 +64,20 @@ export function registerNativeTask(api, native = {}) {
           }
           frame.pendingInputs = [...(frame.pendingInputs || []), ...reply.refreshedInputs];
         }
-        if (reply.phaseComplete) frame.finishedFact = reply.fact;
+        if (reply.phaseComplete) {
+          frame.finishedFact = reply.fact;
+          frame.finishedDisplay = reply.displayText ?? "NO_REPLY";
+          frame.terminalReceipts = [
+            ...(reply.receiptId ? [{ receiptId: reply.receiptId, fact: reply.fact }] : []),
+            ...(reply.extraReceipts || []),
+          ];
+        }
         // Refreshed Human bodies enter native user messages, not tool results.
         const content = [];
-        if (reply.fact) content.push({ type: "text", text: reply.fact });
-        if (!reply.refreshedInputs) content.push({ type: "text", text: JSON.stringify(reply.result ?? reply) });
+        if (reply.refreshedInputs && reply.fact) content.push({ type: "text", text: reply.fact });
+        if (!reply.refreshedInputs) content.push({ type: "text", text: JSON.stringify(
+          await call({ operation: "model_result", outcome: reply }),
+        ) });
         return { content, details: { receiptId: reply.receiptId }, isError: Boolean(failure) };
       },
     };
@@ -82,7 +91,9 @@ export function registerNativeTask(api, native = {}) {
     const fragments = [];
     frame.systemContract = prepared ? skill : role === "manager" ? skill.split("## Plan as Leader")[0].trim() : "";
     fragments.push(frame.systemContract);
-    if (prepared?.fact) fragments.push(prepared.fact, JSON.stringify(prepared.context));
+    if (prepared?.fact) fragments.push(prepared.fact, JSON.stringify(
+      await call({ operation: "model_context", context: prepared.context }),
+    ));
     if (prepared?.context?.outputDirectory) fragments.push(
       "Your native file and shell tools resolve relative paths from outputDirectory. Use scratchDirectory for temporary work; your private Agent workspace still owns memory, skills and session state.",
     );

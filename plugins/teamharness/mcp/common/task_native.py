@@ -85,6 +85,28 @@ def native_role(value):
     return role
 
 
+def model_result(outcome):
+    """Keep native terminal facts, without another copy of the Task snapshot."""
+    if not outcome.get("phaseComplete"):
+        result = outcome.get("result", outcome)
+        return {**result, **{key: outcome[key] for key in ("receiptId", "fact", "extraReceipts") if key in outcome}}
+    task = (outcome.get("result") or {}).get("task") or {}
+    return {"phaseComplete": True,
+            "task": {key: task[key] for key in ("id", "kind", "status", "submissionId", "completionId", "planId") if key in task},
+            **{key: outcome["result"][key] for key in ("sourceEventId",) if key in (outcome.get("result") or {})},
+            **{key: outcome[key] for key in ("receiptId", "fact", "extraReceipts") if key in outcome}}
+
+
+def terminal_display(action, arguments, result):
+    """Business presentation is separate from durable control facts."""
+    task = result.get("task") or {}
+    if action == "create" and task.get("roomId"):
+        link = "#workbench/tasks/" + quote(task["id"], safe="") + "/collaboration?room=" + quote(task["roomId"], safe="")
+        return "已受理「" + task.get("title", task["id"]) + "」，接下来在任务房间规划和执行。[查看任务](" + link + ")"
+    if action == "complete":
+        return arguments.get("report") or task.get("report") or result.get("report")
+
+
 def _invoke(payload, *, call=None, get_json=None, notify=None):
     """Execute one bound operation without process-global context mutation."""
     if not isinstance(payload, dict):
@@ -122,6 +144,8 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         if not isinstance(payload.get("context"), dict):
             raise ValueError("prepared Task context required")
         return task_context.model_context(payload["context"])
+    if operation == "model_result":
+        return model_result(payload["outcome"])
     if operation == "prepare_event":
         # Paths and tuples remain native in prepare(); JSON is this bridge's IO.
         return json.loads(json.dumps(task_context.prepare_event(payload.get("event"), call), default=str))
@@ -234,15 +258,12 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         response["extraReceipts"] = dispatched_receipts(result, context["actor"],
             get_json or (lambda route: controller_json(route, timeout=2)), wait_for_send=True)
     if receipt and response["phaseComplete"]:
-        if action == "create" and (result.get("task") or {}).get("roomId"):
-            task = result["task"]
-            link = "#workbench/tasks/" + quote(task["id"], safe="") + "/collaboration?room=" + quote(task["roomId"], safe="")
-            response["displayText"] = "已受理「" + task.get("title", task["id"]) + "」，接下来在任务房间规划和执行。[查看任务](" + link + ")"
+        display = terminal_display(action, arguments, result)
+        if display is not None:
+            response["displayText"] = display
         elif action == "plan":
             response["displayText"] = ("任务规划已保存，后续推进由任务系统接管" if result.get("progress") == "ready"
                                        else "任务规划已保存，调度尚未完成，请查看任务状态。")
-        elif action == "complete":
-            response["displayText"] = arguments["report"]
     return response
 
 

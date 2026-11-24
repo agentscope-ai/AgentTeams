@@ -174,6 +174,26 @@ python3 tests/task-protocol/summarize_runs.py /path/to/evidence/runs --source FU
 
 提交接入材料时记录声明角色、部署模式、版本与镜像摘要、场景、运行 ID、原会话/Task/Trace 的关联、已校验附件和结果。证据存放在受控位置，报告使用可核对的摘要和关联 ID，凭据与私人会话原文留在测试环境。[1.2.9 历史认证记录](teamharness/task-cli-certification.md)
 
+## 八、统一 HITL 接入与验收
+
+接入两类 [HITL 协议](runtime-approvals.md)：人工决策、问题确认和选项选择使用 Ask User；工具执行前的授权使用 Tool Approval。Dashboard 和 Mobile Client 按协议读写，不为新 Harness 增加审批命令分支。原生命令、RPC、Future 和 SDK 参数的转换由对应 Adapter 负责。
+
+- **Ask User。** 使用 `org.agentteams.run` 的 `confirmation` 块，提供稳定的 `confirmation_id`、问题及选项、可选截止时间。新请求声明 `reply_format=com.agentteams.answer`。答复使用 `kind=ask_user`，逐题保留 `responses` 的问题 ID、选项 ID 和补充文本。原生能力优先暂停并恢复原 Turn；`request_attention` 等非原生路径先持久化决策，再通过后续 Turn 继续同一工作。
+- **Tool Approval。** 使用 `org.agentteams.approval`，新请求提供 `context_id` 并声明相同的 `reply_format`。客户端统一回传 `kind=tool_approval`、请求 ID、上下文、目标 Agent 和 `approved/rejected`。Adapter 保留原有权限策略，在执行前完成原生授权。聊天中的自报 `actor`、自然语言“批准”和普通 Ask User 答案都不能授予工具权限。
+- **状态与回执。** 两条链路等待期间统一展示 `waiting_user`，与正常执行、完成和空闲区分。进程仍存活不代表模型仍在推理；发送成功也不代表运行时接受。原生等待器与持久决策分别由其拥有者确认。问题回执使用 `answered/cancelled/expired`，审批回执使用 `approved/rejected/cancelled/expired`。普通问题不应使 Task 进入 blocked；业务审批的可信 Human 门禁保持不变。
+
+| 验收场景 | 必须举证 |
+| --- | --- |
+| 正常回答与审批 | 真实 SDK 等待器暂停在问题或工具前；答案恢复对应 Turn；只有被接受的批准允许该工具执行；拒绝结果回到原 Turn |
+| 多题、多选与自由输入 | 逐题 ID、选项 ID、选择数及文本完整；未知、重复或遗漏的问题与选项被拒绝 |
+| 重复与迟到答复 | 同一事件重放幂等；首个有效决定不可被后续事件覆盖；工具及后续工作不重复执行 |
+| 越权与错绑 | 校验实际发送人、房间、目标 Agent、请求和上下文；正文或 `actor` 不能伪造授权；错误控制不能落入模型或命令兜底 |
+| 超时与取消 | 原请求不再可授权；卡片与会话状态可核对；Task 取消、返工或替换后旧答案不能继续旧执行 |
+| 重启恢复 | 原生等待器可恢复时恢复原 Turn；否则使旧请求失效，从公共检查点恢复。非原生决策必须在新 Turn 前提交到持久存储；未知工具副作用不能自动重放 |
+| 客户端与升级 | Dashboard、iOS、Android 使用相同两类结构；新 Harness 无需客户端命令分支；请求、答复、回执乱序和历史补载可核对；旧原生命令继续有效 |
+
+记录 Core/Harness/Client 提交、SDK 版本、真实入口、请求/房间/Turn/Task 关联、原生结果和工具执行证据。解析器测试、原生服务测试、镜像构建及部署实跑是不同证据层，不能互相替代。
+
 实现参考
 
 - [公共原生桥接及角色 schema](../../plugins/teamharness/mcp/common/task_native.py) · [公共 Task CLI 参数](../../plugins/teamharness/mcp/common/task_cli.py) · [阶段准备](../../plugins/teamharness/mcp/common/task_context.py)

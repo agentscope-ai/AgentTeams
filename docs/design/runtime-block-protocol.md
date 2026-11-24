@@ -51,7 +51,7 @@ form is what the shipped parser tests exercise.
 | `text` | `text: string`; `isStreaming?` | visible text fragment |
 | `thinking` | `content: string`; `isStreaming?` | reasoning fragment (rendered as a collapsible card) |
 | `tool_call` | `tool_name: string` (required, non-empty); `arguments: object` (absent → `{}`); `status: 'pending' \| 'running' \| 'succeeded' \| 'failed'` (absent or other → `running`); optional `tool_call_id: string` (non-empty), `started_at` / `finished_at` (epoch ms), `result` (any value) | tool-call card; `tool_call_id` is the stable id for deduplication across revisions/replays |
-| `confirmation` | `tool_name: string` (required, non-empty); `confirmation_id: string` (required, non-empty); optional `parameters: string`, `external_files: string`, `expires_at` (epoch ms) | tool-guard approval card; `confirmation_id` links the approval/deny reply |
+| `confirmation` | `tool_name: string` (required, non-empty); `confirmation_id: string` (required, non-empty); optional `parameters: string`, `external_files: string`, `expires_at` (epoch ms), `question` / `questions`, `options`, `multi_select`, `requested_of`, `reply_format`, `status` | Ask User card and receipt; historical tool-guard cards remain readable |
 | `error` | `kind: 'cancelled' \| 'failed' \| 'quiet'` (required); `title: string` (required) | run-closing sentinel; any other `kind` value rejects the block (§4.2) |
 
 **Normalized output shape** (what downstream consumers see — not wire
@@ -118,6 +118,12 @@ wire input.
    requirement.
 
 ## References
+
+Ask User and Tool Approval are distinct HITL contracts. Questions use the
+confirmation blocks above and `com.agentteams.answer` with `kind=ask_user`;
+new tool approvals use `org.agentteams.approval` and the same reply content key
+with `kind=tool_approval`. See [HITL requests, replies and Turn lifecycle](runtime-approvals.md)
+for exact fields, receipt states, compatibility and authorization rules.
 
 - Field spec & parser: `agentteams-dashboard/docs/INTERFACES.md`
   (section "运行时块协议 (`org.agentteams.run` v1)"), `src/lib/a2ui/protocol.ts`.

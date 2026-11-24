@@ -60,6 +60,10 @@ class WorkerMatrix:
 
     def prepare_input(self, room, event_id, source, intent, *, task_id=None):
         """Prepare one accepted input for an atomic batch or history-page commit."""
+        from runtime_hitl import consume_attention
+        decision = consume_attention(room, event_id, source)
+        if decision is not None:
+            intent = "message" if decision else "context"
         previous = self.input(matrix_event_key(room, event_id))
         input_ = {"room_id": room, "event_id": event_id, "intent": intent, "input": source}
         if previous:

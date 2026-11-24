@@ -1,0 +1,37 @@
+--- /dev/null
++++ b/extensions/matrix/src/dashboard-hitl.ts
+@@ -0,0 +1,12 @@
++/** Translate the shared wire decision; native command admission still owns authorization. */
++export function dashboardApprovalCommand(answer: unknown, own: string): string | undefined {
++  if (!answer || typeof answer !== "object" || Array.isArray(answer)) return undefined;
++  const value = answer as Record<string, unknown>;
++  if (value.kind !== "tool_approval") return undefined;
++  const id = value.confirmation_id;
++  if (value.agent_id !== own || typeof id !== "string" || !/^[\w.:-]+$/.test(id)
++    || value.context_id !== id) return "";
++  if (value.answer === "approved") return `/approve ${id} allow-once`;
++  if (value.answer === "rejected") return `/approve ${id} deny`;
++  return "";
++}
+--- a/extensions/matrix/src/matrix/monitor/handler-ingress-content.ts
++++ b/extensions/matrix/src/matrix/monitor/handler-ingress-content.ts
+@@ -1,1 +1,2 @@
++import { dashboardApprovalCommand } from "../../dashboard-hitl.js";
+ import { logInboundDrop, resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+@@ -110,2 +111,10 @@
+   let content = accessContent;
++  const decision = dashboardApprovalCommand(content["com.agentteams.answer"], selfUserId);
++  if (decision !== undefined) {
++    if (!decision) {
++      await commitInboundEventIfClaimedAndDiscardReserved();
++      return undefined;
++    }
++    content = { ...content, body: decision, formatted_body: undefined };
++  }
+   let pollSnapshotPromise: Promise<MatrixPollSnapshot | null> | null = null;
+--- a/extensions/matrix/src/approval-handler.runtime.ts
++++ b/extensions/matrix/src/approval-handler.runtime.ts
+@@ -55,2 +55,3 @@
+     version: 1, runtime: "openclaw", request_id: view.approvalId, status: "pending",
++    reply_format: "com.agentteams.answer", context_id: view.approvalId,
+     tool_name: view.approvalKind === "plugin" ? view.toolName ?? view.title : "exec",

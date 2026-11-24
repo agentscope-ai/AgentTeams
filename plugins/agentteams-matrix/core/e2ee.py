@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import importlib
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 __all__ = [
     "CRYPTO_BACKENDS",
+    "E2EEFailureReport",
+    "E2EE_MAINTENANCE_FAILURE_THRESHOLD",
     "E2EEMaintainer",
     "crypto_available",
     "detect_crypto_backend",
@@ -29,6 +32,15 @@ __all__ = [
 ]
 
 logger = logging.getLogger("agentteams.matrix.core.e2ee")
+
+#: Number of consecutive E2EE maintenance passes that fail before the
+#: maintainer escalates through its ``on_persistent_failure`` callback
+#: (issue #1701).  Five passes give a transient blip (network dip,
+#: homeserver hiccup) room to recover before the owning channel is
+#: marked fatal.  The counter is in-process state on purpose: no
+#: existing state-file pattern covers it, so a restart re-arms the
+#: threshold (worst case the escalation is reported once more).
+E2EE_MAINTENANCE_FAILURE_THRESHOLD = 5
 
 
 def e2ee_store_path(working_dir: Path) -> Path:
@@ -88,6 +100,24 @@ def probe_olm() -> bool:
     return _importable("olm")
 
 
+@dataclass(frozen=True)
+class E2EEFailureReport:
+    """Payload for the ``E2EEMaintainer.on_persistent_failure`` callback.
+
+    Attributes
+    ----------
+    count:
+        The consecutive-failure count that just crossed
+        ``E2EE_MAINTENANCE_FAILURE_THRESHOLD``.
+    last_error:
+        The message of the most recent maintenance error (``str``
+        of the failing pass's exception).
+    """
+
+    count: int
+    last_error: str
+
+
 class E2EEMaintainer:
     """Post-sync E2EE key maintenance on a matrix-nio client (M4c).
 
@@ -96,6 +126,14 @@ class E2EEMaintainer:
     - Query device keys for new/changed users
     - Claim one-time keys to establish Olm sessions
     - Send outgoing to-device messages (key shares, key requests)
+
+    Consecutive maintenance failures are counted in-process and, once
+    ``E2EE_MAINTENANCE_FAILURE_THRESHOLD`` has been crossed, the
+    maintainer escalates exactly once through the optional
+    ``on_persistent_failure`` callback (issue #1701).  The core layer
+    never couples to any adapter mechanism: the owning layer injects
+    the handler that surfaces the persistent failure (e.g. a platform
+    fatal error).
 
     Parameters
     ----------
@@ -106,13 +144,57 @@ class E2EEMaintainer:
         ``keys_claim`` / ``get_users_for_key_claiming`` /
         ``send_to_device_messages``.  ``None`` (or a client without
         ``olm``) disables the maintenance.
+    on_persistent_failure:
+        Optional synchronous callback invoked with an
+        :class:`E2EEFailureReport` exactly once when the consecutive
+        failure count reaches ``E2EE_MAINTENANCE_FAILURE_THRESHOLD``
+        (the threshold-th consecutive failure of a streak; the counter
+        keeps growing afterwards but the callback fires only at the
+        crossing).  A raising callback is logged and ignored so a
+        broken escalation handler can never take the sync loop down.
     """
 
-    def __init__(self, client: Any) -> None:
+    def __init__(
+        self,
+        client: Any,
+        *,
+        on_persistent_failure: Optional[
+            Callable[[E2EEFailureReport], None]
+        ] = None,
+    ) -> None:
         self._client = client
+        self._on_persistent_failure = on_persistent_failure
+        self._consecutive_failures = 0
+        self._last_error = ""
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Consecutive maintenance passes that have errored out.
+
+        Read-only health surface for issue #1701: a successful pass
+        resets it to zero, so it reads ``0`` while maintenance is
+        healthy.
+        """
+        return self._consecutive_failures
+
+    @property
+    def last_error(self) -> str:
+        """Message of the most recent maintenance error.
+
+        Empty string while healthy (never failed, or recovered).
+        """
+        return self._last_error
 
     async def run_once(self) -> None:
-        """Run one maintenance pass; errors are swallowed with a warning."""
+        """Run one maintenance pass.
+
+        Each failing pass is warned (legacy behaviour) and counted;
+        when the consecutive-failure count reaches
+        ``E2EE_MAINTENANCE_FAILURE_THRESHOLD`` the maintainer logs an
+        error with the count and invokes ``on_persistent_failure``
+        (issue #1701).  A successful pass resets the streak — a later
+        streak escalates again.
+        """
         client = self._client
         if client is None or not client.olm:
             return
@@ -127,4 +209,42 @@ class E2EEMaintainer:
                 )
             await client.send_to_device_messages()
         except Exception as exc:
+            self._consecutive_failures += 1
+            self._last_error = str(exc)
             logger.warning("MatrixChannel: E2EE maintenance error: %s", exc)
+            if (
+                self._consecutive_failures
+                == E2EE_MAINTENANCE_FAILURE_THRESHOLD
+            ):
+                logger.error(
+                    "MatrixChannel: E2EE maintenance failed %d "
+                    "consecutive passes — escalating (last error: %s)",
+                    self._consecutive_failures,
+                    exc,
+                )
+                callback = self._on_persistent_failure
+                if callback is not None:
+                    try:
+                        callback(
+                            E2EEFailureReport(
+                                count=self._consecutive_failures,
+                                last_error=self._last_error,
+                            )
+                        )
+                    except Exception as cb_exc:
+                        logger.error(
+                            "MatrixChannel: on_persistent_failure "
+                            "callback raised: %s",
+                            cb_exc,
+                        )
+            return
+        # Successful pass: reset the streak (and pair a recovery line
+        # with the earlier warnings when there was one).
+        if self._consecutive_failures:
+            logger.info(
+                "MatrixChannel: E2EE maintenance recovered after %d "
+                "failed passes",
+                self._consecutive_failures,
+            )
+        self._consecutive_failures = 0
+        self._last_error = ""

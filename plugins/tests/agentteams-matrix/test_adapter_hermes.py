@@ -1479,3 +1479,38 @@ def test_standalone_send_plaintext_control_skips_crypto(
 
     assert result == {"success": True, "message_id": "$plain1"}
     assert sent["content"] == {"msgtype": "m.text", "body": "ping"}
+
+
+# ── #1701: persistent E2EE maintenance failure escalation ───────────────
+
+
+def test_e2ee_maintenance_failure_sets_fatal_error(adapter_mod, monkeypatch):
+    """#1701: the maintainer's persistent-failure callback is wired into
+    the gateway's fatal-error contract (retryable: the sync loop itself
+    is still running)."""
+    from core.e2ee import E2EEFailureReport
+
+    adapter = adapter_mod.AgentTeamsMatrixAdapter(SimpleNamespace(extra={}))
+    adapter._on_e2ee_maintenance_failure(
+        E2EEFailureReport(count=5, last_error="store race boom")
+    )
+
+    assert adapter.has_fatal_error
+    assert adapter._fatal_error_code == "e2ee_maintenance_failed"
+    assert adapter._fatal_error_retryable is True
+    assert "5" in adapter._fatal_error_message
+    assert "store race boom" in adapter._fatal_error_message
+    assert adapter.is_connected is False
+
+
+def test_e2ee_maintenance_failures_property_passes_through(
+    adapter_mod, monkeypatch
+):
+    """#1701 health surface: the adapter exposes the transport's
+    consecutive-failure count (0 while no transport is connected)."""
+    adapter = adapter_mod.AgentTeamsMatrixAdapter(SimpleNamespace(extra={}))
+    assert adapter.e2ee_maintenance_failures == 0
+
+    adapter, _client, transport, _events = _wire_adapter(adapter_mod)
+    transport.e2ee_maintenance_failures = 3
+    assert adapter.e2ee_maintenance_failures == 3

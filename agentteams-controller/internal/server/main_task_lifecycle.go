@@ -9,6 +9,7 @@ import (
 	"path"
 	"time"
 
+	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
 )
 
@@ -44,6 +45,9 @@ func (h *CoordinationHandler) registerHandoffTasks(ctx context.Context, e coordi
 			"requester_reply_route": e.SourceRoute, "tasks": []any{}, "handoff_id": e.ID,
 			"created_at":         time.Now().UTC().Format(time.RFC3339),
 			"task_notifications": map[string]taskNotificationIntent{"handoff": {Event: e, ActorRole: e.ActorRole, ActorName: e.ActorName, Team: e.Team, Status: "pending"}},
+		}
+		if e.ActorRole == authpkg.RoleTeamLeader && e.Actor == e.Recipient {
+			delete(task, "task_notifications") // Continue planning in the current native Human turn.
 		}
 		body, _ := json.Marshal(task)
 		err := h.deps.OSS.PutObjectIfAbsent(ctx, key, body)

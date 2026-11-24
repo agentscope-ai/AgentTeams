@@ -165,11 +165,17 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         if action == "plan":
             planned = sorted(set(context.get("planned") or []) | {identity})
             response["contextUpdate"] = {"planned": planned}
-            response["phaseComplete"] = set(context["planning"]).issubset(planned)
+            response["phaseComplete"] = (set(context["planning"]).issubset(planned)
+                                         and all(item["eventId"] in (context.get("registeredInputs") or []) for item in sources))
         elif action == "create":
             registered = sorted(set(context.get("registeredInputs") or []) | {source, *selected.get("relatedSources", [])})
             response["fact"] += receipts.creation_coverage_context(sources, set(registered))
             response["contextUpdate"] = {"registeredInputs": registered}
+            inline = (result.get("notification") or {}).get("status") == "inline"
+            task = result.get("task") or {}
+            if inline and task.get("status") == "planned" and not task.get("planId"):
+                response["contextUpdate"]["planning"] = sorted(set(context.get("planning") or []) | {task["id"]})
+                return response
             # Release your intake turn before consuming the queued handoff.
             # Unhandled Human inputs must remain available in this turn.
             response["phaseComplete"] = (native_role(context.get("role")) == "leader"

@@ -175,6 +175,13 @@ def creation_receipt(result: object, source: str) -> tuple[str, str] | None:
     if not isinstance(task, dict) or not isinstance(notice, dict):
         return None
     identity, recipient, event = task.get("id"), notice.get("recipient"), notice.get("eventId")
+    if (notice.get("status") == "inline" and isinstance(identity, str) and _ID.fullmatch(identity)
+            and task.get("kind") == "main" and task.get("originEventId") == source
+            and task.get("status") in {"planned", "assigned", "in_progress", "completed", "cancelled"}
+            and isinstance(recipient, str) and _ID.fullmatch(recipient) and not event):
+        key = json.dumps(["create", source, identity, "inline"], separators=(",", ":"))
+        return key, f"[Task system receipt]\nTask {identity} is registered for this Human input. Continue planning this same Task in your current context. Do not send a self-notification or create another Task."
+
     if (not isinstance(identity, str) or not _ID.fullmatch(identity) or task.get("kind") != "main"
             or task.get("status") not in {"planned", "assigned", "in_progress", "submitted", "completed", "cancelled", "blocked", "revision", "paused"}
             or notice.get("status") != "queued" or not isinstance(recipient, str) or not _ID.fullmatch(recipient)

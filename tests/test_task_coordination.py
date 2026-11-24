@@ -131,3 +131,14 @@ def test_native_attempt_is_fenced_by_current_receipt(packet):
     receipt["native_id"] = ""
     with pytest.raises(protocol.NotificationUnavailable):
         protocol.notification(content, "!room:test", "@lead:test", "@worker:test", fetch=fetch, event_id="$retry")
+
+
+def test_verified_last_worker_can_notify_main_task_leader(packet):
+    for control in (packet[0]["org.agentteams.coordination"], packet[1]["control"]):
+        control["channel_meta"]["teamharness_coordination"].update(kind="main_task_ready", task_id="", delivery_id="")
+    assert receive(packet)["text"] == "Canonical assignment"
+    with pytest.raises(protocol.IgnoredNotification):
+        receive(packet, sender="@forged:test")
+    packet[3]["tasks"][0]["status"] = "submitted"
+    with pytest.raises(protocol.IgnoredNotification):
+        receive(packet)

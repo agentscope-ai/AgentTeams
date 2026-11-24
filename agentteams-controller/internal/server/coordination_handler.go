@@ -476,6 +476,15 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 
 			route := coordinationMap(project, "reply_route")
 			target := coordinationString(route, "target_user")
+			origin := coordinationMap(project, "task_origin")
+			if e.Kind == "main_task_completed" && target == actor.Status.MatrixUserID &&
+				coordinationString(origin, "dispatch_agent") == actor.Name && coordinationString(origin, "dispatch_agent_role") == authpkg.RoleTeamLeader {
+				if err = h.targetWorker(&e, actor); err != nil {
+					return e, err
+				}
+				fence = coordinationScopeID(e)
+				break // Return the frozen report directly using this Leader's dispatch identity.
+			}
 			var managers v1beta1.ManagerList
 			if err = h.deps.Client.List(ctx, &managers, client.InNamespace(h.deps.Namespace)); err != nil {
 				return e, err

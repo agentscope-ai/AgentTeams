@@ -68,6 +68,17 @@ func TestLeaderRegistersOwnAdminConfirmationAndReusesItsReceipt(t *testing.T) {
 	if json.Unmarshal(first.Body.Bytes(), &result) != nil || !strings.Contains(result.Task.Spec, "Confirm analysis and a Draft PR") {
 		t.Fatal("authoritative Human confirmation was lost")
 	}
+	if !strings.Contains(first.Body.String(), `"status":"inline"`) {
+		t.Fatal("Leader creation did not admit inline planning")
+	}
+	key := "teams/alpha/shared/tasks/" + result.Task.ID + "/meta.json"
+	meta, _ := h.coordination.read(t.Context(), key)
+	if meta["task_notifications"] != nil {
+		t.Fatal("inline intake queued a self-notification")
+	}
+	if _, err := h.oss.GetObject(t.Context(), coordinationPending+coordinationString(meta, "handoff_id")+".json"); err == nil {
+		t.Fatal("inline intake created a self-handoff outbox event")
+	}
 	again := leaderCreate(t, h, authpkg.RoleTeamLeader, "lead-cr", "@human:test", "!leader-dm:test", "lead-cr")
 	if again.Code != 200 || !strings.Contains(again.Body.String(), result.Task.ID) {
 		t.Fatalf("duplicate confirmation: %d %s", again.Code, again.Body.String())
@@ -135,5 +146,31 @@ func TestLeaderIntakeReadsTheActualHumanEventBeforeRegistration(t *testing.T) {
 	w := leaderCreate(t, h, authpkg.RoleTeamLeader, "lead-cr", "@human:test", "!leader-dm:test", "lead-cr")
 	if w.Code != 403 {
 		t.Fatalf("Agent-authored source admitted: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestLeaderIntakeCompletionReturnsThroughItsOwnDispatchIdentity(t *testing.T) {
+	h := leaderIntakeFixture(t)
+	response := leaderCreate(t, h, authpkg.RoleTeamLeader, "lead-cr", "@human:test", "!leader-dm:test", "lead-cr")
+	if response.Code != 201 {
+		t.Fatal(response.Body.String())
+	}
+	var result struct {
+		Task taskResource `json:"task"`
+	}
+	_ = json.Unmarshal(response.Body.Bytes(), &result)
+	key := "teams/alpha/shared/tasks/" + result.Task.ID + "/meta.json"
+	task, _ := h.coordination.read(t.Context(), key)
+	task["status"] = "completed"
+	body, _ := json.Marshal(task)
+	if err := h.oss.PutObject(t.Context(), key, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.oss.PutObject(t.Context(), "teams/alpha/shared/tasks/"+result.Task.ID+"/result.md", []byte("Verified final result")); err != nil {
+		t.Fatal(err)
+	}
+	event, err := h.coordination.resolve(t.Context(), coordinationEvent{Kind: "main_task_completed", MainTaskID: result.Task.ID}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
+	if err != nil || event.External || event.RecipientName != "lead-cr" || event.RecipientKind != "worker" || event.FinalReport != "Verified final result" || coordinationString(event.RequesterRoute, "target_session") != "!leader-dm:test" {
+		t.Fatalf("Leader completion route: %+v %v", event, err)
 	}
 }

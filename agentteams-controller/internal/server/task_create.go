@@ -113,6 +113,7 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	event.Text = input.Spec
 	id := sourceMainTaskID(resolved.ActorName, resolved.StorageTeam, resolved.RecipientName, source)
 	key := path.Join("teams", resolved.StorageTeam, "shared/tasks", id, "meta.json")
+	existingTask := false
 	if exists, readErr := h.oss.GetObject(r.Context(), key); readErr != nil {
 		if !errors.Is(readErr, os.ErrNotExist) {
 			writeError(w, 503, "task state unavailable; no new task was registered")
@@ -137,9 +138,22 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	} else if len(exists) == 0 {
 		writeError(w, 503, "task state unavailable")
 		return
+	} else {
+		existingTask = true
 	}
 	event.Tasks = []mainTaskRequest{{TaskID: id, Title: input.Title, Spec: input.Spec}}
-	admission, err := h.coordination.enqueue(r.Context(), event, caller)
+	var admission coordinationAdmission
+	var err error
+	inline := caller.Role == authpkg.RoleTeamLeader
+	if inline {
+		event, err = h.coordination.resolve(r.Context(), event, caller)
+		if err == nil {
+			err = h.coordination.registerHandoffTasks(r.Context(), event)
+		}
+		admission = coordinationAdmission{Accepted: err == nil, Recipient: event.RecipientName}
+	} else {
+		admission, err = h.coordination.enqueue(r.Context(), event, caller)
+	}
 	if err != nil {
 		var failure *coordinationAdmissionError
 		if errors.As(err, &failure) {
@@ -150,7 +164,9 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	notification := taskNotificationStatus{Status: "queued", Recipient: admission.Recipient, EventID: admission.EventID}
-	if saved := h.flushTaskNotification(r.Context(), key, "handoff"); saved.Status == "queued" {
+	if inline {
+		notification.Status = "inline"
+	} else if saved := h.flushTaskNotification(r.Context(), key, "handoff"); saved.Status == "queued" {
 		notification = saved
 	}
 	data, err := h.oss.GetObject(r.Context(), key)
@@ -161,15 +177,19 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := 201
-	if admission.Reused {
+	if admission.Reused || existingTask {
 		status = 200
+	}
+	nextAction := "Task system has registered the original request and queued its handoff to the Team Leader. Do not send another handoff message."
+	if inline {
+		nextAction = "Task registered. Continue planning this same Task in your current native context; no self-notification is needed."
 	}
 	httputil.WriteJSON(w, status, struct {
 		SourceEventID string                 `json:"sourceEventId"`
 		Task          taskResource           `json:"task"`
 		Notification  taskNotificationStatus `json:"notification"`
 		NextAction    string                 `json:"nextAction"`
-	}{source, publicTaskResource(id, resolved.StorageTeam, task), notification, "Task system has registered the original request and queued its handoff to the Team Leader. Do not send another handoff message."})
+	}{source, publicTaskResource(id, resolved.StorageTeam, task), notification, nextAction})
 }
 
 func taskSourceKind(caller *authpkg.CallerIdentity) string {

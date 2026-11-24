@@ -348,3 +348,21 @@ def test_cli_is_json_only_and_unknown_operations_fail_closed():
     assert result.returncode != 0
     assert json.loads(result.stdout)['ok'] is False
     assert 'Traceback' not in result.stderr
+
+
+def test_leader_inline_create_continues_to_plan_without_self_handoff(bridge):
+    source = {'inputId': 'ref', 'eventId': '$source', 'roomId': '!room:test', 'userId': '@human:test'}
+    context = {'role': 'leader', 'sources': [source]}
+    created = {'sourceEventId': '$source', 'task': {'id': 'main', 'kind': 'main', 'status': 'planned', 'originEventId': '$source'},
+               'notification': {'status': 'inline', 'recipient': 'lead'}}
+    result = bridge.invoke({'operation': 'task', 'arguments': {'action': 'create', 'leader': 'lead', 'title': 'work'},
+                            'context': context}, call=lambda _: created)
+    assert result['phaseComplete'] is False
+    assert result['contextUpdate']['planning'] == ['main']
+    context.update(result['contextUpdate'])
+    planned = {'task': {'id': 'main', 'kind': 'main', 'status': 'in_progress', 'planId': 'plan'},
+               'progress': 'ready', 'assignments': []}
+    result = bridge.invoke({'operation': 'task', 'arguments': {'action': 'plan', 'taskId': 'main',
+                            'nodes': [{'id': 'a', 'assignedTo': 'dev', 'spec': 'Work', 'dependsOn': []}]},
+                            'context': context}, call=lambda _: planned)
+    assert result['phaseComplete'] is True

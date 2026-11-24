@@ -29,6 +29,11 @@ type Config struct {
 	ConfigDir       string
 	CRDDir          string
 	SkillsDir       string
+	// Version is the controller version string reported by
+	// GET /api/v1/version. It is stamped into the binary at build time
+	// (cmd/controller/main.go) and assigned by main before the app
+	// starts; it is never read from the environment.
+	Version string
 
 	// ResourcePrefix is the tenant-level prefix used to derive Pod/SA/label/
 	// session names created by this controller. Default "agentteams-". Set via

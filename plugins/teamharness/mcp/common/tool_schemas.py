@@ -255,8 +255,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "filesync": {
         "description": (
-            "Explicitly list, stat, pull, push, or cat TeamHarness shared "
-            "artifacts under shared/ or read-only global-shared. "
+            "Explicitly list, stat, pull, push, cat, or delete TeamHarness "
+            "shared artifacts under shared/ or read-only global-shared. "
             "Use this for deliberate shared file operations, not periodic "
             "workspace sync or runtime package updates."
         ),
@@ -265,10 +265,12 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "stat", "pull", "push", "cat"],
+                    "enum": ["list", "stat", "pull", "push", "cat", "delete"],
                     "description": (
                         "Shared artifact operation to perform. cat reads one "
-                        "remote object (content) without touching local state."
+                        "remote object (content) without touching local "
+                        "state; delete removes one remote object (the "
+                        "retention sweep uses it for the mirror prune)."
                     ),
                 },
                 "path": {
@@ -428,6 +430,18 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "limit": {
                     "type": "integer",
                     "description": "For list_events: page size (default 50, max 200).",
+                },
+                "recent": {
+                    "type": "boolean",
+                    "description": (
+                        "For list_events: opt into the mtime-sorted "
+                        "recent-window fast path (#1702) — read only the "
+                        "most-recently-written max(20, 4 x limit) live "
+                        "event files and serve pages newest-first; "
+                        "'approximate' is true when the window does not "
+                        "cover every live file (see "
+                        "contracts/signal-mapping.json 'retention')."
+                    ),
                 },
                 "projectId": {
                     "type": "string",

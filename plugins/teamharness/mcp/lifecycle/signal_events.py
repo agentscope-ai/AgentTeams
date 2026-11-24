@@ -120,24 +120,24 @@ def _project_audit_seq(project: dict[str, Any] | Any) -> int:
 # project's lifecycle state instead of a per-event TTL: once a project is
 # terminal (project meta status == "completed" — the terminal state written
 # by Go CompleteProject and Python complete_project) or its last activity is
-# older than the configured window (retention.days, default 30), the
-# project's live event files are merged into one archive object
-# shared/events/{team_id}/{project_id}-archive-YYYYMMDD.json, the local source
-# files are deleted, and the MinIO mirror is pruned best-effort. The archive
+# older than the configured window (retention.days, default 7), the
+# project's live event files are grouped into content-addressed archive pieces
+# shared/events/{team_id}/{project_id}-archive-YYYYMMDD-{content_hash}.json, the local source
+# files are deleted after the MinIO mirror is pruned successfully. The archive
 # object is NOT part of the live stream (list_events and the Go read surface
 # both read live event files only); it is the retained audit copy. The
 # semantics are registered in contracts/signal-mapping.json under "retention".
 
-_RETENTION_DEFAULT_DAYS = 30
+_RETENTION_DEFAULT_DAYS = 7
 _RETENTION_SWEEP_EVERY_N_EMITS = 16
 _RETENTION_MAX_SWEEP_AGE = datetime.timedelta(hours=24)
 _RETENTION_STATE_NAME = ".retention.state"
 _RECENT_WINDOW_MIN_FILES = 20
-_ARCHIVE_NAME_RE = re.compile(r"^(?P<project_id>.+)-archive-(?P<date>\d{8})\.json$")
+_ARCHIVE_NAME_RE = re.compile(r"^(?P<project_id>.+)-archive-(?P<date>\d{8})(?:-[0-9a-f]{16})?\.json$")
 
 
 def _retention_days() -> int:
-    """The retention window in days (configurable, default 30).
+    """The retention window in days (configurable, default 7).
 
     The TEAMHARNESS_RETENTION_DAYS environment variable wins when set (the
     repo env-override pattern), else the TEAMHARNESS_RUNTIME_CONFIG
@@ -264,8 +264,8 @@ def _retention_sweep(arguments: dict[str, Any], team_id: str) -> None:
     Best-effort end to end: every failure is swallowed here or by the
     caller, so retention never blocks an emit or a read. Per project the
     order is: write the archive locally -> push the archive to the MinIO
-    mirror -> delete the local source files -> prune the mirrored source
-    objects. When the archive push fails, the local source files are kept
+    mirror -> prune the mirrored source objects -> delete the local source
+    files. When the archive push fails, the local source files are kept
     (nothing is ever lost; the next sweep retries).
     """
     workspace = _workspace_dir(arguments)
@@ -324,7 +324,26 @@ def _retention_sweep(arguments: dict[str, Any], team_id: str) -> None:
     for project_id, items in by_project.items():
         if not items:
             continue
-        archive_name = f"{project_id}-archive-{today}.json"
+        if candidates[project_id] == "expired":
+            # Project metadata can lag task/event activity. Keep the entire
+            # active stream when any of its events or tasks is still recent.
+            activity = [_project_last_activity({"updated_at": e.get("occurred_at")}, p) for p, e in items]
+            for task_id in {str(e.get("task_id") or "") for _, e in items} - {""}:
+                task_path = workspace / "shared" / "tasks" / task_id / "meta.json"
+                try:
+                    task = json.loads(task_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if isinstance(task, dict):
+                    activity.append(_project_last_activity(task, task_path))
+            if any(t is not None and now - t <= datetime.timedelta(days=days) for t in activity):
+                continue
+        merged = [e for _, e in items]
+        merged.sort(key=lambda e: (str(e.get("occurred_at") or ""), str(e.get("event_id") or "")))
+        # Different workspaces may hold different subsets of a project. A
+        # content-addressed piece cannot overwrite another subset's archive.
+        digest = hashlib.sha256(json.dumps(merged, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+        archive_name = f"{project_id}-archive-{today}-{digest}.json"
         archive_path = events_dir / archive_name
         archive = _read_archive(archive_path)
         archive["archive"] = True
@@ -333,16 +352,7 @@ def _retention_sweep(arguments: dict[str, Any], team_id: str) -> None:
         archive["project_id"] = project_id
         archive["reason"] = candidates[project_id]
         archive["archived_at"] = _utc_timestamp()
-        existing_ids = {
-            e.get("event_id") for e in archive["events"] if isinstance(e, dict)
-        }
-        fresh = [(p, e) for p, e in items if e.get("event_id") not in existing_ids]
-        if not fresh:
-            continue
-        merged = [e for _, e in fresh]
-        merged.sort(key=lambda e: (str(e.get("occurred_at") or ""), str(e.get("event_id") or "")))
-        archive["events"].extend(merged)
-        archive["events"].sort(key=lambda e: (str(e.get("occurred_at") or ""), str(e.get("event_id") or "")))
+        archive["events"] = merged
         archive["event_count"] = len(archive["events"])
         _write_json(archive_path, archive)
 
@@ -357,13 +367,10 @@ def _retention_sweep(arguments: dict[str, Any], team_id: str) -> None:
             # Keep the local source files; the next sweep retries.
             continue
 
-        # Delete the local source files, then prune the mirror objects.
+        # Keep each local source as the retry record until remote cleanup
+        # succeeds. Existing archive membership is not a publication receipt.
         prune_failures = 0
-        for path, _ev in fresh:
-            try:
-                path.unlink()
-            except OSError:
-                continue  # the file stays live; retried on the next sweep
+        for path, _ev in items:
             prune_args = dict(arguments)
             prune_args.update({"action": "delete", "path": f"shared/events/{team_id}/{path.name}"})
             try:
@@ -372,13 +379,15 @@ def _retention_sweep(arguments: dict[str, Any], team_id: str) -> None:
                 prune = {"ok": False, "error": str(exc)}
             if not (isinstance(prune, dict) and prune.get("ok")):
                 error = str((prune or {}).get("error") or "").lower()
-                if "does not exist" in error:
-                    continue  # already absent == pruned
-                prune_failures += 1
-                if prune_failures >= 5:
-                    # Cap the mc command storm; the remaining objects are
-                    # pruned by a later sweep (or a manual filesync delete).
-                    break
+                if "does not exist" not in error:
+                    prune_failures += 1
+                    if prune_failures >= 5:
+                        break
+                    continue
+            try:
+                path.unlink()
+            except OSError:
+                pass  # Retry local cleanup on a later sweep.
 
 
 def _maybe_run_retention(arguments: dict[str, Any], team_id: str, *, emit_occurred: bool) -> None:
@@ -628,6 +637,8 @@ def _list_events(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[str
                 events.append(ev)
         else:
             for path in sorted(events_dir.glob("*.json")):
+                if _ARCHIVE_NAME_RE.match(path.name):
+                    continue
                 try:
                     ev = json.loads(path.read_text(encoding="utf-8"))
                 except Exception:

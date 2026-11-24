@@ -811,7 +811,7 @@ def test_retention_keeps_sources_when_archive_push_fails(server: Any, tmp_path: 
 
 
 def test_retention_expiry_trigger_uses_retention_days(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
-    # status "active" but last activity 84 days ago > default 30-day window.
+    # status "active" but last activity 84 days ago > default 7-day window.
     filesync = FakeFilesync()
     monkeypatch.setattr(server, "_filesync", filesync)
     workspace = tmp_path / "agent"
@@ -911,3 +911,81 @@ def test_emit_tail_retention_throttle_runs_sweep_every_n_emits(server: Any, tmp_
     assert res["ok"] is True
     assert res["events"] == []
     assert filesync.calls == []
+@pytest.mark.parametrize("failed_action", ["push", "delete"])
+def test_retention_retries_publication_and_cleanup(server: Any, tmp_path: Path, monkeypatch: Any, failed_action: str) -> None:
+    workspace = tmp_path / "agent"
+    directory = _events_dir(server, workspace)
+    directory.mkdir(parents=True)
+    _write_project(workspace, "p1", {"project_id": "p1", "status": "completed"})
+    _seed_event(directory, "ev_retry", "2026-10-01T00:00:00Z", task_id="", project_id="p1")
+    calls = []
+    fail = True
+    def sync(args: dict[str, Any]) -> dict[str, Any]:
+        calls.append(args["action"])
+        return {"ok": not (fail and args["action"] == failed_action)}
+    monkeypatch.setattr(server, "_filesync", sync)
+    server.signal_events._retention_sweep({"workspaceDir": str(workspace)}, _team(server))
+    assert (directory / "ev_retry.json").exists()
+    fail = False
+    server.signal_events._retention_sweep({"workspaceDir": str(workspace)}, _team(server))
+    assert not (directory / "ev_retry.json").exists()
+    assert calls.count("push") == 2
+    assert calls.count("delete") == (2 if failed_action == "delete" else 1)
+
+
+def test_retention_preserves_distinct_workspace_subsets(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    remote = {}
+    def sync(args: dict[str, Any]) -> dict[str, Any]:
+        if args["action"] == "push":
+            remote[args["path"]] = json.loads((Path(args["workspaceDir"]) / args["path"]).read_text())
+        return {"ok": True}
+    monkeypatch.setattr(server, "_filesync", sync)
+    for name in ("a", "b"):
+        workspace = tmp_path / name
+        directory = _events_dir(server, workspace)
+        directory.mkdir(parents=True)
+        _write_project(workspace, "p1", {"project_id": "p1", "status": "completed"})
+        _seed_event(directory, "ev_" + name, "2026-10-01T00:00:00Z", task_id="", project_id="p1")
+        server.signal_events._retention_sweep({"workspaceDir": str(workspace)}, _team(server))
+        assert not (directory / ("ev_" + name + ".json")).exists()
+    assert len(remote) == 2
+    assert {e["event_id"] for archive in remote.values() for e in archive["events"]} == {"ev_a", "ev_b"}
+
+
+def test_retention_keeps_fresh_active_project_signals(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("TEAMHARNESS_RETENTION_DAYS", "7")
+    monkeypatch.setattr(server, "_filesync", FakeFilesync())
+    workspace = tmp_path / "agent"
+    directory = _events_dir(server, workspace)
+    directory.mkdir(parents=True)
+    _write_project(workspace, "p1", {"project_id": "p1", "status": "active", "updated_at": "2026-01-01T00:00:00Z"})
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _seed_event(directory, "ev_fresh", now, task_id="", project_id="p1")
+    result = server._projectflow(_arguments(workspace, "list_events", team=_team(server)))
+    assert [e["event_id"] for e in result["events"]] == ["ev_fresh"]
+    assert (directory / "ev_fresh.json").exists()
+
+
+def test_live_readers_skip_archive_payloads(server: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    workspace = tmp_path / "agent"
+    directory = _events_dir(server, workspace)
+    directory.mkdir(parents=True)
+    archives = [directory / "p1-archive-20261124.json", directory / "p1-archive-20261124-0123456789abcdef.json"]
+    for path in archives:
+        path.write_text('{"archive":true,"events":[]}')
+    reads = []
+    original = Path.read_text
+    def read(path: Path, *args: Any, **kwargs: Any) -> str:
+        if path in archives:
+            reads.append(path)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read)
+    server._projectflow(_arguments(workspace, "list_events", team=_team(server)))
+    server.review_context._review_signals(workspace, _team(server), "t1")
+    assert reads == []
+
+
+def test_filesync_global_shared_delete_is_read_only(server: Any, tmp_path: Path) -> None:
+    result = server._filesync({"workspaceDir": str(tmp_path), "action": "delete", "path": "global-shared/policies/example.json", "dryRun": True})
+    assert result["ok"] is False
+    assert "read-only" in result["error"]

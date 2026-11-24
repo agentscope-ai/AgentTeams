@@ -144,7 +144,7 @@ def _resolve_filesync(arguments: dict[str, Any]) -> tuple[str, str, Path, str, b
     normalized, is_directory = _normalize_shared_path(str(arguments.get("path") or ""), action)
     parts = normalized.strip("/").split("/")
     kind = parts[0]
-    if kind == "global-shared" and action == "push":
+    if kind == "global-shared" and action in {"push", "delete"}:
         raise ValueError("global-shared is read-only for TeamHarness filesync")
 
     storage = arguments.get("storage") if isinstance(arguments.get("storage"), dict) else {}

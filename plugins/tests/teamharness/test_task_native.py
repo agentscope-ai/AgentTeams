@@ -109,12 +109,14 @@ def test_creation_coverage_tracks_exact_sources_without_forcing_a_task_for_quest
                            "context": {**context, **second["contextUpdate"]}}, call=call)
     assert "[Task input coverage]" not in first["fact"]
     assert first["contextUpdate"] == {"registeredInputs": ["$first", "$second"]}
+    assert first["phaseComplete"] is (role == "leader")
 
     amendment = bridge.invoke({"operation": "task",
                                "arguments": {**args, "inputId": "input-a", "relatedInputIds": ["input-b"]},
                                "context": context}, call=call)
     assert "[Task input coverage]" not in amendment["fact"]
     assert amendment["contextUpdate"] == first["contextUpdate"]
+    assert amendment["phaseComplete"] is (role == "leader")
 
 
 def test_handoff_uses_only_admitted_ids_without_another_task_call(bridge):
@@ -184,7 +186,8 @@ def test_review_uses_prepared_submission_when_model_omits_it(bridge, action):
     assert 'submissionId' not in arguments
 
 
-def test_create_keeps_source_binding_per_call_and_does_not_end_human_turn(bridge):
+@pytest.mark.parametrize("role", ["manager", "leader"])
+def test_create_keeps_source_binding_and_finishes_only_leader_intake(bridge, role):
     original = {'inputId': 'ref', 'eventId': '$source', 'roomId': '!room:test', 'userId': '@human:test'}
     calls = []
     def call(arguments):
@@ -193,20 +196,22 @@ def test_create_keeps_source_binding_per_call_and_does_not_end_human_turn(bridge
                 'notification': {'status': 'queued', 'recipient': 'lead', 'eventId': 'notice'}}
     args = {'action': 'create', 'leader': 'lead', 'title': 'work'}
     result = bridge.invoke({'operation': 'task', 'arguments': args,
-                            'context': {'role': 'manager', 'sources': [original]}}, call=call)
+                            'context': {'role': role, 'sources': [original]}}, call=call)
     assert calls[0]['_nativeSource'] == {'eventId': '$source', 'roomId': '!room:test', 'userId': '@human:test'}
     assert '_nativeSource' not in args
     assert result['fact'].startswith('[Task system receipt]')
-    assert result['phaseComplete'] is False
+    assert result['phaseComplete'] is (role == 'leader')
 
 
-def test_late_inputs_remain_user_inputs_and_require_native_checkpoint(bridge):
+@pytest.mark.parametrize("role", ["manager", "leader"])
+def test_late_inputs_remain_user_inputs_and_require_native_checkpoint(bridge, role):
     source = {'inputId': 'ref', 'eventId': '$source', 'roomId': '!room:test', 'userId': '@human:test'}
     update = {'ok': True, 'outcome': 'input_changed', 'noTaskRegistered': True,
               'sourceEventId': '$source', 'inputs': [{'eventId': '$new', 'roomId': '!room:test',
                                                     'userId': '@human:test', 'body': 'Unique amendment fixture 83f2'}]}
     result = bridge.invoke({'operation': 'task', 'arguments': {'action': 'create', 'leader': 'lead', 'title': 'work'},
-                            'context': {'role': 'manager', 'sources': [source]}}, call=lambda _: update)
+                            'context': {'role': role, 'sources': [source]}}, call=lambda _: update)
+    assert result['phaseComplete'] is False
     assert result['refreshedInputs'][0]['body'] == 'Unique amendment fixture 83f2'
     assert 'Unique amendment fixture 83f2' not in result['fact']
     assert result['requiresInputCheckpoint'] is True

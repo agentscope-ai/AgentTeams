@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 from unittest.mock import Mock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'teamharness/mcp/common'))
 import task_canonical as guard
 
@@ -142,11 +144,12 @@ def test_admission_checks_every_trusted_task_and_never_treats_active_as_no_effec
     assert rpc.call_args_list[1].args[0]['arguments'] == {'action': 'get', 'taskId': 'second', 'team': 'own-team'}
 
 
-def test_manager_source_admission_has_no_model_supplied_leader_or_path(monkeypatch):
+@pytest.mark.parametrize("role", ["manager", "leader"])
+def test_creator_source_admission_has_no_model_supplied_leader_or_path(monkeypatch, role):
     monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
     rpc = Mock(return_value={'mode': 'admitted'})
     source = {'eventId': '$own', 'roomId': '!own:test', 'userId': '@human:test', 'inputId': 'ref'}
-    assert guard.admit({'role': 'manager', 'sources': [source]}, rpc=rpc)['ok']
+    assert guard.admit({'role': role, 'sources': [source]}, rpc=rpc)['ok']
     assert rpc.call_args.args[0]['arguments'] == {'action': 'create', '_nativeSource': {key: source[key] for key in ('eventId', 'roomId', 'userId')}}
 
 

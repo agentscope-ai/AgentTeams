@@ -170,6 +170,10 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
             registered = sorted(set(context.get("registeredInputs") or []) | {source, *selected.get("relatedSources", [])})
             response["fact"] += receipts.creation_coverage_context(sources, set(registered))
             response["contextUpdate"] = {"registeredInputs": registered}
+            # Release your intake turn before consuming the queued handoff.
+            # Unhandled Human inputs must remain available in this turn.
+            response["phaseComplete"] = (native_role(context.get("role")) == "leader"
+                                         and all(item["eventId"] in registered for item in sources))
         else:
             response["phaseComplete"] = True
     return response

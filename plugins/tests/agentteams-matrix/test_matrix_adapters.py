@@ -1,11 +1,7 @@
 """Adapter tests for the agentteams-matrix bundle.
 
 The OpenClaw adapter projects the bundle contract.yaml onto its
-runtime config file (openclaw.json). The Hermes adapter is a native
-platform plugin: its installer stages the payload under
-$HERMES_HOME/plugins/agentteams-matrix with a per-file ownership
-marker, and that installer behaviour is covered by
-test_adapter_hermes.py, not here. This suite therefore covers:
+runtime config file (openclaw.json). This suite covers:
 
   1. OpenClaw --dry-run exits 0 and stdout parses as the target format
   2. a real install writes all required keys at the key paths the
@@ -18,11 +14,8 @@ test_adapter_hermes.py, not here. This suite therefore covers:
   6. a missing contract.yaml fails with a non-zero exit and a clear
      error
 
-plus bundle-level dispatch cases: the selected adapter is invoked
-(--adapter openclaw projects, --adapter hermes stages the native
-plugin under a temp HERMES_HOME, and the uninstaller removes it
-again), an unknown adapter is rejected, and the removed Hermes
-projector flags are rejected with a clear error.
+plus bundle-level dispatch and rejection of unsupported adapters, including
+the retired Core Hermes implementation.
 
 Upstream evidence for the projected key paths:
 
@@ -67,12 +60,6 @@ ADAPTERS = {
         "uninstall": BUNDLE_DIR / "adapters" / "openclaw" / "uninstall.sh",
         # accessToken — extensions/matrix/src/config-schema.ts:131
         "token_key": "accessToken",
-    },
-    "hermes": {
-        # Native platform plugin: the scripts stage/remove the plugin
-        # payload, there is no config projection (and no token key).
-        "install": BUNDLE_DIR / "adapters" / "hermes" / "install.sh",
-        "uninstall": BUNDLE_DIR / "adapters" / "hermes" / "uninstall.sh",
     },
 }
 
@@ -156,7 +143,6 @@ def _env(tmp_path: Path, bundle_dir: Path | None = None) -> dict:
     if bundle_dir is not None:
         env["AGENTTEAMS_BUNDLE_DIR"] = str(bundle_dir)
     env.pop("AGENTTEAMS_MATRIX_ACCESS_TOKEN", None)
-    env.pop("HERMES_VERSION", None)
     return env
 
 
@@ -894,85 +880,10 @@ def test_bundle_installer_rejects_unknown_adapter(tmp_path):
     assert "unknown adapter" in result.stderr
 
 
-def test_bundle_installer_hermes_stages_native_plugin(tmp_path):
-    """--adapter hermes stages the native platform plugin payload
-    under HERMES_HOME with the ownership marker (the installer's own
-    idempotence/reconciliation coverage lives in test_adapter_hermes.py;
-    this is the bundle dispatch)."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _make_fake_runtime(bin_dir, "hermes")
-    env = _env(tmp_path)
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    hermes_home = tmp_path / "hermes-home"
-    env["HERMES_HOME"] = str(hermes_home)
-
-    result = _run(BUNDLE_INSTALL, ["--adapter", "hermes"], env)
-    assert result.returncode == 0, result.stderr
-
-    plugin_dir = hermes_home / "plugins" / "agentteams-matrix"
-    for name in ("plugin.yaml", "adapter.py", "__init__.py"):
-        assert (plugin_dir / name).is_file(), name
-    # The runtime-neutral core ships next to the staged plugin.
-    assert (plugin_dir / "core" / "core.py").is_file()
-    # Installer artifacts are not part of the staged payload.
-    for name in ("install.sh", "uninstall.sh", "README.md"):
-        assert not (plugin_dir / name).exists(), name
-
-    marker_path = hermes_home / ".agentteams" / "agentteams-matrix" / "installed.json"
-    marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    assert marker["runtime"] == "hermes"
-    assert marker["files"]["plugin.yaml"]
-    assert "install.sh" not in marker["files"]
-
-
-def test_bundle_installer_hermes_rejects_projector_flags(tmp_path):
-    """The removed Hermes projector flags are rejected with a clear
-    error instead of being silently ignored (the native adapter takes
-    no options)."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _make_fake_runtime(bin_dir, "hermes")
-    env = _env(tmp_path)
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    hermes_home = tmp_path / "hermes-home"
-    env["HERMES_HOME"] = str(hermes_home)
-
-    for flag, value in [
-        ("--hermes-version", "0.22.5"),
-        ("--hermes-root", str(tmp_path)),
-        ("--hermes-capabilities", "full"),
-        ("--allow-partial", None),
-    ]:
-        args = ["--adapter", "hermes", flag]
-        if value is not None:
-            args.append(value)
-        result = _run(BUNDLE_INSTALL, args, env)
-        assert result.returncode != 0, (flag, result.stderr)
-        assert flag in result.stderr
-    # The rejected calls staged nothing.
-    assert not (hermes_home / "plugins").exists()
-
-
-def test_bundle_uninstaller_dispatches_selected_adapter(tmp_path):
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _make_fake_runtime(bin_dir, "hermes")
-    env = _env(tmp_path)
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    hermes_home = tmp_path / "hermes-home"
-    env["HERMES_HOME"] = str(hermes_home)
-
-    specs = ADAPTERS["hermes"]
-    _run(specs["install"], [], env)
-    plugin_dir = hermes_home / "plugins" / "agentteams-matrix"
-    assert (plugin_dir / "plugin.yaml").is_file()
-
-    result = _run(BUNDLE_UNINSTALL, ["--adapter", "hermes"], env)
-    assert result.returncode == 0, result.stderr
-    assert not plugin_dir.exists()
-    # The ownership marker and its state tree go with it.
-    assert not (hermes_home / ".agentteams").exists()
+def test_bundle_installer_rejects_retired_hermes_adapter(tmp_path):
+    result = _run(BUNDLE_INSTALL, ["--adapter", "hermes"], _env(tmp_path))
+    assert result.returncode != 0
+    assert "unknown adapter" in result.stderr
 
 
 def test_bundle_uninstaller_rejects_unknown_adapter(tmp_path):

@@ -287,12 +287,14 @@ def _free_port() -> int:
 
 def _write_config(url: str, token: str) -> None:
     try:
-        from .state import state_dir
+        from .state import _write_credential_file, state_dir
 
         path = state_dir() / "serve.json"
-        path.write_text(
-            json.dumps({"url": url, "token": token}, ensure_ascii=False),
-            encoding="utf-8",
+        _write_credential_file(
+            path,
+            json.dumps({"url": url, "token": token}, ensure_ascii=False).encode(
+                "utf-8",
+            ),
         )
     except Exception:
         pass

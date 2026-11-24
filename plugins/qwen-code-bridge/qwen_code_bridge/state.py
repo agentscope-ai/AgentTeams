@@ -51,6 +51,42 @@ def install_dir() -> Path:
 __all__ = ["STATE_DIR_ENV", "WORKING_DIR_ENV", "install_dir", "state_dir"]
 
 
+def _write_credential_file(path, data: bytes) -> None:
+    """Atomically write *data* to *path*, guaranteeing mode 0600.
+
+    The credential files this plugin manages (``serve.json`` with the
+    qwen serve bearer token; the CLIs' settings files with e.g.
+    ``security.auth.apiKey``) must never be world-readable.  A plain
+    ``Path.write_text`` leaves the file at the process umask's default
+    permissions (typically 0644), and a tmp + ``os.replace`` pair
+    keeps the temp file's permissions — so every rewrite re-loosens a
+    previously-0600 file.
+
+    The temp file is created in the destination's directory (same
+    filesystem, so ``os.replace`` is atomic) with mode 0600 and then
+    chmod'ed to 0600 explicitly before the rename (a restrictive umask
+    can strip bits from the ``os.open`` mode), so the credential file
+    never exists with looser permissions — not even for the instant
+    between creation and replacement.  On failure the temp file is
+    removed and the original error is re-raised.
+    """
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.chmod(str(tmp), 0o600)
+        os.replace(str(tmp), dest)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def cli_home() -> str:
     """Persisted CLI HOME from env or state/config.json.
 

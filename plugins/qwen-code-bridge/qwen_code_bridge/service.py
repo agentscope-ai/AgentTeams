@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from .registry import PRESERVE, CliSpec
-from .state import install_dir as _default_install_dir
+from .state import _write_credential_file, install_dir as _default_install_dir
 
 #: Maximum characters of npm output kept in install task logs.
 _LOG_TAIL_LIMIT = 4096
@@ -266,12 +266,20 @@ class CodingCliService:
                 except (OSError, json.JSONDecodeError):
                     current = {}
             _deep_merge(current, patch)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(current, fh, indent=2, ensure_ascii=False)
-                fh.write("\n")
-            os.replace(tmp, path)
+            payload = json.dumps(current, indent=2, ensure_ascii=False) + "\n"
+            # Credential file: atomic write that keeps mode 0600 (#1699).
+            _write_credential_file(path, payload.encode("utf-8"))
+            # The CLI's extra credential files (e.g. opencode's
+            # auth.json) are written by the CLI itself; tighten any that
+            # already exist so the whole credential surface for this CLI
+            # stays 0600 on every settings write.
+            for name in spec.extra_auth_files:
+                extra = Path(_expand(name))
+                try:
+                    if extra.is_file():
+                        extra.chmod(0o600)
+                except OSError:
+                    pass
             return redact_settings(spec, current)
 
         return await asyncio.to_thread(_apply)

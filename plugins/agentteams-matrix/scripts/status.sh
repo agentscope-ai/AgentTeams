@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Read-only status for the TeamHarness bundle.
 #
-# Usage: status.sh [--runtime auto|openclaw|hermes]... [--json] [--channel NAME]
+# Usage: status.sh [--runtime auto|openclaw]... [--json] [--channel NAME]
 #
 # Reports, per runtime: installed (yes/no), version, plugin id, marker path,
 # file integrity (marker vs disk, when the marker records a file map), and the
@@ -13,14 +13,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUNDLE_ID="agentteams-matrix"
 PLUGIN_ID="agentteams-matrix-channel"
-SUPPORTED_RUNTIMES=(openclaw hermes)
+SUPPORTED_RUNTIMES=(openclaw)
 JSON=0
 CHANNEL="${TEAMHARNESS_CHANNEL:-unknown}"
 SELECTIONS=()
 
 usage() {
   cat <<'EOF'
-Usage: status.sh [--runtime auto|openclaw|hermes]... [--json] [--channel NAME]
+Usage: status.sh [--runtime auto|openclaw]... [--json] [--channel NAME]
 
 Prints the installed version, plugin id, marker path and file integrity for
 each selected runtime. Read-only.
@@ -32,7 +32,7 @@ while [ $# -gt 0 ]; do
     --runtime)
       value="${2:?--runtime requires a value}"
       case "$value" in
-        auto|openclaw|hermes) ;;
+        auto|openclaw) ;;
         *) echo "ERROR: unknown runtime: $value" >&2; exit 2 ;;
       esac
       SELECTIONS+=("$value"); shift 2 ;;
@@ -46,7 +46,6 @@ done
 detected() {
   case "$1" in
     openclaw) command -v openclaw >/dev/null 2>&1 || [ -n "${OPENCLAW_CONFIG_PATH:-}" ] || [ -n "${OPENCLAW_CONFIG:-}" ] || [ -f "$HOME/.openclaw/openclaw.json" ] ;;
-    hermes) command -v hermes >/dev/null 2>&1 || [ -n "${HERMES_HOME:-}" ] || [ -f "$HOME/.hermes/config.yaml" ] ;;
     *) return 1 ;;
   esac
 }
@@ -84,25 +83,9 @@ print(json.dumps(out, ensure_ascii=False))
 PY
 }
 
-hermes_status() {
-  local cfg="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
-  python3 - "$cfg" "$PLUGIN_ID" "$CHANNEL" <<'PY'
-import json
-import sys
-from pathlib import Path
-cfg, plugin_id, channel = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-text = cfg.read_text(errors="ignore") if cfg.is_file() else ""
-out = {"runtime": "hermes", "installed": plugin_id in text, "version": "", "pluginId": plugin_id,
-       "marker": str(cfg), "markerPresent": cfg.is_file(), "filesOk": None,
-       "filesTotal": 0, "filesMissing": 0, "channel": channel}
-print(json.dumps(out, ensure_ascii=False))
-PY
-}
-
 for r in "${runtimes[@]}"; do
   case "$r" in
     openclaw) line="$(openclaw_status)" ;;
-    hermes) line="$(hermes_status)" ;;
   esac
   if [ "$JSON" -eq 1 ]; then
     printf '%s\n' "$line"

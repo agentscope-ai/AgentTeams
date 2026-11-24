@@ -3,10 +3,10 @@
 # AgentTeams runtime via that runtime's adapter. Mirrors install.sh.
 #
 # Usage:
-#   uninstall.sh [--adapter <openclaw|hermes>] [adapter options]
+#   uninstall.sh [--adapter <openclaw>] [adapter options]
 #
 # Without --adapter, every detected runtime is uninstalled (search
-# order: openclaw, hermes). A runtime whose binary is on PATH
+# order: openclaw). A runtime whose binary is on PATH
 # is detected as before; OpenClaw additionally counts as present when
 # its effective config exists — $OPENCLAW_CONFIG_PATH (exported by the
 # Worker entrypoint), then the legacy $OPENCLAW_CONFIG, then
@@ -14,7 +14,7 @@
 # config path is detected without the binary on PATH. Adapter options
 # given after the adapter name (e.g. --config, --dry-run for the
 # openclaw adapter) are forwarded to the selected adapter's
-# uninstall.sh; the hermes adapter takes no options.
+# uninstall.sh.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,19 +26,14 @@ FORWARD=()
 
 usage() {
   cat <<'EOF'
-Usage: uninstall.sh [--adapter <openclaw|hermes>] [adapter options]
+Usage: uninstall.sh [--adapter <openclaw>] [adapter options]
 
 Adapters:
-             (takes no options)
   openclaw   remove the channels.matrix projection from
              ~/.openclaw/openclaw.json (options: --config, --dry-run)
-  hermes     remove the staged matrix platform plugin from $HERMES_HOME
-             (default ~/.hermes): the payload under
-             $HERMES_HOME/plugins/agentteams-matrix plus the
-             ownership marker (takes no options)
 
 Without --adapter, every detected runtime (search order:
-openclaw, hermes) is uninstalled. OpenClaw counts as present when its
+openclaw) is uninstalled. OpenClaw counts as present when its
 effective config exists ($OPENCLAW_CONFIG_PATH, then $OPENCLAW_CONFIG,
 then ~/.openclaw/openclaw.json), even without the binary on PATH.
 EOF
@@ -48,7 +43,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --adapter)
       if [ $# -lt 2 ]; then
-        echo "ERROR: --adapter requires a value (openclaw or hermes)" >&2
+        echo "ERROR: --adapter requires a value (openclaw)" >&2
         exit 2
       fi
       ADAPTER="$2"
@@ -85,7 +80,6 @@ runtime_present() {
       # counts; a dangling link does not.
       command -v openclaw >/dev/null 2>&1 || [ -e "$(openclaw_effective_config)" ]
       ;;
-    hermes) command -v hermes >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
 }
@@ -93,10 +87,6 @@ runtime_present() {
 uninstall_adapter() {
   local adapter="$1"
   if [ "${#FORWARD[@]}" -gt 0 ]; then
-    if [ "${adapter}" = "hermes" ]; then
-      echo "ERROR: the hermes adapter takes no options; drop: ${FORWARD[*]}" >&2
-      exit 2
-    fi
     bash "${BUNDLE_DIR}/adapters/${adapter}/uninstall.sh" "${FORWARD[@]}"
   else
     bash "${BUNDLE_DIR}/adapters/${adapter}/uninstall.sh"
@@ -105,9 +95,9 @@ uninstall_adapter() {
 
 if [ -n "${ADAPTER}" ]; then
   case "${ADAPTER}" in
-    openclaw|hermes) ;;
+    openclaw) ;;
     *)
-      echo "ERROR: unknown adapter: ${ADAPTER} (expected openclaw or hermes)" >&2
+      echo "ERROR: unknown adapter: ${ADAPTER} (expected openclaw)" >&2
       usage >&2
       exit 2
       ;;
@@ -120,7 +110,7 @@ if [ -n "${ADAPTER}" ]; then
 fi
 
 ran=0
-for candidate in openclaw hermes; do
+for candidate in openclaw; do
   if runtime_present "${candidate}"; then
     uninstall_adapter "${candidate}"
     ran=1
@@ -128,6 +118,6 @@ for candidate in openclaw hermes; do
 done
 
 if [ "${ran}" -eq 0 ]; then
-  echo "ERROR: no supported Matrix channel runtime found; expected openclaw or hermes" >&2
+  echo "ERROR: no supported Matrix channel runtime found; expected openclaw" >&2
   exit 1
 fi

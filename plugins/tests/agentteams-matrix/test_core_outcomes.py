@@ -14,10 +14,8 @@ Covers the silent-drop trace contract:
 * the frozen ``DROP_REASONS`` vocabulary (including the shared subset
   that must stay verbatim identical to the TeamHarness side's
   ``NOTIFICATION_GAP_REASONS``);
-* the adapter drop points — QwenPaw channel and Hermes adapter driven
-  with the same logical inputs produce the same reason codes
-  (parity); the OpenClaw runtime is TypeScript and tracked as a TODO
-  in its README.
+* the QwenPaw channel drop points; native runtime adapters are tested
+  in their Harness repositories.
 """
 
 from __future__ import annotations
@@ -62,20 +60,12 @@ from core.outcomes import (  # noqa: E402
     redact_detail,
 )
 from agentteams_matrix.channel import AgentTeamsMatrixChannel  # noqa: E402
-from test_adapter_hermes import (  # noqa: E402
-    _FAKE_MODULE_NAMES,
-    _build_fake_modules,
-    _group_fixtures,
-    _inbound,
-    _wire_adapter,
-    DM_ROOM,
-    FakeClient,
-    GROUP_ROOM,
-    SELF,
-    USER,
-)
 
-HERMES_ADAPTER_PATH = BUNDLE_DIR / "adapters" / "hermes" / "adapter.py"
+SELF = "@agent:example.org"
+USER = "@alice:example.org"
+DM_ROOM = "!dm:example.org"
+GROUP_ROOM = "!group:example.org"
+
 
 ALL_MATRIX_ENV_VARS = (
     "AGENTTEAMS_MATRIX_SERVER",
@@ -187,44 +177,6 @@ class _FailClient:
     ):
         self.calls += 1
         return self.resp
-
-
-# ── Hermes adapter driver (fake gateway, like test_adapter_hermes) ────
-
-
-@pytest.fixture(scope="module")
-def hermes_mod():
-    """Load ``adapters/hermes/adapter.py`` against the fake gateway."""
-    saved = {name: sys.modules.get(name) for name in _FAKE_MODULE_NAMES}
-    sys.modules.update(_build_fake_modules())
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "agentteams_hermes_adapter_drop_ledger", HERMES_ADAPTER_PATH
-        )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        yield module
-    finally:
-        for name, mod in saved.items():
-            if mod is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = mod
-
-
-def _hermes(hermes_mod, monkeypatch, tmp_path, *, client=None, env=True):
-    """Wired adapter with the ledger rooted at ``tmp_path / "state"``."""
-    for var in ALL_MATRIX_ENV_VARS:
-        monkeypatch.delenv(var, raising=False)
-    if env:
-        monkeypatch.setenv("AGENTTEAMS_MATRIX_SERVER", "https://matrix.example.org/")
-        monkeypatch.setenv("AGENTTEAMS_MATRIX_USER_ID", SELF)
-        monkeypatch.setenv("AGENTTEAMS_MATRIX_TOKEN", "s3cr3t-token")
-    monkeypatch.setenv("AGENTTEAMS_MATRIX_STATE_DIR", str(tmp_path / "state"))
-    adapter, client, transport, events = _wire_adapter(
-        hermes_mod, client=client
-    )
-    return adapter, client, transport, events
 
 
 # ── 1. core ledger round-trip ─────────────────────────────────────────
@@ -441,84 +393,6 @@ def test_start_without_homeserver_records_env_missing(qp_channel):
 # ── 4. hermes drop points ─────────────────────────────────────────────
 
 
-def test_hermes_thread_without_mention_records_not_mentioned(
-    hermes_mod, monkeypatch, tmp_path
-):
-    members, room = _group_fixtures()
-    client = FakeClient(
-        member_map={GROUP_ROOM: members}, rooms={GROUP_ROOM: room}
-    )
-    adapter, _, _, events = _hermes(
-        hermes_mod, monkeypatch, tmp_path, client=client
-    )
-    asyncio.run(
-        adapter._on_inbound(
-            _inbound(
-                room_id=GROUP_ROOM,
-                text="thread chit-chat",
-                event_id="$thread-1",
-                thread_root="$root-1",
-            )
-        )
-    )
-    assert events == []
-    rows = read_drops(adapter.state_dir)
-    assert [r["reason"] for r in rows] == ["not_mentioned"]
-    assert rows[0]["event_id"] == "$thread-1"
-
-
-def test_hermes_no_reply_records(hermes_mod, monkeypatch, tmp_path):
-    client = FakeClient(
-        member_map={DM_ROOM: [SELF, USER]},
-    )
-    adapter, _, _, events = _hermes(
-        hermes_mod, monkeypatch, tmp_path, client=client
-    )
-    asyncio.run(adapter._on_inbound(_inbound(room_id=DM_ROOM, text="NO_REPLY")))
-    assert events == []
-    rows = read_drops(adapter.state_dir)
-    assert [r["reason"] for r in rows] == ["no_reply"]
-
-
-def test_hermes_self_trigger_records_ping_pong(
-    hermes_mod, monkeypatch, tmp_path
-):
-    adapter, _, _, events = _hermes(hermes_mod, monkeypatch, tmp_path)
-    asyncio.run(
-        adapter._on_inbound(
-            _inbound(room_id=DM_ROOM, sender=SELF, text="echo")
-        )
-    )
-    assert events == []
-    rows = read_drops(adapter.state_dir)
-    assert [r["reason"] for r in rows] == ["ping_pong"]
-    assert rows[0]["event_id"] == "$e1"
-
-
-def test_hermes_send_failure_records_room_send_failed(
-    hermes_mod, monkeypatch, tmp_path
-):
-    adapter, _, transport, _ = _hermes(hermes_mod, monkeypatch, tmp_path)
-    transport.send_exc = RuntimeError("homeserver unreachable")
-    result = asyncio.run(adapter.send(GROUP_ROOM, "hello"))
-    assert result.success is False
-    rows = read_drops(adapter.state_dir)
-    assert [r["reason"] for r in rows] == ["room_send_failed"]
-    assert "RuntimeError" in rows[0]["detail"]
-
-
-def test_hermes_connect_without_config_records_env_missing(
-    hermes_mod, monkeypatch, tmp_path
-):
-    adapter, _, _, _ = _hermes(hermes_mod, monkeypatch, tmp_path, env=False)
-    assert asyncio.run(adapter.connect()) is False
-    assert adapter.has_fatal_error
-    assert adapter._fatal_error_code == "config_missing"
-    rows = read_drops(adapter.state_dir)
-    assert [r["reason"] for r in rows] == ["matrix_env_missing"]
-    assert rows[0]["room_id"] == ""
-
-
 # ── 5. write-failure safety ───────────────────────────────────────────
 
 
@@ -543,9 +417,6 @@ def test_channel_flow_continues_when_ledger_unwritable(qp_channel):
     assert qp_channel.typing_calls[-1] == (DM_ROOM, False)
 
 
-# ── 6. qwenpaw / hermes parity (same input → same reason) ────────────
-
-
 def _drive_qwenpaw(qp_channel, scenario):
     if scenario == "thread_unmentioned":
         qp_channel._is_dm = False
@@ -563,47 +434,6 @@ def _drive_qwenpaw(qp_channel, scenario):
         room = _qp_room(DM_ROOM)
     asyncio.run(qp_channel._on_room_event(room, event))
     return [r["reason"] for r in read_drops(qp_channel._workspace_dir)]
-
-
-def _drive_hermes(hermes_mod, monkeypatch, tmp_path, scenario):
-    if scenario == "thread_unmentioned":
-        members, room = _group_fixtures()
-        client = FakeClient(
-            member_map={GROUP_ROOM: members}, rooms={GROUP_ROOM: room}
-        )
-        adapter, _, _, _ = _hermes(hermes_mod, monkeypatch, tmp_path, client=client)
-        inbound = _inbound(
-            room_id=GROUP_ROOM,
-            text="thread chit-chat",
-            event_id="$thread-1",
-            thread_root="$root-1",
-        )
-    elif scenario == "no_reply":
-        client = FakeClient(
-            member_map={DM_ROOM: [SELF, USER]},
-        )
-        adapter, _, _, _ = _hermes(hermes_mod, monkeypatch, tmp_path, client=client)
-        inbound = _inbound(room_id=DM_ROOM, text="NO_REPLY")
-    else:  # ping_pong
-        adapter, _, _, _ = _hermes(hermes_mod, monkeypatch, tmp_path)
-        inbound = _inbound(room_id=DM_ROOM, sender=SELF, text="echo")
-    asyncio.run(adapter._on_inbound(inbound))
-    return [r["reason"] for r in read_drops(adapter.state_dir)]
-
-
-@pytest.mark.parametrize(
-    "scenario", ["thread_unmentioned", "no_reply", "ping_pong"]
-)
-def test_same_input_same_reason_across_adapters(
-    scenario, qp_channel, hermes_mod, monkeypatch, tmp_path
-):
-    qp_reasons = _drive_qwenpaw(qp_channel, scenario)
-    hermes_reasons = _drive_hermes(hermes_mod, monkeypatch, tmp_path, scenario)
-    assert qp_reasons == hermes_reasons
-    assert len(qp_reasons) == 1
-    # The OpenClaw runtime is TypeScript (separate repo); parity there is
-    # a documented TODO in adapters/openclaw/README.md.
-    assert qp_reasons[0] in DROP_REASONS
 
 
 # ── 7. credential redaction (the ledger must never hold a token) ─────
@@ -809,45 +639,3 @@ def test_red_repro_identity_redaction_leaks_token(qp_channel, monkeypatch):
     detail = rows[0]["detail"]
     assert SYNTHETIC_SECRET in detail  # the leak is present without redaction
     assert "access_token=***" not in detail
-
-
-# ── integration: the Hermes send-failure sites ───────────────────────
-
-
-def test_hermes_send_url_bearing_exception_never_leaks_token(
-    hermes_mod, monkeypatch, tmp_path
-):
-    adapter, _, transport, _ = _hermes(hermes_mod, monkeypatch, tmp_path)
-    transport.send_exc = _url_bearing_exception()
-    result = asyncio.run(adapter.send(GROUP_ROOM, "hello"))
-    assert result.success is False
-    rows = read_drops(adapter.state_dir)
-    assert [r["reason"] for r in rows] == ["room_send_failed"]
-    assert "RuntimeError" in rows[0]["detail"]
-    assert SYNTHETIC_SECRET not in rows[0]["detail"]
-    assert "access_token=***" in rows[0]["detail"]
-
-
-def test_hermes_media_send_url_bearing_exception_never_leaks_token(
-    hermes_mod, monkeypatch, tmp_path
-):
-    exc = _url_bearing_exception()
-
-    class _RaisingSendClient(FakeClient):
-        async def room_send(self, *args, **kwargs):
-            raise exc
-
-    client = _RaisingSendClient(member_map={GROUP_ROOM: [SELF, USER]})
-    adapter, _, _, _ = _hermes(
-        hermes_mod, monkeypatch, tmp_path, client=client
-    )
-    image = tmp_path / "shot.png"
-    image.write_bytes(b"\x89PNG fake")
-    result = asyncio.run(
-        adapter._send_media_file(GROUP_ROOM, str(image), "m.image", "cap")
-    )
-    assert result.success is False
-    rows = read_drops(adapter.state_dir)
-    assert [r["reason"] for r in rows] == ["room_send_failed"]
-    assert SYNTHETIC_SECRET not in rows[0]["detail"]
-    assert "access_token=***" in rows[0]["detail"]

@@ -227,7 +227,6 @@ def test_matrix_bundle_manifest_form() -> None:
     assert isinstance(adapters, list), "agentteams-matrix adapters must be a list"
     expected = [
         ("openclaw", "adapters/openclaw"),
-        ("hermes", "adapters/hermes"),
     ]
     assert [(adapter.get("id"), adapter.get("path")) for adapter in adapters] == expected
     for _adapter_id, path in expected:

@@ -19,7 +19,7 @@ Two distribution paths exist:
 |:--|:--|:--|:--|:--|
 | `teamharness` | `teamharness` | Shared prompts, skills and MCP tools | Harness-independent | Bundled with Core |
 | `agentteams-teamharness` | `agentteams-teamharness` | Bundle referencing the shared TeamHarness source | OpenClaw / Hermes | Bundle lifecycle scripts |
-| `agentteams-matrix` | `agentteams-matrix` | Shared Matrix core and portable runtime adapters | OpenClaw / Hermes | Bundle lifecycle scripts |
+| `agentteams-matrix` | `agentteams-matrix` | Shared Matrix core and OpenClaw config projector | Shared / OpenClaw | Bundle lifecycle scripts; native Hermes adapter is owned by its Harness |
 | `agentteams-matrix-openclaw` | `agentteams-matrix-openclaw` | OpenClaw channel plugin (JS plugin + Python sidecar) | OpenClaw | OpenClaw adapter path (`openclaw.plugin.json`, `install.sh`) |
 | [`qwen-code-bridge`](https://github.com/agentteams-group/agentteams-harness-qwenpaw/tree/main/plugins/qwen-code-bridge) | `qwen-code-bridge` | QwenPaw Harness-owned plugin (`type: general`), packaged in its Harness repository | QwenPaw 2.2.x | `qwenpaw plugin install` / `POST /api/plugins/upload` / Millforge module `qwenpaw-qwencode-bridge` |
 | `agentteams-manager-tools` | `agentteams-manager-tools` | QwenPaw tool plugin (`type: tool`) | QwenPaw (manager) | shipped in the controller/manager image (`plugins/` → `/opt/agentteams/plugins/`) |

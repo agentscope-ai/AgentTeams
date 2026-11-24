@@ -45,6 +45,11 @@ class WorkerRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(projection["channels"]["matrix"]["userId"], "@worker:test")
         self.assertEqual(projection["models"]["providers"]["agentteams-gateway"]["baseUrl"], "https://gateway.test/v1")
 
+    def test_qoder_uses_the_same_identity_and_gateway_contract(self):
+        projection = self.project(self.record("qoder"))
+        self.assertEqual(projection["channels"]["matrix"]["userId"], "@worker:test")
+        self.assertEqual(projection["models"]["providers"]["agentteams-gateway"]["baseUrl"], "https://gateway.test/v1")
+
     def test_authority_replaces_old_credentials_and_model_without_mutating_legacy(self):
         old = {"channels": {"matrix": {"accessToken": "old-token", "deviceId": "old-device"}},
                "agents": {"defaults": {"model": {"primary": "old/model"}}}, "tools": {"custom": True}}

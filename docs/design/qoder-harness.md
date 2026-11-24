@@ -1,0 +1,13 @@
+# Experimental Qoder Harness registration
+
+The native adapter lives in [agentteams-group/agentteams-harness-qoder](https://github.com/agentteams-group/agentteams-harness-qoder). The candidate targets Leader and Worker roles through the Qoder Agent SDK. Manager support is not implemented.
+
+Core recognizes `runtime: qoder`, projects the standard member configuration, routes public Task notifications, and retains the existing execution and Matrix recovery contracts. Docker, Kubernetes and Sandbox creation require an explicit `spec.image`; there is no fallback to another Harness's image or an unpublished default tag. Qoder reads projected model configuration at turn boundaries instead of using the QwenPaw console hot-apply endpoints.
+
+Build the adapter against this Core candidate and an `agt`/role-assets image from the same source. The independent repository supplies its Dockerfile, build entrypoint, native tests and opt-in real SDK probes. Pin the actual Core/Harness commits and built image digest before deploying. The local installer and default shared release matrix are not changed by this experimental registration.
+
+The adapter requires unencrypted Matrix rooms; its model route is Qoder → Higress → the configured upstream model using the standard OpenAI Chat Completions protocol. It automatically maps the projected gateway URL, model and consumer key into the pinned CLI's native direct-provider settings. Model-policy callbacks return the direct model identifier for every purpose. No catalog provider selection, manual BYOK configuration, inline server-side custom-model payload or Qoder-service fallback is used. Ordinary Model Studio Qwen models and their credentials remain behind Higress.
+
+Qoder authentication and model-gateway authentication are separate. The pinned SDK still performs Qoder account and custom-endpoint permission checks. The tested account did not expose the selected direct model as enabled, and the latest real SDK probe failed before any request reached the localhost gateway fixture. The runtime rejects that unavailable model before submitting input. This registration does not establish successful Higress inference; see the adapter's acceptance record for exact probes and the remaining SDK/account compatibility gate.
+
+Registration, native SDK tests and image smoke are not admission certification. Run the [Harness integration and acceptance guide](harness-integration-guide.md) against the same frozen candidate before claiming supported role combinations, full Task collaboration, restart recovery or bidirectional switching. Keep failed gateway probes and other incomplete evidence in the adapter's acceptance record.

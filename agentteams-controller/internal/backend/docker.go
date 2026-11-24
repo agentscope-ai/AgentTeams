@@ -137,6 +137,10 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			if image == "" {
 				return nil, fmt.Errorf("codex runtime requires spec.image or AGENTTEAMS_CODEX_WORKER_IMAGE")
 			}
+		case req.Runtime == RuntimeClaudeCode:
+			return nil, fmt.Errorf("claudecode runtime requires an explicitly built spec.image")
+		case req.Runtime == RuntimeQoder:
+			return nil, fmt.Errorf("qoder runtime requires an explicitly built spec.image")
 		default:
 			image = d.config.WorkerImage
 		}

@@ -1,73 +1,91 @@
-"""The Team E2E must check actual coordination events, not prose/tool previews."""
+"""Observe accepted public Tasks and real original-room delivery, not legacy prose."""
+import copy
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
+import unittest
 
-import pytest
-
-SCRIPT = Path(__file__).with_name("test-26-qwenpaw-teamharness-plugin-mode.sh")
-
-
-def wait(event, kind="task_assigned", sender="@leader:test", recipient="@worker:test"):
-    source = SCRIPT.read_text()
-    match = re.search(r"^_wait_coordination_message\(\) \{.*?^\}", source, re.M | re.S)
-    assert match, "Team E2E still waits for legacy notification text"
-    run = subprocess.run(["bash", "-c", match.group() + '\n'
-        'matrix_read_messages() { printf "%s" "$FIXTURE"; }\n'
-        'sleep() { :; }\n'
-        '_wait_coordination_message "$KIND" "$SENDER" "$RECIPIENT" 1'],
-        env={"PATH": os.environ["PATH"], "FIXTURE": json.dumps({"chunk": [event]}),
-             "KIND": kind, "SENDER": sender, "RECIPIENT": recipient, "TASK_ID": "task-1",
-             "PROJECT_ID": "project-1", "TEAM_ROOM": "!team:test", "ADMIN_TOKEN": "fixture"},
-        capture_output=True, text=True)
-    return run.returncode == 0
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def packet(kind="task_assigned", sender="@leader:test", recipient="@worker:test"):
-    return {"event_id": "$receipt", "type": "m.room.message", "sender": sender,
-            "content": {"body": "任务已分配。", "org.agentteams.coordination": {"channel_meta": {
-                "sender_id": sender, "agent_matrix_user_id": recipient,
-                "teamharness_coordination": {"id": "a" * 32, "kind": kind,
-                    "task_id": "task-1", "project_id": "project-1"}}}}}
+class PublicTaskObservationTests(unittest.TestCase):
+    def call(self, function, payload):
+        script = (ROOT / 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh').read_text()
+        start = script.index('_task_check_succeeded()')
+        end = script.index('SOURCE_ROOM=', start)
+        return subprocess.run(['bash', '-c', script[start:end] + '\n' + function],
+            input=json.dumps(payload), capture_output=True, text=True, env={**os.environ,
+                'TASK_ID': 'main', 'TEST_TEAM': 'team', 'TEST_WORKER': 'worker',
+                'TEST_MATRIX_DOMAIN': 'test', 'MARKER': 'CURRENT',
+                'ARTIFACT_ID': 'a1', 'ARTIFACT_VERSION': 'v1'})
+
+    def task(self):
+        artifact = {'taskId': 'execution', 'artifactId': 'a1', 'version': 'v1'}
+        return {'task': {'id': 'main', 'team': 'team', 'kind': 'main',
+            'status': 'completed', 'completionId': 'completion',
+            'acceptedResults': [{'assignedTo': 'worker', 'status': 'completed',
+                'resultStatus': 'SUCCESS', 'submissionId': 's1',
+                'review': {'accepted': True, 'status': 'completed', 'submissionId': 's1'},
+                'candidate': {'id': 's1', 'summary': 'Readiness note written', 'artifacts': [artifact]}}],
+            'artifacts': [artifact]}}
+
+    def test_exact_accepted_candidate_and_final_artifact_required(self):
+        task = self.task()
+        self.assertEqual(self.call('_task_check_succeeded', task).returncode, 0)
+        for label in ('project', 'unaccepted', 'wrong-candidate', 'wrong-worker', 'stale-file', 'pending'):
+            changed = copy.deepcopy(task)
+            main = changed['task']
+            child = main['acceptedResults'][0]
+            if label == 'project': main['projectId'] = 'legacy-project'
+            if label == 'unaccepted': child['review']['accepted'] = False
+            if label == 'wrong-candidate': child['review']['submissionId'] = 's0'
+            if label == 'wrong-worker': child['assignedTo'] = 'leader'
+            if label == 'stale-file': main['artifacts'] = [{'artifactId': 'a1', 'version': 'v0'}]
+            if label == 'pending': main['status'] = 'in_progress'
+            with self.subTest(label=label):
+                self.assertNotEqual(self.call('_task_check_succeeded', changed).returncode, 0)
+
+    def delivery(self):
+        return {'chunk': [
+            {'type': 'm.room.message', 'sender': '@manager:test', 'event_id': '$report',
+                'content': {'msgtype': 'm.text', 'body': 'Final CURRENT'}},
+            {'type': 'm.room.message', 'sender': '@manager:test', 'event_id': '$file',
+                'content': {'msgtype': 'm.file', 'url': 'mxc://test/media',
+                    'm.relates_to': {'event_id': '$report'},
+                    'org.agentteams.task_artifact': {'artifactId': 'a1', 'version': 'v1'}}}]}
+
+    def test_delivery_requires_matching_version_and_related_report(self):
+        messages = self.delivery()
+        self.assertEqual(json.loads(self.call('_delivered_result', messages).stdout)['file'], 'mxc://test/media')
+        for label in ('no-file', 'wrong-version', 'wrong-parent', 'wrong-sender', 'stale-report'):
+            changed = copy.deepcopy(messages)
+            report, file = changed['chunk']
+            if label == 'no-file': changed['chunk'].pop()
+            if label == 'wrong-version': file['content']['org.agentteams.task_artifact']['version'] = 'v0'
+            if label == 'wrong-parent': file['content']['m.relates_to']['event_id'] = '$old'
+            if label == 'wrong-sender': file['sender'] = '@worker:test'
+            if label == 'stale-report': report['content']['body'] = 'OLD'
+            with self.subTest(label=label):
+                self.assertNotEqual(self.call('_delivered_result', changed).returncode, 0)
 
 
-@pytest.mark.parametrize("kind,sender,recipient", [
-    ("task_assigned", "@leader:test", "@worker:test"),
-    ("task_submitted", "@worker:test", "@leader:test"),
-])
-def test_current_notification_does_not_need_legacy_text(kind, sender, recipient):
-    assert wait(packet(kind, sender, recipient), kind, sender, recipient)
+    def test_invalid_terminal_task_does_not_poll_again(self):
+        source = (ROOT / 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh').read_text()
+        start = source.index('TASK_CHECK="{}"')
+        end = source.index('\nif echo "${TASK_CHECK}" | _task_check_succeeded;', start)
+        block = source[start:end]
+        for status in ('completed', 'cancelled', 'blocked', 'revision', 'failed'):
+            with self.subTest(status=status):
+                run = subprocess.run(['bash', '-c', r'''
+date() { echo 0; }
+exec_in_agent() { printf '{"task":{"status":"%s"}}' "$STATUS_FIXTURE"; }
+_task_check_succeeded() { return 1; }
+sleep() { echo UNNECESSARY_WAIT; }
+''' + block], env={**os.environ, 'STATUS_FIXTURE': status},
+                    capture_output=True, text=True, timeout=2, check=True)
+                self.assertNotIn('UNNECESSARY_WAIT', run.stdout)
 
 
-@pytest.mark.parametrize("field,value", [("task_id", "old-task"), ("project_id", "other-project"),
-    ("kind", "task_submitted"), ("id", "")])
-def test_another_task_or_event_kind_cannot_satisfy_wait(field, value):
-    event = packet()
-    event["content"]["org.agentteams.coordination"]["channel_meta"]["teamharness_coordination"][field] = value
-    assert not wait(event)
-
-
-def test_forged_sender_and_tool_preview_do_not_prove_assignment():
-    event = packet()
-    event["sender"] = "@other:test"
-    assert not wait(event)
-    event = packet()
-    event["content"] = {"body": "TASK_ASSIGNED: task-1 @worker:test"}
-    assert not wait(event)
-
-
-@pytest.mark.parametrize("kind,sender,recipient,body", [
-    ("task_assigned", "@leader:test", "@worker:test", "@worker:test You are assigned task **task-1**: fixture"),
-    ("task_submitted", "@worker:test", "@leader:test", "@leader:test TASK_COMPLETED: task-1 - Result: shared/tasks/task-1/result.md"),
-])
-def test_default_legacy_transport_still_proves_real_notification(kind, sender, recipient, body):
-    event = packet(kind, sender, recipient)
-    event["content"] = {"body": body, "m.mentions": {"user_ids": [recipient]}}
-    assert wait(event, kind, sender, recipient)
-    event["content"]["org.agentteams.progress_only"] = True
-    assert not wait(event, kind, sender, recipient)
-    event["content"].pop("org.agentteams.progress_only")
-    event["content"]["m.mentions"]["user_ids"] = ["@other:test"]
-    assert not wait(event, kind, sender, recipient)
+if __name__ == '__main__':
+    unittest.main()

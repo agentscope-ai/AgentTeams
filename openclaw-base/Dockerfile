@@ -137,12 +137,14 @@ COPY session-read-audience.patch /tmp/session-read-audience.patch
 # 3. Remove unnecessary files (tests, docs) but keep .git for the online-upgrade
 #    work (P7 rebase path)
 COPY patches/dashboard-approvals.patch /tmp/dashboard-approvals.patch
+COPY patches/unified-hitl.patch /tmp/unified-hitl.patch
 RUN git init /opt/openclaw && \
     cd /opt/openclaw && \
     git remote add origin ${OPENCLAW_REPO_URL} && \
     git fetch --depth 1 origin "${OPENCLAW_TAG}" && \
     git checkout --detach FETCH_HEAD && \
     git apply /tmp/dashboard-approvals.patch && \
+    git apply /tmp/unified-hitl.patch && \
     git apply /tmp/session-read-audience.patch && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install --frozen-lockfile && \

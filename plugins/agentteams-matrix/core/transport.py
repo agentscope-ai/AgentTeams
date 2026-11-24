@@ -47,7 +47,7 @@ from nio import (
     RoomTypingResponse,
 )
 
-from .e2ee import E2EEMaintainer, crypto_available
+from .e2ee import E2EEMaintainer, E2EEFailureReport, crypto_available
 from .interfaces import (
     InboundEvent,
     MediaRef,
@@ -470,6 +470,9 @@ class NioTransport:
         client: Optional[AsyncClient] = None,
         on_sync: Optional[Callable[[], Any]] = None,
         on_token_invalid: Optional[Callable[[], None]] = None,
+        on_e2ee_maintenance_failure: Optional[
+            Callable[[E2EEFailureReport], None]
+        ] = None,
     ) -> None:
         self._config = config
         self._store = store
@@ -484,14 +487,49 @@ class NioTransport:
         # surface a fatal error (re-login required) instead of keeping a
         # healthy-looking connection.
         self._on_token_invalid = on_token_invalid
+        # Persistent E2EE maintenance-failure escalation (issue #1701):
+        # invoked by the maintainer exactly once when its consecutive
+        # failure count crosses E2EE_MAINTENANCE_FAILURE_THRESHOLD.
+        # The core stays adapter-neutral — the owning layer (e.g. a
+        # platform adapter) injects the handler that surfaces the
+        # failure through its own fatal-error contract.
+        self._on_e2ee_maintenance_failure = on_e2ee_maintenance_failure
         self._on_event: Optional[Callable[[InboundEvent], Awaitable[None]]] = None
         self._engine: Optional[SyncEngine] = None
+        # The engine's long-poll task, kept so a runtime can observe its
+        # death (see the ``sync_task`` property).
+        self._sync_task: Optional[asyncio.Task] = None
         self._maintainer: Optional[E2EEMaintainer] = None
         self._callback_registered = False
         self._client_closed = False
         self._media_cache = MediaCache(
             self._fetch_media_bytes, StateLayout(self._state_dir).media_cache
         )
+
+    @property
+    def sync_task(self) -> Optional[asyncio.Task]:
+        """The background task driving the long-poll sync loop.
+
+        ``None`` before :meth:`start` (and after :meth:`stop`).  A
+        runtime that must observe the loop's death — the OpenClaw
+        sidecar's liveness monitor, which exits the process when the
+        task that is supposed to run forever finishes — reads it here
+        instead of reaching into the engine.
+        """
+        return self._sync_task
+
+    @property
+    def e2ee_maintenance_failures(self) -> int:
+        """Consecutive E2EE maintenance failures on the running maintainer.
+
+        Read-only health surface for issue #1701: ``0`` before
+        :meth:`start` (no maintainer yet) and after any successful
+        maintenance pass.  The state is owned by the
+        :class:`~core.e2ee.E2EEMaintainer`; this is a pass-through.
+        """
+        if self._maintainer is None:
+            return 0
+        return self._maintainer.consecutive_failures
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -537,7 +575,10 @@ class NioTransport:
                 build_config = replace(build_config, encryption=False)
             client = build_client(build_config)
             self._client = client
-        self._maintainer = E2EEMaintainer(client)
+        self._maintainer = E2EEMaintainer(
+            client,
+            on_persistent_failure=self._on_e2ee_maintenance_failure,
+        )
 
         if self.encryption:
             # Native crypto preparation (shared with the out-of-process
@@ -567,7 +608,10 @@ class NioTransport:
             on_maintenance=self._after_sync,
             on_token_invalid=self._on_token_invalid,
         )
-        self._engine.start()
+        # Keep the engine's task: a runtime that must notice the sync
+        # loop's death (the OpenClaw sidecar's liveness monitor) reads
+        # it back through the ``sync_task`` property.
+        self._sync_task = self._engine.start()
         logger.info("NioTransport: sync loop started component=matrix")
 
     async def stop(self) -> None:
@@ -575,6 +619,7 @@ class NioTransport:
         if self._engine is not None:
             await self._engine.stop()
             self._engine = None
+            self._sync_task = None
         if self._callback_registered and self._client is not None:
             callbacks = getattr(self._client, "event_callbacks", None)
             if callbacks is not None:

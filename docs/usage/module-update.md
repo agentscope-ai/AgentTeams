@@ -259,6 +259,6 @@ not grant installation access.
 
 * [Plugin inventory](../../plugins/README.md) — what lives under `plugins/`
   and how each form is installed.
-* [Qwen Code bridge](../../plugins/qwen-code-bridge/README.md) — the first
+* [Qwen Code bridge](https://github.com/agentteams-group/agentteams-harness-qwenpaw/tree/main/plugins/qwen-code-bridge) — the first
   worker plugin shipped through this channel.
 * [Local deployment](deployment/local.md) — image-based upgrades.

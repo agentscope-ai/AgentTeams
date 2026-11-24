@@ -116,6 +116,11 @@ spec:
             {{- end }}
             - name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME
               value: {{ .Values.worker.defaultRuntime | quote }}
+            {{- $opencodeImage := .Values.worker.defaultImage.opencode | default dict }}
+            {{- if $opencodeImage.repository }}
+            - name: AGENTTEAMS_OPENCODE_WORKER_IMAGE
+              value: {{ printf "%s:%s" $opencodeImage.repository (required "worker.defaultImage.opencode.tag is required for an OpenCode candidate" $opencodeImage.tag) | quote }}
+            {{- end }}
             - name: TZ
               value: {{ .Values.controller.timezone | quote }}
             - name: AGENTTEAMS_STORAGE_PROVIDER

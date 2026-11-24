@@ -57,6 +57,16 @@ class OperationTest(unittest.TestCase):
         with self.assertRaisesRegex(RecoveryConflict, 'already completed'):
             self.recovery.begin_tools(self.identity, self.calls)
 
+    def test_attention_tool_can_finish_but_waiting_task_cannot_start_another_tool(self):
+        op = self.recovery.begin_tools(self.identity, self.calls)
+        self.task['session_state'] = 'waiting_user'
+        with patch('task_recovery.subprocess.run'):
+            self.recovery.finish_tools(self.identity, op, self.results)
+        with self.assertRaisesRegex(RecoveryConflict, 'human'):
+            self.recovery.begin_tools(self.identity, [dict(self.calls[0], id='followup')])
+        self.task['session_state'] = 'running'
+        self.recovery.begin_tools(self.identity, [dict(self.calls[0], id='followup')])
+
     def test_unknown_or_mismatched_receipts_do_not_upload_or_clear_the_fence(self):
         op = self.recovery.begin_tools(self.identity, self.calls)
         for results in ([dict(self.results[0], effect='unknown')], [dict(self.results[0], effect='none')],

@@ -35,6 +35,7 @@ type K8sConfig struct {
 	QwenPawWorkerImage         string
 	DeepSeekHarnessWorkerImage string
 	CodexWorkerImage           string
+	OpenCodeWorkerImage        string
 	WorkerCPU                  string
 	WorkerMemory               string
 
@@ -272,6 +273,11 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			image = k.config.QwenPawWorkerImage
 		case req.Runtime == RuntimeDeepSeekHarness && k.config.DeepSeekHarnessWorkerImage != "":
 			image = k.config.DeepSeekHarnessWorkerImage
+		case req.Runtime == RuntimeOpenCode:
+			image = k.config.OpenCodeWorkerImage
+			if image == "" {
+				return nil, fmt.Errorf("opencode runtime requires spec.image or AGENTTEAMS_OPENCODE_WORKER_IMAGE")
+			}
 		case req.Runtime == RuntimeCodex:
 			image = k.config.CodexWorkerImage
 			if image == "" {
@@ -783,6 +789,8 @@ func defaultRuntime(runtime string) string {
 		return RuntimeDeepSeekHarness
 	case RuntimeCodex:
 		return RuntimeCodex
+	case RuntimeOpenCode:
+		return RuntimeOpenCode
 	case RuntimeQoder:
 		return RuntimeQoder
 	default:

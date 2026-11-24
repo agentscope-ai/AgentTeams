@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import datetime
 
 import os
 
@@ -477,6 +478,7 @@ def _send_attention_notification(
     worker: str = "",
     humans: list[str] | None = None,
     attempt: int = 1,
+    record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Send an in-flight attention request to the Task room.
 
@@ -561,6 +563,15 @@ def _send_attention_notification(
 
     room_enc = urllib.parse.quote(matrix_room_id, safe="")
     txn = urllib.parse.quote(f"attention-{task_id}-{kind}-{attempt}", safe="")
+    if record and record.get("confirmation_id"):
+        block = {"type": "confirmation", "tool_name": "request_attention",
+            "confirmation_id": record["confirmation_id"], "reply_format": "com.agentteams.answer",
+            "status": "pending", "questions": [{"id": "decision", "question": question,
+                "options": record.get("options", [])}]}
+        deadline = record.get("timeoutAt") or record.get("expiresAt")
+        if deadline:
+            block["expires_at"] = int(datetime.datetime.fromisoformat(deadline.replace("Z", "+00:00")).timestamp() * 1000)
+        content["org.agentteams.run"] = {"version": "1", "blocks": [block]}
     url = f"{homeserver}/_matrix/client/v3/rooms/{room_enc}/send/m.room.message/{txn}"
     request = urllib.request.Request(
         url,

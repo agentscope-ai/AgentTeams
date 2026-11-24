@@ -324,7 +324,7 @@ def test_resolve_records_provenance(tmp_path, monkeypatch):
     assert "resolvedVia" in bad["error"]
 
 
-def test_legacy_call_keeps_legacy_shape(tmp_path, monkeypatch):
+def test_legacy_arguments_gain_a_stable_question_identity(tmp_path, monkeypatch):
     workspace, task_id = _prepare(tmp_path, monkeypatch, notify=lambda *a, **k: _sent())
     result = server._taskflow(
         _arguments(workspace, taskId=task_id, kind="approval", question="Ship it?")
@@ -334,7 +334,9 @@ def test_legacy_call_keeps_legacy_shape(tmp_path, monkeypatch):
     legacy_keys = {"kind", "question", "attempt", "requestedAt", "resolved", "eventId"}
     # S4a always records the notification outcome; the optional S0
     # fields stay absent.
-    assert set(record.keys()) <= legacy_keys | {"notification_log"}
+    assert set(record.keys()) <= legacy_keys | {"notification_log", "confirmation_id", "requested_of"}
+    assert record["confirmation_id"].startswith(f"attention:{task_id}:")
+    assert result["task"]["session_state"] == "waiting_user"
     assert not ({"options", "suggested", "timeoutAt", "expiresAt"} & set(record.keys()))
 
 

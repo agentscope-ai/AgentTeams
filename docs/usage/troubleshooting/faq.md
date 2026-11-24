@@ -523,6 +523,19 @@ that model. Do not rely on `/model list` alone as the source of available
 Higress providers; it shows the agent-side known model list, not every route
 defined in Higress.
 
+### External gateway deployments
+
+In the default embedded deployment, configure a third-party model service as an
+upstream of the bundled Higress gateway. To use an existing Higress instance with
+the Bash installer, set `AGENTTEAMS_HIGRESS_ADAPTER_MODE=external` and provide its
+gateway and Console URLs as `AGENTTEAMS_AI_GATEWAY_URL` and
+`AGENTTEAMS_AI_GATEWAY_ADMIN_URL`.
+
+For a Kubernetes deployment with an existing Alibaba Cloud AI Gateway and OSS,
+follow the [external gateway deployment guide](../deployment/kubernetes.md#11-external-ai-gateway-and-oss).
+This configuration requires a `credentialProvider` sidecar to issue scoped
+temporary credentials.
+
 ### Local models such as Ollama or LM Studio
 
 Local models are supported when the service exposes an OpenAI-compatible API
@@ -755,9 +768,8 @@ a configuration-only operation.
 
 ## Can AgentTeams connect to an existing Higress instance
 
-Not with `gateway.provider=higress` today. The Helm chart validates that
-`gateway.provider=higress` uses `gateway.mode=managed`, which means AgentTeams
-deploys and owns the Higress instance it uses.
+For Helm deployments, `gateway.provider=higress` requires `gateway.mode=managed`.
+AgentTeams deploys and manages that Higress instance.
 
 Do not copy an existing Higress configuration directory into the AgentTeams-managed
 Higress instance. AgentTeams reconciles the AI routes, consumers, and gateway
@@ -769,8 +781,8 @@ The supported paths are:
 - use the Higress instance managed by AgentTeams for AgentTeams traffic
 - use the external `ai-gateway` provider path where applicable
 
-Connecting to an existing self-managed Higress instance would require a separate
-external-Higress design, including gateway/console URLs, credentials, resource
+Connecting the Helm chart to an existing self-managed Higress instance would
+require a separate external-Higress design, including gateway/console URLs, credentials, resource
 naming isolation, and safeguards around existing routes and consumers.
 
 ---

@@ -694,6 +694,7 @@ func (a *App) initHTTPServer(_ context.Context) error {
 		STS:             a.stsService,
 		AuthMw:          a.authMw,
 		KubeMode:        a.cfg.KubeMode,
+		Version:         a.cfg.Version,
 		Namespace:       a.namespace,
 		ControllerName:  a.cfg.ControllerName,
 		SocketPath:      a.cfg.SocketPath,

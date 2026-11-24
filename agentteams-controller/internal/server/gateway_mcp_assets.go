@@ -555,33 +555,7 @@ func (h *gatewayAssets) mcps(ctx context.Context, req gatewayAssetRequest) (any,
 		return map[string]any{"rawConfig": string(raw), "toolCount": len(tools)}, nil
 	}
 	if req.Action == "list" {
-		if h.resources == nil || h.resources.oss == nil {
-			return nil, assetError(503, "MCP asset storage is unavailable")
-		}
-		keys, err := h.resources.oss.ListObjects(ctx, mcpRegistryPrefix)
-		if err != nil {
-			return nil, assetError(503, "cannot list MCP assets")
-		}
-		servers := []any{}
-		for _, key := range keys {
-			name := strings.TrimSuffix(strings.TrimPrefix(key, mcpRegistryPrefix), ".json")
-			if !strings.HasSuffix(key, ".json") || !assetName.MatchString(name) {
-				continue
-			}
-			record, err := h.readMCP(ctx, name)
-			if err != nil {
-				return nil, err
-			}
-			if record == nil {
-				continue
-			}
-			if record.Managed {
-				servers = append(servers, publicMCP(record))
-			} else {
-				servers = append(servers, map[string]any{"name": record.Name, "url": record.URL, "transport": record.Transport, "managed": false})
-			}
-		}
-		return map[string]any{"servers": servers}, nil
+		return h.listMCPAssets(ctx)
 	}
 	if req.Action == "save" {
 		return h.saveMCP(ctx, req.Input)

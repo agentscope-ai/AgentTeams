@@ -10,8 +10,6 @@ requires:
 adapters:
   - id: openclaw
     path: adapters/openclaw
-  - id: hermes
-    path: adapters/hermes
 package:
   include:
     - plugin.json

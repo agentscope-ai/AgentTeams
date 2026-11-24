@@ -42,6 +42,7 @@ type SandboxConfig struct {
 	QwenPawWorkerImage           string
 	DeepSeekHarnessWorkerImage   string
 	CodexWorkerImage             string
+	OpenCodeWorkerImage          string
 	WorkerCPU                    string
 	WorkerMemory                 string
 	SandboxPrewarmSize           int
@@ -158,6 +159,11 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 			workerImage = s.config.QwenPawWorkerImage
 		case req.Runtime == RuntimeDeepSeekHarness && s.config.DeepSeekHarnessWorkerImage != "":
 			workerImage = s.config.DeepSeekHarnessWorkerImage
+		case req.Runtime == RuntimeOpenCode:
+			workerImage = s.config.OpenCodeWorkerImage
+			if workerImage == "" {
+				return nil, fmt.Errorf("opencode runtime requires spec.image or AGENTTEAMS_OPENCODE_WORKER_IMAGE")
+			}
 		case req.Runtime == RuntimeCodex:
 			workerImage = s.config.CodexWorkerImage
 			if workerImage == "" {

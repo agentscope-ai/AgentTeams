@@ -139,12 +139,12 @@ def _normalize_shared_path(raw_path: str, action: str) -> tuple[str, bool]:
 
 def _resolve_filesync(arguments: dict[str, Any]) -> tuple[str, str, Path, str, bool]:
     action = str(arguments.get("action") or "").strip()
-    if action not in {"pull", "push", "list", "stat", "cat", "etag"}:
-        raise ValueError("action is required; use pull, push, stat, cat, list, or etag")
+    if action not in {"pull", "push", "list", "stat", "cat", "etag", "delete"}:
+        raise ValueError("action is required; use pull, push, stat, cat, etag, list, or delete")
     normalized, is_directory = _normalize_shared_path(str(arguments.get("path") or ""), action)
     parts = normalized.strip("/").split("/")
     kind = parts[0]
-    if kind == "global-shared" and action == "push":
+    if kind == "global-shared" and action in {"push", "delete"}:
         raise ValueError("global-shared is read-only for TeamHarness filesync")
 
     storage = arguments.get("storage") if isinstance(arguments.get("storage"), dict) else {}
@@ -307,6 +307,12 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
         # The object's ETag for conditional commits (If-Match); same
         # probe the push guard uses, read-only.
         command = ["mc", "stat", "--json", remote]
+    elif action == "delete":
+        # Remove one remote object (the retention sweep's mirror prune,
+        # #1702; usable directly for deliberate shared-file deletion).
+        # mc reports a non-existent object as an error; callers that
+        # treat "already absent" as success check the error text.
+        command = ["mc", "rm", remote]
     elif action == "pull":
         if is_directory:
             command = ["mc", "mirror", remote, str(local), "--overwrite"]

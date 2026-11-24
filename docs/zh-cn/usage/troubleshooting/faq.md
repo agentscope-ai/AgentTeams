@@ -502,6 +502,16 @@ provider；Higress 再根据请求里的模型名路由到真实上游供应商�
 `/model list` 当成 Higress 可用供应商列表；它展示的是 Agent 侧已知模型列表，不是
 Higress 里定义的全部路由。
 
+### 外部 AI 网关部署
+
+默认的内嵌部署通过内置 Higress 转发模型请求，第三方模型服务可以配置为它的上游。
+如需通过 Bash 安装器接入已有的 Higress，请设置 `AGENTTEAMS_HIGRESS_ADAPTER_MODE=external`，
+并通过 `AGENTTEAMS_AI_GATEWAY_URL` 和 `AGENTTEAMS_AI_GATEWAY_ADMIN_URL` 分别指定网关和 Console 地址。
+
+Kubernetes 部署如需接入已有的阿里云 AI Gateway 和 OSS，请参考
+[外部网关部署指南](../deployment/kubernetes.md#11-外部-ai-gateway-与-oss)。
+该配置需要 `credentialProvider` sidecar 签发受限的临时凭证。
+
 ### Ollama、LM Studio 等本地模型
 
 本地模型需要暴露 OpenAI 兼容 API，并且 AgentTeams 容器必须能访问该地址。在 Docker 容器内，
@@ -721,8 +731,8 @@ agent 模板接线，不是纯配置项。
 
 ## AgentTeams 可以连接已有的 Higress 实例吗
 
-当前不能通过 `gateway.provider=higress` 连接已有 Higress。Helm chart 会校验
-`gateway.provider=higress` 必须搭配 `gateway.mode=managed`，也就是由 AgentTeams 部署并管理 Higress。
+在 Helm 部署中，`gateway.provider=higress` 必须搭配 `gateway.mode=managed`。
+AgentTeams 会部署并管理这个 Higress 实例。
 
 不建议把已有 Higress 配置目录直接复制到 AgentTeams 托管的 Higress 中。AgentTeams 会调和它需要的
 AI routes、consumers 和网关资源，复制进去的资源可能和 AgentTeams 管理的状态冲突，或在安装/调和流程中被覆盖。
@@ -732,7 +742,7 @@ AI routes、consumers 和网关资源，复制进去的资源可能和 AgentTeam
 - 使用 AgentTeams 托管的 Higress 承载 AgentTeams 流量
 - 在适用场景下使用外部 `ai-gateway` provider
 
-如果要支持已有的自管 Higress，需要单独设计 external Higress 模式，包括 Gateway/Console URL、
+如果要让 Helm chart 支持已有的自管 Higress，需要单独设计 external Higress 模式，包括 Gateway/Console URL、
 访问凭据、资源命名隔离，以及避免影响已有 routes 和 consumers 的保护策略。
 
 ---

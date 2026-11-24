@@ -99,8 +99,8 @@ _is_metrics_supported() {
     local runtime
     runtime=$(_detect_runtime "$container" "$base_dir")
     case "$runtime" in
-        copaw) return 1 ;;
-        *) return 0 ;;
+        openclaw|hermes) return 0 ;;
+        *) return 1 ;;
     esac
 }
 
@@ -562,7 +562,7 @@ get_latest_session() {
     docker exec "$container" sh -c "ls -t '${session_dir}'/*.jsonl 2>/dev/null | head -1" 2>/dev/null
 }
 
-# Wait for the latest session file to stop growing (agent has finished processing)
+# Optional metrics flush wait, not a functional readiness/completion signal.
 # Wait for a worker container's session to stabilize (no new bytes written for stable_seconds).
 # Usage: wait_for_worker_session_stable <worker_name> [stable_seconds] [max_wait_seconds]
 wait_for_worker_session_stable() {
@@ -603,6 +603,10 @@ wait_for_worker_session_stable() {
         local size=0
         if [ -n "$session" ]; then
             size=$(docker exec "$container" sh -c "wc -c < '${session}' 2>/dev/null || echo 0")
+        fi
+        if [ "${size:-0}" -eq 0 ]; then
+            log_info "Worker '${worker}' has no nonempty session observation; collecting available metrics without waiting" >&2
+            return 0
         fi
 
         if [ "$size" -eq "$last_size" ] && [ "$size" -gt 0 ]; then
@@ -658,6 +662,10 @@ wait_for_session_stable() {
         if [ -n "$session" ]; then
             size=$(docker exec "$manager_container" sh -c "wc -c < '${session}' 2>/dev/null || echo 0" | tr -dc '0-9')
             size=${size:-0}
+        fi
+        if [ "$size" -eq 0 ]; then
+            log_info "Manager has no nonempty session observation; collecting available metrics without waiting" >&2
+            return 0
         fi
 
         if [ "$size" -eq "$last_size" ]; then

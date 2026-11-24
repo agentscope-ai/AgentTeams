@@ -386,6 +386,36 @@ def test_maintenance_failure_report_is_frozen():
         report.count = 6  # type: ignore[misc]
 
 
+@pytest.mark.parametrize("operation", ["keys_upload", "keys_query", "keys_claim", "send_to_device_messages"])
+def test_error_responses_count_and_escalate_then_recover(operation):
+    from nio.responses import KeysUploadError, ToDeviceError
+
+    client = FakeClient(upload=True, query=True, claim=True)
+    reports = []
+    maintainer = E2EEMaintainer(client, on_persistent_failure=reports.append)
+    original = getattr(client, operation)
+
+    async def fail(*args):
+        if operation == "send_to_device_messages":
+            return [None, ToDeviceError("maintenance unavailable", "M_UNKNOWN")]
+        return KeysUploadError("maintenance unavailable", "M_UNKNOWN")
+
+    async def scenario():
+        setattr(client, operation, fail)
+        for count in range(1, E2EE_MAINTENANCE_FAILURE_THRESHOLD + 3):
+            await maintainer.run_once()
+            assert maintainer.consecutive_failures == count
+        assert len(reports) == 1
+        assert reports[0].count == E2EE_MAINTENANCE_FAILURE_THRESHOLD
+        assert "maintenance unavailable" in maintainer.last_error
+        setattr(client, operation, original)
+        await maintainer.run_once()
+        assert maintainer.consecutive_failures == 0
+        assert maintainer.last_error == ""
+
+    _run(scenario())
+
+
 # ---------------------------------------------------------------------------
 # Native crypto init (matrix-nio 0.26 + vodozemac): the NioTransport's
 # restore_login preparation, the fail-closed E2EEInitError, the persisted

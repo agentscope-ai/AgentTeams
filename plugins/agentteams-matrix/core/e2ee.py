@@ -200,14 +200,14 @@ class E2EEMaintainer:
             return
         try:
             if client.should_upload_keys:
-                await client.keys_upload()
+                self._check_response(await client.keys_upload())
             if client.should_query_keys:
-                await client.keys_query()
+                self._check_response(await client.keys_query())
             if client.should_claim_keys:
-                await client.keys_claim(
+                self._check_response(await client.keys_claim(
                     client.get_users_for_key_claiming(),
-                )
-            await client.send_to_device_messages()
+                ))
+            self._check_response(await client.send_to_device_messages())
         except Exception as exc:
             self._consecutive_failures += 1
             self._last_error = str(exc)
@@ -248,3 +248,16 @@ class E2EEMaintainer:
             )
         self._consecutive_failures = 0
         self._last_error = ""
+
+    @staticmethod
+    def _check_response(response: Any) -> None:
+        # nio reports HTTP failures as response objects, not exceptions;
+        # to-device sends return a list of individually acknowledged results.
+        if isinstance(response, (list, tuple)):
+            for item in response:
+                E2EEMaintainer._check_response(item)
+        elif response is not None:
+            from nio.responses import ErrorResponse
+
+            if isinstance(response, ErrorResponse):
+                raise RuntimeError(str(response))

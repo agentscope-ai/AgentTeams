@@ -81,11 +81,7 @@ else:
         "(install.sh copies it)"
     )
 
-from core.e2ee import (  # noqa: E402
-    E2EEMaintainer,
-    E2EEFailureReport,
-    crypto_available,
-)
+from core.e2ee import E2EEMaintainer, crypto_available  # noqa: E402
 from core.history import (  # noqa: E402
     DEFAULT_HISTORY_LIMIT,
     HistoryEntry,
@@ -273,19 +269,6 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
         """
         return self._transport is not None and not self.has_fatal_error
 
-    @property
-    def e2ee_maintenance_failures(self) -> int:
-        """Consecutive E2EE maintenance failures on the running transport.
-
-        Read-only health surface for issue #1701: ``0`` while no
-        transport is connected (or maintenance is healthy).  The SDK's
-        JSON runtime status stays SDK-owned; this property is the
-        in-process readable shape.
-        """
-        if self._transport is None:
-            return 0
-        return self._transport.e2ee_maintenance_failures
-
     def _fail(self, code: str, message: str, *, retryable: bool) -> bool:
         self._set_fatal_error(code, message, retryable=retryable)
         return False
@@ -308,36 +291,6 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
             "token_invalid",
             "M_UNKNOWN_TOKEN: matrix re-login required",
             retryable=False,
-        )
-
-    def _on_e2ee_maintenance_failure(self, report: E2EEFailureReport) -> None:
-        """Persistent E2EE maintenance failure -> the gateway's fatal contract.
-
-        The core's :class:`E2EEMaintainer` counts consecutive key
-        maintenance failures and, once
-        ``E2EE_MAINTENANCE_FAILURE_THRESHOLD`` passes have failed, invokes
-        this injected callback (issue #1701).  The core stays
-        adapter-neutral: it only calls the handler — this adapter wires
-        it into the gateway's fatal-error surface so the channel stops
-        reporting healthy (``is_connected`` goes False) and the count
-        plus the last error are visible to the operator.  Retryable:
-        the sync loop itself is still running and a reconnect may
-        restore maintenance.
-        """
-        logger.error(
-            "AgentTeams Matrix: E2EE key maintenance failed %d "
-            "consecutive passes (last error: %s) — marking the channel "
-            "fatal",
-            report.count,
-            report.last_error,
-        )
-        self._set_fatal_error(
-            "e2ee_maintenance_failed",
-            (
-                f"E2EE key maintenance failed {report.count} consecutive "
-                f"passes (last error: {report.last_error})"
-            ),
-            retryable=True,
         )
 
     async def _preconnect_token_valid(self, client) -> bool:
@@ -466,7 +419,6 @@ class AgentTeamsMatrixAdapter(BasePlatformAdapter):
                 encryption=encryption,
                 client=client,
                 on_token_invalid=self._on_token_invalid,
-                on_e2ee_maintenance_failure=self._on_e2ee_maintenance_failure,
             )
             await transport.start(self._on_inbound)
             self._transport = transport

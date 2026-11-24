@@ -2046,9 +2046,9 @@ func (h *ProjectHandler) teamWorkerNames(ctx context.Context, team string) []str
 // this project: the project's source_room_id plus every graph task's
 // TaskMeta.room_id. Spawn association is derived through this set — a spawn's
 // persisted root_session_id (QwenPaw 2.1+) is the session that called
-// spawn_subagent, i.e. one of these rooms. Reads are best-effort: an
-// unreadable TaskMeta just contributes nothing, never a 500.
-func (h *ProjectHandler) collectProjectRooms(ctx context.Context, meta *projectMeta, team string) map[string]bool {
+// spawn_subagent, i.e. one of these rooms. Missing/malformed TaskMeta is
+// skipped, but storage unavailability leaves association unknown.
+func (h *ProjectHandler) collectProjectRooms(ctx context.Context, meta *projectMeta, team string) (map[string]bool, error) {
 	rooms := map[string]bool{}
 	if r := normalizeSessionKey(meta.SourceRoomID); r != "" {
 		rooms[r] = true
@@ -2066,6 +2066,9 @@ func (h *ProjectHandler) collectProjectRooms(ctx context.Context, meta *projectM
 		for _, key := range taskMetaKeys(t.TaskID, team) {
 			data, err := h.oss.GetObject(ctx, key)
 			if err != nil {
+				if errors.Is(err, oss.ErrStorageUnavailable) {
+					return nil, err
+				}
 				continue
 			}
 			var raw map[string]any
@@ -2081,7 +2084,7 @@ func (h *ProjectHandler) collectProjectRooms(ctx context.Context, meta *projectM
 			break
 		}
 	}
-	return rooms
+	return rooms, nil
 }
 
 // spawnBelongsToProject reports whether a spawn chat belongs to the project's
@@ -2103,15 +2106,18 @@ func spawnBelongsToProject(c workerChat, rooms map[string]bool) bool {
 // agents/{worker}/.
 const workerChatsPath = ".qwenpaw/workspaces/default/chats.json"
 
-func (h *ProjectHandler) readWorkerSpawns(ctx context.Context, worker string, rooms map[string]bool) []spawnInfo {
+func (h *ProjectHandler) readWorkerSpawns(ctx context.Context, worker string, rooms map[string]bool) ([]spawnInfo, error) {
 	out := make([]spawnInfo, 0)
 	data, err := h.oss.GetObject(ctx, "agents/"+worker+"/"+workerChatsPath)
 	if err != nil {
-		return out // chats.json missing/unreadable: skip worker, don't 500
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			return nil, err
+		}
+		return out, nil // genuinely missing/unreadable legacy index
 	}
 	var file workerChatsFile
 	if err := json.Unmarshal(data, &file); err != nil {
-		return out // truncated/legacy shape: skip worker
+		return out, nil // truncated/legacy shape: skip worker
 	}
 	for _, c := range file.Chats {
 		if !isSpawnChat(c) {
@@ -2132,7 +2138,7 @@ func (h *ProjectHandler) readWorkerSpawns(ctx context.Context, worker string, ro
 			Skills:        spawnSkills(c),
 		})
 	}
-	return out
+	return out, nil
 }
 
 // GetProjectSpawns handles GET /api/v1/projects/{id}/spawns.
@@ -2171,13 +2177,22 @@ func (h *ProjectHandler) GetProjectSpawns(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	rooms := h.collectProjectRooms(r.Context(), meta, team)
+	rooms, err := h.collectProjectRooms(r.Context(), meta, team)
+	if err != nil {
+		writeStorageUnavailable(w)
+		return
+	}
 	workers := h.teamWorkerNames(r.Context(), team)
 	resp := projectSpawnsResponse{ProjectID: projectID, Workers: make([]workerSpawns, 0, len(workers))}
 	for _, worker := range workers {
+		spawns, err := h.readWorkerSpawns(r.Context(), worker, rooms)
+		if err != nil {
+			writeStorageUnavailable(w)
+			return
+		}
 		resp.Workers = append(resp.Workers, workerSpawns{
 			Worker: worker,
-			Spawns: h.readWorkerSpawns(r.Context(), worker, rooms),
+			Spawns: spawns,
 		})
 	}
 	httputil.WriteJSON(w, http.StatusOK, resp)
@@ -2235,10 +2250,13 @@ type spawnMessagesResponse struct {
 // on both sides so bare room ids and channel-prefixed keys compare reliably;
 // the raw value is kept for the SQL lookup because history.db stores the
 // original key.
-func (h *ProjectHandler) findSpawnWorker(ctx context.Context, workers []string, sessionID string) (string, string, *string) {
+func (h *ProjectHandler) findSpawnWorker(ctx context.Context, workers []string, sessionID string) (string, string, *string, error) {
 	for _, worker := range workers {
 		data, err := h.oss.GetObject(ctx, "agents/"+worker+"/"+workerChatsPath)
 		if err != nil {
+			if errors.Is(err, oss.ErrStorageUnavailable) {
+				return "", "", nil, err
+			}
 			continue
 		}
 		var file workerChatsFile
@@ -2250,11 +2268,11 @@ func (h *ProjectHandler) findSpawnWorker(ctx context.Context, workers []string, 
 				continue
 			}
 			if normalizeSessionKey(c.SessionID) == sessionID {
-				return worker, c.SessionID, spawnRootSession(c)
+				return worker, c.SessionID, spawnRootSession(c), nil
 			}
 		}
 	}
-	return "", "", nil
+	return "", "", nil, nil
 }
 
 // openReadOnlySQLite opens a SQLite database read-only, falling back to
@@ -2407,7 +2425,11 @@ func (h *ProjectHandler) GetProjectSpawnMessages(w http.ResponseWriter, r *http.
 		}
 	}
 
-	worker, rawSessionID, root := h.findSpawnWorker(r.Context(), h.teamWorkerNames(r.Context(), team), sessionID)
+	worker, rawSessionID, root, err := h.findSpawnWorker(r.Context(), h.teamWorkerNames(r.Context(), team), sessionID)
+	if err != nil {
+		writeStorageUnavailable(w)
+		return
+	}
 	if worker == "" {
 		httputil.WriteError(w, http.StatusNotFound, "spawn session not found")
 		return
@@ -2415,7 +2437,11 @@ func (h *ProjectHandler) GetProjectSpawnMessages(w http.ResponseWriter, r *http.
 	// Project scoping: the spawn must belong to this project (root session in
 	// the project's room set). Legacy spawns without a root and other
 	// projects' spawns are hidden as 404.
-	rooms := h.collectProjectRooms(r.Context(), meta, team)
+	rooms, err := h.collectProjectRooms(r.Context(), meta, team)
+	if err != nil {
+		writeStorageUnavailable(w)
+		return
+	}
 	spawnChat := workerChat{Meta: map[string]any{}}
 	if root != nil {
 		spawnChat.Meta["root_session_id"] = *root
@@ -3362,7 +3388,7 @@ func (h *ProjectHandler) GetProjectMeta(w http.ResponseWriter, r *http.Request) 
 	}
 	data, err := h.oss.GetObject(r.Context(), pwc.key)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "read project meta: "+err.Error())
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "read project meta: "+err.Error())
 		return
 	}
 	etag := contentETag(data)

@@ -1841,6 +1841,11 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     att_body = att_ev[0]["content"].get("body", "")
     if f"ATTENTION_APPROVAL: {att_tid} - Ship to production?" not in att_body:
         raise AssertionError(f"attention event must carry the contract line: {att_body!r}")
+    hitl_block = att_ev[0]["content"]["org.agentteams.run"]["blocks"][0]
+    if hitl_block.get("confirmation_id") != att1["task"]["attention"][-1]["confirmation_id"]:
+        raise AssertionError(f"attention card must bind the persisted question: {hitl_block!r}")
+    if hitl_block.get("questions", [{}])[0].get("id") != "decision":
+        raise AssertionError(f"attention card must preserve the shared answer schema: {hitl_block!r}")
     mentions = (att_ev[0]["content"].get("m.mentions") or {}).get("user_ids", [])
     if "@admin:example.test" not in mentions or "@carol:example.test" not in mentions:
         raise AssertionError(f"attention event must mention leader and human: {mentions!r}")
@@ -2290,7 +2295,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         raise AssertionError(f"suggested must be written to the record: {nv_ok_records[0]!r}")
     if nv_ok_records[0].get("expiresAt") != "2026-10-29T08:00:00Z":
         raise AssertionError(f"expiresAt must be written to the record: {nv_ok_records[0]!r}")
-    # 5) omitted fields keep the legacy record shape (no new keys).
+    # 5) legacy arguments retain optional defaults and gain a stable HITL identity.
     nv_plain_tid = "att-options-plain"
     _lifecycle_setup(nv_plain_tid)
     nv_plain = payload("taskflow", {
@@ -2309,7 +2314,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     # notification_log is the S4a outcome entry: it is always present on a
     # record that went through the notification stage, independent of the
     # optional S0 fields this shape check guards.
-    legacy_keys = {"kind", "question", "attempt", "requestedAt", "resolved", "eventId", "notification_log"}
+    legacy_keys = {"kind", "question", "attempt", "requestedAt", "resolved", "eventId", "notification_log", "confirmation_id", "requested_of"}
     if not set(nv_plain_records[0].keys()) <= legacy_keys:
         raise AssertionError(f"omitted fields must keep the legacy record shape: {nv_plain_records[0]!r}")
     if any(key in nv_plain_records[0] for key in ("options", "suggested", "expiresAt")):

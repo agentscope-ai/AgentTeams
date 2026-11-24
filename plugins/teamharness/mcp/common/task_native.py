@@ -107,6 +107,10 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         return receipts.creation_sources(meta)
     if operation == "schema":
         return task_cli.schema(native_role(payload.get("role")))
+    if operation == "model_context":
+        if not isinstance(payload.get("context"), dict):
+            raise ValueError("prepared Task context required")
+        return task_context.model_context(payload["context"])
     if operation == "prepare_event":
         # Paths and tuples remain native in prepare(); JSON is this bridge's IO.
         return json.loads(json.dumps(task_context.prepare_event(payload.get("event"), call), default=str))

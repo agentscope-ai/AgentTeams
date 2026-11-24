@@ -393,3 +393,16 @@ def test_dispatch_receipts_confirm_actual_sender_event_without_a_model_turn(brid
         assert bridge.dispatched_receipts(result,'@sender:test',lambda _:{**saved,**change})==[]
     def unavailable(_):raise OSError('temporarily unavailable')
     assert bridge.dispatched_receipts(result,'@sender:test',unavailable)==[]
+
+
+def test_model_context_bridge_uses_public_projection_and_rejects_unprepared_values(bridge):
+    value={"spec":"Your node", "originalInputs":[{"body":"Original requirement"}],
+           "inputs":[{"summary":"Reviewed", "files":[{"localPath":"/tmp/versioned/result.json", "preview":"large file body"}]}],
+           "acceptedResults":[{"candidate":{"report":"large report body", "reportFile":{"artifactId":"report-id"}}}]}
+    result=bridge.invoke({"operation":"model_context","context":value})
+    assert result==bridge.task_context.model_context(value)
+    assert "large file body" not in json.dumps(result)
+    assert "large report body" not in json.dumps(result)
+    assert value["acceptedResults"][0]["candidate"]["report"]=="large report body"
+    with pytest.raises(ValueError,match="prepared Task context"):
+        bridge.invoke({"operation":"model_context","context":[]})

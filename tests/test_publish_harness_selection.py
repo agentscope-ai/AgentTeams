@@ -14,6 +14,7 @@ SCRIPT = WORKFLOW["jobs"]["prepare"]["steps"][0]["run"]
 @pytest.mark.parametrize("runtime,architecture,publish,success,count", [
     ("all", "all", "false", True, 12),
     ("codex", "amd64", "false", True, 1),
+    ("claudecode", "all", "false", True, 2),
     ("opencode", "all", "false", True, 2),
     ("codex", "amd64", "true", False, 0),
     ("invalid", "all", "false", False, 0),

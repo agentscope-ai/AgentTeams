@@ -55,8 +55,12 @@ class Recovery:
         except (urllib.error.URLError, TimeoutError) as error:
             raise RecoveryUnavailable("Task recovery connection failed; read the current Task before retrying") from error
 
-    def discover(self):
-        return self.request("GET", "tasks/recoverable")
+    def discover(self, *, include_waiting=False):
+        snapshot = self.request("GET", "tasks/recoverable")
+        if include_waiting:
+            return snapshot
+        return {**snapshot, "tasks": [entry for entry in snapshot["tasks"]
+            if entry["task"].get("session_state") != "waiting_user"]}
 
     @staticmethod
     def task_path(task_id, team):
@@ -67,7 +71,7 @@ class Recovery:
             {"action": "claim", "instance_id": snapshot["instance_id"], "process_id": self.process}, entry["etag"])
 
     def checkpoint(self, task_id, team, checkpoint, *, release=False, expected_identity=None, expected_digest=None):
-        snapshot = self.discover()
+        snapshot = self.discover(include_waiting=True)
         entry = next((e for e in snapshot["tasks"] if e["task"]["task_id"] == task_id and e["team_id"] == team), None)
         if entry is None:
             raise RecoveryConflict("Task was cancelled, reassigned or is no longer recoverable")
@@ -84,7 +88,7 @@ class Recovery:
              "process_id": self.process, "checkpoint": checkpoint}, entry["etag"])
 
     def current(self, task_id, team):
-        snapshot = self.discover()
+        snapshot = self.discover(include_waiting=True)
         return next((e["task"] for e in snapshot["tasks"]
                      if e["task"]["task_id"] == task_id and e["team_id"] == team), None)
 
@@ -96,6 +100,8 @@ class Recovery:
             raise RecoveryConflict('Native tool execution ownership was replaced')
         if execution.get('state') not in ({'active', 'needs_verification'} if verification else {'active'}):
             raise RecoveryConflict('Native unconfirmed operation requires verification before normal admission')
+        if not verification and task.get('session_state') == 'waiting_user':
+            raise RecoveryConflict('Task is waiting for a human decision')
         return task
 
     def begin_tools(self, identity, calls):
@@ -149,7 +155,7 @@ class Recovery:
         A Task tool can release execution after submission. The same verified
         process may reclaim it for delivery; a replaced process cannot.
         """
-        snapshot = self.discover()
+        snapshot = self.discover(include_waiting=True)
         entry = next((e for e in snapshot["tasks"] if e["task"]["task_id"] == task_id and e["team_id"] == team), None)
         execution = entry["task"].get("execution", {}) if entry else {}
         if execution.get("process_id") != self.process or execution.get("instance_id") != snapshot["instance_id"]:
@@ -195,6 +201,8 @@ class Recovery:
     def resume_text(task):
         execution = task["execution"]
         checkpoint = execution.get("checkpoint")
+        decisions = [record for record in task.get('attention', []) if record.get('answer')]
+        decision_context = {'human_decisions': decisions} if decisions else {}
         if task.get('task_plan_id'):
             return ("Continue your existing Task through the common task protocol and its prepared output directory. "
                 "Your framework owns durable execution checkpoints and receipt recovery; do not call legacy taskflow/projectflow "
@@ -202,7 +210,7 @@ class Recovery:
                 "authoritative verification before reasoning or further tools. Preserve verified work and submit only the current "
                 "Task's outputs with the common task tool.\n"
                 + json.dumps({'task_id': task['task_id'], 'team_id': task.get('team_id'), 'status': task['status'],
-                    'generation': execution['generation'], 'checkpoint': checkpoint}, ensure_ascii=False))
+                    'generation': execution['generation'], 'checkpoint': checkpoint, **decision_context}, ensure_ascii=False))
         return ("Recover your existing Task from the authoritative task system. Do not create a new task.\n"
             "Before a new external side effect, record its operation identity with checkpoint_task. If an operation is "
             "started or unknown, verify its external outcome and save evidence before continuing; do not rerun it. "
@@ -217,7 +225,7 @@ class Recovery:
                 "status": task["status"], "title": task.get("title"), "spec": task.get("spec"),
                 "project_id": task.get("project_id"), "main_task_id": task.get("main_task_id"),
                 "generation": execution["generation"], "checkpoint": checkpoint,
-                "history": task.get("history", [])[-10:]}, ensure_ascii=False))
+                "history": task.get("history", [])[-10:], **decision_context}, ensure_ascii=False))
 
 
 def enabled():

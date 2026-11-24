@@ -41,7 +41,8 @@ def approval_decision(content, agent_id):
         return None
     request = answer.get("confirmation_id")
     context = answer.get("context_id")
-    if (answer.get("agent_id") != agent_id or answer.get("answer") not in {"approved", "rejected"}
+    decision = answer.get("answer")
+    if (answer.get("agent_id") != agent_id or not isinstance(decision, str) or decision not in {"approved", "rejected"}
             or not isinstance(request, str) or not re.fullmatch(r"[\w.:-]+", request)
             or not isinstance(context, str) or not re.fullmatch(r"[\w.:-]+", context)):
         return ()

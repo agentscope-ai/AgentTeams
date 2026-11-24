@@ -2463,6 +2463,55 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     if ofail_meta2.get("projectCompletionEventId") != ofail_note.get("eventId"):
         raise AssertionError(f"persisted event id must match the sent event: {ofail_meta2!r}")
 
+    # Shared HITL consumption uses the real conditional meta HTTP endpoint and
+    # Matrix receipt transport; storage reads project the fake authoritative object.
+    import hitl_answer
+    hitl_tid = "hitl-durable-answer"
+    _lifecycle_setup(hitl_tid)
+    hitl_request = payload("taskflow", {
+        "role": "worker", "action": "request_attention", "payload": {
+            "taskId": hitl_tid, "kind": "decision", "question": "Continue?",
+            "options": [{"id": "go", "label": "Go"}],
+        },
+    })
+    hitl_id = hitl_request["task"]["attention"][-1]["confirmation_id"]
+    os.environ["TEAMHARNESS_SHARED_DIR"] = str(workspace / "shared")
+    os.environ["AGENTTEAMS_SHARED_STORAGE_PREFIX"] = "mock/shared"
+    os.environ["AGENTTEAMS_MATRIX_USER_ID"] = "@worker-a:example.test"
+
+    def hitl_pull(arguments, tid):
+        remote = _VIRTUAL_META.get(f"shared/tasks/{tid}/meta.json")
+        if remote is None:
+            return False
+        path = workspace / f"shared/tasks/{tid}/meta.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(remote[0]), encoding="utf-8")
+        return True
+
+    _sync_mod._pull_task = hitl_pull
+    _sync_mod._remote_task_meta_etag = lambda arguments, tid: _fake_etag(arguments, f"shared/tasks/{tid}/meta.json")
+    decision = {"room_id": "!team:example.test", "event_id": "$hitl-answer", "source": {
+        "sender": "@carol:example.test", "content": {"com.agentteams.answer": {
+            "kind": "ask_user", "agent_id": "@worker-a:example.test", "actor": "@forged:example.test",
+            "confirmation_id": hitl_id, "responses": [{"id": "decision", "selected": ["go"]}],
+        }},
+    }}
+    if hitl_answer.consume({**decision, "source": {**decision["source"], "sender": "@stranger:example.test"}})["accepted"]:
+        raise AssertionError("an unauthorized sender must not settle the question")
+    if not hitl_answer.consume(decision)["accepted"]:
+        raise AssertionError(f"the question must persist the authorized decision: {_VIRTUAL_META[f'shared/tasks/{hitl_tid}/meta.json'][0]!r}")
+    hitl_meta = _VIRTUAL_META[f"shared/tasks/{hitl_tid}/meta.json"][0]
+    answer_record = hitl_meta["attention"][-1]
+    if answer_record["answer"]["sender"] != "@carol:example.test" or hitl_meta["session_state"] != "running":
+        raise AssertionError(f"the actual sender and continuation state must be durable: {hitl_meta!r}")
+    if hitl_answer.consume({**decision, "event_id": "$different-answer"})["accepted"]:
+        raise AssertionError("another event must not replace the first accepted answer")
+    (workspace / f"shared/tasks/{hitl_tid}/meta.json").unlink()
+    if not hitl_answer.consume(decision)["accepted"]:
+        raise AssertionError("a replay must recover the committed decision without local task state")
+    if matrix["events"][-1]["content"]["org.agentteams.run"]["blocks"][0]["status"] != "answered":
+        raise AssertionError("a committed decision must produce the shared owner receipt")
+
     matrix_server.shutdown()
     matrix_server.server_close()
 

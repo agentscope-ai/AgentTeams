@@ -7,8 +7,11 @@ import urllib.request
 import os
 
 def apply_answer(task, room, event_id, sender, content, owner, now):
+    from mcp.common.identity import _canonical_room_id
     answer = content.get("com.agentteams.answer") or {}
-    if task.get("room_id") != room or task.get("status") in {"cancelled", "completed", "accepted", "revision", "blocked"}:
+    if answer.get("kind") not in (None, "ask_user"):
+        return False
+    if _canonical_room_id(task.get("room_id")) != _canonical_room_id(room) or task.get("status") in {"cancelled", "completed", "accepted", "revision", "blocked"}:
         return False
     records = [record for record in task.get("attention", [])
         if record.get("confirmation_id") == answer.get("confirmation_id")]
@@ -45,6 +48,7 @@ def apply_answer(task, room, event_id, sender, content, owner, now):
         record["resolved"] = True
         record["resolvedVia"] = "im_reply"
         record["resolvedBy"] = sender
+        record["resolvedAt"] = record["answer"]["received_at"]
     return True
 
 
@@ -55,7 +59,10 @@ def consume(request):
     parts = str(answer.get("confirmation_id", "")).split(":")
     if len(parts) != 3 or parts[0] != "attention":
         return {"accepted": False}
-    task_id = server._safe_id(parts[1], "taskId")
+    try:
+        task_id = server._safe_id(parts[1], "taskId")
+    except ValueError:
+        return {"accepted": False}
     arguments = {}
     class InvalidAnswer(Exception):
         pass
@@ -70,6 +77,10 @@ def consume(request):
         _commit_task_guarded(arguments, task_id, mutate, action="answer_attention", exclude=["spec.md", "base/"])
     except InvalidAnswer:
         return {"accepted": False}
+    except ValueError as error:
+        if str(error) == "task not found":
+            return {"accepted": False}
+        raise
     receipt = {"msgtype": "m.text", "body": "Question answered", "org.agentteams.run": {
         "version": "1", "blocks": [{"type": "confirmation", "tool_name": "request_attention",
             "confirmation_id": answer["confirmation_id"], "status": "answered"}]}}

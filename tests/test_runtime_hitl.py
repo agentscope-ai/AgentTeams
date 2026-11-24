@@ -19,7 +19,7 @@ class ApprovalWireTests(unittest.TestCase):
 
     def test_invalid_structured_control_never_falls_back_to_body(self):
         for changes in ({"agent_id": "@other:s"}, {"confirmation_id": "one\n/approve two"},
-                        {"context_id": ""}, {"answer": "allow-always"}, {"context_id": None}):
+                        {"context_id": ""}, {"answer": "allow-always"}, {"answer": {}}, {"context_id": None}):
             self.assertEqual(approval_decision(self.content(**changes), "@worker:s"), ())
 
     def test_legacy_messages_and_questions_are_separate(self):

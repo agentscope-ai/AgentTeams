@@ -63,7 +63,9 @@ class WorkerMatrix:
         from runtime_hitl import consume_attention
         decision = consume_attention(room, event_id, source)
         if decision is not None:
-            intent = "message" if decision else "context"
+            # The durable Task becomes recoverable after a valid decision.
+            # Do not start independent Matrix work for the same answer.
+            intent = "context"
         previous = self.input(matrix_event_key(room, event_id))
         input_ = {"room_id": room, "event_id": event_id, "intent": intent, "input": source}
         if previous:
@@ -73,7 +75,7 @@ class WorkerMatrix:
             if previous.get("work"):
                 input_["work"] = previous["work"]
         elif task_id is not None:
-            tasks = self.recovery.discover()
+            tasks = self.recovery.discover(include_waiting=True)
             matches = [entry for entry in tasks["tasks"]
                 if entry["task"]["task_id"] == task_id and entry["task"].get("room_id") == room]
             if len(matches) != 1:

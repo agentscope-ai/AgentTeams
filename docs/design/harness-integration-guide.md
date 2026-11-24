@@ -181,6 +181,7 @@ python3 tests/task-protocol/summarize_runs.py /path/to/evidence/runs --source FU
 - **Ask User。** 使用 `org.agentteams.run` 的 `confirmation` 块，提供稳定的 `confirmation_id`、问题及选项、可选截止时间。新请求声明 `reply_format=com.agentteams.answer`。答复使用 `kind=ask_user`，逐题保留 `responses` 的问题 ID、选项 ID 和补充文本。原生能力优先暂停并恢复原 Turn；`request_attention` 等非原生路径先持久化决策，再通过后续 Turn 继续同一工作。
 - **Tool Approval。** 使用 `org.agentteams.approval`，新请求提供 `context_id` 并声明相同的 `reply_format`。客户端统一回传 `kind=tool_approval`、请求 ID、上下文、目标 Agent 和 `approved/rejected`。Adapter 保留原有权限策略，在执行前完成原生授权。聊天中的自报 `actor`、自然语言“批准”和普通 Ask User 答案都不能授予工具权限。
 - **状态与回执。** 两条链路等待期间统一展示 `waiting_user`，与正常执行、完成和空闲区分。进程仍存活不代表模型仍在推理；发送成功也不代表运行时接受。原生等待器与持久决策分别由其拥有者确认。问题回执使用 `answered/cancelled/expired`，审批回执使用 `approved/rejected/cancelled/expired`。普通问题不应使 Task 进入 blocked；业务审批的可信 Human 门禁保持不变。
+- **非原生等待与恢复。** 持久 Task 标记为 `waiting_user` 后，自动恢复扫描跳过该 Task，新的原生工具调用暂停准入；发起问题的工具仍须写完自己的执行回执。收到可信答复并提交决策后，后续 Turn 从公共任务上下文读取 `human_decisions`，继续同一 Task。
 
 | 验收场景 | 必须举证 |
 | --- | --- |

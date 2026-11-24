@@ -2,8 +2,10 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "plugins/teamharness"))
 spec = importlib.util.spec_from_file_location("hitl_answer", ROOT / "plugins/teamharness/mcp/hitl_answer.py")
 hitl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hitl)
@@ -54,6 +56,11 @@ class AttentionDecisions(unittest.TestCase):
         self.assertTrue(self.apply())
         self.assertFalse(self.task["attention"][0]["resolved"])
         self.assertEqual(self.task["decision_status"], "frozen")
+
+    def test_tool_decision_cannot_settle_a_question(self):
+        self.content["com.agentteams.answer"]["kind"] = "tool_approval"
+        self.assertFalse(self.apply())
+        self.assertNotIn("answer", self.task["attention"][0])
 
 
 if __name__ == "__main__":

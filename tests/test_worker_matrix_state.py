@@ -84,6 +84,16 @@ def test_native_callback_does_not_need_to_fabricate_a_batch_cursor():
     assert recovery.request.call_args.args[2]["consumer"] is None
 
 
+@pytest.mark.parametrize("accepted", [True, False])
+def test_attention_decision_does_not_create_independent_message_work(accepted):
+    source = {"sender": "@human:test", "content": {"com.agentteams.answer": {
+        "confirmation_id": "attention:T:one", "responses": []}}}
+    matrix = WorkerMatrix("hermes", recovery=Mock())
+    with patch("runtime_hitl.consume_attention", return_value=accepted), patch.object(matrix, "input", return_value=None):
+        item = matrix.prepare_input("!room:test", "$answer", source, "message")
+    assert item == {"room_id": "!room:test", "event_id": "$answer", "input": source, "intent": "context"}
+
+
 def test_common_transport_sends_create_precondition_without_task_lease():
     with patch.dict(os.environ, {"AGENTTEAMS_PROCESS_ID": "actual-process", "AGENTTEAMS_CONTROLLER_URL": "http://controller.invalid"}), \
             patch("task_recovery.Path.read_text", return_value="worker-token"), \

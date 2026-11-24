@@ -116,5 +116,10 @@ ENV AGENTTEAMS_CONTROLLER_URL=http://127.0.0.1:8090 \
     AGENTTEAMS_AUTH_TOKEN_FILE=/var/run/agentteams/cli-token \
     AGENTTEAMS_MC_MIRROR_SCOPE=controller
 
+# Local stacks need fewer gateway/Wasm instances than the upstream default.
+# Explicit container environment values still override these defaults.
+ENV GATEWAY_CONCURRENCY=2 \
+    JVM_ARGS="-Xms32m -Xmx256m"
+
 # ---- Start ----
 ENTRYPOINT ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

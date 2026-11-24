@@ -88,6 +88,8 @@ func coordinationSession(e coordinationEvent) string {
 		suffix = ":" + e.ID
 	}
 	switch e.Kind {
+	case "assistant_digest":
+		return "coordination-assistant:" + e.ID
 	case "handoff":
 		return "coordination-handoff:" + e.ID
 	case "task_assigned":
@@ -109,6 +111,12 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 	}
 	meta := map[string]any{"room_id": e.RoomID, "sender_id": e.Actor, "agent_matrix_user_id": e.Recipient, "event_id": e.ID, "api_projection": true, "task_id": e.TaskID, "main_task_id": e.MainTaskID, "project_id": e.ProjectID, "teamharness_requester_route": original,
 		"teamharness_coordination": map[string]any{"id": e.ID, "kind": e.Kind, "task_id": e.TaskID, "main_task_id": e.MainTaskID, "project_id": e.ProjectID, "delivery_id": e.DeliveryID, "submission_id": e.SubmissionID, "plan_type": e.PlanType, "dispatch_mode": e.DispatchMode}}
+	if e.Kind == "assistant_digest" {
+		meta["assistant_team"] = coordinationString(e.SourceRoute, "team")
+		meta["assistant_manager"] = coordinationString(e.SourceRoute, "manager")
+		meta["assistant_user"] = coordinationString(e.SourceRoute, "user")
+		meta["assistant_request_id"] = e.OriginEventID
+	}
 	text := e.Text
 	switch e.Kind {
 	case "handoff":
@@ -163,6 +171,10 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 	return map[string]any{"user_id": user, "session_id": coordinationSession(e), "input": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": text}}}}, "channel_meta": meta, "request_context": map[string]any{"teamharness_coordination": meta}}
 }
 func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelivery, persist func() error) {
+	if d.Event.Kind == "assistant_digest" {
+		h.advanceAssistant(ctx, d)
+		return
+	}
 	if d.NativeID != "" && coordinationClosing(d.Event.Kind) {
 		p, _, err := h.state(ctx, d.Event)
 		if err != nil {
@@ -556,6 +568,8 @@ func coordinationMatrixNotification(e coordinationEvent, p map[string]any) map[s
 	content := coordinationMatrixAssignment(e, p)
 	caption := ""
 	switch e.Kind {
+	case "assistant_digest":
+		caption = "请整理关注信息，并通过公共助手接口提交本期提醒。"
 	case "handoff":
 		caption = "请接收这项需求，创建主任务并安排执行。"
 	case "task_submitted":

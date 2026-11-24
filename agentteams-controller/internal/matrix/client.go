@@ -270,10 +270,22 @@ type TuwunelClient struct {
 	orphanRetryBaseDelay time.Duration
 }
 
+// DefaultHTTPTimeout bounds each Matrix homeserver request when
+// NewTuwunelClient is built with a nil *http.Client. Without an explicit
+// deadline the fallback http.DefaultClient (Timeout=0) lets a homeserver
+// that accepts connections but never answers pin the request forever;
+// every homeserver call in this package flows through doJSON — the auth
+// path (Whoami on every cache miss) and all room/message/invite/sync
+// operations included — so an unbounded client is a standing DoS surface.
+// 30 s matches the in-cluster upstream-client convention used by the
+// credprovider sidecar client.
+const DefaultHTTPTimeout = 30 * time.Second
+
 // NewTuwunelClient creates a Matrix client for a Tuwunel homeserver.
+// When httpClient is nil, a client with DefaultHTTPTimeout is used.
 func NewTuwunelClient(cfg Config, httpClient *http.Client) *TuwunelClient {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = &http.Client{Timeout: DefaultHTTPTimeout}
 	}
 	return &TuwunelClient{
 		config:               cfg,
@@ -1410,7 +1422,11 @@ func (c *TuwunelClient) doJSON(ctx context.Context, method, path, token string, 
 		c.adminToken.Store("")
 	}
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		observeErr = err
+		return resp.StatusCode, respBody, fmt.Errorf("read response body: %w", err)
+	}
 
 	if respOut != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, respOut); err != nil {

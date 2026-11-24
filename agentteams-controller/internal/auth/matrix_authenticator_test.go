@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -317,5 +318,95 @@ func TestMatrixAuthenticator_L1RequiresReconciledIdentity(t *testing.T) {
 	fw.userID = "@luo:matrix.local"
 	if _, err := auth.Authenticate(context.Background(), "token"); err == nil {
 		t.Fatal("unreconciled L1 identity was trusted by localpart alone")
+	}
+}
+
+// TestMatrixAuthenticator_WhoamiCacheDefaults pins the #1706 bounds on the
+// constructor: the whoami cache must start capped at defaultCacheMax with
+// the shared package TTL/cleanup defaults (naming aligned with the
+// TokenReview side).
+func TestMatrixAuthenticator_WhoamiCacheDefaults(t *testing.T) {
+	auth := NewMatrixTokenAuthenticator(nil, "default", &fakeWhoami{})
+	if auth.cacheMax != defaultCacheMax {
+		t.Errorf("cacheMax = %d, want %d (defaultCacheMax)", auth.cacheMax, defaultCacheMax)
+	}
+	if auth.cacheTTL != defaultCacheTTL {
+		t.Errorf("cacheTTL = %v, want %v (defaultCacheTTL)", auth.cacheTTL, defaultCacheTTL)
+	}
+	if auth.cleanupInterval != defaultCleanupInterval {
+		t.Errorf("cleanupInterval = %v, want %v", auth.cleanupInterval, defaultCleanupInterval)
+	}
+}
+
+// TestMatrixAuthenticator_PutToCache_EvictsOldestWhenAllLive guards the
+// #1706 fix: an insert that would exceed cacheMax evicts the
+// earliest-expiry entry (LRU-equivalent, same semantics as
+// TokenReviewAuthenticator.evictOldestLocked).
+func TestMatrixAuthenticator_PutToCache_EvictsOldestWhenAllLive(t *testing.T) {
+	auth := NewMatrixTokenAuthenticator(nil, "default", &fakeWhoami{})
+	auth.cacheMax = 3
+	auth.cacheTTL = 10 * time.Minute
+
+	// Insert with manual expiries so we can predict eviction order.
+	now := time.Now()
+	auth.cache[fakeKey(1)] = cachedIdentity{userID: "@u1:matrix.local", expiry: now.Add(1 * time.Minute)}
+	auth.cache[fakeKey(2)] = cachedIdentity{userID: "@u2:matrix.local", expiry: now.Add(2 * time.Minute)}
+	auth.cache[fakeKey(3)] = cachedIdentity{userID: "@u3:matrix.local", expiry: now.Add(3 * time.Minute)}
+
+	auth.putToCache(fakeKey(4), "@u4:matrix.local") // should kick fakeKey(1) out
+
+	auth.cacheMu.Lock()
+	defer auth.cacheMu.Unlock()
+	if len(auth.cache) != 3 {
+		t.Fatalf("cap exceeded: got %d entries, want 3", len(auth.cache))
+	}
+	if _, ok := auth.cache[fakeKey(1)]; ok {
+		t.Errorf("oldest-expiry entry should have been evicted")
+	}
+	if _, ok := auth.cache[fakeKey(4)]; !ok {
+		t.Errorf("newly inserted entry missing")
+	}
+}
+
+// TestMatrixAuthenticator_PutToCache_SweepsExpiredBeforeEvicting verifies
+// the first half of the bound: expired entries are swept before any
+// live entry is evicted (mirrors TestPutInCache_EvictsExpiredBeforeOldest
+// on the TokenReview side).
+func TestMatrixAuthenticator_PutToCache_SweepsExpiredBeforeEvicting(t *testing.T) {
+	auth := NewMatrixTokenAuthenticator(nil, "default", &fakeWhoami{})
+	auth.cacheMax = 3
+	auth.cacheTTL = 50 * time.Millisecond
+
+	auth.putToCache(fakeKey(1), "@u1:matrix.local")
+	auth.putToCache(fakeKey(2), "@u2:matrix.local")
+	auth.putToCache(fakeKey(3), "@u3:matrix.local")
+
+	time.Sleep(60 * time.Millisecond) // all three expire
+
+	auth.putToCache(fakeKey(4), "@u4:matrix.local")
+
+	auth.cacheMu.Lock()
+	defer auth.cacheMu.Unlock()
+	if got := len(auth.cache); got != 1 {
+		t.Fatalf("expected expired sweep to leave only the new entry, got %d entries", got)
+	}
+	if _, ok := auth.cache[fakeKey(4)]; !ok {
+		t.Errorf("freshly inserted key should remain after sweep")
+	}
+}
+
+// TestMatrixAuthenticator_PutToCache_CapZeroUnbounded mirrors
+// TestCacheMaxZero_DisablesCap from the TokenReview side: cacheMax=0
+// disables the bound (used by tests / future callers that want
+// explicit control).
+func TestMatrixAuthenticator_PutToCache_CapZeroUnbounded(t *testing.T) {
+	auth := NewMatrixTokenAuthenticator(nil, "default", &fakeWhoami{})
+	auth.cacheMax = 0
+	auth.cacheTTL = 10 * time.Minute
+	for i := 0; i < 50; i++ {
+		auth.putToCache(fakeKey(i), "@u:matrix.local")
+	}
+	if got := len(auth.cache); got != 50 {
+		t.Errorf("cap=0 should allow unbounded growth, got %d entries", got)
 	}
 }

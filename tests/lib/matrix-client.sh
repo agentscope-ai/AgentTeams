@@ -279,7 +279,9 @@ matrix_wait_for_reply_since() {
 # Wait for a reply from a specific user that matches a (case-insensitive) regex.
 #
 # Usage: matrix_wait_for_reply_matching <token> <room_id> <from_user_prefix> <pattern> \
-#        [timeout_seconds] [nudge_token nudge_room nudge_message nudge_interval]
+#        [timeout_seconds] [nudge_token nudge_room nudge_message nudge_interval] [baseline_event]
+# Pass a baseline captured before sending, or an explicit empty baseline when
+# matching a unique per-request marker, so an immediate reply cannot be missed.
 #
 # Returns: the body of the FIRST matching reply (printed to stdout), exit 0 on
 # match, or exit 1 on timeout. Non-matching new replies during the wait are
@@ -305,10 +307,10 @@ matrix_wait_for_reply_matching() {
     local elapsed=0
 
     # Snapshot the baseline event_id so we only consider NEW messages.
-    local baseline_event
-    baseline_event=$(matrix_read_messages "${token}" "${room_id}" 20 2>/dev/null | \
-        jq -r --arg user "${from_user}" \
-        '[.chunk[] | select(.sender | startswith($user)) | select(.type == "m.room.message") | select(.content.body != null) | .event_id] | first // ""' 2>/dev/null)
+    local baseline_event="${10:-}"
+    if [ "$#" -lt 10 ]; then
+        baseline_event=$(matrix_latest_message_event_id "${token}" "${room_id}" "${from_user}")
+    fi
 
     # Track which non-matching new replies we've already logged, to avoid
     # repeating them on every poll.

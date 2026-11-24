@@ -234,7 +234,17 @@ func (h *LifecycleHandler) RestartManager(w http.ResponseWriter, r *http.Request
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"name": name, "phase": "Running"})
 }
 
-// EnsureReady handles POST /api/v1/workers/{name}/ensure-ready
+// EnsureReady handles POST /api/v1/workers/{name}/ensure-ready.
+//
+// Failure contract: when the worker needs a start and the backend's Start
+// call fails, the endpoint answers 502 Bad Gateway with the sanitized start
+// error (the same status Restart/RestartManager use for backend start
+// failures) and does NOT write Status.Phase="Running" -- the container's
+// state is unknown and the declarative spec update leaves recreation to the
+// reconciler. Callers that see 502 should treat the worker as not running
+// and re-check status (the agt CLI surfaces non-2xx as a command failure;
+// the Manager's lifecycle-worker.sh ensure-ready path is declarative and
+// does not read this response at all).
 func (h *LifecycleHandler) EnsureReady(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
@@ -286,9 +296,16 @@ func (h *LifecycleHandler) EnsureReady(w http.ResponseWriter, r *http.Request) {
 		// Directly operate on backend for immediate response
 		if b != nil {
 			if err := b.Start(r.Context(), name); err != nil {
-				// Start may fail if container/pod was removed (Stopped state on K8s).
-				// The reconciler will handle recreation.
-				log.Printf("[WARN] ensure-ready start worker %s: %v (reconciler will retry)", name, err)
+				// A failed start means the container's state is unknown (it may
+				// have been removed, or the daemon rejected the start). Do NOT
+				// claim Phase "Running" and do NOT answer 200: the declarative
+				// spec update above is still in place, so the reconciler will
+				// (re)create the container and report the true phase. Same
+				// contract as Restart (502 on a backend start failure).
+				log.Printf("[ERROR] ensure-ready start worker %s: %v (reconciler will retry)", name, err)
+				h.setReady(name, false)
+				httputil.WriteError(w, http.StatusBadGateway, "ensure-ready: start worker failed: "+err.Error())
+				return
 			}
 		}
 

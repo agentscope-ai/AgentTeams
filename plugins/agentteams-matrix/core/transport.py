@@ -47,7 +47,7 @@ from nio import (
     RoomTypingResponse,
 )
 
-from .e2ee import E2EEMaintainer, crypto_available
+from .e2ee import E2EEMaintainer, E2EEFailureReport, crypto_available
 from .interfaces import (
     InboundEvent,
     MediaRef,
@@ -470,6 +470,9 @@ class NioTransport:
         client: Optional[AsyncClient] = None,
         on_sync: Optional[Callable[[], Any]] = None,
         on_token_invalid: Optional[Callable[[], None]] = None,
+        on_e2ee_maintenance_failure: Optional[
+            Callable[[E2EEFailureReport], None]
+        ] = None,
     ) -> None:
         self._config = config
         self._store = store
@@ -484,6 +487,13 @@ class NioTransport:
         # surface a fatal error (re-login required) instead of keeping a
         # healthy-looking connection.
         self._on_token_invalid = on_token_invalid
+        # Persistent E2EE maintenance-failure escalation (issue #1701):
+        # invoked by the maintainer exactly once when its consecutive
+        # failure count crosses E2EE_MAINTENANCE_FAILURE_THRESHOLD.
+        # The core stays adapter-neutral — the owning layer (e.g. a
+        # platform adapter) injects the handler that surfaces the
+        # failure through its own fatal-error contract.
+        self._on_e2ee_maintenance_failure = on_e2ee_maintenance_failure
         self._on_event: Optional[Callable[[InboundEvent], Awaitable[None]]] = None
         self._engine: Optional[SyncEngine] = None
         # The engine's long-poll task, kept so a runtime can observe its
@@ -507,6 +517,20 @@ class NioTransport:
         instead of reaching into the engine.
         """
         return self._sync_task
+
+    @property
+    def e2ee_maintenance_failures(self) -> int:
+        """Consecutive E2EE maintenance failures on the running maintainer.
+
+        Read-only health surface for issue #1701: ``0`` before
+        :meth:`start` (no maintainer yet) and after any successful
+        maintenance pass.  The state is owned by the
+        :class:`~core.e2ee.E2EEMaintainer`; this is a pass-through.
+        """
+        if self._maintainer is None:
+            return 0
+        return self._maintainer.consecutive_failures
+
     # -- lifecycle ------------------------------------------------------------
 
     async def start(
@@ -551,7 +575,10 @@ class NioTransport:
                 build_config = replace(build_config, encryption=False)
             client = build_client(build_config)
             self._client = client
-        self._maintainer = E2EEMaintainer(client)
+        self._maintainer = E2EEMaintainer(
+            client,
+            on_persistent_failure=self._on_e2ee_maintenance_failure,
+        )
 
         if self.encryption:
             # Native crypto preparation (shared with the out-of-process

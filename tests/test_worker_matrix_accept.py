@@ -15,7 +15,7 @@ from task_recovery_rpc import execute
 def test_accept_uses_self_task_discovery_and_never_fabricates_consumer(runtime):
     recovery = Mock()
     recovery.discover.return_value = {"tasks": [{"team_id": "team", "task": {
-        "task_id": "T", "room_id": "!room:test"}}]}
+        "task_id": "T", "room_id": "!room:test", "session_state": "waiting_user"}}]}
     matrix = WorkerMatrix(runtime, recovery=recovery)
     matrix.start = Mock(return_value={"etag": "start"})
     matrix.input = Mock(return_value=None)
@@ -27,7 +27,7 @@ def test_accept_uses_self_task_discovery_and_never_fabricates_consumer(runtime):
     assert matrix.ingest.call_args.args == ({"etag": "start"}, None, [{
         "room_id": "!room:test", "event_id": "$event", "intent": "message", "input": source,
         "work": {"kind": "task", "team_id": "team", "task_id": "T"}}])
-    recovery.discover.assert_called_once_with()
+    recovery.discover.assert_called_once_with(include_waiting=True)
     recovery.request.assert_not_called()
 
 

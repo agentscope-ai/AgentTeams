@@ -312,6 +312,60 @@ func TestLifecycleEnsureReadyStartsSleepingWorker(t *testing.T) {
 	}
 }
 
+// TestLifecycleEnsureReadyStartFailureFailsClosed covers #1705: a failed
+// backend Start must not be swallowed. The endpoint answers 502 with the
+// start error, does not claim Status.Phase="Running", and does not report
+// 200+Ready/Running -- while the declarative spec.state=Running update is
+// still in place so the reconciler recreates the container.
+func TestLifecycleEnsureReadyStartFailureFailsClosed(t *testing.T) {
+	scheme := newLifecycleTestScheme(t)
+	worker := &v1beta1.Worker{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"},
+		Status:     v1beta1.WorkerStatus{Phase: "Sleeping"},
+	}
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&v1beta1.Worker{}).
+		WithObjects(worker).
+		Build()
+	backendStub := &stubWorkerBackend{status: backend.StatusStopped, startErr: errors.New("docker: container alpha-dev removed")}
+	handler := NewLifecycleHandler(k8sClient, backend.NewRegistry([]backend.WorkerBackend{backendStub}), "default")
+	handler.setReady("alpha-dev", true) // stale self-report from before the removal
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alpha-dev/ensure-ready", nil)
+	req.SetPathValue("name", "alpha-dev")
+	rec := httptest.NewRecorder()
+
+	handler.EnsureReady(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadGateway, rec.Code, rec.Body.String())
+	}
+	var errResp struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil || !strings.Contains(errResp.Message, "docker: container alpha-dev removed") {
+		t.Fatalf("error body does not carry the start error: %s", rec.Body.String())
+	}
+
+	var updated v1beta1.Worker
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "alpha-dev", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if updated.Status.Phase != "Sleeping" {
+		t.Fatalf("expected phase to stay Sleeping after failed start, got %q", updated.Status.Phase)
+	}
+	if updated.Spec.DesiredState() != "Running" {
+		t.Fatalf("expected declarative spec.state Running (reconciler will retry), got %q", updated.Spec.DesiredState())
+	}
+	if handler.isReady("alpha-dev") {
+		t.Fatal("expected the stale ready flag to be cleared after a failed start")
+	}
+	if backendStub.startCalls != 1 {
+		t.Fatalf("expected one start call, got %d", backendStub.startCalls)
+	}
+}
+
 // TestLifecycleEnsureReadyProbesBackendWhenRunning covers #1260: a Running CR and a
 // ready flag from an earlier self-report must not produce "Ready" once the backend
 // itself says the worker is gone or cannot say anything at all.

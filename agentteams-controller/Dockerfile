@@ -20,7 +20,10 @@ COPY go.mod go.sum ./
 RUN go mod download || true
 
 COPY . .
-RUN CGO_ENABLED=1 go build -ldflags '-extldflags "-static"' -o /agentteams-controller ./cmd/controller/
+# CONTROLLER_VERSION is stamped into the binary (-X main.version) and reported
+# by GET /api/v1/version. Release builds pass --build-arg CONTROLLER_VERSION=vX.Y.Z.
+ARG CONTROLLER_VERSION=dev
+RUN CGO_ENABLED=1 go build -ldflags "-X main.version=${CONTROLLER_VERSION} -extldflags '-static'" -o /agentteams-controller ./cmd/controller/
 RUN CGO_ENABLED=0 go build -o /agt ./cmd/agt/
 
 # ============ Stage 2: mc (MinIO Client) ============

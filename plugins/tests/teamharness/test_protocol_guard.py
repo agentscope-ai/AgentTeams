@@ -905,6 +905,22 @@ def test_review_identical_actor_string_forbidden(
 # --- Row 8: the stall chain 0/1/2/3 ---------------------------------------
 
 
+def test_question_retries_remain_waiting_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: None, attention_env: None,
+) -> None:
+    _enforce_on(monkeypatch)
+    _write_in_progress_task(tmp_path)
+    first = _request_attention(tmp_path)
+    question_id = first["task"]["attention"][0]["confirmation_id"]
+    for _ in range(6):
+        result = _request_attention(tmp_path)
+        assert result["ok"] is True
+        assert result["task"]["attention"][0]["confirmation_id"] == question_id
+        assert result["task"]["session_state"] == "waiting_user"
+        assert result["task"].get("decision_status", "open") == "open"
+        assert result["task"]["status"] == "in_progress"
+
+
 def test_row8_stall_chain_escalates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     storage: None, attention_env: None,
@@ -919,6 +935,11 @@ def test_row8_stall_chain_escalates(
     assert record["resolved"] is False
     assert record.get("eventId")
     assert created["task"].get("decision_status", constants.DEFAULT_DECISION_STATUS) == "open"
+
+    # Preserve the legacy escalation contract for a historical text request.
+    legacy = _task_meta(tmp_path)
+    legacy["attention"][0].pop("confirmation_id")
+    server._write_task({"workspaceDir": str(tmp_path)}, legacy)
 
     bumped = _request_attention(tmp_path)
     assert bumped["ok"] is True
@@ -964,8 +985,11 @@ def test_row9_frozen_unfreeze_requires_approval(
     _enforce_on(monkeypatch)
     _write_in_progress_task(tmp_path)
 
-    # Escalate the decision loop to frozen: create + 3 unanswered re-requests.
+    # A historical text request retains its escalation policy.
     _request_attention(tmp_path)
+    legacy = _task_meta(tmp_path)
+    legacy["attention"][0].pop("confirmation_id")
+    server._write_task({"workspaceDir": str(tmp_path)}, legacy)
     _request_attention(tmp_path)
     _request_attention(tmp_path)
     frozen = _request_attention(tmp_path)
@@ -1685,6 +1709,9 @@ def test_r5_absorbing_matrix(
     # create (stall 0) + re-requests 1, 2, 3.
     created = _request_attention(tmp_path, kind=kind, question="Ask?")
     assert created["ok"] is True
+    legacy = _task_meta(tmp_path)
+    legacy["attention"][0].pop("confirmation_id")
+    server._write_task({"workspaceDir": str(tmp_path)}, legacy)
     _request_attention(tmp_path, kind=kind)
     _request_attention(tmp_path, kind=kind)
     frozen = _request_attention(tmp_path, kind=kind)

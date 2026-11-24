@@ -33,6 +33,8 @@ func (d *Deployer) CheckManagerModel(ctx context.Context, runtime, key, admin, r
 		}
 		if runtime == "codex" {
 			cfg.Protocol = "responses"
+		} else if runtime == backend.RuntimeClaudeCode {
+			cfg.Protocol = "anthropic-messages"
 		}
 		cfg.URL = strings.TrimRight(cfg.URL, "/")
 		if cfg.URL != "" && !strings.HasSuffix(cfg.URL, "/v1") {

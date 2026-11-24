@@ -84,7 +84,7 @@ def main():
         deadline = time.monotonic() + int(os.getenv('AGENTTEAMS_STARTUP_TIMEOUT', '300'))
         while child.poll() is None and time.monotonic() < deadline:
             try:
-                if runtime in ('codex', 'deepseek-harness', 'hermes', 'opencode'):
+                if runtime in ('claudecode', 'codex', 'deepseek-harness', 'hermes', 'opencode'):
                     status = json.loads((log_dir() / 'status.json').read_text())
                     if status.get('boot_id') == os.environ['AGENTTEAMS_BOOT_ID'] and status.get('state') == 'ready':
                         return

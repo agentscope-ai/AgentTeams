@@ -30,7 +30,7 @@ class WorkerRuntimeConfigTests(unittest.TestCase):
             return config.project(record, record["member"]["runtime"], "worker", legacy)
 
     def test_same_format_projects_all_six_harnesses_without_native_files(self):
-        for harness in ("codex", "hermes", "qwenpaw", "deepseek-harness", "openclaw", "openhuman"):
+        for harness in ("claudecode", "codex", "hermes", "qwenpaw", "deepseek-harness", "openclaw", "openhuman"):
             with self.subTest(harness=harness):
                 projection = self.project(self.record(harness))
                 matrix = projection["channels"]["matrix"]

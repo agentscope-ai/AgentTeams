@@ -107,7 +107,7 @@ class Recovery:
                         expected_identity=identity, expected_digest=self.digest(original))
         return operation
 
-    def finish_tools(self, identity, operation, results):
+    def finish_tools(self, identity, operation, results, *, artifacts=()):
         from task_operation import result_bytes, finish
         task = self.tools_current(identity, verification=True)
         original = task['execution'].get('checkpoint')
@@ -117,6 +117,9 @@ class Recovery:
         subprocess.run(['mc', 'pipe', os.environ['AGENTTEAMS_STORAGE_PREFIX'].rstrip('/') + '/' + key],
                        input=data, check=True, capture_output=True, timeout=30)
         cp = finish(original, operation, {'key': key, 'sha256': digest, 'size': len(data)})
+        for artifact in artifacts:
+            if artifact not in cp['artifacts']:
+                cp['artifacts'].append(artifact)
         return self.checkpoint(identity['task_id'], identity['team_id'], cp,
                                expected_identity=identity, expected_digest=self.digest(original))
 

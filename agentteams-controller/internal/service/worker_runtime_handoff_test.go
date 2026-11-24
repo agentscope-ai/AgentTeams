@@ -14,6 +14,17 @@ import (
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 )
 
+func TestClaudeCodeHandoffRecordsEitherDirection(t *testing.T) {
+	for _, pair := range [][2]string{{"claudecode", "qwenpaw"}, {"qwenpaw", "claudecode"}} {
+		store := WorkerRuntimeStore{Storage: ossfake.NewMemory()}
+		source := WorkerStart{InstanceID: "docker/boot", ProcessID: "registered-start", Runtime: pair[0]}
+		got, _, err := store.Preflight(t.Context(), "agent", "switch", pair[1], "image:dev", source, "")
+		if err != nil || got.Handoff.Source != source || got.Handoff.TargetRuntime != pair[1] || got.Handoff.Phase != "stopping" {
+			t.Fatalf("%s to %s: got %+v, %v", pair[0], pair[1], got, err)
+		}
+	}
+}
+
 func TestHandoffPreflightConcurrentRequestsKeepOneOperation(t *testing.T) {
 	source := WorkerStart{InstanceID: "docker/boot", ProcessID: "registered-start", Runtime: "hermes"}
 	store := WorkerRuntimeStore{Storage: ossfake.NewMemory()}

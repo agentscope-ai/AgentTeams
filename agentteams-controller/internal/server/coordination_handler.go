@@ -514,7 +514,7 @@ func coordinationClip(text string, limit int) string {
 // Each managed Harness consumes authenticated Task notifications over Matrix.
 func coordinationRuntimeSupported(runtime string) bool {
 	switch runtime {
-	case "qwenpaw", "openclaw", "hermes", "deepseek-harness", "openhuman", "codex", "opencode":
+	case "qwenpaw", "openclaw", "hermes", "deepseek-harness", "openhuman", "codex", "opencode", "claudecode":
 		return true
 	default:
 		return false

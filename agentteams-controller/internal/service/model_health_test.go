@@ -12,17 +12,23 @@ import (
 )
 
 func TestManagerHealthEffectiveContract(t *testing.T) {
-	for _, runtime := range []string{"qwenpaw", "codex", "openclaw"} {
+	for _, runtime := range []string{"qwenpaw", "codex", "claudecode", "openclaw"} {
 		t.Run(runtime, func(t *testing.T) {
 			path := "/v1/chat/completions"
 			body := `{"choices":[{"message":{"content":"ok"}}]}`
 			if runtime == "codex" {
 				path = "/v1/responses"
 				body = `{"status":"completed","output":[{"content":[{"type":"output_text","text":"ok"}]}]}`
+			} else if runtime == "claudecode" {
+				path = "/v1/messages"
+				body = `{"type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`
 			}
 			calls := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
+				if runtime == "claudecode" && r.Header.Get("anthropic-version") != "2023-06-01" {
+					t.Error("missing Anthropic Messages protocol header")
+				}
 				if r.URL.Path != path || r.Header.Get("Authorization") != "Bearer effective-key" {
 					t.Errorf("wrong effective route %s", r.URL.Path)
 				}

@@ -131,6 +131,8 @@ func Probe(ctx context.Context, client *http.Client, cfg Config) string {
 	payload := map[string]any{"model": cfg.Model, "max_tokens": 256, "messages": []map[string]string{{"role": "user", "content": "Reply with one word: ok"}}, "stream": false}
 	path := "/chat/completions"
 	switch cfg.Protocol {
+	case "anthropic-messages":
+		path = "/messages"
 	case "chat", "openai-completions":
 	case "responses", "openai-responses":
 		path = "/responses"
@@ -145,6 +147,9 @@ func Probe(ctx context.Context, client *http.Client, cfg Config) string {
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.Key)
 	req.Header.Set("Content-Type", "application/json")
+	if cfg.Protocol == "anthropic-messages" {
+		req.Header.Set("anthropic-version", "2023-06-01")
+	}
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
@@ -205,6 +210,12 @@ func Validate(b []byte, protocol string) string {
 			Code int `json:"status_code"`
 		} `json:"base_resp"`
 		Status  string `json:"status"`
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
 		Choices []struct {
 			Message struct {
 				Content   string `json:"content"`
@@ -233,6 +244,17 @@ func Validate(b []byte, protocol string) string {
 		default:
 			return "provider_error"
 		}
+	}
+	if protocol == "anthropic-messages" {
+		if r.Type != "message" || r.Role != "assistant" {
+			return "invalid_response"
+		}
+		for _, block := range r.Content {
+			if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+				return "ok"
+			}
+		}
+		return "empty_response"
 	}
 	if protocol == "responses" || protocol == "openai-responses" {
 		if r.Status != "completed" && r.Status != "incomplete" {

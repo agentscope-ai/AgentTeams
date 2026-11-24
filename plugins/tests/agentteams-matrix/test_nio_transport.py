@@ -318,6 +318,27 @@ def _megolm_event() -> MegolmEvent:
 # -- lifecycle ---------------------------------------------------------------
 
 
+def test_sync_task_tracks_running_loop_and_clears_on_stop(tmp_path):
+    async def scenario():
+        transport = NioTransport(
+            _config(encryption=False), store=FakeStore(), state_dir=tmp_path,
+            client=FakeClient(), encryption=False,
+        )
+        assert transport.sync_task is None
+        assert transport.e2ee_maintenance_failures == 0
+        await transport.start(lambda e: _noop())
+        task = transport.sync_task
+        assert isinstance(task, asyncio.Task)
+        await asyncio.sleep(0)
+        assert not task.done()
+        await transport.stop()
+        assert task.done()
+        assert transport.sync_task is None
+        assert transport.e2ee_maintenance_failures == 0
+
+    _run(scenario)
+
+
 def test_start_build_path_starts_sync_engine(tmp_path, monkeypatch):
     FakeSyncEngine.instances = []
     monkeypatch.setattr(transport_mod, "SyncEngine", FakeSyncEngine)

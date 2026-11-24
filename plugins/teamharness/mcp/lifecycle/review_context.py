@@ -15,6 +15,7 @@ from mcp.common.config import _runtime_team_name
 from mcp.common.io import _read_json
 from mcp.common.payload import _payload, _safe_id
 from mcp.common.paths import _optional_workspace_dir, _task_state_path
+from mcp.lifecycle.signal_events import _ARCHIVE_NAME_RE
 
 # Closed SIG-* event_type set, single-sourced at
 # plugins/teamharness/contracts/signal-mapping.json (v1.2). Only events
@@ -55,6 +56,8 @@ def _review_signals(workspace_dir: Path, team: str, task_id: str) -> list[dict[s
     events_dir = workspace_dir / "shared" / "events" / team
     if events_dir.is_dir():
         for path in sorted(events_dir.glob("*.json")):
+            if _ARCHIVE_NAME_RE.match(path.name):
+                continue
             try:
                 ev = json.loads(path.read_text(encoding="utf-8"))
             except Exception:

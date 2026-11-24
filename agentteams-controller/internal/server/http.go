@@ -38,6 +38,7 @@ type ServerDeps struct {
 	STS             *credentials.STSService
 	AuthMw          *authpkg.Middleware
 	KubeMode        string
+	Version         string // controller version for /api/v1/version (stamped at build time; empty falls back to "dev")
 	Namespace       string
 	ControllerName  string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
 	SocketPath      string               // Docker proxy (embedded only)
@@ -110,7 +111,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/monitoring/{kind}/{name}/logs", mw.RequireAuthz(authpkg.ActionGet, "monitoring", nil)(http.HandlerFunc(monitoring.logs)))
 
 	// --- Status / health (no auth) ---
-	sh := NewStatusHandler(deps.Client, deps.Namespace, deps.KubeMode)
+	sh := NewStatusHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.Version)
 	mux.HandleFunc("GET /healthz", sh.Healthz)
 
 	// --- Status endpoints (authenticated, any role) ---

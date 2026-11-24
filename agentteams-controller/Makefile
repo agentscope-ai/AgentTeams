@@ -2,10 +2,14 @@
 
 # --- Build ---
 
+# Version stamped into the controller binary (-X main.version) and reported by
+# GET /api/v1/version; override with make build-controller CONTROLLER_VERSION=vX.Y.Z
+CONTROLLER_VERSION ?= 1.2.9
+
 build: build-controller build-cli
 
 build-controller:
-	CGO_ENABLED=1 go build -o bin/agentteams-controller ./cmd/controller/
+	CGO_ENABLED=1 go build -ldflags "-X main.version=$(CONTROLLER_VERSION)" -o bin/agentteams-controller ./cmd/controller/
 
 build-cli:
 	CGO_ENABLED=0 go build -o bin/agt ./cmd/agt/

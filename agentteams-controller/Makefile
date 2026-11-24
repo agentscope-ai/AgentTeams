@@ -4,7 +4,7 @@
 
 # Version stamped into the controller binary (-X main.version) and reported by
 # GET /api/v1/version; override with make build-controller CONTROLLER_VERSION=vX.Y.Z
-CONTROLLER_VERSION ?= 1.2.9
+CONTROLLER_VERSION ?= dev
 
 build: build-controller build-cli
 

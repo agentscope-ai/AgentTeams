@@ -92,6 +92,7 @@ jobs:
       - name: Build shared CLI and builtin assets on native runner
         env:
           CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           ARCH: ${{ matrix.arch }}
           REUSE_CONTROLLER: ${{ inputs.controller_image }}
         run: |
@@ -100,11 +101,13 @@ jobs:
             [[ "$REUSE_CONTROLLER" =~ ^higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller@sha256:[a-f0-9]{64}$ ]]
             docker pull --platform "linux/$ARCH" "$REUSE_CONTROLLER"
             revision=$(docker inspect "$REUSE_CONTROLLER" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+            version=$(docker inspect "$REUSE_CONTROLLER" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+            [[ "$version" == "$RELEASE_VERSION" ]]
             [[ "$revision" =~ ^[a-f0-9]{40}$ ]]
             git diff --exit-code "$revision" HEAD -- agentteams-controller manager/agent
             docker tag "$REUSE_CONTROLLER" "$image"
           else
-            make build-agentteams-controller LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \
+            make build-agentteams-controller VERSION="$RELEASE_VERSION" LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \
               DOCKER_BUILD_ARGS="--label org.opencontainers.image.revision=${GITHUB_SHA}"
           fi
           docker run --rm --entrypoint agt "$image" tracing --help

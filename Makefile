@@ -80,6 +80,8 @@ endif
 
 REGISTRY_ARG = --build-arg HIGRESS_REGISTRY=$(HIGRESS_REGISTRY)
 BUILTIN_VERSION_ARG = --build-arg BUILTIN_VERSION=$(VERSION)
+CONTROLLER_VERSION ?= $(if $(filter latest,$(VERSION)),dev,$(VERSION))
+CONTROLLER_VERSION_ARG = --build-arg CONTROLLER_VERSION=$(CONTROLLER_VERSION) --label org.opencontainers.image.version=$(CONTROLLER_VERSION)
 
 # Named build context for shared libraries (requires BuildKit / Docker 23+)
 SHARED_LIB_CTX = --build-context shared=./shared/lib
@@ -166,7 +168,7 @@ stage-agent-assets: ## Assemble shared role prompts and skills for Controller im
 
 build-agentteams-controller: stage-agent-assets ## Build agentteams-controller image (prerequisite for Manager)
 	@echo "==> Building agentteams-controller image: $(LOCAL_CONTROLLER)"
-	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(CONTROLLER_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(LOCAL_CONTROLLER) \
 		./agentteams-controller/
 	@rm -rf ./agentteams-controller/agent ./agentteams-controller/plugins
@@ -325,7 +327,7 @@ ifeq ($(IS_PODMAN),1)
 	$(foreach plat,$(subst $(comma), ,$(MULTIARCH_PLATFORMS)), \
 		echo "  -> Building agentteams-controller for $(plat)..." && \
 		podman build --platform $(plat) \
-			$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+			$(REGISTRY_ARG) $(CONTROLLER_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
 			--manifest $(CONTROLLER_TAG) \
 			./agentteams-controller/ && ) true
 	podman manifest push --all $(CONTROLLER_TAG) docker://$(CONTROLLER_TAG)
@@ -336,7 +338,7 @@ else
 	docker buildx build \
 		--builder $(BUILDX_BUILDER) \
 		--platform $(MULTIARCH_PLATFORMS) \
-		$(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
+		$(REGISTRY_ARG) $(CONTROLLER_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
 		-t $(CONTROLLER_TAG) \
 		$(if $(PUSH_LATEST),-t $(CONTROLLER_IMAGE):latest) \
 		--push \

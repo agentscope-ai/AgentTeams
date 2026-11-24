@@ -264,6 +264,12 @@ def _ensure_console_task_meta(arguments: dict[str, Any], task: dict[str, Any]) -
 
 
 def _write_task(arguments: dict[str, Any], task: dict[str, Any]) -> None:
+    questions = [item for item in (task.get("attention") or []) if isinstance(item, dict) and item.get("confirmation_id")]
+    if questions:
+        if task.get("status") in {"completed", "cancelled", "blocked", "revision"}:
+            task["session_state"] = "done" if task["status"] == "completed" else "idle"
+        else:
+            task["session_state"] = "waiting_user" if any(not item.get("resolved") and not item.get("answer") for item in questions) else "running"
     _ensure_console_task_meta(arguments, task)
     _write_json(_task_state_path(arguments, task["task_id"]), task)
 
@@ -1666,7 +1672,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     continue
                 if existing.get("eventId"):
                     event_id = str(existing["eventId"])
-                    if _protocol_enforce_enabled():
+                    if _protocol_enforce_enabled() and not (existing.get("confirmation_id") and kind != "approval"):
                         # W2 stall chain: an unanswered re-request of the
                         # open loop counts as one more stall; the
                         # decision_status sub-state escalates at the
@@ -1752,6 +1758,8 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                     # explicit resolved=true never reaches the new-record path
                     # (handled above): a freshly raised record is always open.
                     "resolved": False,
+                    "confirmation_id": f"attention:{task_id}:{uuid.uuid4().hex}",
+                    "requested_of": _team_human_matrix_ids(),
                 }
                 # camelCase to match the existing meta.json record fields;
                 # each is written only when provided (backward compatible).
@@ -1841,6 +1849,7 @@ def _taskflow(arguments: dict[str, Any]) -> dict[str, Any]:
                             worker=str(task.get("assigned_to") or ""),
                             humans=_team_human_matrix_ids(),
                             attempt=attempt,
+                            record=record,
                         )
                         if notification.get("sent"):
                             record["eventId"] = notification.get("eventId")

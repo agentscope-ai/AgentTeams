@@ -73,6 +73,7 @@ func resolveTeamAdminActor(ctx context.Context, c client.Client, prov service.Hu
 		return teamAdminActor{}, fmt.Errorf("team admin human %s/%s has no Matrix token", key.Namespace, key.Name)
 	}
 	return teamAdminActor{
+		HumanUID:     string(human.UID),
 		MatrixUserID: matrixUserID,
 		Token:        token,
 		Username:     identity.MatrixLocalpart,

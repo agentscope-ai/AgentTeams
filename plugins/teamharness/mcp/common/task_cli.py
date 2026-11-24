@@ -61,7 +61,7 @@ TASK_SCHEMA = {
             "report": {"type": "string", "description": "For submit: optional detailed report; for complete: verified final human report."},
             "status": {"type": "string", "enum": ["SUCCESS", "SUCCESS_WITH_NOTES", "REVISION_NEEDED", "BLOCKED", "INTERRUPTED"]},
             "files": {"type": "array", "items": {"type": "string"}, "description": "For submit: JSON array of filenames relative to this task's prepared output directory, even for one file."},
-            "artifacts": {"type": "array", "items": {"type": "string"}, "description": "For complete: omit to deliver all accepted outputs. To select a subset, use the accepted artifactId values."},
+            "artifacts": {"type": "array", "items": {"type": "string"}, "description": "For complete: final deliverable set, using accepted artifactId values. Exclude superseded intermediate versions and repeated filenames for the same project. Omit only when every accepted output belongs in the final set."},
             "submissionId": {"type": "string", "description": "For accept/reject: exact candidate ID from the task system."},
             "replacementSpec": {"type": "string", "description": "For reject only: optional explicit corrections to dispatch a new execution of the same step, preserving the rejected attempt."},
             "note": {"type": "string", "description": "For accept/reject: your independent business validation evidence or rejection reason."},

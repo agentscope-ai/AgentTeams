@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/test-helpers.sh"
 source "${SCRIPT_DIR}/lib/matrix-client.sh"
 source "${SCRIPT_DIR}/lib/agent-metrics.sh"
+source "${SCRIPT_DIR}/lib/minio-client.sh"
 
 test_setup "04-human-intervene"
 
@@ -37,35 +38,44 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
 # Alice container should be running from test-02/03; wait to ensure it's up before snapshot
 wait_for_worker_container "alice" 60
 METRICS_BASELINE=$(snapshot_baseline "alice")
-matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Ask Alice to write a Python script that prints 'Hello, World!' and saves it as hello.py."
+RUN_ID="test04-$(date +%s)-$$"
+RESULT_PATH="shared/test-fixtures/${RUN_ID}/hello.py"
+ALICE_ROOM=$(get_worker_room_id alice)
+assert_not_empty "${ALICE_ROOM}" "Alice's registered Worker room found"
+minio_setup
 
-log_info "Waiting for Manager to relay task..."
-sleep 20
+# The Worker acknowledges a paused request first. The supplement releases it;
+# no guessed duration or unrelated old chat message can stand in for completion.
+matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
+    "Forward this standalone request verbatim to Alice in room:${ALICE_ROOM}: @alice:${TEST_MATRIX_DOMAIN} For request ${RUN_ID}, prepare to write a Python script at ${RESULT_PATH} that prints Hello, World! with no arguments. First reply with ${RUN_ID}_READY and end your turn. Wait for the supplementary requirement before creating the file. Do not create a separate Task or Project."
+
+READY=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${ALICE_ROOM}" "@alice:" "${RUN_ID}_READY" 180 "" "" "" 600 "")
+assert_not_empty "${READY}" "Alice acknowledged the initial request before the supplement"
+if [ -z "${READY}" ]; then
+    test_teardown "04-human-intervene"
+    test_summary
+    exit 1
+fi
 
 log_section "Send Supplementary Instruction"
-
-# Send supplementary instruction mid-task
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Additional requirement for Alice: the script should also accept a command line argument for the name, so it prints 'Hello, <name>!' instead."
-
-log_info "Waiting for Manager to relay supplement..."
-REPLY=$(matrix_wait_for_reply "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" 180 \
-    "${ADMIN_TOKEN}" "${DM_ROOM}" "Please check if the supplementary instruction has been processed.")
-
-assert_not_empty "${REPLY}" "Manager acknowledged supplementary instruction"
+    "Forward this supplement verbatim to Alice in room:${ALICE_ROOM}: @alice:${TEST_MATRIX_DOMAIN} Supplement for ${RUN_ID}: write ${RESULT_PATH} now. Extend the script to accept an optional name argument and print Hello, <name>! when provided; preserve the original no-argument behavior. Include the literal marker ${RUN_ID} in a Python comment. Publish the file using the TeamHarness filesync tool action=push, path=${RESULT_PATH}, then verify with action=stat. Do not use bulk private workspace sync."
 
 log_section "Verify Incorporation"
-
-# Wait for completion
-sleep 60
-
-# Read recent messages to verify both requirements were addressed
-MESSAGES=$(matrix_read_messages "${ADMIN_TOKEN}" "${DM_ROOM}" 20)
-log_info "Checking if final result includes both requirements..."
-
-# The result should reference both the original and supplementary requirements
-assert_not_empty "${MESSAGES}" "Room has messages from task processing"
+if minio_wait_for_file "${RESULT_PATH}" 300 "${RUN_ID}"; then
+    # Check both behaviors in the delivered script, rather than accepting any
+    # nonempty Matrix history as a successful intervention.
+    SCRIPT_FILE="${TEST_OUTPUT_DIR}/${RUN_ID}-hello.py"
+    minio_read_file "${RESULT_PATH}" > "${SCRIPT_FILE}"
+    ORIGINAL=$(python3 -c 'import subprocess, sys; sys.exit(subprocess.call([sys.executable, *sys.argv[1:]], timeout=10))' "${SCRIPT_FILE}" 2>/dev/null)
+    assert_eq "0" "$?" "Delivered Python script executes without arguments"
+    SUPPLEMENT=$(python3 -c 'import subprocess, sys; sys.exit(subprocess.call([sys.executable, *sys.argv[1:]], timeout=10))' "${SCRIPT_FILE}" AgentTeams 2>/dev/null)
+    assert_eq "0" "$?" "Delivered Python script executes with a name"
+    assert_eq "Hello, World!" "${ORIGINAL}" "Original requirement preserved"
+    assert_eq "Hello, AgentTeams!" "${SUPPLEMENT}" "Supplementary requirement incorporated"
+else
+    log_fail "This request's supplemented script was not delivered within 300s"
+fi
 
 log_section "Collect Metrics"
 wait_for_worker_session_stable "alice" 5 120

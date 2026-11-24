@@ -29,6 +29,11 @@ type Config struct {
 	ConfigDir       string
 	CRDDir          string
 	SkillsDir       string
+	// Version is the controller version string reported by
+	// GET /api/v1/version. It is stamped into the binary at build time
+	// (cmd/controller/main.go) and assigned by main before the app
+	// starts; it is never read from the environment.
+	Version string
 
 	// ResourcePrefix is the tenant-level prefix used to derive Pod/SA/label/
 	// session names created by this controller. Default "agentteams-". Set via
@@ -545,6 +550,7 @@ func (c *Config) DockerConfig() backend.DockerConfig {
 		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
 		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
 		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
+		OpenCodeWorkerImage:        envOrDefault("AGENTTEAMS_OPENCODE_WORKER_IMAGE", ""),
 		DefaultNetwork:             envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
 	}
 }
@@ -599,6 +605,7 @@ func (c *Config) K8sConfig() backend.K8sConfig {
 		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
 		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
 		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
+		OpenCodeWorkerImage:        envOrDefault("AGENTTEAMS_OPENCODE_WORKER_IMAGE", ""),
 		WorkerCPU:                  c.K8sWorkerCPU,
 		WorkerMemory:               c.K8sWorkerMemory,
 		ControllerName:             c.ControllerName,
@@ -618,6 +625,7 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 		QwenPawWorkerImage:           envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
 		DeepSeekHarnessWorkerImage:   envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
 		CodexWorkerImage:             envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
+		OpenCodeWorkerImage:          envOrDefault("AGENTTEAMS_OPENCODE_WORKER_IMAGE", ""),
 		WorkerCPU:                    c.K8sWorkerCPU,
 		WorkerMemory:                 c.K8sWorkerMemory,
 		SandboxPrewarmSize:           c.SandboxPrewarmSize,

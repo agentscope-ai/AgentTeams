@@ -191,6 +191,25 @@ class RecoveryTests(unittest.TestCase):
         self.assertNotIn('taskflow.checkpoint_task', Recovery.resume_text(managed))
         self.assertIn('taskflow.checkpoint_task', Recovery.resume_text(self.task))
 
+    def test_waiting_task_is_not_automatically_resumed_but_current_turn_can_checkpoint(self):
+        self.task['session_state'] = 'waiting_user'
+        self.assertEqual(self.recovery.discover()['tasks'], [])
+        self.assertEqual(self.recovery.current('stable-task', 'team'), self.task)
+        self.recovery.checkpoint('stable-task', 'team', {'version': 4})
+        self.assertEqual(self.request.call_args.args[0], 'POST')
+
+    def test_resume_carries_the_durable_human_decision_in_both_task_protocols(self):
+        import json
+        decision = {'confirmation_id': 'attention:stable-task:one', 'question': 'Which region?',
+                    'options': [{'id': 'east', 'label': 'East'}], 'resolved': True,
+                    'answer': {'event_id': '$answer', 'sender': '@human:test',
+                               'responses': [{'id': 'decision', 'selected': ['east']}]}}
+        self.task['attention'] = [decision, {'question': 'Unanswered'}]
+        for managed in (False, True):
+            task = {**self.task, **({'task_plan_id': 'plan'} if managed else {})}
+            payload = json.loads(Recovery.resume_text(task).split('\n')[-1])
+            self.assertEqual(payload['human_decisions'], [decision])
+
 
 if __name__ == "__main__":
     unittest.main()

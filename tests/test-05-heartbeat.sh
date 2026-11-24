@@ -1,7 +1,6 @@
 #!/bin/bash
-# test-05-heartbeat.sh - Case 5: Heartbeat triggers Manager inquiry
-# Verifies: Manager sends status inquiry to Worker during heartbeat,
-#           Worker responds with progress
+# test-05-heartbeat.sh - Case 5: On-demand Manager heartbeat checklist
+# Verifies: the Manager finishes the current checklist and returns its final report.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/test-helpers.sh"
@@ -21,7 +20,7 @@ ADMIN_TOKEN=$(echo "${ADMIN_LOGIN}" | jq -r '.access_token')
 
 MANAGER_USER="@manager:${TEST_MATRIX_DOMAIN}"
 
-log_section "Assign Long Task"
+log_section "Find Manager Conversation"
 
 DM_ROOM=$(matrix_find_dm_room "${ADMIN_TOKEN}" "${MANAGER_USER}" 2>/dev/null || true)
 assert_not_empty "${DM_ROOM}" "DM room with Manager found"
@@ -34,58 +33,21 @@ wait_for_manager_agent_ready 300 "${DM_ROOM}" "${ADMIN_TOKEN}" || {
     exit 1
 }
 
-# Alice container should be running from test-02/03/04; wait to ensure it's up before snapshot
-wait_for_worker_container "alice" 60
-METRICS_BASELINE=$(snapshot_baseline "alice")
+METRICS_BASELINE=$(snapshot_baseline)
+log_section "Run Current Heartbeat Checklist"
+# A lengthy research assignment is unrelated to heartbeat execution. Request
+# the same checklist explicitly on every runtime and wait for its final report.
+COMPLETION_MARKER="AT_HEARTBEAT_DONE_$(date +%s)_$$"
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Ask Alice to research and write a comprehensive technical document about WebAssembly. This should be detailed and thorough."
-
-log_info "Waiting for Manager to assign task..."
-sleep 30
-
-log_section "Trigger Heartbeat"
-
-MANAGER_CONTAINER="${TEST_CONTROLLER_CONTAINER:-agentteams-controller}"
-MANAGER_RUNTIME=$(docker exec "${MANAGER_CONTAINER}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || \
-                  docker exec "${MANAGER_CONTAINER}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
-log_info "Triggering heartbeat (runtime=${MANAGER_RUNTIME})..."
-
-case "${MANAGER_RUNTIME}" in
-    copaw|qwenpaw)
-        # CoPaw: the internal _heartbeat APScheduler job has no manual trigger API.
-        # Wait for the final report before another test uses the same Manager DM.
-        COMPLETION_MARKER="AT_HEARTBEAT_DONE_$(date +%s)_$$"
-        matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-            "Please execute your heartbeat check now. Read HEARTBEAT.md in your current workspace and follow the full checklist. Report findings here. After all checks finish, end your final report with this exact plain-text line: ${COMPLETION_MARKER}"
-        log_info "Waiting for the final Manager heartbeat report..."
-        REPORT=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" \
-            "(^|[[:space:]])${COMPLETION_MARKER}[[:space:]]*$" 900)
-        assert_not_empty "${REPORT}" "Manager finished the heartbeat checklist and sent the final report"
-        ;;
-    *)
-        # OpenClaw: trigger via system event
-        docker exec "${MANAGER_CONTAINER}" bash -c \
-            "cd ~/agentteams-fs/agents/manager && openclaw system event --mode now" 2>/dev/null || \
-            log_info "Could not trigger OpenClaw heartbeat via system event"
-        log_info "Waiting for heartbeat inquiry..."
-        sleep 60
-
-        log_section "Verify Heartbeat Inquiry"
-        MESSAGES=$(matrix_read_messages "${ADMIN_TOKEN}" "${DM_ROOM}" 30)
-        INQUIRY=$(echo "${MESSAGES}" | jq -r '[.chunk[] | select(.sender | startswith("@manager")) | .content.body] | map(select(test("status|progress|heartbeat|how"; "i"))) | first // empty')
-        if [ -n "${INQUIRY}" ]; then
-            log_pass "Manager sent heartbeat inquiry"
-        else
-            log_info "Heartbeat inquiry not detected (may need longer wait or different room)"
-        fi
-        ;;
-esac
+    "Please execute your heartbeat check now. Read HEARTBEAT.md in your current workspace and follow the full checklist. Report findings here. After all checks finish, end your final report with this exact plain-text line: ${COMPLETION_MARKER}"
+REPORT=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager:" \
+    "(^|[[:space:]])${COMPLETION_MARKER}[[:space:]]*$" 900 "" "" "" 600 "")
+assert_not_empty "${REPORT}" "Manager finished the heartbeat checklist and sent the final report"
 
 log_section "Collect Metrics"
-wait_for_worker_session_stable "alice" 5 120
 wait_for_session_stable 5 60
 PREV_METRICS=$(cat "${TEST_OUTPUT_DIR}/metrics-05-heartbeat.json" 2>/dev/null || true)
-METRICS=$(collect_delta_metrics "05-heartbeat" "$METRICS_BASELINE" "alice")
+METRICS=$(collect_delta_metrics "05-heartbeat" "$METRICS_BASELINE")
 print_metrics_report "$METRICS" "$PREV_METRICS"
 save_metrics_file "$METRICS" "05-heartbeat"
 

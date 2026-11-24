@@ -38,6 +38,7 @@ type ServerDeps struct {
 	STS             *credentials.STSService
 	AuthMw          *authpkg.Middleware
 	KubeMode        string
+	Version         string // controller version for /api/v1/version (stamped at build time; empty falls back to "dev")
 	Namespace       string
 	ControllerName  string               // AGENTTEAMS_CONTROLLER_NAME; empty in embedded mode
 	SocketPath      string               // Docker proxy (embedded only)
@@ -91,6 +92,14 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	}
 
 	mw := deps.AuthMw
+	assistant := NewAssistantHandler(deps)
+	mux.Handle("GET /api/v1/assistant/context", mw.Authenticate(http.HandlerFunc(assistant.Context)))
+	mux.Handle("GET /api/v1/assistant/conversation", mw.Authenticate(http.HandlerFunc(assistant.Conversation)))
+	mux.Handle("PUT /api/v1/assistant/context", mw.Authenticate(http.HandlerFunc(assistant.Context)))
+	mux.Handle("GET /api/v1/assistant/business", mw.Authenticate(http.HandlerFunc(assistant.Business)))
+	mux.Handle("PUT /api/v1/assistant/business", mw.Authenticate(http.HandlerFunc(assistant.Business)))
+	mux.Handle("POST /api/v1/assistant/messages", mw.Authenticate(http.HandlerFunc(assistant.Send)))
+	mux.Handle("GET /api/v1/assistant/messages/{id}", mw.Authenticate(http.HandlerFunc(assistant.Receipt)))
 	archives := NewTaskRoomArchiveHandler(deps)
 	mux.Handle("GET /api/v1/task-rooms/archived", mw.Authenticate(http.HandlerFunc(archives.List)))
 	mux.Handle("GET /api/v1/task-rooms/{roomId}/archive", mw.Authenticate(http.HandlerFunc(archives.Status)))
@@ -98,6 +107,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 		mux.Handle("POST /api/v1/task-rooms/{roomId}/"+action, mw.Authenticate(archives.Mutate(action)))
 	}
 	s.coordination = NewCoordinationHandler(deps)
+	s.coordination.assistant = assistant
 	mux.Handle("POST /api/v1/coordination/events", mw.Authenticate(http.HandlerFunc(s.coordination.PostEvent)))
 	mux.Handle("POST /api/v1/teams/{name}/task-rooms/{roomId}/join-humans", mw.Authenticate(http.HandlerFunc(s.coordination.JoinTaskRoomHumans)))
 	mux.Handle("GET /api/v1/coordination/events/{id}", mw.Authenticate(http.HandlerFunc(s.coordination.GetEvent)))
@@ -110,7 +120,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("GET /api/v1/monitoring/{kind}/{name}/logs", mw.RequireAuthz(authpkg.ActionGet, "monitoring", nil)(http.HandlerFunc(monitoring.logs)))
 
 	// --- Status / health (no auth) ---
-	sh := NewStatusHandler(deps.Client, deps.Namespace, deps.KubeMode)
+	sh := NewStatusHandler(deps.Client, deps.Namespace, deps.KubeMode, deps.Version)
 	mux.HandleFunc("GET /healthz", sh.Healthz)
 
 	// --- Status endpoints (authenticated, any role) ---

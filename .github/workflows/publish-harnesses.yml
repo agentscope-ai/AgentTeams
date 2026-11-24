@@ -19,7 +19,7 @@ on:
         description: 'Build only one runtime when recovering a failed platform'
         type: choice
         default: all
-        options: [all, openclaw, qwenpaw, hermes, deepseek, openhuman, codex]
+        options: [all, openclaw, qwenpaw, hermes, deepseek, openhuman, codex, opencode]
       architecture:
         description: 'Build only one architecture; partial builds require publish=false'
         type: choice
@@ -35,7 +35,8 @@ concurrency:
 
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
-  CODEX_REF: c218aeb72a6978e298fc98dcf90de8bd2455f002
+  CODEX_REF: 860b07d4027ea2bd48c0d4f4885b9a9612d1b446
+  OPENCODE_REF: 318d1524535398d67a4a876fe07b966689d57361
 
 jobs:
   prepare:
@@ -55,9 +56,10 @@ jobs:
           PUBLISH: ${{ inputs.publish }}
         run: |
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          [[ "$RUNTIME" =~ ^(all|openclaw|qwenpaw|hermes|deepseek|openhuman|codex)$ ]] || exit 1
+          [[ "$RUNTIME" =~ ^(all|openclaw|qwenpaw|hermes|deepseek|openhuman|codex|opencode)$ ]] || exit 1
           [[ "$ARCHITECTURE" =~ ^(all|amd64|arm64)$ ]] || exit 1
           [[ "$PUBLISH" != true || "$ARCHITECTURE" == all ]] || exit 1
+          # Experimental OpenCode is opt-in until its full admission passes.
           runtimes='["openclaw","qwenpaw","hermes","deepseek","openhuman","codex"]'
           architectures='["amd64","arm64"]'
           if [[ "$RUNTIME" != all ]]; then runtimes="[\"$RUNTIME\"]"; fi
@@ -92,6 +94,7 @@ jobs:
       - name: Build shared CLI and builtin assets on native runner
         env:
           CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           ARCH: ${{ matrix.arch }}
           REUSE_CONTROLLER: ${{ inputs.controller_image }}
         run: |
@@ -100,11 +103,13 @@ jobs:
             [[ "$REUSE_CONTROLLER" =~ ^higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller@sha256:[a-f0-9]{64}$ ]]
             docker pull --platform "linux/$ARCH" "$REUSE_CONTROLLER"
             revision=$(docker inspect "$REUSE_CONTROLLER" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+            version=$(docker inspect "$REUSE_CONTROLLER" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+            [[ "$version" == "$RELEASE_VERSION" ]]
             [[ "$revision" =~ ^[a-f0-9]{40}$ ]]
             git diff --exit-code "$revision" HEAD -- agentteams-controller manager/agent
             docker tag "$REUSE_CONTROLLER" "$image"
           else
-            make build-agentteams-controller LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \
+            make build-agentteams-controller VERSION="$RELEASE_VERSION" LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \
               DOCKER_BUILD_ARGS="--label org.opencontainers.image.revision=${GITHUB_SHA}"
           fi
           docker run --rm --entrypoint agt "$image" tracing --help
@@ -146,6 +151,12 @@ jobs:
           repository: agentteams-group/agentteams-harness-codex
           ref: ${{ env.CODEX_REF }}
           path: codex-harness
+      - uses: actions/checkout@v4
+        if: matrix.runtime == 'opencode'
+        with:
+          repository: agentteams-group/agentteams-harness-opencode
+          ref: ${{ env.OPENCODE_REF }}
+          path: opencode-harness
       - uses: ruby/setup-ruby@v1
         if: matrix.runtime == 'qwenpaw'
         with:

@@ -296,7 +296,7 @@ func TestTaskPlanRecoversQueueAdmissionBeforeActivation(t *testing.T) {
 	}
 }
 
-func submitPlannedCandidate(t *testing.T, h *ProjectHandler, store *ossfake.Memory, id, worker, content string) string {
+func submitPlannedCandidate(t *testing.T, h *ProjectHandler, store *ossfake.Memory, id, worker, content string, resultStatuses ...string) string {
 	t.Helper()
 	key := "teams/alpha/shared/tasks/" + id + "/meta.json"
 	child, err := h.coordination.read(t.Context(), key)
@@ -325,7 +325,11 @@ func submitPlannedCandidate(t *testing.T, h *ProjectHandler, store *ossfake.Memo
 	}
 	var file publishedTaskFile
 	_ = json.Unmarshal(w.Body.Bytes(), &file)
-	body, _ := json.Marshal(taskSubmitRequest{Summary: "Candidate " + id, Artifacts: []string{file.ArtifactID}})
+	status := "SUCCESS"
+	if len(resultStatuses) > 0 {
+		status = resultStatuses[0]
+	}
+	body, _ := json.Marshal(taskSubmitRequest{Summary: "Candidate " + id, Artifacts: []string{file.ArtifactID}, Status: status})
 	r = httptest.NewRequest(http.MethodPost, "/submit", strings.NewReader(string(body)))
 	r.SetPathValue("id", id)
 	r.Header.Set("X-AgentTeams-Process-ID", "process-1")
@@ -354,27 +358,17 @@ func acceptPlannedCandidate(t *testing.T, h *ProjectHandler, caller *authpkg.Cal
 	return w
 }
 
-func TestTaskPlanAcceptanceAutomaticallyDispatchesDependenciesAndCompletes(t *testing.T) {
+func TestTaskPlanSubmissionAutomaticallyDispatchesDependenciesAndCompletes(t *testing.T) {
 	h, store, leader, _ := taskPlanFixture(t)
 	if w := callPlan(h, leader, planRequest()); w.Code != 200 {
 		t.Fatalf("plan: %d %s", w.Code, w.Body.String())
 	}
 	a, b, c := taskPlanExecutionID("alpha", "main", "A"), taskPlanExecutionID("alpha", "main", "B"), taskPlanExecutionID("alpha", "main", "C")
 	sa := submitPlannedCandidate(t, h, store, a, "worker-cr", "Accepted A bytes")
-	acceptPlannedCandidate(t, h, leader, a, sa)
 	if _, err := store.GetObject(t.Context(), "teams/alpha/shared/tasks/"+c+"/meta.json"); err == nil {
-		t.Fatal("C dispatched before B acceptance")
+		t.Fatal("C dispatched before B delivery")
 	}
 	sb := submitPlannedCandidate(t, h, store, b, "second-cr", "Accepted B bytes")
-	accepted := acceptPlannedCandidate(t, h, leader, b, sb)
-	var receipt struct {
-		DispatchStatus string               `json:"dispatchStatus"`
-		Assignments    []taskPlanAssignment `json:"assignments"`
-	}
-	_ = json.Unmarshal(accepted.Body.Bytes(), &receipt)
-	if receipt.DispatchStatus != "ready" || len(receipt.Assignments) != 1 || receipt.Assignments[0].TaskID != c || receipt.Assignments[0].Status != "queued" || receipt.Assignments[0].Recipient != "worker-cr" {
-		t.Fatalf("missing downstream queue receipt: %s", accepted.Body.String())
-	}
 	child, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+c+"/meta.json")
 	if err != nil || child["status"] != "assigned" {
 		t.Fatalf("C was not automatically assigned: %+v %v", child, err)
@@ -390,11 +384,13 @@ func TestTaskPlanAcceptanceAutomaticallyDispatchesDependenciesAndCompletes(t *te
 			t.Fatalf("dependency lost accepted identity: %+v", input)
 		}
 	}
-	sc := submitPlannedCandidate(t, h, store, c, "worker-cr", "Integrated C bytes")
-	last := acceptPlannedCandidate(t, h, leader, c, sc)
-	if !strings.Contains(last.Body.String(), `"recipient":"lead-cr"`) {
-		t.Fatalf("missing main closure notification: %s", last.Body.String())
+	submitPlannedCandidate(t, h, store, c, "worker-cr", "Integrated C bytes")
+	main, _ := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/main/meta.json")
+	ready := coordinationMap(coordinationMap(main, "task_notifications"), "ready")
+	if ready["recipient"] != "lead-cr" {
+		t.Fatalf("missing final Leader notification: %+v", ready)
 	}
+
 	completed := callTaskComplete(h, leader, "Accepted final results attached")
 	var final struct {
 		Task         taskResource           `json:"task"`

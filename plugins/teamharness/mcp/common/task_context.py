@@ -76,7 +76,7 @@ def prepare(kind, event, result):
                         "Prefer native file tools for simple reads and writes. Use shell or patch tools when the assignment needs them. "
                         "Write each deliverable using the exact absolute outputDirectory below plus its filename. "
                         "Use scratchDirectory for temporary work. Pass files as a JSON array of paths relative to outputDirectory. "
-                        "Once you have produced and checked your deliverables, use the native Task tool to submit before ending your turn.",
+                        "Once you have produced and checked your deliverables, use the native Task tool to submit before ending your turn. For failed review or validation, submit REVISION_NEEDED; do not report SUCCESS merely because checking finished. Normal SUCCESS freezes this delivery and directly notifies ready downstream Workers; only exceptions or explicit approval gates go to the Leader.",
                 "context": result, "execution": task_id,
                 "ack": (task_id, root.resolve(), task["assignedTo"], task["assignmentId"])}
     if kind == "task_submitted":
@@ -86,7 +86,7 @@ def prepare(kind, event, result):
                 or candidate.get("id") != submission or not isinstance(candidate.get("artifacts"), list)
                 or not isinstance(candidate.get("reportFile"), dict) or not candidate["reportFile"].get("artifactId")):
             raise ValueError("task candidate does not match this review")
-        return {"fact": f"Review this exact candidate against its task spec. This is a public snapshot, not a completed business review. Your review is inspection of the published evidence, not another test execution. Read missing report or artifact evidence once. For accept or reject, set taskId to {task_id} and give a concrete note. Omit submissionId in the native tool to use the prepared candidate. Recorded test results belong to the Worker; do not claim you ran them. Accepting this step releases its dependencies, not final acceptance of the whole request: do not wait for downstream QA that depends on this step. This is a decision-only phase: only common Task operations are available. Do not download files to assemble a test environment, repeat unchanged reads, execute or edit outputs, or seek batch execution, subagents or another workflow. If required proof is missing or inconsistent, reject with explicit replacementSpec instead of trying to execute checks yourself; the task system dispatches the correction and dependencies.",
+        return {"fact": f"Review this exact candidate against its task spec. REVISION_NEEDED means the reviewed deliverable needs correction even when the Reviewer correctly found the defect: do not accept it as pipeline success. Use reject with correction requirements and, when needed, Developer fix then independent Reviewer recheck. Replacement entry dependsOn is [], inherited upstream inputs are automatic; dependencies may name only other replacementNodes IDs. This is a public snapshot, not a completed business review. Your review is inspection of the published evidence, not another test execution. Read missing report or artifact evidence once. For accept or reject, set taskId to {task_id} and give a concrete note. Omit submissionId in the native tool to use the prepared candidate. Recorded test results belong to the Worker; do not claim you ran them. Accepting this step releases its dependencies, not final acceptance of the whole request: do not wait for downstream QA that depends on this step. This is a decision-only phase: only common Task operations are available. Do not download files to assemble a test environment, repeat unchanged reads, execute or edit outputs, or seek batch execution, subagents or another workflow. If required proof is missing or inconsistent, reject with explicit replacementSpec instead of trying to execute checks yourself. For failed independent review, also provide replacementNodes containing Developer correction then independent Reviewer recheck; the task system dispatches the correction and dependencies.",
                 "context": task, "review": (task_id, submission)}
     if kind == "main_task_ready":
         nodes = task.get("nodes")
@@ -102,16 +102,20 @@ def prepare(kind, event, result):
         for child in accepted:
             if not isinstance(child, dict):
                 raise ValueError("accepted result evidence is invalid")
-            candidate, review = child.get("candidate"), child.get("review")
+            candidate, review, handoff = child.get("candidate"), child.get("review"), child.get("handoff")
             submission = child.get("submissionId")
+            delivered = (isinstance(handoff, dict) and handoff.get("submissionId") == submission
+                         and handoff.get("actorRole") in {"worker", "team_leader"} and bool(handoff.get("actorName"))
+                         and child.get("resultStatus") in {"SUCCESS", "SUCCESS_WITH_NOTES"})
+            reviewed = (isinstance(review, dict) and bool(review.get("id")) and review.get("accepted") is True
+                        and review.get("status") == "completed" and review.get("submissionId") == submission)
             if (child.get("id") not in remaining or child.get("mainTaskId") != task_id
                     or child.get("projectId", "") != task.get("projectId", "") or child.get("kind") != "execution"
                     or child.get("status") != "completed" or not isinstance(submission, str) or not submission
                     or not isinstance(candidate, dict) or candidate.get("id") != submission
-                    or not isinstance(review, dict) or not review.get("id") or review.get("accepted") is not True
-                    or review.get("status") != "completed" or review.get("submissionId") != submission):
+                    or not (delivered or reviewed)):
                 raise ValueError("accepted result identity or saved review changed")
             remaining.remove(child["id"])
-        return {"fact": "All execution steps are accepted. Use acceptedResults below: each id is the actual execution Task ID, with its exact candidate, saved review, report and artifact versions. Verify whole-request coverage from this evidence; do not reread unchanged accepted files or rerun checks. Read more only for a concrete missing or inconsistent requirement, using that result's id, never a local step alias or the main Task ID for child files. Call task complete with your final report, distinguishing recorded tests from your own review. Choose one coherent final deliverable set for the original request, excluding superseded intermediate versions and repeated filenames for the same project. Pass artifacts using the exact artifactId values from acceptedResults, including every file that final project needs. Omit artifacts only when all accepted outputs already form that final set. The task system returns report and artifacts to the original Human conversation using the first dispatch identity. Do not send another message or poll.",
+        return {"fact": "All execution steps have completed. Use acceptedResults below: each id is the actual execution Task ID, with its exact candidate, report and artifact versions, plus a frozen handoff or saved review. A handoff records delivery, not a prior Leader acceptance. Verify whole-request coverage from this evidence; do not reread unchanged accepted files or rerun checks. Read more only for a concrete missing or inconsistent requirement, using that result's id, never a local step alias or the main Task ID for child files. Call task complete with your final report, distinguishing recorded tests from your own review. Choose one coherent final deliverable set for the original request, excluding superseded intermediate versions and repeated filenames for the same project. Pass artifacts using the exact artifactId values from acceptedResults, including every file that final project needs. Omit artifacts only when all accepted outputs already form that final set. The task system returns report and artifacts to the original Human conversation using the first dispatch identity. Do not send another message or poll.",
                 "context": task, "completion": task_id}
     raise ValueError("unsupported task preparation event")

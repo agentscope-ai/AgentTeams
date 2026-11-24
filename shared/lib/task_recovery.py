@@ -98,6 +98,8 @@ class Recovery:
         if (not task or execution.get('process_id') != self.process
                 or any(execution.get(key) != identity.get(key) for key in ('generation', 'instance_id', 'process_id'))):
             raise RecoveryConflict('Native tool execution ownership was replaced')
+        if not verification and task.get('status') != 'in_progress':
+            raise RecoveryConflict('Task execution is already submitted or completed; only its owned tool return may settle')
         if execution.get('state') not in ({'active', 'needs_verification'} if verification else {'active'}):
             raise RecoveryConflict('Native unconfirmed operation requires verification before normal admission')
         if not verification and task.get('session_state') == 'waiting_user':

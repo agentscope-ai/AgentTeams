@@ -224,7 +224,25 @@ def task_receipt(result: object, task_id: str, action: str) -> tuple[str, str] |
     if not isinstance(result, dict) or result.get("ok") is False:
         return None
     task, notification = result.get("task"), result.get("notification")
-    if not isinstance(task, dict) or not isinstance(notification, dict):
+    if not isinstance(task, dict):
+        return None
+    if action == "submit" and task.get("status") == "completed":
+        handoff = task.get("handoff")
+        submission = task.get("submissionId")
+        assignments = assignment_facts(result.get("assignments"))
+        if (task.get("id") != task_id or not isinstance(submission, str) or not submission
+                or not isinstance(handoff, dict) or handoff.get("submissionId") != submission
+                or handoff.get("actorRole") not in {"worker", "team_leader"} or not handoff.get("actorName")
+                or result.get("mainProjection") not in {"applied", "pending"}
+                or result.get("dispatchStatus") not in {"ready", "pending"} or assignments is None):
+            return None
+        identities, fact = assignments
+        if result["mainProjection"] == "pending" or result["dispatchStatus"] == "pending":
+            fact += " Synchronization or downstream dispatch is pending; the task system will retry."
+        identity = json.dumps([action, task_id, submission, result["mainProjection"], result["dispatchStatus"], identities], separators=(",", ":"))
+        return identity, (f"[Task system receipt]\nTask {task_id} completed with its immutable delivery. {fact} "
+                          "End this execution. Do not notify the Leader, repeat assignments, or poll.")
+    if not isinstance(notification, dict):
         return None
     if action not in {"submit", "complete"}:
         return None

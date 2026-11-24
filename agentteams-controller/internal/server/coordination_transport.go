@@ -138,7 +138,7 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 		}
 		text = "TASK_COMPLETED: " + e.TaskID + "\nCandidate result only. Validate the current submission with check_task or its synchronized runtime-prepared receipt before accepting. " + guidance + "\n" + text
 	case "main_task_ready":
-		text = "MAIN_TASK_READY_TO_CLOSE: " + e.MainTaskID + "\nEvery execution subtask is accepted. Verify the whole request and call taskflow complete_task with taskId and report. Do not complete an optional Project or wait for its other main tasks.\n" + text
+		text = "MAIN_TASK_READY_TO_CLOSE: " + e.MainTaskID + "\nEvery execution subtask has completed. Verify the whole request and call taskflow complete_task with taskId and report. Do not complete an optional Project or wait for its other main tasks.\n" + text
 	case "project_ready":
 		text = "PROJECT_READY_TO_CLOSE: " + e.ProjectID + "\nEvery execution leaf has been accepted. Verify the complete request from these accepted results, then call projectflow complete_project with projectId and report (your concise final user report). That single operation closes coordinating parents, saves the report, completes the project and notifies the original coordinator. Do not modify accepted artifacts, repeat QA or end with a pending parent.\n" + text
 	case "main_task_completed":
@@ -377,7 +377,7 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 	}
 
 	if d.MatrixEventID == "" {
-		label := map[string]string{"handoff": "已交接", "task_assigned": "已派发", "task_submitted": "已提交，待验收", "main_task_ready": "子任务已验收，开始汇总", "main_task_completed": "主任务已完成，正在回报", "project_ready": "执行任务已验收，开始汇总", "project_completed": "已完成，正在回报"}[e.Kind]
+		label := map[string]string{"handoff": "已交接", "task_assigned": "已派发", "task_submitted": "已提交，待验收", "main_task_ready": "执行环节已完成，开始总体验收", "main_task_completed": "主任务已完成，正在回报", "project_ready": "执行任务已验收，开始汇总", "project_completed": "已完成，正在回报"}[e.Kind]
 		id, err := h.projectEvent(ctx, e, e.ActorRole, e.ActorName, e.RoomID, e.ID, label+" · "+coordinationLabel(e))
 		if err == nil {
 			d.MatrixEventID = id
@@ -559,6 +559,9 @@ func coordinationMatrixAssignment(e coordinationEvent, p map[string]any) map[str
 	prefix := "任务已分配。"
 	if len(prior) > 0 {
 		prefix = "前置的" + strings.Join(prior, "、") + "环节已验收通过。"
+		if e.ActorRole == authpkg.RoleWorker {
+			prefix = "前置的" + strings.Join(prior, "、") + "环节已完成交付。"
+		}
 	}
 	body := e.Recipient + " " + prefix + "请继续开始「" + coordinationTaskTitle(e, p) + "」任务，按任务要求完成并提交结果。"
 	formatted := strings.ReplaceAll(html.EscapeString(body), html.EscapeString(e.Recipient), `<a href="https://matrix.to/#/`+url.PathEscape(e.Recipient)+`">`+html.EscapeString(strings.Split(e.Recipient, ":")[0])+`</a>`)
@@ -575,7 +578,7 @@ func coordinationMatrixNotification(e coordinationEvent, p map[string]any) map[s
 	case "task_submitted":
 		caption = "「" + coordinationTaskTitle(e, p) + "」已提交结果，请检查本次提交并验收。"
 	case "project_ready", "main_task_ready":
-		caption = "所有执行环节已验收，请汇总最终结果并完成本次任务。"
+		caption = "所有执行环节已完成，请核对最终交付并验收本次任务。"
 	}
 	if caption != "" {
 		body := e.Recipient + " " + caption

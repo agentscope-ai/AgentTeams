@@ -110,7 +110,10 @@ delay dispatch or prepare inputs. Check every required edge before planning.
 Preserve explicit requirements for independent work with distinct Worker identities.
 When the requester asks for a synthesis or decision based on those results, make
 the aggregation node depend on every required upstream result. Choose the
-smallest plan that meets these requirements, the original scope, any explicit
+smallest plan that meets these requirements. Do not pre-plan hypothetical
+correction nodes; create them only after a failed submission, using
+`replacementNodes`. Keep correction graph IDs local: entry `dependsOn: []`,
+then refer only to other replacement node IDs. Respect the original scope, any explicit
 node count, and the acceptance criteria. Keep closely related implementation,
 tests and documentation together when one Worker can meet those requirements.
 Add a separate QA node where the requirements or verification benefit justify
@@ -149,12 +152,23 @@ Call the native Task tool with `action: submit`, `taskId`, a truthful
 `summary`, optional detailed `report` and `files` as a JSON array of paths
 relative to your output directory, even for one file. Keep Task mutations on
 this tool during a managed Task turn. Use the actual result `status`;
-do not claim success when validation failed. Submission is a candidate, not
-Leader acceptance. End after a successful durable submission. The task system
-notifies your Leader; do not send another completion message or poll.
+use `REVISION_NEEDED` when independent review or validation finds a defect,
+and `BLOCKED` when execution cannot proceed. Do not publish a failing review as
+`SUCCESS` merely because you finished checking it.
+For ordinary planned nodes, `SUCCESS` or `SUCCESS_WITH_NOTES` completes your
+node and freezes its output. The task system sends the structured @ to each
+ready downstream Worker in the same Task room using your identity; you do not
+need a Leader turn or another message. This records delivery, not whole-request
+acceptance. Exceptions, explicit Human approval gates and legacy tasks still go
+to your Leader. End after the durable receipt; do not repeat assignments or poll.
 
 ## Review as Leader
 
+Handle a prepared `task_submitted` exception, explicit Human approval gate or
+legacy review; ordinary successful planned nodes hand off automatically.
+`REVISION_NEEDED` means the reviewed deliverable failed its criteria, even when
+your Reviewer correctly identified that defect. Do not accept it as pipeline
+success; reject it to schedule the needed correction and independent recheck.
 Use the prepared public candidate or call `get` with the execution Task ID.
 Check the task spec, `candidate.id`, business status, report and exact artifact
 references. Read more only when evidence is truncated, missing or inconsistent.
@@ -176,8 +190,13 @@ omit `submissionId` to use the candidate bound by the framework. When using
 the CLI, pass the exact `submissionId` you reviewed. Use `reject` only for a
 business review decision. If the same step needs correction, provide explicit `replacementSpec`
 in that rejection. The task system keeps the rejected attempt terminal, creates
-one replacement execution under the same main task and rewires unstarted
-consumers. Omit it when no replacement is intended. Do not reopen the rejected
+a replacement execution under the same main task and rewires unstarted
+consumers. If an independent review failed, also provide `replacementNodes`
+with a Developer correction followed by an independent Reviewer recheck, using
+local node IDs and `dependsOn`. The entry correction inherits the failed step's
+upstream inputs and exact rejected candidate. Consumers wait for all leaves of
+this correction graph; do not send code changes to the Reviewer or bypass the
+recheck. Omit replacement requirements when no replacement is intended. Do not reopen the rejected
 execution, replace the main task or bypass required Human approval.
 
 After acceptance the task system dispatches ready dependencies automatically.
@@ -196,7 +215,8 @@ normal submission publishes the named output files. Never guess storage keys.
 
 On `main_task_ready`, use the prepared `acceptedResults` from `get` to verify
 whole-request coverage. Each result includes its actual execution `id`, exact
-candidate, saved review, report and artifact versions. Do not reread unchanged
+candidate, report and artifact versions, plus either a frozen handoff or a
+saved review. A handoff is a completed delivery, not a prior Leader review. Do not reread unchanged
 accepted files or rerun checks. For a concrete evidence gap, use the result's
 execution ID; a plan step alias and main Task ID do not own child files.
 Call `complete` with the main `taskId` and final Human report. By default the task

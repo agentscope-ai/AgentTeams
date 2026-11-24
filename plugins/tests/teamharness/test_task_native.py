@@ -239,6 +239,27 @@ def test_verified_submission_adds_the_shared_receipt_fact(bridge):
     assert 'Delivery and acceptance are not yet confirmed' in result['fact']
 
 
+def test_direct_handoff_ends_worker_phase_without_notifying_leader(bridge):
+    result = bridge.invoke({'operation': 'task', 'arguments': {'action': 'submit', 'taskId': 't1', 'summary': 'done'},
+                            'context': {'role': 'worker', 'execution': 't1'}},
+        call=lambda _: {'task': {'id': 't1', 'status': 'completed', 'submissionId': 's1',
+                                 'handoff': {'submissionId': 's1', 'actorName': 'dev', 'actorRole': 'worker'}},
+                         'mainProjection': 'applied', 'dispatchStatus': 'ready',
+                         'assignments': [{'taskId': 'review', 'status': 'queued', 'recipient': 'reviewer', 'eventId': 'notice'}]})
+    assert result['phaseComplete'] is True
+    assert 'immutable delivery' in result['fact']
+    assert 'Do not notify the Leader' in result['fact']
+
+
+def test_incomplete_handoff_proof_cannot_end_native_execution(bridge):
+    result = bridge.invoke({'operation': 'task', 'arguments': {'action': 'submit', 'taskId': 't1', 'summary': 'done'},
+                            'context': {'role': 'worker', 'execution': 't1'}},
+        call=lambda _: {'task': {'id': 't1', 'status': 'completed', 'submissionId': 's1',
+                                 'handoff': {'submissionId': 'other', 'actorName': 'dev', 'actorRole': 'worker'}},
+                         'mainProjection': 'applied', 'dispatchStatus': 'ready', 'assignments': []})
+    assert result['phaseComplete'] is False
+
+
 def test_planning_ends_only_after_every_admitted_request_is_planned(bridge):
     context = {'role': 'leader', 'planning': ['main-a', 'main-b']}
     def call(arguments):

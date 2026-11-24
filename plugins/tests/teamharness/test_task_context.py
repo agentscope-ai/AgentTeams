@@ -101,6 +101,18 @@ def test_closure_requires_all_public_nodes_accepted():
     with pytest.raises(ValueError): context.prepare("main_task_ready", event, result)
 
 
+def test_final_acceptance_consumes_exact_handoff_without_inventing_leader_review():
+    event, result = closure()
+    child = result['task']['acceptedResults'][0]
+    del child['review']
+    child.update(resultStatus='SUCCESS', handoff={'submissionId': 's1', 'actorName': 'dev', 'actorRole': 'worker'})
+    prepared = context.prepare('main_task_ready', event, result)
+    assert prepared['completion'] == 'main'
+    assert 'review' not in prepared['context']['acceptedResults'][0]
+    child['handoff']['submissionId'] = 'other'
+    with pytest.raises(ValueError): context.prepare('main_task_ready', event, result)
+
+
 @pytest.mark.parametrize("change", ["missing", "wrong-task", "wrong-main", "unreviewed", "wrong-candidate", "wrong-review", "duplicate"])
 def test_closure_rejects_missing_or_mismatched_accepted_evidence(change):
     event, result = closure()

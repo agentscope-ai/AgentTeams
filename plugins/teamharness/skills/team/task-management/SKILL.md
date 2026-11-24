@@ -99,7 +99,9 @@ precedence over supplementary context and execution assignments.
 
 ## Plan as Leader
 
-Preserve the main task already registered by Manager. Call `plan` once with
+For a direct work request from your registered Team Admin in your private Leader conversation, you may first call `create` with your own registered Leader identity, a title and the supplied Human input reference. The Controller verifies the original Human event and current private conversation; reminders and Agent messages cannot register work this way. Keep any existing business-to-Task mapping and reuse it for follow-ups. Preserve the returned main Task ID and end after its creation receipt. Resume planning only when the Task system admits its handoff. Do not invent a Task ID or plan an unregistered request.
+
+Preserve the main task registered by its verified intake receipt. Call `plan` once with
 `taskId` and the complete `nodes` array. Each node has a local `id`, registered
 `assignedTo`, full `spec` and explicit `dependsOn` local IDs. Use `[]` only for
 independent work. If a node consumes another node's outputs or verifies its

@@ -82,7 +82,7 @@ def schema(role: str) -> dict:
     """Present each runtime role's operations; API authorization remains final."""
     allowed = {
         "manager": {"create", "get", "cancel", "files_list", "files_read", "files_get"},
-        "leader": {"plan", "get", "accept", "reject", "complete", "cancel", "files_list", "files_read", "files_get"},
+        "leader": {"create", "plan", "get", "accept", "reject", "complete", "cancel", "files_list", "files_read", "files_get"},
         "worker": {"begin", "get", "submit", "files_list", "files_read", "files_get", "files_put"},
         "remote-member": {"begin", "get", "submit", "files_list", "files_read", "files_get", "files_put"},
     }.get(role, set(_ACTIONS))
@@ -93,6 +93,13 @@ def schema(role: str) -> dict:
             "including quick work that produces a file or other deliverable. The Task system delivers "
             "the accepted result to the original conversation. Use get to inspect an existing Task, "
             "cancel for its explicit withdrawal, and the file actions for its verified artifacts."
+        )
+    elif role == "leader":
+        result["description"] = (
+            "Use create only for a direct registered Team Admin work request in your private conversation; "
+            "set leader to your own registered identity and use the supplied Human input reference. "
+            "Preserve its receipt and wait for the admitted handoff before plan. "
+            "Use plan/review/completion only for the framework-prepared Task phase."
         )
     properties = result["inputSchema"]["properties"]
     fields = {"action", "taskId"}

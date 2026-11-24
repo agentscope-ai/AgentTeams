@@ -213,11 +213,12 @@ def test_file_identity_can_include_consistency_check_name(monkeypatch):
     assert argv == ["/usr/local/bin/agt", "task", "files", "read", "a", "--name", "app.py", "--artifact", "opaque", "--version", "v1"]
 
 
-def test_execution_and_leader_schemas_require_task_identity(monkeypatch):
+def test_intake_schemas_allow_create_while_execution_still_requires_task_identity(monkeypatch):
     tool = load(monkeypatch)
-    for role in ["leader", "worker"]:
-        assert set(tool.schema(role)["inputSchema"]["required"]) == {"action", "taskId"}
-    assert tool.schema("manager")["inputSchema"]["required"] == ["action"]
+    assert set(tool.schema("worker")["inputSchema"]["required"]) == {"action", "taskId"}
+    for role in ["manager", "leader"]:
+        assert tool.schema(role)["inputSchema"]["required"] == ["action"]
+        assert "create" in tool.schema(role)["inputSchema"]["properties"]["action"]["enum"]
 
 
 @pytest.mark.parametrize("message, retryable", [

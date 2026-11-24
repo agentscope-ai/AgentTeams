@@ -203,15 +203,16 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		if len(e.Tasks) > 0 {
 			e.Protocol = "task/v1"
 		}
-		if caller.Role != authpkg.RoleManager || e.OriginEventID == "" || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_session"), "!") || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_user"), "@") {
+		if (caller.Role != authpkg.RoleManager && caller.Role != authpkg.RoleTeamLeader) || e.OriginEventID == "" || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_session"), "!") || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_user"), "@") {
 			return reject()
 		}
-		actor, err := h.manager(ctx, caller.Username)
-		if err != nil {
-			return e, err
+		if caller.Role == authpkg.RoleManager {
+			actor, err := h.manager(ctx, caller.Username)
+			if err != nil {
+				return e, err
+			}
+			e.Actor, e.ActorName = actor.Status.MatrixUserID, actor.Name
 		}
-		e.Actor = actor.Status.MatrixUserID
-		e.ActorName = actor.Name
 		recipient, err := h.worker(ctx, e.Recipient)
 		if err != nil {
 			return e, err
@@ -222,6 +223,26 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		}
 		e.Team = tm.Name
 		e.StorageTeam = tm.Spec.EffectiveTeamName(tm.Name)
+		if caller.Role == authpkg.RoleTeamLeader {
+			route, err := NewAssistantHandler(h.deps).routeFor(ctx, caller, tm.Name)
+			room, user := coordinationString(e.SourceRoute, "target_session"), coordinationString(e.SourceRoute, "target_user")
+			if err != nil || caller.Team != tm.Name || route.name != recipient.Name || route.room != room || route.user != user || e.RoomID != room || len(e.Tasks) > 1 {
+				return reject()
+			}
+			e.Actor, e.ActorName = recipient.Status.MatrixUserID, recipient.Name
+			original, status := h.taskSourceRequestFor(ctx, "worker", recipient.Name, room, e.OriginEventID, user)
+			if status != 0 {
+				return reject()
+			}
+			if len(e.Tasks) == 1 {
+				if e.Tasks[0].TaskID != sourceMainTaskID(e.ActorName, e.StorageTeam, recipient.Name, e.OriginEventID) {
+					return reject()
+				}
+				if !strings.Contains(e.Tasks[0].Spec, original) {
+					return reject()
+				}
+			}
+		}
 		if !coordinationStorageTeamSafe(e.StorageTeam) {
 			return reject()
 		}

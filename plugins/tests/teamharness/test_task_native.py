@@ -85,12 +85,13 @@ def test_completion_requires_explicit_selection_for_competing_output_names(bridg
     assert calls == [{**arguments, 'artifacts': ['final']}]
 
 
-def test_creation_coverage_tracks_exact_sources_without_forcing_a_task_for_questions(bridge):
+@pytest.mark.parametrize("role", ["manager", "leader"])
+def test_creation_coverage_tracks_exact_sources_without_forcing_a_task_for_questions(bridge, role):
     sources = [
         {"inputId": "input-a", "eventId": "$first", "roomId": "!room:test", "userId": "@human:test"},
         {"inputId": "input-b", "eventId": "$second", "roomId": "!room:test", "userId": "@human:test"},
     ]
-    context = {"role": "manager", "sources": sources}
+    context = {"role": role, "sources": sources}
 
     def call(arguments):
         return {"sourceEventId": arguments["_nativeSource"]["eventId"],

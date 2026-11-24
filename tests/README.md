@@ -1,6 +1,8 @@
 # AgentTeams Integration Tests
 
-Automated integration test suite that validates all 10 POC acceptance cases.
+Integration scenarios for the current runtime, Task protocol, and migration paths.
+Historical POC/GitHub scenarios remain available for manual runs; the
+CI filters below define the maintained regression matrix.
 
 ## Architecture
 
@@ -26,8 +28,8 @@ Test Script                     AgentTeams System
 | test-02 | Case 2 | Create Worker Alice via Matrix conversation |
 | test-03 | Case 3 | Assign task, Worker completes |
 | test-04 | Case 4 | Human intervenes with supplementary instructions |
-| test-05 | Case 5 | Heartbeat triggers Manager inquiry |
-| test-06 | Case 6 | Create Bob, collaborative task |
+| test-05 | Case 5 | On-demand heartbeat checklist and final report |
+| test-06 | Case 6 | Create Bob and verify Worker identity isolation |
 | test-07 | Case 7 | Credential smooth rotation (TODO) |
 | test-08 | Case 8 | GitHub operations via MCP Server |
 | test-09 | Case 9 | Multi-Worker GitHub collaboration |
@@ -55,12 +57,12 @@ for manual diagnostics against a CoPaw installation. It is no longer in the
 CI matrix or the default release-baseline filter.
 
 Migration coverage remains: `23` exercises an actual CoPaw worker before
-switching to QwenPaw, and `28` checks Manager state migration. Keep building
-`copaw-worker` for `23`; retiring CoPaw regression does not retire migration
-validation.
+switching to QwenPaw, `28` checks Manager state migration, and `29` uses the
+pinned published CoPaw image for retained-data upgrade coverage. An old
+migration input is intentional and must not be removed as an obsolete test.
 
 The integration matrix now has 7 jobs instead of 10, and controller-shard
-script invocations fall from the original 48 to 28. All scenario files remain
+script invocations fall from the original 48 to 29. All scenario files remain
 available through `--test-filter`. OpenClaw, QwenPaw, and Hermes LLM interaction
 coverage stays in place. Controller-only scenarios use their own readiness
 checks instead of waiting for an unrelated Manager session to stabilize.
@@ -70,7 +72,32 @@ Run the lightweight scheduling regression checks without containers or keys:
 
 ```bash
 python3 tests/check-integration-scheduling.py
+python3 tests/test-ci-interaction.py
 ```
+
+### Current-mode case audit
+
+| Cases | Maintained behavior |
+|-------|---------------------|
+| `03` | Keep the standalone Worker request, registered room/mention check, and current-run shared artifact marker. It does not need a Project or a main Task. |
+| `04` | Wait for the Worker's explicit paused-request acknowledgement, then send the human supplement. Execute the delivered Python artifact to verify both original and supplementary requirements. No fixed 20/60-second sleeps or nonempty-history PASS. |
+| `05` | Request the current heartbeat checklist explicitly and require this run's final report marker on every Manager runtime. Remove unrelated WebAssembly research and fixed 30/60-second sleeps. This checks checklist execution, not periodic scheduler timing. |
+| `06` | Keep conversational creation of a second Worker, runtime, gateway, workspace and distinct Matrix identities. Retire the REST API/`Project:` room search, 300-second search plus 60-second fallback, completion-keyword scan, and directory-list-only acceptance. Team delegation is checked by `26`. |
+| `26` | Keep QwenPaw plugin/package/role/hot-update checks. Replace `projectflow create_project/plan_dag`, manual Task IDs, and `taskflow`/storage paths with public Task creation, planning, begin/submit, independent acceptance and completion. The driver registers a real human Matrix event through `agt task create`; real Leader/Worker models perform the work. Require the accepted immutable file content and its native Matrix attachment related to the final report in the original conversation. This is not a test of model-driven Manager registration. |
+| `08`, `09`, `11`, `13`, `14`, `21` | Historical GitHub/Project/CoPaw flows are outside the seven-job CI matrix and release-baseline filter. They retain legacy waits/protocols and are not current Task certification. Use an explicit `--test-filter` for compatibility diagnostics; a local run without a filter still discovers all numbered scripts. Do not add these cases back to default CI unchanged. |
+| `15`, `17`–`20`, `22`–`25`, `27`–`29`, `100` | Keep controller, permissions, runtime-switch, startup, migration and cleanup coverage. Short condition-poll intervals are not blind business-task sleeps. |
+
+Session JSONL stabilization is only an optional metrics flush. Unknown or
+unsupported runtimes, missing files and empty observations skip that wait;
+they do not prove agent readiness or zero token usage. Nonempty supported
+observations retain a bounded flush wait. Functional PASS comes from each
+scenario's own acknowledgement, artifact or public Task/delivery assertions.
+
+For context, the OpenClaw shard in run `45297881675` took 36m05s, including
+five exhausted Worker metrics waits (10m13s total) and roughly six minutes
+searching for an obsolete Project room in `06`. These are observations of the
+old run, not a measured speedup of this revision. Compare hosted test-step
+times separately from image preparation, runner queue time and runner minutes.
 
 ## Running Tests
 

@@ -21,8 +21,7 @@ TEST_LEADER="${TEST_TEAM}-leader"
 TEST_WORKER="${TEST_TEAM}-worker"
 TEST_MODEL="${AGENTTEAMS_E2E_MODEL:-${AGENTTEAMS_DEFAULT_MODEL:-qwen3.7-max}}"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
-PROJECT_ID="test26-project-$$"
-TASK_ID="test26-task-$$"
+TASK_ID=""
 TEST_RUN_ID="$$_$(date +%s)"
 MARKER="TEST26_TEAMHARNESS_PLUGIN_MODE_${TEST_RUN_ID}"
 BOOTSTRAP_LEADER_MARKER="TEST26_QWENPAW_BOOTSTRAP_LEADER_${TEST_RUN_ID}"
@@ -82,8 +81,6 @@ _cleanup() {
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_LEADER}/runtime/" 2>/dev/null || true
     exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/agents/${TEST_WORKER}/runtime/" 2>/dev/null || true
-    exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/" 2>/dev/null || true
-    exec_in_manager mc rm -r --force "${STORAGE_PREFIX}/shared/tasks/${TASK_ID}/" 2>/dev/null || true
     for object in \
         "${LEADER_PACKAGE_V1_OBJECT}" \
         "${WORKER_PACKAGE_V1_OBJECT}" \
@@ -371,50 +368,8 @@ raise SystemExit(1)
 '
 }
 
-# A real Leader may already have accepted the result before this observer checks.
-# effective is intentionally false after acceptance; require its recorded history.
-_task_check_succeeded() {
-    jq -e --arg task "${TASK_ID}" --arg marker "${MARKER}" \
-        --arg project "${PROJECT_ID}" --arg room "${TEAM_ROOM}" \
-        --arg worker "${TEST_WORKER}" --arg mxid "${WORKER_MXID}" '
-        .ok == true and .task.task_id == $task and
-        .task.project_id == $project and .task.room_id == $room and
-        (.task.assigned_to == $worker or .task.assigned_to == $mxid) and
-        .result.status == "SUCCESS" and
-        (.result.summary | contains($marker)) and
-        (.validationErrors | type == "array" and length == 0) and
-        ((.task.status == "submitted" and .effective == true) or
-         (.task.status == "completed" and
-          any(.task.history[]?; .action == "accept_task_result" and
-              .from == "submitted" and .to == "completed")))
-    ' >/dev/null 2>&1
-}
-
-_leader_mcp_call() {
-    _qwenpaw_mcp_call "${LEADER_CONTAINER}" "$@"
-}
-
 _worker_mcp_call() {
     _qwenpaw_mcp_call "${WORKER_CONTAINER}" "$@"
-}
-
-_wait_leader_shared_stat() {
-    local path="$1"
-    local timeout="${2:-120}"
-    local elapsed=0
-    local stat_args
-    stat_args=$(jq -nc --arg path "${path}" '{action:"stat", path:$path}')
-    while [ "${elapsed}" -lt "${timeout}" ]; do
-        local result
-        result=$(_leader_mcp_call filesync "${stat_args}" 2>/dev/null || echo "{}")
-        if echo "${result}" | jq -e '.ok == true and .exists == true' >/dev/null 2>&1; then
-            printf '%s\n' "${result}"
-            return 0
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-    return 1
 }
 
 _wait_runtime_package_ref() {
@@ -519,8 +474,6 @@ _dump_debug_snapshot() {
         matrix_read_messages "${ADMIN_TOKEN}" "${TEAM_ROOM}" 30 2>/dev/null | \
             jq -r '.chunk[] | select(.type == "m.room.message") | "\(.sender): \(.content.body // "")"' || true
     fi
-    exec_in_manager mc ls --recursive "${STORAGE_PREFIX}/shared/projects/${PROJECT_ID}/" 2>/dev/null || true
-    exec_in_manager mc ls --recursive "${STORAGE_PREFIX}/shared/tasks/${TASK_ID}/" 2>/dev/null || true
 }
 
 _create_test_agentspec_package() {
@@ -752,8 +705,8 @@ fi
 LEADER_SOUL=$(cat <<EOF
 # ${TEST_LEADER}
 
-You are the leader for ${TEST_TEAM}. Use TeamHarness tools for project
-planning, task delegation, shared files, and team-room messages. Delegate
+You are the leader for ${TEST_TEAM}. Use the public Task tools for
+planning, delegation, acceptance and final delivery. Delegate
 worker tasks instead of completing them yourself.
 EOF
 )
@@ -761,8 +714,8 @@ WORKER_SOUL=$(cat <<EOF
 # ${TEST_WORKER}
 
 You are a QwenPaw worker for ${TEST_TEAM}. When assigned a TeamHarness
-task, acknowledge it, use the shared task spec, write requested
-deliverables, submit the task, and reply in the Team Room.
+task, follow its begin receipt, write requested deliverables in the returned
+output directory, and submit through the public Task tool.
 EOF
 )
 
@@ -1016,7 +969,7 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
     TEAMHARNESS_MCP=$(_agent_api "${container}" GET /api/mcp/teamharness 2>/dev/null || echo "{}")
     TEAMHARNESS_TOOLS=$(_agent_api "${container}" GET /api/mcp/tools/teamharness 2>/dev/null || echo "[]")
     if echo "${TEAMHARNESS_MCP}" | jq -e '.enabled == true and .transport == "stdio" and .command and (.args | length > 0)' >/dev/null 2>&1 && \
-       echo "${TEAMHARNESS_TOOLS}" | jq -e '([.[].name] | index("health") and index("filesync") and index("taskflow") and index("projectflow"))' >/dev/null 2>&1; then
+       echo "${TEAMHARNESS_TOOLS}" | jq -e '([.[].name] | index("health") and index("filesync") and index("task"))' >/dev/null 2>&1; then
         log_pass "${container} QwenPaw API exposes callable TeamHarness MCP"
     else
         log_fail "${container} QwenPaw API missing callable TeamHarness MCP"
@@ -1354,143 +1307,125 @@ else
     log_fail "QwenPaw worker hello script did not write expected marker"
 fi
 
-_wait_coordination_message() {
-    local kind="$1" sender="$2" recipient="$3" timeout="$4"
-    local elapsed=0 matching
-    while [ "${elapsed}" -lt "${timeout}" ]; do
-        matching=$(matrix_read_messages "${ADMIN_TOKEN}" "${TEAM_ROOM}" 100 2>/dev/null | jq -c \
-            --arg kind "${kind}" --arg sender "${sender}" --arg recipient "${recipient}" \
-            --arg task "${TASK_ID}" --arg project "${PROJECT_ID}" '
-            .chunk[] | select(.type == "m.room.message" and .sender == $sender and .event_id != null) |
-            .content as $content |
-            $content["org.agentteams.coordination"].channel_meta as $meta |
-            $meta.teamharness_coordination as $event |
-            select(($meta.sender_id == $sender and $meta.agent_matrix_user_id == $recipient and
-                $event.kind == $kind and $event.task_id == $task and $event.project_id == $project and
-                ($event.id // "") != "") or
-                ($content["org.agentteams.coordination"] == null and
-                 $content["org.agentteams.progress_only"] != true and
-                 (($content["m.mentions"].user_ids // []) | index($recipient)) != null and
-                 (($kind == "task_assigned" and
-                   (($content.body // "") | startswith($recipient + " You are assigned task **" + $task + "**:"))) or
-                  ($kind == "task_submitted" and
-                   (($content.body // "") | startswith($recipient + " TASK_COMPLETED: " + $task + " -"))))))' | head -n 1)
-        if [ -n "${matching}" ]; then
-            echo "${matching}"
-            return 0
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-    return 1
+# Assert public task facts, including the exact candidate independently accepted
+# by the Leader. A completed label or a queued notification is insufficient.
+_task_check_succeeded() {
+    jq -e --arg task "${TASK_ID}" \
+        --arg team "${TEST_TEAM}" --arg worker "${TEST_WORKER}" '
+        .task as $main |
+        $main.id == $task and $main.team == $team and $main.kind == "main" and
+        ($main.projectId // "") == "" and $main.status == "completed" and
+        ($main.completionId | length > 0) and
+        ($main.acceptedResults | length == 1) and
+        ($main.acceptedResults[0] |
+            .assignedTo == $worker and .status == "completed" and
+            .resultStatus == "SUCCESS" and
+            .review.accepted == true and .review.status == "completed" and
+            .review.submissionId == .submissionId and
+            .candidate.id == .submissionId and
+            (.candidate.artifacts | length == 1)) and
+        ($main.artifacts | length == 1) and
+        $main.artifacts[0].artifactId == $main.acceptedResults[0].candidate.artifacts[0].artifactId and
+        $main.artifacts[0].version == $main.acceptedResults[0].candidate.artifacts[0].version
+    ' >/dev/null 2>&1
 }
 
-TASK_PROMPT=$(cat <<EOF
-${LEADER_MXID} Please complete this TeamHarness plugin-mode E2E request by coordinating with
-the worker. Do not complete the worker task yourself.
+_delivered_result() {
+    jq -ce --arg sender "@manager:${TEST_MATRIX_DOMAIN}" --arg marker "${MARKER}" \
+        --arg artifact "${ARTIFACT_ID}" --arg version "${ARTIFACT_VERSION}" '
+        [.chunk[]? | select(.type == "m.room.message" and .sender == $sender)] as $messages |
+        first($messages[] |
+            select(.content.msgtype == "m.file" and
+                .content["org.agentteams.task_artifact"].artifactId == $artifact and
+                .content["org.agentteams.task_artifact"].version == $version) |
+            . as $file |
+            $messages[] |
+            select(.event_id == $file.content["m.relates_to"].event_id and
+                .content.msgtype == "m.text" and (.content.body | contains($marker))) |
+            {report: .content.body, file: $file.content.url})
+    ' 2>/dev/null
+}
 
-Project id: ${PROJECT_ID}
-Task id: ${TASK_ID}
-Completion marker: ${MARKER}
-Existing Team Room: ${TEAM_ROOM}
+SOURCE_ROOM=$(matrix_find_dm_room "${ADMIN_TOKEN}" "@manager:${TEST_MATRIX_DOMAIN}" 2>/dev/null || true)
+assert_not_empty "${SOURCE_ROOM}" "Original human/Manager conversation found"
+DELIVERABLE_NAME="readiness-${TEST_RUN_ID}.txt"
+TASK_PROMPT="CI input fixture: the test driver will register this request through the public Task CLI; wait for that handoff instead of registering it again. Requirement: ask the registered Team Leader ${TEST_LEADER} to delegate one readiness note to ${TEST_WORKER}. The worker must write ${DELIVERABLE_NAME} containing exactly ${MARKER}. The Leader must independently inspect and accept that exact candidate, then complete the main Task with this file and a final report containing ${MARKER}. Use the public Task tool and the directories from begin. No Project is required."
+SOURCE_EVENT=$(matrix_send_message "${ADMIN_TOKEN}" "${SOURCE_ROOM}" "${TASK_PROMPT}" | jq -r '.event_id // empty')
+assert_not_empty "${SOURCE_EVENT}" "Real human request persisted in the original conversation"
 
-Required leader steps:
-1. Use projectflow create_project for projectId ${PROJECT_ID}, with roomId ${TEAM_ROOM}.
-2. Use projectflow plan_dag with exactly one task whose taskId is ${TASK_ID}
-   and whose assignedTo is the worker runtimeName from your TeamHarness
-   roster facts. Do not invent a different task id.
-3. Use taskflow delegate_task for projectId ${PROJECT_ID}, taskId ${TASK_ID},
-   using exactly roomId ${TEAM_ROOM}, and the task spec below. This request
-   exercises the existing Team Room; do not create another room. This must create
-   shared/tasks/${TASK_ID}/spec.md.
-4. The successful delegation automatically notifies the worker. End your turn
-   after dispatch; do not send a second assignment or manually mention the worker.
-
-Task spec to delegate:
-# Task: Write TeamHarness plugin-mode readiness note
-
-First call taskflow ack_task for task ${TASK_ID}. Continue only when the
-returned acknowledgement has ok=true and synced=true. If acknowledgement
-sync failed, retry the same ack_task. Use the returned spec as the execution
-contract.
-
-Create shared/tasks/${TASK_ID}/workspace/readiness-note.txt with this exact
-line:
-${MARKER}
-
-Create shared/tasks/${TASK_ID}/result.md with a short completion report that
-contains ${MARKER} and lists the readiness note as a deliverable.
-
-Then call taskflow submit_task with status SUCCESS, a summary containing
-${MARKER}, and both shared/tasks/${TASK_ID}/result.md and
-shared/tasks/${TASK_ID}/workspace/readiness-note.txt as deliverables.
-
-Treat submission as complete only when taskflow submit_task returns
-ok=true and synced=true. If shared-storage sync fails, retry that same call
-with the same status, summary and ordered deliverables. Do not switch task
-tools or report completion based on a local state. The successful submission
-automatically notifies the leader in the Team Room.
-EOF
-)
-
-if matrix_send_message "${ADMIN_TOKEN}" "${TEAM_ROOM}" "${TASK_PROMPT}" >/dev/null 2>&1; then
-    log_pass "Admin sent real TeamHarness task to QwenPaw leader"
-else
-    log_fail "Admin failed to send task to QwenPaw leader"
+# This is fixture registration, not a model-generated route or a prewritten DAG.
+# The API verifies this real Matrix event and captures the original request.
+if [ -n "${SOURCE_EVENT}" ] && [ -n "${SOURCE_ROOM}" ]; then
+    CREATE_RESULT=$(exec_in_agent env \
+        AGENTTEAMS_ORIGIN_EVENT_ID="${SOURCE_EVENT}" \
+        AGENTTEAMS_REQUESTER_USER_ID="@${TEST_ADMIN_USER}:${TEST_MATRIX_DOMAIN}" \
+        AGENTTEAMS_REQUESTER_ROOM_ID="${SOURCE_ROOM}" \
+        agt task create --title "Readiness ${TEST_RUN_ID}" --leader "${TEST_LEADER}" 2>/dev/null || echo "{}")
+    TASK_ID=$(echo "${CREATE_RESULT}" | jq -r '.task.id // empty')
+fi
+assert_not_empty "${TASK_ID}" "Public Task CLI registered the request with a server-generated ID"
+if [ -z "${TASK_ID}" ]; then
+    _dump_debug_snapshot
+    test_teardown "26-qwenpaw-teamharness-plugin-mode"
+    test_summary
+    exit 1
 fi
 
-# Check the coordination envelope or the default legacy protocol with real mentions.
-LEADER_ASSIGNMENT=$(_wait_coordination_message task_assigned "${LEADER_MXID}" "${WORKER_MXID}" 480 || true)
-if [ -n "${LEADER_ASSIGNMENT}" ]; then
-    log_pass "Leader assigned TeamHarness task to worker in Team Room"
-else
-    log_fail "Leader did not assign TeamHarness task to worker in Team Room"
-fi
-
-SPEC_STAT=$(_wait_leader_shared_stat "shared/tasks/${TASK_ID}/spec.md" 180 || echo "{}")
-if echo "${SPEC_STAT}" | jq -e '.ok == true and .exists == true' >/dev/null 2>&1; then
-    log_pass "Task spec exists in shared storage after leader delegation"
-else
-    log_fail "Task spec missing after leader delegation"
-fi
-
-WORKER_REPLY=$(_wait_coordination_message task_submitted "${WORKER_MXID}" "${LEADER_MXID}" 720 || true)
-if [ -n "${WORKER_REPLY}" ]; then
-    log_pass "Worker completed delegated TeamHarness task in Team Room"
-else
-    log_fail "Worker did not complete delegated TeamHarness task"
-fi
-
-RESULT_STAT=$(_wait_leader_shared_stat "shared/tasks/${TASK_ID}/result.md" 180 || echo "{}")
-if echo "${RESULT_STAT}" | jq -e '.ok == true and .exists == true' >/dev/null 2>&1; then
-    log_pass "Task result exists in shared storage"
-else
-    log_fail "Task result missing in shared storage"
-fi
-
-DELIVERABLE_STAT=$(_wait_leader_shared_stat "shared/tasks/${TASK_ID}/workspace/readiness-note.txt" 180 || echo "{}")
-if echo "${DELIVERABLE_STAT}" | jq -e '.ok == true and .exists == true' >/dev/null 2>&1; then
-    log_pass "Task deliverable exists in shared storage"
-else
-    log_fail "Task deliverable missing in shared storage"
-fi
-
-CHECK_ARGS=$(jq -nc --arg task "${TASK_ID}" '{role:"leader", action:"check_task", payload:{taskId:$task}}')
-TASK_CHECK=$(_leader_mcp_call taskflow "${CHECK_ARGS}" 2>/dev/null || echo "{}")
+TASK_CHECK="{}"
+DEADLINE=$(( $(date +%s) + 900 ))
+while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+    TASK_CHECK=$(exec_in_agent agt task get "${TASK_ID}" --team "${TEST_TEAM}" 2>/dev/null || echo "{}")
+    if echo "${TASK_CHECK}" | _task_check_succeeded; then
+        break
+    fi
+    STATUS=$(echo "${TASK_CHECK}" | jq -r '.task.status // empty')
+    case "${STATUS}" in completed|cancelled|blocked|revision|failed) break ;; esac
+    sleep 5
+done
 if echo "${TASK_CHECK}" | _task_check_succeeded; then
-    log_pass "Leader verified submitted worker result through taskflow"
+    log_pass "Leader independently accepted the Worker candidate and completed the public Task"
 else
-    log_fail "Leader could not verify submitted worker result through taskflow: ${TASK_CHECK}"
+    log_fail "Public Task did not reach verified acceptance and completion (task=${TASK_ID})"
+    _dump_debug_snapshot
+    test_teardown "26-qwenpaw-teamharness-plugin-mode"
+    test_summary
+    exit 1
 fi
 
-# Existence alone does not prove that the Worker produced this run's deliverable.
-DELIVERABLE_CONTENT=$(minio_read_file "teams/${TEST_TEAM}/shared/tasks/${TASK_ID}/workspace/readiness-note.txt" 2>/dev/null || true)
-# QwenPaw write_file uses UTF-8 with BOM for a new text file.
-DELIVERABLE_CONTENT="${DELIVERABLE_CONTENT#$'\xEF\xBB\xBF'}"
-if [ "${DELIVERABLE_CONTENT}" = "${MARKER}" ]; then
-    log_pass "Persisted task deliverable matches this run's marker"
+CHILD_TASK=$(echo "${TASK_CHECK}" | jq -r '.task.artifacts[0].taskId // empty')
+ARTIFACT_ID=$(echo "${TASK_CHECK}" | jq -r '.task.artifacts[0].artifactId // empty')
+ARTIFACT_VERSION=$(echo "${TASK_CHECK}" | jq -r '.task.artifacts[0].version // empty')
+if [ -n "${CHILD_TASK}" ] && [ -n "${ARTIFACT_ID}" ] && [ -n "${ARTIFACT_VERSION}" ]; then
+    FILE_VIEW=$(exec_in_agent agt task files read "${CHILD_TASK}" --team "${TEST_TEAM}" \
+        --artifact "${ARTIFACT_ID}" --version "${ARTIFACT_VERSION}" 2>/dev/null || echo "{}")
+    DELIVERABLE_CONTENT=$(echo "${FILE_VIEW}" | jq -r '.text // empty')
+    DELIVERABLE_CONTENT="${DELIVERABLE_CONTENT#$'\xEF\xBB\xBF'}"
+    assert_eq "${MARKER}" "${DELIVERABLE_CONTENT}" "Accepted immutable artifact matches this run's exact marker"
 else
-    log_fail "Persisted task deliverable does not match this run's marker"
+    log_fail "Completed task did not expose an immutable final artifact"
+fi
+
+# Verify actual original-room delivery, not just completion/notification state.
+FINAL_REPORT=""
+FINAL_FILE=""
+DEADLINE=$(( $(date +%s) + 120 ))
+while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+    MESSAGES=$(matrix_read_messages "${ADMIN_TOKEN}" "${SOURCE_ROOM}" 100 2>/dev/null || echo "{}")
+    DELIVERED=$(echo "${MESSAGES}" | _delivered_result || echo "{}")
+    FINAL_REPORT=$(echo "${DELIVERED}" | jq -r '.report // empty')
+    FINAL_FILE=$(echo "${DELIVERED}" | jq -r '.file // empty')
+    [ -n "${FINAL_REPORT}" ] && [ -n "${FINAL_FILE}" ] && break
+    sleep 5
+done
+assert_not_empty "${FINAL_REPORT}" "Original conversation received the final report"
+if [[ "${FINAL_FILE}" == mxc://* ]]; then
+    ATTACHMENT=$(exec_in_manager curl -sf \
+        "${TEST_MATRIX_DIRECT_URL}/_matrix/client/v1/media/download/${FINAL_FILE#mxc://}" \
+        -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+    ATTACHMENT="${ATTACHMENT#$'\xEF\xBB\xBF'}"
+    assert_eq "${MARKER}" "${ATTACHMENT}" "Native Matrix attachment in the original conversation has the correct bytes"
+else
+    log_fail "Original conversation did not receive the native file attachment"
 fi
 
 _dump_debug_snapshot

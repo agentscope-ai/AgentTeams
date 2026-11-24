@@ -27,12 +27,14 @@ Coverage:
 
 import asyncio
 import datetime
+import fcntl
 import importlib.util
 import inspect
 import json
 import os
 import subprocess
 import sys
+import time
 import types
 from dataclasses import dataclass
 from pathlib import Path
@@ -1346,7 +1348,12 @@ def test_standalone_send_initializes_e2ee_before_an_encrypted_send(
 ):
     """The one-shot sender must establish the same state the long-running
     transport has: crypto store, uploaded keys, synced room state. Only
-    then does nio know the room is encrypted."""
+    then does nio know the room is encrypted. It must NOT run the
+    key-maintenance pass itself (#1700): the maintenance run is the
+    cross-process crypto-store race — key exchange stays with the
+    in-process maintainer."""
+    import core.e2ee as core_e2ee
+
     _e2ee_env(monkeypatch, tmp_path)
     room = "!e2ee:example.org"
     client = _E2EEStubClient(room_id=room, encrypted_room=True)
@@ -1356,18 +1363,14 @@ def test_standalone_send_initializes_e2ee_before_an_encrypted_send(
         built["config"] = config
         return client
 
-    maintainer_runs = []
+    maintenance_runs = []
 
-    class _Maintainer:
-        def __init__(self, c):
-            self.client = c
-
-        async def run_once(self):
-            maintainer_runs.append(True)
+    async def _recorded_run_once(self):
+        maintenance_runs.append(True)
 
     monkeypatch.setattr(adapter_mod, "build_client", fake_build)
     monkeypatch.setattr(adapter_mod, "crypto_available", lambda: True)
-    monkeypatch.setattr(adapter_mod, "E2EEMaintainer", _Maintainer)
+    monkeypatch.setattr(core_e2ee.E2EEMaintainer, "run_once", _recorded_run_once)
     monkeypatch.setattr(adapter_mod, "SyncResponse", _SyncStub)
 
     result = asyncio.run(
@@ -1378,10 +1381,12 @@ def test_standalone_send_initializes_e2ee_before_an_encrypted_send(
     # The E2EE store was requested on the client.
     assert built["config"].encryption is True
     assert built["config"].store_path is not None
-    # The init sequence ran before the send, in order.
+    # The init sequence ran before the send, in order — and nothing after
+    # it: no maintenance round (a second keys_upload from run_once would
+    # extend the call log).
     ops = [c[0] for c in client.calls]
-    assert ops[:3] == ["restore_login", "keys_upload", "sync"]
-    assert maintainer_runs == [True]
+    assert ops == ["restore_login", "keys_upload", "sync"]
+    assert maintenance_runs == []
     # The send happened with the room known-encrypted.
     assert client.sent == [
         {
@@ -1392,6 +1397,94 @@ def test_standalone_send_initializes_e2ee_before_an_encrypted_send(
         }
     ]
     assert client.closed is True
+
+
+def test_standalone_send_serializes_on_the_e2ee_store_lock(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """#1700: an encrypted standalone send holds a blocking flock on
+    ``<state_dir>/e2ee/standalone-send.lock`` for the crypto phase and
+    releases it when the send completes."""
+    _e2ee_env(monkeypatch, tmp_path)
+    room = "!e2ee:example.org"
+    client = _E2EEStubClient(room_id=room, encrypted_room=True)
+    monkeypatch.setattr(adapter_mod, "build_client", lambda config: client)
+    monkeypatch.setattr(adapter_mod, "crypto_available", lambda: True)
+    monkeypatch.setattr(adapter_mod, "SyncResponse", _SyncStub)
+
+    result = asyncio.run(
+        adapter_mod._standalone_send(SimpleNamespace(extra={}), room, "ping")
+    )
+
+    assert result == {"success": True, "message_id": "$e2ee-sent"}
+    lock_file = tmp_path / "e2ee-state" / "e2ee" / "standalone-send.lock"
+    assert lock_file.is_file()
+    # Released once the send completes: a non-blocking exclusive
+    # re-acquire must succeed now.
+    fd = os.open(str(lock_file), os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def test_standalone_send_waits_for_a_concurrent_lock_holder(
+    adapter_mod, matrix_env, monkeypatch, tmp_path
+):
+    """#1700: while another process holds the store lock, the standalone
+    send blocks (its crypto phase cannot start) and proceeds only once
+    the holder exits."""
+    _e2ee_env(monkeypatch, tmp_path)
+    room = "!e2ee:example.org"
+    client = _E2EEStubClient(room_id=room, encrypted_room=True)
+    monkeypatch.setattr(adapter_mod, "build_client", lambda config: client)
+    monkeypatch.setattr(adapter_mod, "crypto_available", lambda: True)
+    monkeypatch.setattr(adapter_mod, "SyncResponse", _SyncStub)
+
+    lock_file = tmp_path / "e2ee-state" / "e2ee" / "standalone-send.lock"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    # A second "cron process" holds the store lock briefly.
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import fcntl, os, sys, time;"
+            " fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600);"
+            " fcntl.flock(fd, fcntl.LOCK_EX);"
+            " time.sleep(0.5);"
+            " os.close(fd)",
+            str(lock_file),
+        ],
+    )
+    # Wait until the holder demonstrably holds the lock (avoids the
+    # interpreter-startup race: the send must observe contention).
+    probe_fd = os.open(str(lock_file), os.O_RDWR | os.O_CREAT, 0o600)
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(probe_fd, fcntl.LOCK_UN)
+        except BlockingIOError:
+            break
+        if time.monotonic() > deadline:
+            raise AssertionError("lock holder never acquired the lock")
+        time.sleep(0.02)
+    os.close(probe_fd)
+    try:
+        start = time.monotonic()
+        result = asyncio.run(
+            adapter_mod._standalone_send(SimpleNamespace(extra={}), room, "ping")
+        )
+        elapsed = time.monotonic() - start
+    finally:
+        holder.terminate()
+        holder.wait()
+
+    assert result == {"success": True, "message_id": "$e2ee-sent"}
+    # The send waited for the concurrent holder (blocked on flock).
+    assert elapsed >= 0.3
+    assert client.sent
 
 
 def test_standalone_send_fails_closed_without_a_crypto_backend(
@@ -1479,3 +1572,5 @@ def test_standalone_send_plaintext_control_skips_crypto(
 
     assert result == {"success": True, "message_id": "$plain1"}
     assert sent["content"] == {"msgtype": "m.text", "body": "ping"}
+    # A plaintext cron send opens no E2EE store, hence takes no store lock.
+    assert not (tmp_path / "plain-state" / "e2ee").exists()

@@ -109,6 +109,12 @@ All reads go through `gateway.platforms._shared.get_scoped_secret`
   `NioTransport.typing`.
 - Cron delivery: `cron_deliver_env_var` = `AGENTTEAMS_MATRIX_HOME_ROOM`
   plus a standalone sender (ephemeral client, one `room_send`, close).
+  With E2EE enabled the standalone sender serializes its whole crypto
+  phase on a blocking `flock` of `e2ee/standalone-send.lock` and does not
+  run key maintenance itself (#1700) — it shares the matrix-nio crypto
+  store with the in-process transport, which does not take that lock
+  (cron delivery is low-frequency, so a one-shot sender waiting its
+  turn is acceptable; key exchange continues in-process).
 - Drop ledger: every silent drop (mention-gated group chatter, `NO_REPLY`,
   self-trigger suppression, final send failure, missing Matrix
   configuration) is recorded as one JSON line in

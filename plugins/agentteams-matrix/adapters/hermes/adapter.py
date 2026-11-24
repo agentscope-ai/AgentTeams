@@ -34,6 +34,7 @@ setups surface in ``hermes gateway status``.
 import asyncio
 import contextlib
 import datetime
+import fcntl
 import io
 import logging
 import mimetypes
@@ -81,7 +82,7 @@ else:
         "(install.sh copies it)"
     )
 
-from core.e2ee import E2EEMaintainer, crypto_available  # noqa: E402
+from core.e2ee import crypto_available  # noqa: E402
 from core.history import (  # noqa: E402
     DEFAULT_HISTORY_LIMIT,
     HistoryEntry,
@@ -1133,6 +1134,61 @@ def _resolve_cron_room(pconfig, chat_id: str) -> str:
     return target
 
 
+#: Lock file name inside the E2EE store directory (#1700).  The lock
+#: serializes concurrent standalone cron sends against each other; the
+#: lock *file* is never removed, so acquirers always race on the same
+#: path.
+_STANDALONE_E2EE_LOCK_NAME = "standalone-send.lock"
+
+
+class _StandaloneE2EEStoreLock:
+    """Blocking exclusive ``flock`` over the standalone sender's E2EE store.
+
+    The one-shot cron client opens the same matrix-nio crypto store as
+    the in-process :class:`NioTransport` (``<state_dir>/e2ee``) with the
+    same device identity, and matrix-nio has no cross-process
+    coordination of the store — concurrent crypto phases are the race
+    reported in #1700.  Unlike the core's fail-closed
+    :class:`~core.state.SingleWriterLock`, this lock *blocks*: cron
+    delivery is low-frequency, so a one-shot sender waiting its turn is
+    acceptable.  The in-process transport deliberately does NOT take
+    this lock (minimal intrusion — it is the long-running owner of the
+    store state).
+    """
+
+    def __init__(self, store_dir: Path) -> None:
+        self._path = store_dir / _STANDALONE_E2EE_LOCK_NAME
+        self._fh: Optional[int] = None
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def acquire(self) -> None:
+        """Acquire the lock, waiting for any other standalone sender."""
+        if self._fh is not None:
+            raise RuntimeError(f"lock {self._path} already held by this instance")
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(self._path), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except BaseException:
+            os.close(fd)
+            raise
+        self._fh = fd
+
+    def release(self) -> None:
+        """Release the lock (idempotent)."""
+        if self._fh is None:
+            return
+        try:
+            fcntl.flock(self._fh, fcntl.LOCK_UN)
+        finally:
+            os.close(self._fh)
+            self._fh = None
+
+
 async def _standalone_send(
     pconfig,
     chat_id: str,
@@ -1184,7 +1240,18 @@ async def _standalone_send(
         encryption=encryption,
         sync_timeout_ms=DEFAULT_SYNC_TIMEOUT_MS,
     )
+    # #1700: with encryption on this process opens the SAME matrix-nio
+    # crypto store as the in-process NioTransport and nio has no
+    # cross-process coordination — serialize the whole crypto phase
+    # (store open -> restore -> sync -> room_send -> close) on a
+    # blocking lock file inside the store directory.  A plaintext send
+    # opens no store and takes no lock.
+    store_lock = (
+        _StandaloneE2EEStoreLock(StateLayout(state_dir).e2ee) if encryption else None
+    )
     try:
+        if store_lock is not None:
+            store_lock.acquire()
         client = build_client(config)
         try:
             if encryption:
@@ -1196,6 +1263,21 @@ async def _standalone_send(
                 # encrypted and silently sends m.room.message in plaintext
                 # (the round-12 regression). Anything that cannot be
                 # established fails closed here.
+                #
+                # Key-maintenance (keys_upload/keys_query/keys_claim/
+                # send_to_device) is deliberately NOT run here (#1700):
+                # this one-shot send only needs the restored store plus
+                # this room's state — nio encrypts the send itself,
+                # sharing a new group session when the room has none —
+                # and running the maintenance pass concurrently with the
+                # in-process maintainer (same device identity, same
+                # store) is exactly the cross-process crypto-store race.
+                # Ongoing key exchange continues with the in-process
+                # maintainer after every successful sync.  Documented
+                # trade-off: a to-device key request consumed by this
+                # one-shot sync would not be answered by this process
+                # (nio's outgoing queue is in-memory); requesters retry,
+                # so the degradation is recoverable.
                 #
                 # The canonical identity: config values win, and a whoami
                 # fills in what is missing (nio leaves user_id/device_id
@@ -1226,7 +1308,6 @@ async def _standalone_send(
                         "agentteams-matrix: E2EE standalone send could not "
                         f"sync the room state ({type(sync_response).__name__})"
                     )
-                await E2EEMaintainer(client).run_once()
                 rooms = getattr(client, "rooms", None) or {}
                 room = rooms.get(target) if hasattr(rooms, "get") else None
                 if room is None:
@@ -1253,6 +1334,9 @@ async def _standalone_send(
     except Exception as e:
         logger.debug("agentteams-matrix standalone send raised", exc_info=True)
         return send_error(f"agentteams-matrix standalone send failed: {e}")
+    finally:
+        if store_lock is not None:
+            store_lock.release()
     if not isinstance(resp, RoomSendResponse):
         return send_error(f"agentteams-matrix: room_send failed: {type(resp).__name__}")
     return {"success": True, "message_id": resp.event_id}

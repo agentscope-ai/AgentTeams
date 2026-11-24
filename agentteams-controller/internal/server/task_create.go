@@ -144,8 +144,8 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	event.Tasks = []mainTaskRequest{{TaskID: id, Title: input.Title, Spec: input.Spec}}
 	var admission coordinationAdmission
 	var err error
-	inline := caller.Role == authpkg.RoleTeamLeader
-	if inline {
+	directLeader := caller.Role == authpkg.RoleTeamLeader
+	if directLeader {
 		event, err = h.coordination.resolve(r.Context(), event, caller)
 		if err == nil {
 			err = h.coordination.registerHandoffTasks(r.Context(), event)
@@ -164,8 +164,8 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	notification := taskNotificationStatus{Status: "queued", Recipient: admission.Recipient, EventID: admission.EventID}
-	if inline {
-		notification.Status = "inline"
+	if directLeader {
+		notification = h.flushTaskNotification(r.Context(), key, "handoff")
 	} else if saved := h.flushTaskNotification(r.Context(), key, "handoff"); saved.Status == "queued" {
 		notification = saved
 	}
@@ -181,8 +181,8 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		status = 200
 	}
 	nextAction := "Task system has registered the original request and queued its handoff to the Team Leader. Do not send another handoff message."
-	if inline {
-		nextAction = "Task registered. Continue planning this same Task in your current native context; no self-notification is needed."
+	if directLeader {
+		nextAction = "Task registered. Planning continues in its Task room; end this intake turn. Do not plan here or send another handoff."
 	}
 	httputil.WriteJSON(w, status, struct {
 		SourceEventID string                 `json:"sourceEventId"`
@@ -288,7 +288,7 @@ func validateTaskOriginCommit(w http.ResponseWriter, current, next []byte) bool 
 		return false
 	}
 	if had {
-		for _, field := range []string{"source_room_id", "requester", "reply_route", "requester_reply_route", "task_id", "task_kind", "team_id", "handoff_id", "spec", "title"} {
+		for _, field := range []string{"source_room_id", "requester", "reply_route", "requester_reply_route", "task_id", "task_kind", "team_id", "handoff_id", "spec", "title", "room_id"} {
 			a, hasA := rawJSONField(current, field)
 			b, hasB := rawJSONField(next, field)
 			if hasA != hasB || (hasA && !sameJSONValue(a, b)) {

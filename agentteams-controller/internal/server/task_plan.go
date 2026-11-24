@@ -33,6 +33,7 @@ type taskPlanRequest struct {
 type taskPlan struct {
 	ID        string          `json:"id"`
 	ActorName string          `json:"actor_name"`
+	RoomID    string          `json:"room_id,omitempty"`
 	Request   taskPlanRequest `json:"request"`
 }
 
@@ -212,7 +213,7 @@ func (h *ProjectHandler) PlanTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		nodes, _ := main["tasks"].([]any)
-		if main["status"] != "planned" || len(nodes) != 0 || coordinationString(main, "room_id") != "" || strings.TrimSpace(coordinationString(main, "spec")) == "" {
+		if main["status"] != "planned" || len(nodes) != 0 || strings.TrimSpace(coordinationString(main, "spec")) == "" {
 			writeError(w, 409, "main task is not awaiting its first execution plan")
 			return
 		}

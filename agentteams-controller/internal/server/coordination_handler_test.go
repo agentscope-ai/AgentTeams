@@ -176,7 +176,7 @@ func TestMatrixFinalCannotInventMissingReport(t *testing.T) {
 	}
 }
 
-func TestMatrixAssignmentTracksAckAndSubmissionWithoutWorkerExecutionHTTP(t *testing.T) {
+func TestMatrixAssignmentTracksStateWithoutPostingAcceptanceChat(t *testing.T) {
 	h, store := coordinationFixture(t)
 	native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/teamharness/coordination/approvals" {
@@ -202,12 +202,12 @@ func TestMatrixAssignmentTracksAckAndSubmissionWithoutWorkerExecutionHTTP(t *tes
 	}
 	putProject(store, "teams/alpha/shared/tasks/t1/meta.json", map[string]any{"task_id": "t1", "project_id": "p1", "status": "in_progress", "assigned_to": "@worker:test", "notifyTxn": "delegate-1"})
 	h.advance(context.Background(), &d, func() error { return nil })
-	if acks != 1 || d.Status != "running" || d.AckEventID == "" {
-		t.Fatal("ACK did not start execution/approval tracking")
+	if acks != 0 || d.Status != "running" || d.AckEventID != "" {
+		t.Fatal("internal execution tracking posted an acceptance chat")
 	}
 	putProject(store, "teams/alpha/shared/tasks/t1/meta.json", map[string]any{"task_id": "t1", "project_id": "p1", "status": "submitted", "assigned_to": "@worker:test", "notifyTxn": "delegate-1"})
 	h.advance(context.Background(), &d, func() error { return nil })
-	if acks != 1 || d.Status != "completed" {
+	if acks != 0 || d.Status != "completed" {
 		t.Fatal("submission repeated ACK or did not finish tracking")
 	}
 }

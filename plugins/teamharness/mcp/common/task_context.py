@@ -1,4 +1,5 @@
 """Public Task preparation validation shared by native runtime adapters."""
+import copy
 from pathlib import Path
 import re
 
@@ -72,7 +73,7 @@ def prepare(kind, event, result):
                 or not output.resolve().is_relative_to(root.resolve()) or not scratch.resolve().is_relative_to(root.resolve())):
             raise ValueError("task begin receipt does not match this assignment")
         return {"fact": "Your assignment is acknowledged and inputs are prepared. Do not repeat begin or download supplied inputs. "
-                        "Use the original request for context and produce only the deliverables assigned to your node. "
+                        "Use the original request for context and produce only the deliverables assigned to your node. Upstream inputs contain summaries and verified file paths; read only the reports or files needed for your node. Do not load the whole history or repeat it in a handoff. Start work directly; do not send separate received, starting, or receipt messages. "
                         "Prefer native file tools for simple reads and writes. Use shell or patch tools when the assignment needs them. "
                         "Write each deliverable using the exact absolute outputDirectory below plus its filename. "
                         "Use scratchDirectory for temporary work. Pass files as a JSON array of paths relative to outputDirectory. "
@@ -116,6 +117,31 @@ def prepare(kind, event, result):
                     or not (delivered or reviewed)):
                 raise ValueError("accepted result identity or saved review changed")
             remaining.remove(child["id"])
-        return {"fact": "All execution steps have completed. Use acceptedResults below: each id is the actual execution Task ID, with its exact candidate, report and artifact versions, plus a frozen handoff or saved review. A handoff records delivery, not a prior Leader acceptance. Verify whole-request coverage from this evidence; do not reread unchanged accepted files or rerun checks. Read more only for a concrete missing or inconsistent requirement, using that result's id, never a local step alias or the main Task ID for child files. Call task complete with your final report, distinguishing recorded tests from your own review. Choose one coherent final deliverable set for the original request, excluding superseded intermediate versions and repeated filenames for the same project. Pass artifacts using the exact artifactId values from acceptedResults, including every file that final project needs. Omit artifacts only when all accepted outputs already form that final set. The task system returns report and artifacts to the original Human conversation using the first dispatch identity. Do not send another message or poll.",
+        return {"fact": "All execution steps have completed. Use acceptedResults below: each id is the actual execution Task ID, with its summary, exact candidate identity and versioned report/artifact references, plus a frozen handoff or saved review. A handoff records delivery, not a prior Leader acceptance. Verify whole-request coverage from this evidence. Read a referenced report or artifact when needed to judge a requirement; do not reread unchanged evidence or rerun checks. Use files_read with its artifactId for a referenced report, using that result's id, never a local step alias or the main Task ID for child files. Call task complete with your final report, distinguishing recorded tests from your own review. Choose one coherent final deliverable set for the original request, excluding superseded intermediate versions and repeated filenames for the same project. Pass artifacts using the exact artifactId values from acceptedResults, including every file that final project needs. Omit artifacts only when all accepted outputs already form that final set. The task system returns report and artifacts to the original Human conversation using the first dispatch identity. Do not send another message or poll.",
                 "context": task, "completion": task_id}
     raise ValueError("unsupported task preparation event")
+
+
+def model_context(value):
+    """Project prepared evidence as references; preserve the canonical snapshot."""
+    projected = copy.deepcopy(value)
+    for upstream in projected.get("inputs", []):
+        for file in upstream.get("files", []):
+            # Begin already materialized and verified this exact local file.
+            # Its entire preview is not an instruction for the next Worker.
+            file.pop("preview", None)
+    task = projected.get("task", projected)
+    specs = {node.get("taskId"): node.get("spec") for node in task.get("nodes", [])}
+    prefix = "# Original request\n" + task.get("spec", "") + "\n\n# Your assignment\n"
+    for child in task.get("acceptedResults", []):
+        if child.get("spec") == prefix + (specs.get(child.get("id")) or ""):
+            child.pop("spec", None)  # The original and node contract are above.
+        candidate = child.get("candidate") or {}
+        if candidate.get("reportFile"):
+            candidate.pop("report", None)
+            candidate.pop("reportTruncated", None)
+    candidate = task.get("candidate") or {}
+    if candidate.get("reportFile"):
+        candidate.pop("report", None)
+        candidate.pop("reportTruncated", None)
+    return projected

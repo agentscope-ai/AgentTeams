@@ -55,7 +55,7 @@ TASK_SCHEMA = {
             "nodes": {"type": "array", "description": "For plan: complete execution DAG; no source routes or execution Task IDs.",
                       "items": {"type": "object", "additionalProperties": False, "required": ["id", "assignedTo", "spec", "dependsOn"],
                                 "properties": {"id": {"type": "string"}, "title": {"type": "string"},
-                                               "assignedTo": {"type": "string"}, "spec": {"type": "string"},
+                                               "assignedTo": {"type": "string"}, "spec": {"type": "string", "description": "Only this node responsibility, inputs, outputs and acceptance checks. The original Human request is attached automatically; do not copy it or other nodes into each spec."},
                                                "dependsOn": {"type": "array", "items": {"type": "string"}, "description": "Required on every node. List all upstream local node IDs whose completed outputs this node needs; use [] only for independent work."}}}},
             "summary": {"type": "string", "description": "For submit: actual result and validation summary."},
             "report": {"type": "string", "description": "For submit: optional detailed report; for complete: verified final human report."},

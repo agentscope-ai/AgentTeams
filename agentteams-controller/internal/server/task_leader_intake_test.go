@@ -9,6 +9,7 @@ import (
 
 	v1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -40,7 +41,9 @@ func leaderIntakeFixture(t *testing.T) *ProjectHandler {
 	if err := creds.Save(t.Context(), "lead-cr", &service.WorkerCredentials{MatrixToken: "leader-intake-token"}); err != nil {
 		t.Fatal(err)
 	}
-	h.coordination.deps.Provisioner = service.NewProvisioner(service.ProvisionerConfig{Creds: creds})
+	mx := &planTestMatrix{rooms: map[string]matrix.CreateRoomRequest{}}
+	h.coordination.deps.MatrixClient = mx
+	h.coordination.deps.Provisioner = service.NewProvisioner(service.ProvisionerConfig{Matrix: mx, Creds: creds, MatrixDomain: "test"})
 	return h
 }
 
@@ -68,16 +71,22 @@ func TestLeaderRegistersOwnAdminConfirmationAndReusesItsReceipt(t *testing.T) {
 	if json.Unmarshal(first.Body.Bytes(), &result) != nil || !strings.Contains(result.Task.Spec, "Confirm analysis and a Draft PR") {
 		t.Fatal("authoritative Human confirmation was lost")
 	}
-	if !strings.Contains(first.Body.String(), `"status":"inline"`) {
-		t.Fatal("Leader creation did not admit inline planning")
+	if !strings.Contains(first.Body.String(), `"status":"queued"`) || result.Task.RoomID != "!planned:test" {
+		t.Fatalf("Leader did not create a room and queue planning: %s", first.Body.String())
 	}
 	key := "teams/alpha/shared/tasks/" + result.Task.ID + "/meta.json"
 	meta, _ := h.coordination.read(t.Context(), key)
-	if meta["task_notifications"] != nil {
-		t.Fatal("inline intake queued a self-notification")
+	data, err := h.oss.GetObject(t.Context(), coordinationPending+coordinationString(meta, "handoff_id")+".json")
+	var delivery coordinationDelivery
+	if err != nil || json.Unmarshal(data, &delivery) != nil || delivery.Event.RoomID != result.Task.RoomID {
+		t.Fatalf("planning was not handed to the durable task room: %s %v", data, err)
 	}
-	if _, err := h.oss.GetObject(t.Context(), coordinationPending+coordinationString(meta, "handoff_id")+".json"); err == nil {
-		t.Fatal("inline intake created a self-handoff outbox event")
+	if coordinationString(coordinationMap(meta, "reply_route"), "target_session") != "!leader-dm:test" {
+		t.Fatal("moving planning changed the original reply route")
+	}
+	content := coordinationMatrixNotification(delivery.Event, coordinationPayload(delivery.Event))
+	if content["msgtype"] != "m.notice" || strings.Contains(content["body"].(string), "@lead") {
+		t.Fatalf("internal planning wake-up became a self mention: %v", content)
 	}
 	again := leaderCreate(t, h, authpkg.RoleTeamLeader, "lead-cr", "@human:test", "!leader-dm:test", "lead-cr")
 	if again.Code != 200 || !strings.Contains(again.Body.String(), result.Task.ID) {
@@ -172,5 +181,36 @@ func TestLeaderIntakeCompletionReturnsThroughItsOwnDispatchIdentity(t *testing.T
 	event, err := h.coordination.resolve(t.Context(), coordinationEvent{Kind: "main_task_completed", MainTaskID: result.Task.ID}, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"})
 	if err != nil || event.External || event.RecipientName != "lead-cr" || event.RecipientKind != "worker" || event.FinalReport != "Verified final result" || coordinationString(event.RequesterRoute, "target_session") != "!leader-dm:test" {
 		t.Fatalf("Leader completion route: %+v %v", event, err)
+	}
+}
+
+func TestLeaderPlanningRoomRetriesAfterLostResponseWithoutDuplicate(t *testing.T) {
+	h := leaderIntakeFixture(t)
+	mx := h.coordination.deps.MatrixClient.(*planTestMatrix)
+	mx.lostResponse = true
+	first := leaderCreate(t, h, authpkg.RoleTeamLeader, "lead-cr", "@human:test", "!leader-dm:test", "lead-cr")
+	if first.Code != 201 || !strings.Contains(first.Body.String(), `"status":"pending"`) {
+		t.Fatalf("%d %s", first.Code, first.Body.String())
+	}
+	again := leaderCreate(t, h, authpkg.RoleTeamLeader, "lead-cr", "@human:test", "!leader-dm:test", "lead-cr")
+	if again.Code != 200 || !strings.Contains(again.Body.String(), `"status":"queued"`) || mx.creates != 1 {
+		t.Fatalf("%d %s rooms=%d", again.Code, again.Body.String(), mx.creates)
+	}
+}
+
+func TestLeaderCannotRedirectPlanningToAnotherRoom(t *testing.T) {
+	h := leaderIntakeFixture(t)
+	response := leaderCreate(t, h, authpkg.RoleTeamLeader, "lead-cr", "@human:test", "!leader-dm:test", "lead-cr")
+	var result struct {
+		Task taskResource `json:"task"`
+	}
+	_ = json.Unmarshal(response.Body.Bytes(), &result)
+	meta, _ := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+result.Task.ID+"/meta.json")
+	data, _ := h.oss.GetObject(t.Context(), coordinationPending+coordinationString(meta, "handoff_id")+".json")
+	var delivery coordinationDelivery
+	_ = json.Unmarshal(data, &delivery)
+	delivery.Event.RoomID = "!foreign:test"
+	if _, err := h.coordination.resolve(t.Context(), delivery.Event, &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"}); err == nil {
+		t.Fatal("arbitrary room redirect admitted")
 	}
 }

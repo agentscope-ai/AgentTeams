@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import sys
 import urllib.request
+from urllib.parse import quote
 
 if __package__:
     from . import phase_recovery, task_cli, task_context, task_roster, task_receipt as receipts
@@ -24,15 +25,46 @@ else:
     import task_roster
 
 
-def controller_json(route):
+def controller_json(route, *, timeout=10):
     """Use operator-provided public API configuration, never model routing."""
     token = os.getenv("AGENTTEAMS_AUTH_TOKEN", "").strip()
     if not token:
         token = Path(os.getenv("AGENTTEAMS_AUTH_TOKEN_FILE") or "/var/run/secrets/agentteams/token").read_text().strip()
     url = os.environ["AGENTTEAMS_CONTROLLER_URL"].rstrip("/") + "/api/v1/" + route
     request = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
+
+
+def dispatched_receipts(result, actor, get_json):
+    """Confirm actual Matrix sends for the authenticated outgoing Task events."""
+    task = result["task"]
+    notices = [(item["eventId"], item["taskId"], "task_assigned")
+               for item in result.get("assignments", []) if item.get("status") == "queued" and item.get("eventId")]
+    notice = result.get("notification") or {}
+    if notice.get("status") == "queued" and notice.get("eventId"):
+        notices.append((notice["eventId"], task["id"], "task_submitted"))
+    confirmed = []
+    for event, identity, kind in notices:
+        try:
+            saved = get_json("coordination/events/" + event)
+        except (OSError, ValueError):
+            continue  # The existing canonical fact still says queued, not sent.
+        native = saved.get("native_id", "")
+        scope_matches = (saved.get("task_id") == identity and saved.get("kind") == kind)
+        if kind == "task_submitted" and saved.get("kind") == "main_task_ready":
+            scope_matches = saved.get("main_task_id") == task.get("mainTaskId")
+        if (saved.get("event_id") != event or saved.get("actor") != actor or not scope_matches
+                or not isinstance(native, str) or not native.startswith("matrix:$")):
+            continue
+        confirmed.append({"receiptId": json.dumps(["dispatch", event, native], separators=(",", ":")),
+                          "fact": "[Task handoff receipt]\n" + json.dumps({
+                              "taskId": task["id"], "submissionId": task["submissionId"],
+                              "downstreamTaskId": saved.get("task_id") or saved.get("main_task_id"),
+                              "recipient": saved["recipient"], "roomId": saved["room_id"],
+                              "eventId": event, "matrixEventId": native[7:], "status": "sent"},
+                              ensure_ascii=False, separators=(",", ":")) + "\nAlready notified. No action or further reasoning is needed."})
+    return confirmed
 
 
 def native_role(value):
@@ -182,6 +214,20 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
                                          and all(item["eventId"] in registered for item in sources))
         else:
             response["phaseComplete"] = True
+    if (receipt and response["phaseComplete"] and action == "submit" and context.get("actor")
+            and (get_json or os.getenv("AGENTTEAMS_CONTROLLER_URL"))):
+        response["extraReceipts"] = dispatched_receipts(result, context["actor"],
+            get_json or (lambda route: controller_json(route, timeout=2)))
+    if receipt and response["phaseComplete"]:
+        if action == "create" and (result.get("task") or {}).get("roomId"):
+            task = result["task"]
+            link = "#workbench/tasks/" + quote(task["id"], safe="") + "/collaboration?room=" + quote(task["roomId"], safe="")
+            response["displayText"] = "已受理「" + task.get("title", task["id"]) + "」，接下来在任务房间规划和执行。[查看任务](" + link + ")"
+        elif action == "plan":
+            response["displayText"] = ("任务规划已保存，后续推进由任务系统接管" if result.get("progress") == "ready"
+                                       else "任务规划已保存，调度尚未完成，请查看任务状态。")
+        elif action == "complete":
+            response["displayText"] = arguments["report"]
     return response
 
 

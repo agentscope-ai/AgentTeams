@@ -21,6 +21,7 @@ type taskResource struct {
 	PlanID                 string                            `json:"planId,omitempty"`
 	Nodes                  []taskPlanNodeResource            `json:"nodes,omitempty"`
 	ID                     string                            `json:"id"`
+	RoomID                 string                            `json:"roomId,omitempty"`
 	Team                   string                            `json:"team"`
 	Kind                   string                            `json:"kind,omitempty"`
 	Title                  string                            `json:"title,omitempty"`
@@ -211,7 +212,7 @@ func publicTaskResource(id, team string, record map[string]any) taskResource {
 			notices[kind] = taskNotificationStatus{Status: intent.Status, EventID: intent.EventID, Recipient: intent.Recipient}
 		}
 	}
-	return taskResource{
+	return taskResource{RoomID: coordinationString(record, "room_id"),
 		Cancellation: cancellation, CancellationProjection: cancellationProjection,
 		RevisionOf: coordinationString(record, "revision_of"), Candidate: publicTaskCandidate(record),
 		PlanID: plan.ID, Nodes: nodes,

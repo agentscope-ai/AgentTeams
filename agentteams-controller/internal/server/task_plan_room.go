@@ -100,8 +100,21 @@ func (h *CoordinationHandler) ensureTaskPlanRoom(ctx context.Context, main map[s
 		return "", fmt.Errorf("task room creation unavailable")
 	}
 	actual, err := h.deps.MatrixClient.GetRoomState(ctx, room.RoomID, "room.meta", "", token)
-	if err != nil || actual["taskId"] != main["task_id"] || actual["planId"] != plan.ID || actual["teamName"] != team.Spec.EffectiveTeamName(team.Name) || coordinationString(coordinationMap(actual, "leaderWorker"), "userId") != leader.Status.MatrixUserID {
+	if err != nil || actual["taskId"] != main["task_id"] || actual["teamName"] != team.Spec.EffectiveTeamName(team.Name) || coordinationString(coordinationMap(actual, "leaderWorker"), "userId") != leader.Status.MatrixUserID {
 		return "", fmt.Errorf("task room ownership does not match the saved plan")
+	}
+	if bound := coordinationString(main, "room_id"); bound != "" && bound != room.RoomID {
+		return "", fmt.Errorf("task room identity changed")
+	}
+	// The room is owned by the immutable Task, before it has a plan. Bind the
+	// saved plan and its members in place; never create a second planning room.
+	if actual["planId"] != plan.ID {
+		if !strings.HasPrefix(coordinationString(main, "room_id"), "!") || plan.ID == "" {
+			return "", fmt.Errorf("task room plan changed")
+		}
+		if err := h.deps.MatrixClient.SetRoomState(ctx, room.RoomID, "room.meta", "", meta, token); err != nil {
+			return "", err
+		}
 	}
 	members, err := h.deps.MatrixClient.ListRoomMembersWithToken(ctx, room.RoomID, token)
 	if err != nil {

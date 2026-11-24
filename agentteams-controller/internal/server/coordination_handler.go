@@ -226,13 +226,24 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		if caller.Role == authpkg.RoleTeamLeader {
 			route, err := NewAssistantHandler(h.deps).routeFor(ctx, caller, tm.Name)
 			room, user := coordinationString(e.SourceRoute, "target_session"), coordinationString(e.SourceRoute, "target_user")
-			if err != nil || caller.Team != tm.Name || route.name != recipient.Name || route.room != room || route.user != user || e.RoomID != room || len(e.Tasks) > 1 {
+			if err != nil || caller.Team != tm.Name || route.name != recipient.Name || route.room != room || route.user != user || len(e.Tasks) > 1 {
 				return reject()
 			}
 			e.Actor, e.ActorName = recipient.Status.MatrixUserID, recipient.Name
 			original, status := h.taskSourceRequestFor(ctx, "worker", recipient.Name, room, e.OriginEventID, user)
 			if status != 0 {
 				return reject()
+			}
+			if e.RoomID != room {
+				if len(e.Tasks) != 1 {
+					return reject()
+				}
+				request := e.Tasks[0]
+				main, err := h.read(ctx, path.Join("teams", e.StorageTeam, "shared/tasks", request.TaskID, "meta.json"))
+				origin := coordinationMap(main, "task_origin")
+				if err != nil || main["task_kind"] != "main" || main["room_id"] != e.RoomID || main["title"] != request.Title || main["spec"] != request.Spec || main["assigned_to"] != recipient.Status.MatrixUserID || origin["event_id"] != e.OriginEventID || origin["room_id"] != room || origin["requester"] != user || origin["dispatch_agent"] != recipient.Name {
+					return reject()
+				}
 			}
 			if len(e.Tasks) == 1 {
 				if e.Tasks[0].TaskID != sourceMainTaskID(e.ActorName, e.StorageTeam, recipient.Name, e.OriginEventID) {

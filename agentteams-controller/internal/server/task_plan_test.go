@@ -550,3 +550,34 @@ func TestTaskPlanRecoversPreparedAssignmentAfterQueueOutage(t *testing.T) {
 		t.Fatalf("queue recovery duplicated assignment or room: %+v events=%d rooms=%d", child, len(entries), mx.creates)
 	}
 }
+
+func (m *planTestMatrix) SetRoomState(_ context.Context, _, _, _ string, content map[string]any, _ string) error {
+	for key, room := range m.rooms {
+		room.InitialState[0].Content = content
+		m.rooms[key] = room
+	}
+	return nil
+}
+func (m *planTestMatrix) InviteToRoomWithToken(_ context.Context, _, user, _ string) error {
+	for key, room := range m.rooms {
+		room.Invite = append(room.Invite, user)
+		m.rooms[key] = room
+	}
+	return nil
+}
+func TestPlanReusesIntakeRoomAndInvitesExecutionMembers(t *testing.T) {
+	h, store, caller, mx := taskPlanFixture(t)
+	body, _ := store.GetObject(t.Context(), "teams/alpha/shared/tasks/main/meta.json")
+	var main map[string]any
+	_ = json.Unmarshal(body, &main)
+	room, err := h.coordination.ensureTaskPlanRoom(t.Context(), main, taskPlan{ActorName: "lead-cr"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	main["room_id"] = room
+	putTask(store, "teams/alpha/shared/tasks/main/meta.json", main)
+	w := callPlan(h, caller, planRequest())
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"progress":"ready"`) || mx.creates != 1 || !mx.joined["@worker:test"] || !mx.joined["@second:test"] {
+		t.Fatalf("plan in intake room: %d %s rooms=%d joined=%v", w.Code, w.Body.String(), mx.creates, mx.joined)
+	}
+}

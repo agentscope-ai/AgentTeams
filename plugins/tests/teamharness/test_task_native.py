@@ -366,3 +366,30 @@ def test_leader_inline_create_continues_to_plan_without_self_handoff(bridge):
                             'nodes': [{'id': 'a', 'assignedTo': 'dev', 'spec': 'Work', 'dependsOn': []}]},
                             'context': context}, call=lambda _: planned)
     assert result['phaseComplete'] is True
+
+
+def test_leader_creation_ends_intake_and_moves_planning_to_task_room(bridge):
+    source = {'inputId':'ref','eventId':'$source','roomId':'!dm:test','userId':'@human:test'}
+    created = {'sourceEventId':'$source','task':{'id':'main','kind':'main','title':'HTML page','status':'planned','roomId':'!task:test'},
+               'notification':{'status':'queued','recipient':'lead','eventId':'event'}}
+    result=bridge.invoke({'operation':'task','arguments':{'action':'create','leader':'lead','title':'HTML page'},
+        'context':{'role':'leader','sources':[source]}},call=lambda _:created)
+    assert result['phaseComplete'] is True
+    assert 'planning' not in result['contextUpdate']
+    assert 'HTML page' in result['displayText'] and '任务房间' in result['displayText']
+    assert 'main/collaboration?room=' in result['displayText']
+    assert 'Task system receipt' in result['fact']
+
+
+def test_dispatch_receipts_confirm_actual_sender_event_without_a_model_turn(bridge):
+    result={'task':{'id':'source','mainTaskId':'main','submissionId':'s1'},
+            'assignments':[{'taskId':'next','status':'queued','eventId':'notice'}]}
+    saved={'event_id':'notice','kind':'task_assigned','task_id':'next','actor':'@sender:test',
+           'recipient':'@tester:test','room_id':'!task:test','native_id':'matrix:$sent'}
+    rows=bridge.dispatched_receipts(result,'@sender:test',lambda _:saved)
+    assert len(rows)==1
+    assert '"status":"sent"' in rows[0]['fact'] and '"matrixEventId":"$sent"' in rows[0]['fact']
+    for change in [{'actor':'@another:test'},{'native_id':''},{'event_id':'foreign'},{'task_id':'other'}]:
+        assert bridge.dispatched_receipts(result,'@sender:test',lambda _:{**saved,**change})==[]
+    def unavailable(_):raise OSError('temporarily unavailable')
+    assert bridge.dispatched_receipts(result,'@sender:test',unavailable)==[]

@@ -155,13 +155,13 @@ func coordinationPayload(e coordinationEvent) map[string]any {
 		case "handoff":
 			requests, _ := json.Marshal(e.Tasks)
 			roster, _ := json.Marshal(e.EligibleAssignees)
-			text = e.Text + "\nThese main tasks are already registered. Preserve their IDs and original requirements. Use the common task tool action plan with the complete execution DAG, selecting registered assignees; the task system creates the room and dispatches ready steps. End after planning; do not send assignments or poll. Tasks: " + string(requests) + "\nRegistered assignees: " + string(roster)
+			text = "These main tasks are already registered. Preserve their IDs and original requirements. Use the common task tool action plan with the complete execution DAG, selecting registered assignees; plan in the current Task room when one is supplied; the task system dispatches ready steps. End after planning; do not send assignments or poll. Tasks: " + string(requests) + "\nRegistered assignees: " + string(roster)
 		case "task_assigned":
 			text = "TASK_ASSIGNED: " + e.TaskID + "\nUse the framework-prepared task begin receipt. Execute only this task, keep inputs read-only, and submit files relative to its prepared output directory through the common task tool. Do not repeat begin when already prepared.\n" + e.Text
 		case "task_submitted":
 			text = "TASK_SUBMITTED: " + e.TaskID + "\nReview the exact candidate and its artifacts using the common task tool. Accept or reject this submission ID with independent business evidence; the task system advances dependencies. End after review; do not dispatch or poll.\n" + e.Text
 		case "main_task_ready":
-			text = "MAIN_TASK_READY_TO_CLOSE: " + e.MainTaskID + "\nVerify the whole original request against accepted results and use the common task tool action complete with your final report. The task system returns the report and accepted artifacts to the original Human conversation using the first dispatch Agent identity. Do not send another notification.\n" + e.Text
+			text = "MAIN_TASK_READY_TO_CLOSE: " + e.MainTaskID + "\nVerify the whole original request against accepted results and use the common task tool action complete with your final report. The task system returns the report and accepted artifacts to the original Human conversation using the first dispatch Agent identity. Do not send another notification. The framework prepares the authoritative main Task and result references; inspect additional evidence only as needed."
 		}
 	}
 	user := coordinationString(original, "target_user")
@@ -337,13 +337,7 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 				return
 			}
 			if status == "in_progress" || status == "submitted" || status == "completed" {
-				if d.AckEventID == "" {
-					id, sendErr := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, e.RoomID, e.ID+"-ack", "已接收「"+coordinationTaskTitle(e, p)+"」，开始处理。")
-					if sendErr != nil {
-						return
-					}
-					d.AckEventID, d.Error = id, ""
-				}
+				d.Error = "" // Execution ACK is internal state, not another chat message.
 				if status != "in_progress" {
 					d.Status = "completed"
 				}
@@ -383,12 +377,7 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 			d.MatrixEventID = id
 		}
 	}
-	if e.Kind == "task_assigned" && d.AckEventID == "" && (coordinationString(t, "status") == "in_progress" || coordinationString(t, "status") == "submitted" || coordinationString(t, "status") == "completed") {
-		id, err := h.projectEvent(ctx, e, e.RecipientKind, e.RecipientName, e.RoomID, e.ID+"-ack", "已接收任务，开始处理 · "+e.TaskID)
-		if err == nil {
-			d.AckEventID = id
-		}
-	}
+
 	h.projectApprovals(ctx, e, d)
 	result, err := h.native(ctx, "GET", e.TargetURL+"/api/console/chat/task/"+url.PathEscape(d.NativeID), nil)
 	if err != nil {
@@ -461,7 +450,7 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 			return
 		}
 	}
-	if d.MatrixEventID == "" || (e.Kind == "task_assigned" && d.AckEventID == "") {
+	if d.MatrixEventID == "" {
 		d.Error = "progress projection unavailable"
 		return
 	}
@@ -569,6 +558,13 @@ func coordinationMatrixAssignment(e coordinationEvent, p map[string]any) map[str
 }
 func coordinationMatrixNotification(e coordinationEvent, p map[string]any) map[string]any {
 	content := coordinationMatrixAssignment(e, p)
+	if e.Kind == "handoff" && e.Protocol == "task/v1" && e.Actor == e.Recipient {
+		content["msgtype"] = "m.notice"
+		content["body"] = "任务房间已创建，请在这里规划并执行已受理的需求。"
+		content["m.mentions"] = map[string]any{"user_ids": []string{}}
+		delete(content, "formatted_body")
+		return content
+	}
 	caption := ""
 	switch e.Kind {
 	case "assistant_digest":

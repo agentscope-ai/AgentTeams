@@ -49,6 +49,36 @@ func (h *ProjectHandler) flushTaskNotification(ctx context.Context, key, kind st
 		if intent.Status == "queued" {
 			return taskNotificationStatus{Status: "queued", EventID: intent.EventID, Recipient: intent.Recipient}
 		}
+		// A direct Leader intake keeps the original reply route but moves planning
+		// to a durable Task room before admitting its internal wake-up.
+		if kind == "handoff" && intent.ActorRole == authpkg.RoleTeamLeader && intent.Event.Actor == intent.Event.Recipient {
+			var main map[string]any
+			if json.Unmarshal(body, &main) != nil {
+				return taskNotificationStatus{Status: "pending", Error: "task snapshot unavailable"}
+			}
+			room := coordinationString(main, "room_id")
+			if room == "" {
+				room, err = h.coordination.ensureTaskPlanRoom(ctx, main, taskPlan{ActorName: intent.ActorName})
+				if err != nil {
+					return taskNotificationStatus{Status: "pending", Error: err.Error()}
+				}
+			}
+			if intent.Event.RoomID != room {
+				intent.Event.RoomID = room
+				intents[kind] = intent
+				task["room_id"], _ = json.Marshal(room)
+				task["task_notifications"], _ = json.Marshal(intents)
+				next, _ := json.Marshal(task)
+				strict, ok := h.oss.(conditionalWriter)
+				if !ok {
+					return taskNotificationStatus{Status: "pending", Error: "conditional task storage required"}
+				}
+				if err := strict.PutObjectIfMatchStrict(ctx, key, next, contentETag(body)); err != nil && !errors.Is(err, oss.ErrPreconditionFailed) {
+					return taskNotificationStatus{Status: "pending", Error: err.Error()}
+				}
+				continue
+			}
+		}
 		admitted, err := h.coordination.enqueue(ctx, intent.Event, &authpkg.CallerIdentity{Role: intent.ActorRole, Username: intent.ActorName, Team: intent.Team})
 		if err != nil {
 			return taskNotificationStatus{Status: "pending", Error: err.Error()}

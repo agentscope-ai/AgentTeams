@@ -50,7 +50,7 @@ func (h *ProjectHandler) reconcileTaskPlan(ctx context.Context, key string) erro
 		if status, message := h.taskExecutionAdmissionFailure(ctx, key, main); status != 0 {
 			return fmt.Errorf("%s", message)
 		}
-		if strings.HasPrefix(coordinationString(main, "room_id"), "!") {
+		if strings.HasPrefix(coordinationString(main, "room_id"), "!") && plan.RoomID == main["room_id"] {
 			break
 		}
 		room, err := h.coordination.ensureTaskPlanRoom(ctx, main, plan)
@@ -58,6 +58,8 @@ func (h *ProjectHandler) reconcileTaskPlan(ctx context.Context, key string) erro
 			return err
 		}
 		main["room_id"] = room
+		plan.RoomID = room
+		main["task_plan"] = plan
 		next, _ := json.Marshal(main)
 		if err := strict.PutObjectIfMatchStrict(ctx, key, next, contentETag(body)); err != nil {
 			if errors.Is(err, oss.ErrPreconditionFailed) {

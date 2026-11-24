@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 import urllib.request
 from urllib.parse import quote
 
@@ -36,7 +37,7 @@ def controller_json(route, *, timeout=10):
         return json.load(response)
 
 
-def dispatched_receipts(result, actor, get_json):
+def dispatched_receipts(result, actor, get_json, *, wait_for_send=False):
     """Confirm actual Matrix sends for the authenticated outgoing Task events."""
     task = result["task"]
     notices = [(item["eventId"], item["taskId"], "task_assigned")
@@ -45,15 +46,25 @@ def dispatched_receipts(result, actor, get_json):
     if notice.get("status") == "queued" and notice.get("eventId"):
         notices.append((notice["eventId"], task["id"], "task_submitted"))
     confirmed = []
+    # One dispatcher interval for the whole batch; never wait for downstream execution.
+    deadline = time.monotonic() + 2.25 if wait_for_send else 0
     for event, identity, kind in notices:
-        try:
-            saved = get_json("coordination/events/" + event)
-        except (OSError, ValueError):
-            continue  # The existing canonical fact still says queued, not sent.
-        native = saved.get("native_id", "")
-        scope_matches = (saved.get("task_id") == identity and saved.get("kind") == kind)
-        if kind == "task_submitted" and saved.get("kind") == "main_task_ready":
-            scope_matches = saved.get("main_task_id") == task.get("mainTaskId")
+        while True:
+            try:
+                saved = get_json("coordination/events/" + event)
+            except (OSError, ValueError):
+                saved = {}  # The canonical fact remains queued, not sent.
+            native = saved.get("native_id", "")
+            scope_matches = (saved.get("task_id") == identity and saved.get("kind") == kind)
+            if kind == "task_submitted" and saved.get("kind") == "main_task_ready":
+                scope_matches = saved.get("main_task_id") == task.get("mainTaskId")
+            if saved.get("event_id") != event or saved.get("actor") != actor or not scope_matches:
+                break
+            if isinstance(native, str) and native.startswith("matrix:$"):
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.15)
         if (saved.get("event_id") != event or saved.get("actor") != actor or not scope_matches
                 or not isinstance(native, str) or not native.startswith("matrix:$")):
             continue
@@ -221,7 +232,7 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
     if (receipt and response["phaseComplete"] and action == "submit" and context.get("actor")
             and (get_json or os.getenv("AGENTTEAMS_CONTROLLER_URL"))):
         response["extraReceipts"] = dispatched_receipts(result, context["actor"],
-            get_json or (lambda route: controller_json(route, timeout=2)))
+            get_json or (lambda route: controller_json(route, timeout=2)), wait_for_send=True)
     if receipt and response["phaseComplete"]:
         if action == "create" and (result.get("task") or {}).get("roomId"):
             task = result["task"]

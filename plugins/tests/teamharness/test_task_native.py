@@ -406,3 +406,27 @@ def test_model_context_bridge_uses_public_projection_and_rejects_unprepared_valu
     assert value["acceptedResults"][0]["candidate"]["report"]=="large report body"
     with pytest.raises(ValueError,match="prepared Task context"):
         bridge.invoke({"operation":"model_context","context":[]})
+
+
+def test_dispatch_receipt_waits_for_actual_send_without_starting_another_turn(bridge,monkeypatch):
+    result={"task":{"id":"source","mainTaskId":"main","submissionId":"s1"},
+            "assignments":[{"taskId":"next","status":"queued","eventId":"notice"}]}
+    saved={"event_id":"notice","kind":"task_assigned","task_id":"next","actor":"@sender:test",
+           "recipient":"@tester:test","room_id":"!task:test","native_id":""}
+    reads=[]
+    def fetch(_):
+        reads.append(1)
+        return dict(saved,native_id="matrix:$sent" if len(reads)>1 else "")
+    sleeps=[]
+    monkeypatch.setattr(bridge.time,"sleep",sleeps.append)
+    rows=bridge.dispatched_receipts(result,"@sender:test",fetch,wait_for_send=True)
+    assert len(rows)==1 and len(reads)==2 and len(sleeps)==1
+    assert '"status":"sent"' in rows[0]["fact"]
+
+
+def test_dispatch_wait_expires_without_claiming_delivery(bridge,monkeypatch):
+    result={"task":{"id":"source","submissionId":"s1"},"assignments":[{"taskId":"next","status":"queued","eventId":"notice"}]}
+    saved={"event_id":"notice","kind":"task_assigned","task_id":"next","actor":"@sender:test","native_id":""}
+    ticks=iter([0,1,3]);monkeypatch.setattr(bridge.time,"monotonic",lambda:next(ticks))
+    monkeypatch.setattr(bridge.time,"sleep",lambda _:None)
+    assert bridge.dispatched_receipts(result,"@sender:test",lambda _:saved,wait_for_send=True)==[]

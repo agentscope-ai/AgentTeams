@@ -1090,6 +1090,8 @@ missing.extend(
 problems = []
 if missing:
     problems.append("missing:" + ",".join(missing))
+if not required_workerflow and any(item.get("source") == "plugin:workerflow" for item in skills.values()):
+    problems.append("unexpected:workerflow")
 print("ok" if not problems else ";".join(problems))
 PY
 }
@@ -1145,7 +1147,9 @@ if authorization:
 package_server = mcp.get(package_mcp_name) or {}
 if package_server.get("url") != package_mcp_url or not package_server.get("enabled"):
     problems.append("package_mcp:api")
-for key in ("teamharness", "workerflow"):
+if "workerflow" in mcp:
+    problems.append("unexpected:workerflow")
+for key in ("teamharness",):
     client = mcp.get(key) or {}
     if not client.get("enabled") or client.get("transport") != "stdio":
         problems.append(f"{key}:api")
@@ -1167,14 +1171,14 @@ assert_eq "ok" "${WORKER_RUNTIME_PROJECTION_CHECK}" "Worker applies controller m
 LEADER_SKILL_CHECK=$(_workspace_skill_check \
     "${LEADER_CONTAINER}" \
     "communication,file-sharing,team-coordination,project-management,task-delegation,task-execution,mcporter" \
-    "worker-internal-workflow")
-assert_eq "ok" "${LEADER_SKILL_CHECK}" "Leader API exposes TeamHarness and WorkerFlow plugin skills"
+    "")
+assert_eq "ok" "${LEADER_SKILL_CHECK}" "Leader API exposes TeamHarness skills without optional WorkerFlow"
 
 WORKER_SKILL_CHECK=$(_workspace_skill_check \
     "${WORKER_CONTAINER}" \
     "communication,file-sharing,team-coordination,project-management,task-delegation,task-execution,mcporter" \
-    "worker-internal-workflow")
-assert_eq "ok" "${WORKER_SKILL_CHECK}" "Worker API exposes TeamHarness and WorkerFlow plugin skills"
+    "")
+assert_eq "ok" "${WORKER_SKILL_CHECK}" "Worker API exposes TeamHarness skills without optional WorkerFlow"
 
 MCP_HEALTH=$(_worker_mcp_call health '{}' 2>/dev/null || echo "{}")
 if echo "${MCP_HEALTH}" | jq -e '.ok == true' >/dev/null 2>&1; then

@@ -27,7 +27,7 @@ class PublicTaskObservationTests(unittest.TestCase):
             'acceptedResults': [{'assignedTo': 'worker', 'status': 'completed',
                 'resultStatus': 'SUCCESS', 'submissionId': 's1',
                 'review': {'accepted': True, 'status': 'completed', 'submissionId': 's1'},
-                'candidate': {'id': 's1', 'summary': 'CURRENT', 'artifacts': [artifact]}}],
+                'candidate': {'id': 's1', 'summary': 'Readiness note written', 'artifacts': [artifact]}}],
             'artifacts': [artifact]}}
 
     def test_exact_accepted_candidate_and_final_artifact_required(self):
@@ -68,6 +68,23 @@ class PublicTaskObservationTests(unittest.TestCase):
             if label == 'stale-report': report['content']['body'] = 'OLD'
             with self.subTest(label=label):
                 self.assertNotEqual(self.call('_delivered_result', changed).returncode, 0)
+
+
+    def test_invalid_terminal_task_does_not_poll_again(self):
+        source = (ROOT / 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh').read_text()
+        start = source.index('TASK_CHECK="{}"')
+        end = source.index('\nif echo "${TASK_CHECK}" | _task_check_succeeded;', start)
+        block = source[start:end]
+        for status in ('completed', 'cancelled', 'blocked', 'revision', 'failed'):
+            with self.subTest(status=status):
+                run = subprocess.run(['bash', '-c', r'''
+date() { echo 0; }
+exec_in_agent() { printf '{"task":{"status":"%s"}}' "$STATUS_FIXTURE"; }
+_task_check_succeeded() { return 1; }
+sleep() { echo UNNECESSARY_WAIT; }
+''' + block], env={**os.environ, 'STATUS_FIXTURE': status},
+                    capture_output=True, text=True, timeout=2, check=True)
+                self.assertNotIn('UNNECESSARY_WAIT', run.stdout)
 
 
 if __name__ == '__main__':

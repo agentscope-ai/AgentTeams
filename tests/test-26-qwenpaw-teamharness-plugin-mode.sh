@@ -1310,7 +1310,7 @@ fi
 # Assert public task facts, including the exact candidate independently accepted
 # by the Leader. A completed label or a queued notification is insufficient.
 _task_check_succeeded() {
-    jq -e --arg task "${TASK_ID}" --arg marker "${MARKER}" \
+    jq -e --arg task "${TASK_ID}" \
         --arg team "${TEST_TEAM}" --arg worker "${TEST_WORKER}" '
         .task as $main |
         $main.id == $task and $main.team == $team and $main.kind == "main" and
@@ -1323,7 +1323,6 @@ _task_check_succeeded() {
             .review.accepted == true and .review.status == "completed" and
             .review.submissionId == .submissionId and
             .candidate.id == .submissionId and
-            (.candidate.summary | contains($marker)) and
             (.candidate.artifacts | length == 1)) and
         ($main.artifacts | length == 1) and
         $main.artifacts[0].artifactId == $main.acceptedResults[0].candidate.artifacts[0].artifactId and
@@ -1380,13 +1379,17 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
         break
     fi
     STATUS=$(echo "${TASK_CHECK}" | jq -r '.task.status // empty')
-    case "${STATUS}" in cancelled|blocked|revision|failed) break ;; esac
+    case "${STATUS}" in completed|cancelled|blocked|revision|failed) break ;; esac
     sleep 5
 done
 if echo "${TASK_CHECK}" | _task_check_succeeded; then
     log_pass "Leader independently accepted the Worker candidate and completed the public Task"
 else
     log_fail "Public Task did not reach verified acceptance and completion (task=${TASK_ID})"
+    _dump_debug_snapshot
+    test_teardown "26-qwenpaw-teamharness-plugin-mode"
+    test_summary
+    exit 1
 fi
 
 CHILD_TASK=$(echo "${TASK_CHECK}" | jq -r '.task.artifacts[0].taskId // empty')

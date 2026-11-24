@@ -47,7 +47,7 @@ minio_setup
 # The Worker acknowledges a paused request first. The supplement releases it;
 # no guessed duration or unrelated old chat message can stand in for completion.
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Forward this standalone request verbatim to Alice in room:${ALICE_ROOM}: @alice:${TEST_MATRIX_DOMAIN} For request ${RUN_ID}, prepare to write a Python hello script at ${RESULT_PATH}. First reply with ${RUN_ID}_READY and end your turn. Wait for the supplementary requirement before creating the file. Do not create a separate Task or Project."
+    "Forward this standalone request verbatim to Alice in room:${ALICE_ROOM}: @alice:${TEST_MATRIX_DOMAIN} For request ${RUN_ID}, prepare to write a Python script at ${RESULT_PATH} that prints Hello, World! with no arguments. First reply with ${RUN_ID}_READY and end your turn. Wait for the supplementary requirement before creating the file. Do not create a separate Task or Project."
 
 READY=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${ALICE_ROOM}" "@alice:" "${RUN_ID}_READY" 180 "" "" "" 600 "")
 assert_not_empty "${READY}" "Alice acknowledged the initial request before the supplement"
@@ -59,7 +59,7 @@ fi
 
 log_section "Send Supplementary Instruction"
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Forward this supplement verbatim to Alice in room:${ALICE_ROOM}: @alice:${TEST_MATRIX_DOMAIN} Supplement for ${RUN_ID}: write ${RESULT_PATH} now. With no arguments it must print Hello, World!; with one argument it must print Hello, <name>!. Include the literal marker ${RUN_ID} in a Python comment. Publish the file using the TeamHarness filesync tool action=push, path=${RESULT_PATH}, then verify with action=stat. Do not use bulk private workspace sync."
+    "Forward this supplement verbatim to Alice in room:${ALICE_ROOM}: @alice:${TEST_MATRIX_DOMAIN} Supplement for ${RUN_ID}: write ${RESULT_PATH} now. Extend the script to accept an optional name argument and print Hello, <name>! when provided; preserve the original no-argument behavior. Include the literal marker ${RUN_ID} in a Python comment. Publish the file using the TeamHarness filesync tool action=push, path=${RESULT_PATH}, then verify with action=stat. Do not use bulk private workspace sync."
 
 log_section "Verify Incorporation"
 if minio_wait_for_file "${RESULT_PATH}" 300 "${RUN_ID}"; then

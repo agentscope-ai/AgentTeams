@@ -1422,7 +1422,11 @@ func (c *TuwunelClient) doJSON(ctx context.Context, method, path, token string, 
 		c.adminToken.Store("")
 	}
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		observeErr = err
+		return resp.StatusCode, respBody, fmt.Errorf("read response body: %w", err)
+	}
 
 	if respOut != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, respOut); err != nil {

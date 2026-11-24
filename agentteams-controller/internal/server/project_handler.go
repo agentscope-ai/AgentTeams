@@ -66,6 +66,24 @@ func NewProjectHandler(c client.Client, namespace string, o oss.StorageClient, m
 	return h
 }
 
+// writeProjectStorageError maps a storage-layer error to its HTTP form on
+// the projects API, mirroring the human files API's unified storage mapping
+// (writeStorageError / writeStorageUnavailable in human_files_handler.go):
+// oss.ErrStorageUnavailable means the object store could not answer at all
+// (connection fault, transport timeout, HTTP 5xx) — the object's state is
+// unknown — so the caller must get the stable 503 storage_unavailable body
+// ("retry later") and never absence (404 — a sync client would delete its
+// local copy, the D1 failure mode) or a server fault (500). Every other
+// error keeps the endpoint's original status and message, so no non-
+// availability semantics change.
+func writeProjectStorageError(w http.ResponseWriter, err error, status int, message string) {
+	if errors.Is(err, oss.ErrStorageUnavailable) {
+		writeStorageUnavailable(w)
+		return
+	}
+	httputil.WriteError(w, status, message)
+}
+
 // --- internal model (mirrors meta.json, tolerant to extra fields) ---
 
 type projectMeta struct {
@@ -796,7 +814,9 @@ func (h *ProjectHandler) listProjects(w http.ResponseWriter, r *http.Request, ta
 		}
 		children, err := h.oss.ListObjects(r.Context(), prefix)
 		if err != nil {
-			writeK8sError(w, "list projects", err)
+			// The store may not have answered at all (oss.ErrStorageUnavailable):
+			// the candidate set is then unknown, not empty — 503, never 500.
+			writeProjectStorageError(w, err, http.StatusInternalServerError, "list projects: "+err.Error())
 			return
 		}
 		for _, child := range children {
@@ -829,6 +849,10 @@ func (h *ProjectHandler) listProjects(w http.ResponseWriter, r *http.Request, ta
 	}
 	wg.Wait()
 
+	// storeDown flips when any per-object meta read hit a store-availability
+	// fault (oss.ErrStorageUnavailable): every unread project's state is
+	// then unknown, not absent, so the list must not report it as missing.
+	storeDown := false
 	for _, res := range results {
 		if res.err != nil {
 			skippedProjects++
@@ -836,9 +860,18 @@ func (h *ProjectHandler) listProjects(w http.ResponseWriter, r *http.Request, ta
 				continue // project dir without meta.json yet; skip, not 500
 			}
 			// W5: a single project read failure must not fail the whole
-			// list (one bad/transient object would 500 everything else).
-			// Infrastructure-level failures (ListObjects) still 500;
+			// list (one bad/transient object would 500 everything else);
 			// per-object data failures are skipped like malformed meta.
+			// Exception: a store-availability fault means the store did not
+			// answer at all — the unread meta.json's state is unknown, and a
+			// list that omits it would read as "absent" (the D1 failure mode
+			// oss.ErrStorageUnavailable exists to prevent). List-level
+			// failures (ListObjects above) and per-object faults alike
+			// answer 503 storage_unavailable; the flag makes the whole list
+			// fail closed below.
+			if errors.Is(res.err, oss.ErrStorageUnavailable) {
+				storeDown = true
+			}
 			continue
 		}
 		var meta projectMeta
@@ -883,6 +916,14 @@ func (h *ProjectHandler) listProjects(w http.ResponseWriter, r *http.Request, ta
 		})
 	}
 
+	if storeDown {
+		// At least one meta.json read never got a semantic response: the
+		// list's contents are unprovable, so it answers retry-later
+		// instead of a 200 whose shorter body reads as deletion.
+		writeStorageUnavailable(w)
+		return
+	}
+
 	// Deterministic ordering across prefixes.
 	sort.Slice(projects, func(i, j int) bool { return projects[i].ProjectID < projects[j].ProjectID })
 	if tasksOnly {
@@ -921,7 +962,10 @@ func (h *ProjectHandler) GetProjectWorkflow(w http.ResponseWriter, r *http.Reque
 	}
 	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
 	if err != nil {
-		writeK8sError(w, "get project workflow", err)
+		// resolveProjectMeta only touches object storage: map a store
+		// availability fault to 503 storage_unavailable (state unknown,
+		// retry later), keep the 500 for any other error.
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "get project workflow: "+err.Error())
 		return
 	}
 	match, ok := h.resolveSingleProjectMatch(w, matches)
@@ -1439,7 +1483,7 @@ func (h *ProjectHandler) GetTaskInspection(w http.ResponseWriter, r *http.Reques
 	}
 	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
 	if err != nil {
-		writeK8sError(w, "get task inspection", err)
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "get task inspection: "+err.Error())
 		return
 	}
 	meta, team, ok := h.resolveSingleProject(w, matches)
@@ -1485,7 +1529,9 @@ func (h *ProjectHandler) GetTaskInspection(w http.ResponseWriter, r *http.Reques
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			httputil.WriteError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+			// A store-availability fault is "retry later" (503), not a
+			// server bug (500): the meta's state is unknown, not corrupt.
+			writeProjectStorageError(w, err, http.StatusInternalServerError, "read task meta: "+err.Error())
 			return
 		}
 		var raw map[string]any
@@ -1559,7 +1605,7 @@ func (h *ProjectHandler) GetTaskArtifact(w http.ResponseWriter, r *http.Request)
 	}
 	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
 	if err != nil {
-		writeK8sError(w, "get task artifact", err)
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "get task artifact: "+err.Error())
 		return
 	}
 	meta, team, ok := h.resolveSingleProject(w, matches)
@@ -1609,7 +1655,9 @@ func (h *ProjectHandler) GetTaskArtifact(w http.ResponseWriter, r *http.Request)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			httputil.WriteError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+			// A store-availability fault is "retry later" (503), not a
+			// server bug (500): the meta's state is unknown, not corrupt.
+			writeProjectStorageError(w, err, http.StatusInternalServerError, "read task meta: "+err.Error())
 			return
 		}
 		var raw map[string]any
@@ -1687,6 +1735,7 @@ func (h *ProjectHandler) GetTaskArtifact(w http.ResponseWriter, r *http.Request)
 	// global one (mirrors taskMetaKeys ordering).
 	var data []byte
 	var readErr error
+	var storeFault error
 	for _, key := range artifactKeys(artifactRelative, team) {
 		d, err := h.oss.GetObject(r.Context(), key)
 		if err == nil {
@@ -1694,13 +1743,23 @@ func (h *ProjectHandler) GetTaskArtifact(w http.ResponseWriter, r *http.Request)
 			break
 		}
 		readErr = err
+		// Remember a store-availability fault even if a later scope key
+		// yields a different error: the artifact's state in that scope is
+		// then unknown, so absence (404) must not be reported.
+		if storeFault == nil && errors.Is(err, oss.ErrStorageUnavailable) {
+			storeFault = err
+		}
 	}
 	if data == nil {
+		if storeFault != nil {
+			writeStorageUnavailable(w)
+			return
+		}
 		if errors.Is(readErr, os.ErrNotExist) {
 			httputil.WriteError(w, http.StatusNotFound, "artifact not found")
 			return
 		}
-		httputil.WriteError(w, http.StatusInternalServerError, "read artifact: "+errStr(readErr))
+		writeProjectStorageError(w, readErr, http.StatusInternalServerError, "read artifact: "+errStr(readErr))
 		return
 	}
 
@@ -2095,7 +2154,7 @@ func (h *ProjectHandler) GetProjectSpawns(w http.ResponseWriter, r *http.Request
 	}
 	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
 	if err != nil {
-		writeK8sError(w, "get project spawns", err)
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "get project spawns: "+err.Error())
 		return
 	}
 	meta, team, ok := h.resolveSingleProject(w, matches)
@@ -2218,27 +2277,35 @@ func openReadOnlySQLite(path string) (*sql.DB, error) {
 }
 
 // readSpawnMessages pulls the worker's history.db from object storage and
-// returns the spawn session's conversation stream. Failures degrade to a
-// non-200 status (never a 500): the db is missing/unreadable on the object
-// store, or the copy cannot be opened as SQLite.
-func (h *ProjectHandler) readSpawnMessages(ctx context.Context, worker, sessionID string, limit int) (spawnMessagesResponse, int) {
+// returns the spawn session's conversation stream. A genuinely missing or
+// non-SQLite db degrades to a non-200 status (never a 500). A store-
+// availability fault (oss.ErrStorageUnavailable) is reported through
+// storeErr so the caller answers 503 storage_unavailable — the db's state
+// is then unknown, not absent (a 404 would read as deletion, the D1
+// failure mode).
+func (h *ProjectHandler) readSpawnMessages(ctx context.Context, worker, sessionID string, limit int) (spawnMessagesResponse, int, error) {
 	resp := spawnMessagesResponse{SessionID: sessionID, Messages: make([]spawnMessage, 0)}
-	unavailable := func() (spawnMessagesResponse, int) {
-		return resp, http.StatusNotFound
+	unavailable := func() (spawnMessagesResponse, int, error) {
+		return resp, http.StatusNotFound, nil
 	}
 
 	dbData, err := h.oss.GetObject(ctx, "agents/"+worker+"/"+workerHistoryDBPath)
 	if err != nil {
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			// The store did not answer at all: unknown state — the caller
+			// answers retry-later (503), never absence (404).
+			return resp, 0, err
+		}
 		return unavailable()
 	}
 	tmp, err := os.MkdirTemp("", "spawn-msgs-")
 	if err != nil {
-		return resp, http.StatusInternalServerError
+		return resp, http.StatusInternalServerError, nil
 	}
 	defer os.RemoveAll(tmp)
 	dbPath := filepath.Join(tmp, "history.db")
 	if err := os.WriteFile(dbPath, dbData, 0o600); err != nil {
-		return resp, http.StatusInternalServerError
+		return resp, http.StatusInternalServerError, nil
 	}
 	// Best-effort WAL sidecars: the most recent rows live in -wal until a
 	// checkpoint; without them (or when stale) the immutable fallback below
@@ -2290,7 +2357,7 @@ func (h *ProjectHandler) readSpawnMessages(ctx context.Context, worker, sessionI
 	for i := range desc {
 		resp.Messages[len(desc)-1-i] = desc[i]
 	}
-	return resp, http.StatusOK
+	return resp, http.StatusOK, nil
 }
 
 // GetProjectSpawnMessages handles GET /api/v1/projects/{id}/spawns/{sessionId}/messages.
@@ -2313,7 +2380,7 @@ func (h *ProjectHandler) GetProjectSpawnMessages(w http.ResponseWriter, r *http.
 	}
 	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
 	if err != nil {
-		writeK8sError(w, "get spawn messages", err)
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "get spawn messages: "+err.Error())
 		return
 	}
 	meta, team, ok := h.resolveSingleProject(w, matches)
@@ -2357,7 +2424,13 @@ func (h *ProjectHandler) GetProjectSpawnMessages(w http.ResponseWriter, r *http.
 		httputil.WriteError(w, http.StatusNotFound, "spawn session not found")
 		return
 	}
-	resp, status := h.readSpawnMessages(r.Context(), worker, rawSessionID, limit)
+	resp, status, storeErr := h.readSpawnMessages(r.Context(), worker, rawSessionID, limit)
+	if storeErr != nil {
+		// The object store did not answer at all: the history.db's state is
+		// unknown — stable 503 storage_unavailable, never 404 "absent".
+		writeStorageUnavailable(w)
+		return
+	}
 	if status != http.StatusOK {
 		httputil.WriteError(w, status, "spawn messages unavailable")
 		return
@@ -2423,7 +2496,7 @@ func (h *ProjectHandler) GetProjectHistory(w http.ResponseWriter, r *http.Reques
 	}
 	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
 	if err != nil {
-		writeK8sError(w, "get project history", err)
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "get project history: "+err.Error())
 		return
 	}
 	match, ok := h.resolveSingleProjectMatch(w, matches)
@@ -2442,7 +2515,7 @@ func (h *ProjectHandler) GetProjectHistory(w http.ResponseWriter, r *http.Reques
 	historyPrefix := strings.TrimSuffix(match.key, "meta.json") + "history/"
 	children, err := h.oss.ListObjects(r.Context(), historyPrefix)
 	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "list project history: "+err.Error())
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "list project history: "+err.Error())
 		return
 	}
 	snapshots := make([]projectSnapshot, 0, len(children))
@@ -2484,7 +2557,7 @@ func (h *ProjectHandler) GetProjectHistorySnapshot(w http.ResponseWriter, r *htt
 	}
 	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
 	if err != nil {
-		writeK8sError(w, "get project history snapshot", err)
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "get project history snapshot: "+err.Error())
 		return
 	}
 	match, ok := h.resolveSingleProjectMatch(w, matches)
@@ -2507,7 +2580,7 @@ func (h *ProjectHandler) GetProjectHistorySnapshot(w http.ResponseWriter, r *htt
 			httputil.WriteError(w, http.StatusNotFound, "snapshot not found")
 			return
 		}
-		httputil.WriteError(w, http.StatusInternalServerError, "read project history snapshot: "+err.Error())
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "read project history snapshot: "+err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -2733,7 +2806,7 @@ func (h *ProjectHandler) GetProjectEvents(w http.ResponseWriter, r *http.Request
 	}
 	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
 	if err != nil {
-		writeK8sError(w, "get project events", err)
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "get project events: "+err.Error())
 		return
 	}
 	match, ok := h.resolveSingleProjectMatch(w, matches)
@@ -3096,11 +3169,17 @@ func (h *ProjectHandler) writeProjectMeta(ctx context.Context, w http.ResponseWr
 				"conditional_write_unsupported: storage provider does not support conditional writes")
 			return false
 		}
+		// The store did not answer at all: the write's fate is unknown —
+		// retry later (stable 503), never a 500 server fault.
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+			return false
+		}
 		httputil.WriteError(w, http.StatusInternalServerError, "write project meta: "+err.Error())
 		return false
 	}
 	if err := h.oss.PutObject(ctx, key, data); err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "write project meta: "+err.Error())
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "write project meta: "+err.Error())
 		return false
 	}
 	return true
@@ -3475,6 +3554,12 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 					"noncanonical pause value: the runtime compares exact strings, so the stored value would not mean what it spells")
 				return
 			}
+		case errors.Is(readErr, oss.ErrStorageUnavailable):
+			// The store did not answer at all: the stored pause state is
+			// unknown — retry later, never a 500 server fault or a
+			// byte-identical-echo guess.
+			writeStorageUnavailable(w)
+			return
 		default:
 			writeError(w, http.StatusInternalServerError,
 				"verify the server-owned pause state: "+readErr.Error())
@@ -3506,6 +3591,12 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 			// The backend cannot honor If-Match at all: fail closed.
 			writeError(w, http.StatusServiceUnavailable,
 				"backend cannot provide conditional writes: "+oss.ErrConditionalUnsupported.Error())
+		case errors.Is(err, oss.ErrStorageUnavailable):
+			// The store did not answer: the write's fate is unknown. The
+			// caller retries with the same inputs (idempotent on an
+			// unchanged store) — the fault is neither a server bug nor a
+			// version conflict.
+			writeStorageUnavailable(w)
 		default:
 			writeError(w, http.StatusInternalServerError, "commit project meta: "+err.Error())
 		}
@@ -3516,7 +3607,7 @@ func (h *ProjectHandler) PutProjectMeta(w http.ResponseWriter, r *http.Request) 
 	// computed): the client binds its next commit to it.
 	committed, err := h.oss.StatMeta(r.Context(), pwc.key)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "stat project meta after commit: "+err.Error())
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "stat project meta after commit: "+err.Error())
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, struct {
@@ -3730,7 +3821,10 @@ func (h *ProjectHandler) readProjectWriteContext(w http.ResponseWriter, r *http.
 	// first-match would let an id collision mutate the wrong team's project.
 	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
 	if err != nil {
-		writeK8sError(w, "resolve project meta", err)
+		// resolveProjectMeta only touches object storage: map a store
+		// availability fault to 503 storage_unavailable (state unknown,
+		// retry later), keep the 500 for any other error.
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "resolve project meta: "+err.Error())
 		return nil, true
 	}
 	meta, team, ok := h.resolveSingleProject(w, matches)
@@ -4180,7 +4274,10 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 	matches, err := h.resolveProjectMeta(r.Context(), projectID, prefixes, teamFilter, caller, crToEffective)
 	if err != nil {
-		writeK8sError(w, "resolve project meta", err)
+		// resolveProjectMeta only touches object storage: map a store
+		// availability fault to 503 storage_unavailable (state unknown,
+		// retry later), keep the 500 for any other error.
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "resolve project meta: "+err.Error())
 		return
 	}
 	meta, team, ok := h.resolveSingleProject(w, matches)
@@ -4265,7 +4362,14 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	// when writing back, then apply the submission fence and cancellation.
 	taskData, err := readTaskMetaFirst(h, r.Context(), taskID, team)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+		// A store-availability fault is "retry later" (stable 503), not a
+		// server bug (500): the task meta's state is unknown. The failure
+		// audit entry is still recorded (best-effort) as on other faults.
+		if errors.Is(err, oss.ErrStorageUnavailable) {
+			writeStorageUnavailable(w)
+		} else {
+			writeError(w, http.StatusInternalServerError, "read task meta: "+err.Error())
+		}
 		cancelFail("read task meta: " + err.Error())
 		return
 	}
@@ -4435,7 +4539,7 @@ func (h *ProjectHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.oss.PutObject(r.Context(), taskMetaKeys(taskID, team)[0], taskJSON); err != nil {
-		writeError(w, http.StatusInternalServerError, "write task meta: "+err.Error())
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "write task meta: "+err.Error())
 		return
 	}
 	h.emitSignalEvent(r.Context(), signalEmitters["CancelTask"], team, signalTeamID(meta, team), meta.ProjectID, taskID, nil, taskMetaKeys(taskID, team)[0], taskJSON, map[string]any{
@@ -4564,7 +4668,10 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "project already exists: "+projectID)
 		return
 	} else if !errors.Is(err, os.ErrNotExist) {
-		writeError(w, http.StatusInternalServerError, "stat project meta: "+err.Error())
+		// A store-availability fault leaves existence unknown — the
+		// 409 conflict and the 404-adjacent "not yet" are both unprovable,
+		// so the create answers retry-later (503) instead of a 500.
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "stat project meta: "+err.Error())
 		return
 	}
 
@@ -4593,7 +4700,7 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.oss.PutObject(r.Context(), key, data); err != nil {
-		writeError(w, http.StatusInternalServerError, "write project meta: "+err.Error())
+		writeProjectStorageError(w, err, http.StatusInternalServerError, "write project meta: "+err.Error())
 		return
 	}
 	h.interventionNotify(r.Context(), meta, fmt.Sprintf("🆕 项目 %s 已创建", projectID))

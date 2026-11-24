@@ -23,6 +23,7 @@ any encrypted ``AsyncClient`` is constructed.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -33,6 +34,8 @@ import core.e2ee as core_e2ee
 from core.e2ee import (
     CRYPTO_BACKENDS,
     E2EEMaintainer,
+    E2EEFailureReport,
+    E2EE_MAINTENANCE_FAILURE_THRESHOLD,
     crypto_available,
     detect_crypto_backend,
     e2ee_store_path,
@@ -263,6 +266,154 @@ def test_run_once_error_swallowed_with_warning_and_stops(
         "MatrixChannel: E2EE maintenance error: boom" in record.getMessage()
         for record in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# #1701: maintenance-error escalation.  Consecutive failures are counted
+# in-process; crossing E2EE_MAINTENANCE_FAILURE_THRESHOLD logs an error
+# with the count and escalates through the injected callback exactly
+# once per streak.
+# ---------------------------------------------------------------------------
+
+
+def test_maintainer_escalates_once_at_the_threshold(caplog):
+    reports: List[Tuple[int, str]] = []
+
+    def escalate(report):
+        reports.append((report.count, report.last_error))
+
+    client = FakeClient(upload=True, upload_exc=RuntimeError("boom"))
+    maintainer = E2EEMaintainer(client, on_persistent_failure=escalate)
+
+    with caplog.at_level("ERROR", logger="agentteams.matrix.core.e2ee"):
+        for _ in range(6):
+            _run(maintainer.run_once())
+
+    # Escalation fires exactly once — on the threshold-th consecutive
+    # failure — while the counter keeps growing past the crossing.
+    assert reports == [(E2EE_MAINTENANCE_FAILURE_THRESHOLD, "boom")]
+    assert maintainer.consecutive_failures == 6
+    assert maintainer.last_error == "boom"
+    escalation_lines = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "ERROR"
+        and "E2EE maintenance failed" in record.getMessage()
+    ]
+    assert len(escalation_lines) == 1
+    assert str(E2EE_MAINTENANCE_FAILURE_THRESHOLD) in escalation_lines[0]
+
+
+def test_maintainer_resets_the_streak_on_success():
+    client = FakeClient(upload=True, upload_exc=RuntimeError("boom"))
+    maintainer = E2EEMaintainer(client)
+
+    for _ in range(3):
+        _run(maintainer.run_once())
+    assert maintainer.consecutive_failures == 3
+    assert maintainer.last_error == "boom"
+
+    # A healthy pass (upload flag off -> only the unconditional
+    # to-device send, which succeeds) resets the streak.
+    client.should_upload_keys = False
+    client._upload_exc = None
+    _run(maintainer.run_once())
+    assert maintainer.consecutive_failures == 0
+    assert maintainer.last_error == ""
+
+
+def test_maintainer_escalates_again_after_recovery():
+    reports: List[int] = []
+    client = FakeClient(upload=True, upload_exc=RuntimeError("boom"))
+    maintainer = E2EEMaintainer(
+        client,
+        on_persistent_failure=lambda r: reports.append(r.count),
+    )
+
+    for _ in range(E2EE_MAINTENANCE_FAILURE_THRESHOLD):
+        _run(maintainer.run_once())
+    client.should_upload_keys = False
+    client._upload_exc = None
+    _run(maintainer.run_once())  # recovery pass
+    client.should_upload_keys = True
+    client._upload_exc = RuntimeError("boom-again")
+    for _ in range(E2EE_MAINTENANCE_FAILURE_THRESHOLD):
+        _run(maintainer.run_once())
+    assert reports == [
+        E2EE_MAINTENANCE_FAILURE_THRESHOLD,
+        E2EE_MAINTENANCE_FAILURE_THRESHOLD,
+    ]
+
+
+def test_maintainer_counts_failures_without_a_callback():
+    client = FakeClient(upload=True, upload_exc=RuntimeError("boom"))
+    maintainer = E2EEMaintainer(client)
+    for _ in range(E2EE_MAINTENANCE_FAILURE_THRESHOLD + 1):
+        _run(maintainer.run_once())
+    assert (
+        maintainer.consecutive_failures
+        == E2EE_MAINTENANCE_FAILURE_THRESHOLD + 1
+    )
+
+
+def test_maintainer_failing_callback_does_not_break_maintenance(caplog):
+    def explode(report):
+        raise RuntimeError("callback boom")
+
+    client = FakeClient(upload=True, upload_exc=RuntimeError("boom"))
+    maintainer = E2EEMaintainer(client, on_persistent_failure=explode)
+
+    with caplog.at_level("ERROR", logger="agentteams.matrix.core.e2ee"):
+        for _ in range(E2EE_MAINTENANCE_FAILURE_THRESHOLD):
+            _run(maintainer.run_once())  # must not raise
+
+    assert (
+        maintainer.consecutive_failures
+        == E2EE_MAINTENANCE_FAILURE_THRESHOLD
+    )
+    assert any(
+        "on_persistent_failure" in record.getMessage()
+        for record in caplog.records
+        if record.levelname == "ERROR"
+    )
+
+
+def test_maintenance_failure_report_is_frozen():
+    report = E2EEFailureReport(count=5, last_error="boom")
+    assert report.count == 5
+    assert report.last_error == "boom"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        report.count = 6  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("operation", ["keys_upload", "keys_query", "keys_claim", "send_to_device_messages"])
+def test_error_responses_count_and_escalate_then_recover(operation):
+    from nio.responses import KeysUploadError, ToDeviceError
+
+    client = FakeClient(upload=True, query=True, claim=True)
+    reports = []
+    maintainer = E2EEMaintainer(client, on_persistent_failure=reports.append)
+    original = getattr(client, operation)
+
+    async def fail(*args):
+        if operation == "send_to_device_messages":
+            return [None, ToDeviceError("maintenance unavailable", "M_UNKNOWN")]
+        return KeysUploadError("maintenance unavailable", "M_UNKNOWN")
+
+    async def scenario():
+        setattr(client, operation, fail)
+        for count in range(1, E2EE_MAINTENANCE_FAILURE_THRESHOLD + 3):
+            await maintainer.run_once()
+            assert maintainer.consecutive_failures == count
+        assert len(reports) == 1
+        assert reports[0].count == E2EE_MAINTENANCE_FAILURE_THRESHOLD
+        assert "maintenance unavailable" in maintainer.last_error
+        setattr(client, operation, original)
+        await maintainer.run_once()
+        assert maintainer.consecutive_failures == 0
+        assert maintainer.last_error == ""
+
+    _run(scenario())
 
 
 # ---------------------------------------------------------------------------

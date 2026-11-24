@@ -862,3 +862,44 @@ def test_download_traversal_filename_stays_in_cache(tmp_path):
         assert not (tmp_path / "sentinel.txt").exists()
 
     _run(scenario)
+
+
+def test_maintenance_failure_escalation_wired_through_transport(tmp_path, monkeypatch):
+    """#1701: the injected persistent-failure callback reaches the
+    maintainer, and the transport exposes the consecutive-failure
+    count as its read-only health surface."""
+    FakeSyncEngine.instances = []
+    monkeypatch.setattr(transport_mod, "SyncEngine", FakeSyncEngine)
+
+    async def scenario():
+        reports: List[tuple] = []
+        client = FakeClient()
+        client.olm = object()  # maintenance enabled
+        transport = NioTransport(
+            _config(),
+            store=FakeStore(),
+            state_dir=tmp_path,
+            client=client,
+            on_e2ee_maintenance_failure=lambda r: reports.append(
+                (r.count, r.last_error)
+            ),
+        )
+        assert transport.e2ee_maintenance_failures == 0
+        await transport.start(lambda e: _noop())
+
+        # Fail the maintenance pass and drive the post-sync hook
+        # directly (the SyncEngine stand-in records on_maintenance but
+        # never invokes it).
+        client.should_upload_keys = True
+
+        async def _boom():
+            raise RuntimeError("maintenance boom")
+
+        client.keys_upload = _boom
+        for i in range(1, 7):
+            await transport._after_sync()
+            assert transport.e2ee_maintenance_failures == i
+        assert reports == [(5, "maintenance boom")]
+        await transport.stop()
+
+    _run(scenario)

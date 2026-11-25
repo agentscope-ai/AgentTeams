@@ -160,7 +160,7 @@ func (h *AssistantHandler) Context(w http.ResponseWriter, r *http.Request) {
 		for i := len(messages) - 1; i >= 0; i-- {
 			e := messages[i]
 			body, _ := e.Content["body"].(string)
-			if e.Type != "m.room.message" || body == "" || e.Content["org.agentteams.coordination"] != nil {
+			if e.Type != "m.room.message" || body == "" || e.Content["org.agentteams.coordination"] != nil || e.Content["org.agentteams.progress_only"] == true {
 				continue
 			}
 			text := []rune(body)

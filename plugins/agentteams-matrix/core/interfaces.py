@@ -90,6 +90,11 @@ class OutboundMessage:
     reply_to: str | None = None
     kind: str = "final"
     media: list[MediaRef] = ()
+    #: Idempotency ``tx_id`` (MX-1).  ``None`` (default) keeps the legacy
+    #: behaviour — the transport generates a random one.  The outbox
+    #: worker sets a deterministic value derived from the row identity so
+    #: a restart replay produces no second Matrix event.
+    tx_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in OUTBOUND_KINDS:
@@ -182,6 +187,14 @@ class CoreConfig:
     reconnect_initial_delay: float = 1.0
     reconnect_max_delay: float = 60.0
     reconnect_backoff_factor: float = 2.0
+    # Outbound queue (MX-1): per-kind in-flight cap and retry schedules.
+    outbox_concurrency: int = 4
+    outbox_backoff_initial: float = 2.0
+    outbox_backoff_max: float = 60.0
+    # Long-running task kinds use a slower retry schedule [5s, 300s].
+    outbox_long_running_kinds: tuple = ()
+    outbox_backoff_long_initial: float = 5.0
+    outbox_backoff_long_max: float = 300.0
     # Declared runtime capabilities (name -> supported), e.g. from a
     # sidecar hello.  Absent means unsupported; consumers degrade
     # (e.g. wait for the next turn) instead of raising.
@@ -212,6 +225,21 @@ class CoreConfig:
             )
         if self.reconnect_backoff_factor < 1.0:
             raise ValueError("CoreConfig.reconnect_backoff_factor must be >= 1.0")
+        if self.outbox_concurrency < 1:
+            raise ValueError("CoreConfig.outbox_concurrency must be >= 1")
+        if self.outbox_backoff_initial <= 0:
+            raise ValueError("CoreConfig.outbox_backoff_initial must be > 0")
+        if self.outbox_backoff_max < self.outbox_backoff_initial:
+            raise ValueError(
+                "CoreConfig.outbox_backoff_max must be >= outbox_backoff_initial"
+            )
+        if self.outbox_backoff_long_initial <= 0:
+            raise ValueError("CoreConfig.outbox_backoff_long_initial must be > 0")
+        if self.outbox_backoff_long_max < self.outbox_backoff_long_initial:
+            raise ValueError(
+                "CoreConfig.outbox_backoff_long_max must be >= "
+                "outbox_backoff_long_initial"
+            )
 
     @property
     def sidecar_socket_path(self) -> Path:

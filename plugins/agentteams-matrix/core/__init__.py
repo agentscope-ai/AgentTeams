@@ -54,6 +54,14 @@ from .mentions import (
     text_mentions_worker,
     was_mentioned,
 )
+from .outbox import (
+    OUTBOX_STATUSES,
+    OutboundQueue,
+    OutboxRow,
+    deterministic_tx_id,
+    outbox_marker,
+    with_marker,
+)
 from .outcomes import (
     DROP_REASONS,
     DROPS_RELATIVE_PATH,
@@ -103,6 +111,7 @@ __all__ = [
     "HISTORY_CONTEXT_MARKER",
     "INBOUND_KINDS",
     "OUTBOUND_KINDS",
+    "OUTBOX_STATUSES",
     "TYPING_STATES",
     "CoreConfig",
     "CoreLockedError",
@@ -117,6 +126,8 @@ __all__ = [
     "MediaCache",
     "MediaRef",
     "OutboundMessage",
+    "OutboundQueue",
+    "OutboxRow",
     "PROTOCOL_VERSION",
     "RoomHistory",
     "RuntimeBridge",
@@ -134,6 +145,7 @@ __all__ = [
     "describe_exception",
     "drops_path",
     "e2ee_store_path",
+    "deterministic_tx_id",
     "encode_frame",
     "extract_mentions_from_text",
     "frame_to_inbound",
@@ -145,6 +157,7 @@ __all__ = [
     "make_outbound",
     "make_typing",
     "mxc_to_http",
+    "outbox_marker",
     "parse_capabilities",
     "probe_olm",
     "read_drops",
@@ -155,4 +168,5 @@ __all__ = [
     "text_mentions_worker",
     "to_handle_from_target",
     "was_mentioned",
+    "with_marker",
 ]

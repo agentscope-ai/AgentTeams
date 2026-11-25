@@ -564,6 +564,19 @@ func TestSandboxBackend_Create_ImageResolution(t *testing.T) {
 			config:    SandboxConfig{WorkerImage: "default:latest", CodexWorkerImage: "codex:v1"},
 			wantImage: "codex:v1",
 		},
+		{
+			name:      "claudecode runtime",
+			runtime:   RuntimeClaudeCode,
+			config:    SandboxConfig{WorkerImage: "default:latest", ClaudeCodeWorkerImage: "claudecode:v1"},
+			wantImage: "claudecode:v1",
+		},
+		{
+			name:      "explicit claudecode image wins",
+			runtime:   RuntimeClaudeCode,
+			reqImage:  "custom/claudecode:v2",
+			config:    SandboxConfig{ClaudeCodeWorkerImage: "claudecode:v1"},
+			wantImage: "custom/claudecode:v2",
+		},
 	}
 
 	for _, tt := range tests {

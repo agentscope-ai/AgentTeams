@@ -40,6 +40,7 @@ const (
 	RuntimeDeepSeekHarness = "deepseek-harness"
 	RuntimeCodex           = "codex"
 	RuntimeOpenCode        = "opencode"
+	RuntimeQoder           = "qoder"
 	RuntimeClaudeCode      = "claudecode"
 )
 
@@ -65,13 +66,13 @@ func NormalizeAuthTokenExpirationSeconds(seconds int64) int64 {
 // ValidRuntime reports whether r is a recognized runtime value.
 // An empty string is valid — backends resolve it via ResolveRuntime.
 func ValidRuntime(r string) bool {
-	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw || r == RuntimeDeepSeekHarness || r == RuntimeCodex || r == RuntimeOpenCode || r == RuntimeClaudeCode
+	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw || r == RuntimeDeepSeekHarness || r == RuntimeCodex || r == RuntimeOpenCode || r == RuntimeQoder || r == RuntimeClaudeCode
 }
 
 // UsesMemberRuntimeConfig reports whether a runtime consumes the
 // controller-projected agents/<runtimeName>/runtime/runtime.yaml contract.
 func UsesMemberRuntimeConfig(runtime string) bool {
-	return runtime == RuntimeQwenPaw || runtime == RuntimeDeepSeekHarness || runtime == RuntimeCodex || runtime == RuntimeOpenCode || runtime == RuntimeClaudeCode
+	return runtime == RuntimeQwenPaw || runtime == RuntimeDeepSeekHarness || runtime == RuntimeCodex || runtime == RuntimeOpenCode || runtime == RuntimeQoder || runtime == RuntimeClaudeCode
 }
 
 // ResolveRuntime returns the effective runtime for a backend request.

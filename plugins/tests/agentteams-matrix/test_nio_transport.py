@@ -318,6 +318,27 @@ def _megolm_event() -> MegolmEvent:
 # -- lifecycle ---------------------------------------------------------------
 
 
+def test_sync_task_tracks_running_loop_and_clears_on_stop(tmp_path):
+    async def scenario():
+        transport = NioTransport(
+            _config(encryption=False), store=FakeStore(), state_dir=tmp_path,
+            client=FakeClient(), encryption=False,
+        )
+        assert transport.sync_task is None
+        assert transport.e2ee_maintenance_failures == 0
+        await transport.start(lambda e: _noop())
+        task = transport.sync_task
+        assert isinstance(task, asyncio.Task)
+        await asyncio.sleep(0)
+        assert not task.done()
+        await transport.stop()
+        assert task.done()
+        assert transport.sync_task is None
+        assert transport.e2ee_maintenance_failures == 0
+
+    _run(scenario)
+
+
 def test_start_build_path_starts_sync_engine(tmp_path, monkeypatch):
     FakeSyncEngine.instances = []
     monkeypatch.setattr(transport_mod, "SyncEngine", FakeSyncEngine)
@@ -860,5 +881,46 @@ def test_download_traversal_filename_stays_in_cache(tmp_path):
         assert (cache_dir / "sentinel.txt").read_bytes() == b"sentinel-bytes"
         # Nothing was created next to the cache dir.
         assert not (tmp_path / "sentinel.txt").exists()
+
+    _run(scenario)
+
+
+def test_maintenance_failure_escalation_wired_through_transport(tmp_path, monkeypatch):
+    """#1701: the injected persistent-failure callback reaches the
+    maintainer, and the transport exposes the consecutive-failure
+    count as its read-only health surface."""
+    FakeSyncEngine.instances = []
+    monkeypatch.setattr(transport_mod, "SyncEngine", FakeSyncEngine)
+
+    async def scenario():
+        reports: List[tuple] = []
+        client = FakeClient()
+        client.olm = object()  # maintenance enabled
+        transport = NioTransport(
+            _config(),
+            store=FakeStore(),
+            state_dir=tmp_path,
+            client=client,
+            on_e2ee_maintenance_failure=lambda r: reports.append(
+                (r.count, r.last_error)
+            ),
+        )
+        assert transport.e2ee_maintenance_failures == 0
+        await transport.start(lambda e: _noop())
+
+        # Fail the maintenance pass and drive the post-sync hook
+        # directly (the SyncEngine stand-in records on_maintenance but
+        # never invokes it).
+        client.should_upload_keys = True
+
+        async def _boom():
+            raise RuntimeError("maintenance boom")
+
+        client.keys_upload = _boom
+        for i in range(1, 7):
+            await transport._after_sync()
+            assert transport.e2ee_maintenance_failures == i
+        assert reports == [(5, "maintenance boom")]
+        await transport.stop()
 
     _run(scenario)

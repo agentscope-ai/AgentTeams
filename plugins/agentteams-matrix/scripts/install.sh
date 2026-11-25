@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # Bundle installer: installs the agentteams-matrix bundle onto an
 # AgentTeams runtime via that runtime's adapter (OpenClaw projects
-# the contract onto openclaw.json; Hermes stages the native platform
-# plugin into $HERMES_HOME; QwenPaw copies the channel plugin).
+# the contract onto openclaw.json).
 #
 # Usage:
-#   install.sh [--adapter <openclaw|hermes>] [adapter options]
+#   install.sh [--adapter <openclaw>] [adapter options]
 #
 # Without --adapter, the first detected runtime is used (search order:
-# openclaw, hermes). A runtime whose binary is on PATH is
+# openclaw). A runtime whose binary is on PATH is
 # detected as before; OpenClaw additionally counts as present when its
 # effective config exists — $OPENCLAW_CONFIG_PATH (exported by the
 # Worker entrypoint), then the legacy $OPENCLAW_CONFIG, then
@@ -16,7 +15,7 @@
 # config path is detected without the binary on PATH. Adapter options
 # given after the adapter name (e.g. --config, --dry-run for the
 # openclaw adapter) are forwarded to the selected adapter's
-# install.sh; the hermes adapter takes no options.
+# install.sh.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,21 +28,14 @@ FORWARD=()
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--adapter <openclaw|hermes>] [adapter options]
+Usage: install.sh [--adapter <openclaw>] [adapter options]
 
 Adapters:
-             (takes no options)
   openclaw   project channels.matrix into ~/.openclaw/openclaw.json
              (options: --config, --dry-run, --with-credentials)
-  hermes     stage the native matrix platform plugin into $HERMES_HOME
-             (default ~/.hermes): the payload under
-             $HERMES_HOME/plugins/agentteams-matrix plus the per-file
-             ownership marker at
-             $HERMES_HOME/.agentteams/agentteams-matrix/installed.json
-             (takes no options; set HERMES_HOME to relocate)
 
 Without --adapter, the first detected runtime (search order:
-openclaw, hermes) is installed. OpenClaw counts as present when its
+openclaw) is installed. OpenClaw counts as present when its
 effective config exists ($OPENCLAW_CONFIG_PATH, then $OPENCLAW_CONFIG,
 then ~/.openclaw/openclaw.json), even without the binary on PATH.
 EOF
@@ -53,7 +45,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --adapter)
       if [ $# -lt 2 ]; then
-        echo "ERROR: --adapter requires a value (openclaw or hermes)" >&2
+        echo "ERROR: --adapter requires a value (openclaw)" >&2
         exit 2
       fi
       ADAPTER="$2"
@@ -90,34 +82,13 @@ runtime_present() {
       # counts; a dangling link does not.
       command -v openclaw >/dev/null 2>&1 || [ -e "$(openclaw_effective_config)" ]
       ;;
-    hermes) command -v hermes >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac
-}
-
-# The Hermes config projector was replaced by the native platform
-# plugin adapter, which takes no options; the old projector flags are
-# rejected with a clear error instead of silently ignored.
-reject_hermes_projector_flags() {
-  local flag
-  for flag in "${FORWARD[@]}"; do
-    case "$flag" in
-      --hermes-version|--hermes-root|--hermes-capabilities|--allow-partial)
-        echo "ERROR: ${flag} is a removed Hermes projector flag; the native hermes adapter takes no options — it stages the platform plugin under \$HERMES_HOME/plugins/agentteams-matrix (set HERMES_HOME to relocate)" >&2
-        exit 2
-        ;;
-    esac
-  done
 }
 
 install_adapter() {
   local adapter="$1"
   if [ "${#FORWARD[@]}" -gt 0 ]; then
-    if [ "${adapter}" = "hermes" ]; then
-      reject_hermes_projector_flags
-      echo "ERROR: the hermes adapter takes no options; drop: ${FORWARD[*]}" >&2
-      exit 2
-    fi
     bash "${BUNDLE_DIR}/adapters/${adapter}/install.sh" "${FORWARD[@]}"
   else
     bash "${BUNDLE_DIR}/adapters/${adapter}/install.sh"
@@ -126,9 +97,9 @@ install_adapter() {
 
 if [ -n "${ADAPTER}" ]; then
   case "${ADAPTER}" in
-    openclaw|hermes) ;;
+    openclaw) ;;
     *)
-      echo "ERROR: unknown adapter: ${ADAPTER} (expected openclaw or hermes)" >&2
+      echo "ERROR: unknown adapter: ${ADAPTER} (expected openclaw)" >&2
       usage >&2
       exit 2
       ;;
@@ -141,7 +112,7 @@ if [ -n "${ADAPTER}" ]; then
 fi
 
 ran=0
-for candidate in openclaw hermes; do
+for candidate in openclaw; do
   if runtime_present "${candidate}"; then
     install_adapter "${candidate}"
     ran=1
@@ -149,6 +120,6 @@ for candidate in openclaw hermes; do
 done
 
 if [ "${ran}" -eq 0 ]; then
-  echo "ERROR: no supported Matrix channel runtime found; expected openclaw or hermes" >&2
+  echo "ERROR: no supported Matrix channel runtime found; expected openclaw" >&2
   exit 1
 fi

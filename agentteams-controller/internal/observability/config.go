@@ -16,7 +16,7 @@ const SecretName = "agentteams-observability"
 
 func SupportsRuntime(runtime string) bool {
 	switch runtime {
-	case "qwenpaw", "hermes", "openclaw", "deepseek-harness", "codex", "openhuman", "opencode", "claudecode":
+	case "qwenpaw", "hermes", "openclaw", "deepseek-harness", "codex", "openhuman", "opencode", "qoder", "claudecode":
 		return true
 	default:
 		return false

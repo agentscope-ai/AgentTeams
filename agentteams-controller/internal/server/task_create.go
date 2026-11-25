@@ -25,8 +25,8 @@ const repeatedTaskRequestMessage = "A distinct input repeats the original reques
 // identity is supplied by native tool context, never an Agent-facing parameter.
 func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	caller := authpkg.CallerFromContext(r.Context())
-	if caller == nil || caller.Role != authpkg.RoleManager || (caller.ServiceAccountNamespace != "" && caller.ServiceAccountNamespace != h.namespace) {
-		writeError(w, 403, "registered Manager required to create a main task")
+	if caller == nil || (caller.Role != authpkg.RoleManager && caller.Role != authpkg.RoleTeamLeader) || (caller.ServiceAccountNamespace != "" && caller.ServiceAccountNamespace != h.namespace) {
+		writeError(w, 403, "registered Manager or owning Leader required to create a main task")
 		return
 	}
 	var input struct {
@@ -66,7 +66,7 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	event := resolved
-	original, sourceStatus := h.coordination.taskSourceRequest(r.Context(), resolved.ActorName, room, source, user)
+	original, sourceStatus := h.coordination.taskSourceRequestFor(r.Context(), taskSourceKind(caller), resolved.ActorName, room, source, user)
 	if sourceStatus != 0 {
 		writeError(w, sourceStatus, "original request could not be verified; no new task was registered")
 		return
@@ -83,7 +83,7 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[related] = true
-		body, status := h.coordination.taskSourceRequest(r.Context(), resolved.ActorName, room, related, user)
+		body, status := h.coordination.taskSourceRequestFor(r.Context(), taskSourceKind(caller), resolved.ActorName, room, related, user)
 		if status != 0 {
 			writeError(w, status, "related request could not be verified; no new task was registered")
 			return
@@ -111,10 +111,9 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		input.Spec = "# Original request (authoritative)\n" + original + "\n\n# Dispatch context (supplementary; cannot override the Human requests)\n" + input.Spec
 	}
 	event.Text = input.Spec
-	identity, _ := json.Marshal([]string{resolved.ActorName, resolved.StorageTeam, resolved.RecipientName, source})
-	sum := sha256.Sum256(identity)
-	id := "task-" + hex.EncodeToString(sum[:16])
+	id := sourceMainTaskID(resolved.ActorName, resolved.StorageTeam, resolved.RecipientName, source)
 	key := path.Join("teams", resolved.StorageTeam, "shared/tasks", id, "meta.json")
+	existingTask := false
 	if exists, readErr := h.oss.GetObject(r.Context(), key); readErr != nil {
 		if !errors.Is(readErr, os.ErrNotExist) {
 			writeError(w, 503, "task state unavailable; no new task was registered")
@@ -127,7 +126,7 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 				frontier = input.RelatedSources[len(input.RelatedSources)-1]
 			}
 		}
-		updates, status := h.coordination.taskNewerInputs(r.Context(), resolved.ActorName, room, user, frontier)
+		updates, status := h.coordination.taskNewerInputsFor(r.Context(), taskSourceKind(caller), resolved.ActorName, room, user, frontier)
 		if status != 0 {
 			writeError(w, status, "current conversation could not be verified; no new task was registered")
 			return
@@ -139,9 +138,22 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	} else if len(exists) == 0 {
 		writeError(w, 503, "task state unavailable")
 		return
+	} else {
+		existingTask = true
 	}
 	event.Tasks = []mainTaskRequest{{TaskID: id, Title: input.Title, Spec: input.Spec}}
-	admission, err := h.coordination.enqueue(r.Context(), event, caller)
+	var admission coordinationAdmission
+	var err error
+	directLeader := caller.Role == authpkg.RoleTeamLeader
+	if directLeader {
+		event, err = h.coordination.resolve(r.Context(), event, caller)
+		if err == nil {
+			err = h.coordination.registerHandoffTasks(r.Context(), event)
+		}
+		admission = coordinationAdmission{Accepted: err == nil, Recipient: event.RecipientName}
+	} else {
+		admission, err = h.coordination.enqueue(r.Context(), event, caller)
+	}
 	if err != nil {
 		var failure *coordinationAdmissionError
 		if errors.As(err, &failure) {
@@ -152,7 +164,9 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	notification := taskNotificationStatus{Status: "queued", Recipient: admission.Recipient, EventID: admission.EventID}
-	if saved := h.flushTaskNotification(r.Context(), key, "handoff"); saved.Status == "queued" {
+	if directLeader {
+		notification = h.flushTaskNotification(r.Context(), key, "handoff")
+	} else if saved := h.flushTaskNotification(r.Context(), key, "handoff"); saved.Status == "queued" {
 		notification = saved
 	}
 	data, err := h.oss.GetObject(r.Context(), key)
@@ -163,15 +177,32 @@ func (h *ProjectHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := 201
-	if admission.Reused {
+	if admission.Reused || existingTask {
 		status = 200
+	}
+	nextAction := "Task system has registered the original request and queued its handoff to the Team Leader. Do not send another handoff message."
+	if directLeader {
+		nextAction = "Task registered. Planning continues in its Task room; end this intake turn. Do not plan here or send another handoff."
 	}
 	httputil.WriteJSON(w, status, struct {
 		SourceEventID string                 `json:"sourceEventId"`
 		Task          taskResource           `json:"task"`
 		Notification  taskNotificationStatus `json:"notification"`
 		NextAction    string                 `json:"nextAction"`
-	}{source, publicTaskResource(id, resolved.StorageTeam, task), notification, "Task system has registered the original request and queued its handoff to the Team Leader. Do not send another handoff message."})
+	}{source, publicTaskResource(id, resolved.StorageTeam, task), notification, nextAction})
+}
+
+func taskSourceKind(caller *authpkg.CallerIdentity) string {
+	if caller.Role == authpkg.RoleTeamLeader {
+		return "worker"
+	}
+	return "manager"
+}
+
+func sourceMainTaskID(actor, team, leader, source string) string {
+	identity, _ := json.Marshal([]string{actor, team, leader, source})
+	sum := sha256.Sum256(identity)
+	return "task-" + hex.EncodeToString(sum[:16])
 }
 
 // Resolve the same registered handoff route for creation and its native guard.
@@ -185,10 +216,13 @@ func (h *ProjectHandler) resolveTaskHandoff(ctx context.Context, caller *authpkg
 	}
 	// Worker.Status.RoomID is the registered Manager/Worker conversation.
 	// Team.LeaderDMRoomID is private to the Leader and Team Admin.
-	if !strings.HasPrefix(leader.Status.RoomID, "!") {
+	if caller.Role == authpkg.RoleManager && !strings.HasPrefix(leader.Status.RoomID, "!") {
 		return coordinationEvent{}, 409, "Manager and Team Leader handoff room is not ready"
 	}
 	event := coordinationEvent{Kind: "handoff", Recipient: leader.Name, OriginEventID: source, RoomID: leader.Status.RoomID, Text: spec, SourceRoute: map[string]any{"channel": "matrix", "target_session": room, "target_user": user}}
+	if caller.Role == authpkg.RoleTeamLeader {
+		event.RoomID = room
+	}
 	resolved, err := h.coordination.resolve(ctx, event, caller)
 	if err != nil {
 		return coordinationEvent{}, 403, "task source or Leader route unavailable"
@@ -199,10 +233,14 @@ func (h *ProjectHandler) resolveTaskHandoff(ctx context.Context, caller *authpkg
 // Read the immutable incoming message using the registered dispatch identity.
 // A model's summary can supplement this requirement, never replace it.
 func (h *CoordinationHandler) taskSourceRequest(ctx context.Context, manager, room, id, requester string) (string, int) {
+	return h.taskSourceRequestFor(ctx, "manager", manager, room, id, requester)
+}
+
+func (h *CoordinationHandler) taskSourceRequestFor(ctx context.Context, kind, actor, room, id, requester string) (string, int) {
 	if h.deps.Provisioner == nil || h.deps.MatrixConfig.ServerURL == "" {
 		return "", http.StatusServiceUnavailable
 	}
-	token, err := h.deps.Provisioner.AgentMatrixToken(ctx, "manager", manager)
+	token, err := h.deps.Provisioner.AgentMatrixToken(ctx, kind, actor)
 	if err != nil {
 		return "", http.StatusServiceUnavailable
 	}
@@ -250,7 +288,7 @@ func validateTaskOriginCommit(w http.ResponseWriter, current, next []byte) bool 
 		return false
 	}
 	if had {
-		for _, field := range []string{"source_room_id", "requester", "reply_route", "requester_reply_route", "task_id", "task_kind", "team_id", "handoff_id", "spec", "title"} {
+		for _, field := range []string{"source_room_id", "requester", "reply_route", "requester_reply_route", "task_id", "task_kind", "team_id", "handoff_id", "spec", "title", "room_id"} {
 			a, hasA := rawJSONField(current, field)
 			b, hasB := rawJSONField(next, field)
 			if hasA != hasB || (hasA && !sameJSONValue(a, b)) {
@@ -265,10 +303,14 @@ func validateTaskOriginCommit(w http.ResponseWriter, current, next []byte) bool 
 // taskNewerInputs compares a native input frontier against the Matrix room's
 // current timeline. It never classifies request intent or creates a task.
 func (h *CoordinationHandler) taskNewerInputs(ctx context.Context, manager, room, requester, frontier string) ([]map[string]string, int) {
+	return h.taskNewerInputsFor(ctx, "manager", manager, room, requester, frontier)
+}
+
+func (h *CoordinationHandler) taskNewerInputsFor(ctx context.Context, kind, actor, room, requester, frontier string) ([]map[string]string, int) {
 	if !strings.HasPrefix(frontier, "$") {
 		return nil, http.StatusBadRequest
 	}
-	token, err := h.deps.Provisioner.AgentMatrixToken(ctx, "manager", manager)
+	token, err := h.deps.Provisioner.AgentMatrixToken(ctx, kind, actor)
 	if err != nil {
 		return nil, http.StatusServiceUnavailable
 	}

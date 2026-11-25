@@ -29,4 +29,6 @@ def test_actual_workflow_selection(tmp_path, runtime, architecture, publish, suc
     if success:
         values = dict(line.split("=", 1) for line in output.read_text().splitlines())
         assert len(json.loads(values["runtimes"])) * len(json.loads(values["architectures"])) == count
+        if runtime != "all":
+            assert json.loads(values["runtimes"]) == [runtime]
         assert "include" not in WORKFLOW["jobs"]["harness-platform"]["strategy"]["matrix"]

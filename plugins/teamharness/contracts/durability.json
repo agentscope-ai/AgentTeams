@@ -122,6 +122,11 @@
       "tool": "filesync",
       "action": "pull",
       "level": "sync"
+    },
+    {
+      "tool": "filesync",
+      "action": "delete",
+      "level": "sync"
     }
   ],
   "read_only_actions": [
@@ -168,6 +173,7 @@
   "notes": [
     "projectflow replan_project is listed in _PROJECTFLOW_MUTATING_ACTIONS but has no Python dispatch branch (the Go/CoPaw native route performs the replan), so it is absent from write_actions",
     "roomflow / message / artifact writes are remote (Matrix API) writes performed synchronously inside the call; filesync pull is a local write of the authoritative remote state; local state writes use the atomic replace described in 'description'",
-    "read-type actions may still refresh local cache through a pull; that cache refresh is not a state mutation"
+    "read-type actions may still refresh local cache through a pull; that cache refresh is not a state mutation",
+    "projectflow list_events is read-only with respect to project/task state, but it may trigger a best-effort S2 event retention sweep (#1702) before reading the stream: a terminal or expired project's live event files are merged into shared/events/{team}/{project_id}-archive-YYYYMMDD.json, the local source files are deleted, and the MinIO mirror is pruned with filesync delete — event-store maintenance in the sense of the previous note, not a state mutation (semantics: signal-mapping.json 'retention')"
   ]
 }

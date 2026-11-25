@@ -2,9 +2,11 @@
 
 Select `claudecode` to run a managed AgentTeams member with Anthropic's Python Agent SDK and its bundled Claude Code executable. The same image accepts the Manager, Leader and Worker role contracts. Like the [Codex Harness](codex.md), the adapter owns Matrix delivery and native sessions. Claude Code owns the model loop and tool execution. The SDK exposes structured results and SDK hooks while using the official headless runtime. [Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) · [Python package and terms](https://github.com/anthropics/claude-agent-sdk-python#license-and-terms)
 
+This integration is experimental and has not completed full admission. The shared image workflow builds it only when `runtime=claudecode` is explicitly selected; `all` does not include it. Passing native tests does not replace end-to-end delivery, recovery and mixed-runtime acceptance.
+
 ## Build and select the image
 
-Check out [the Claude Code Harness](https://github.com/agentteams-group/agentteams-harness-claudecode) beside AgentTeams. Build from a Core checkout with the pinned DeepSeek submodule initialized. Pass Core as the named build context `agentteams` and the independent Harness checkout as the positional context. The image uses the pinned Python Matrix transport helpers. Set `CONTROLLER_IMAGE` to a Controller image built from this revision for the matching `agt` and `mc` binaries.
+Check out [the Claude Code Harness](https://github.com/agentteams-group/agentteams-harness-claudecode) beside AgentTeams at the `CLAUDECODE_REF` recorded in `.github/workflows/publish-harnesses.yml`. Build from a Core checkout with the pinned DeepSeek submodule initialized. Pass Core as the named build context `agentteams` and the independent Harness checkout as the positional context. The image uses the pinned Python Matrix transport helpers. Set `CONTROLLER_IMAGE` to a Controller image built from this revision for the matching `agt` and `mc` binaries.
 
 ```sh
 git submodule update --init deepseek-harness

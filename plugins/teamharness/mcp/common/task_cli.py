@@ -19,7 +19,7 @@ _ACTIONS = {
     "begin": ((), ("team",), {}),
     "submit": (("summary",), ("report", "status", "team"), {"files": "file"}),
     "accept": (("submissionId", "note"), ("team",), {}),
-    "reject": (("submissionId", "note"), ("team", "replacementSpec"), {}),
+    "reject": (("submissionId", "note"), ("team", "replacementSpec", "replacementNodes"), {}),
     "complete": (("report",), ("team",), {"artifacts": "artifact"}),
     "cancel": (("reason",), ("team",), {}),
     "files_list": ((), ("team",), {}),
@@ -35,8 +35,8 @@ TASK_SCHEMA = {
     "description": (
         "Operate on tasks through the common task-system CLI/API. Interpret Human intent before choosing an operation. "
         "Manager: create a task when needed; Manager/Leader: cancel the intended existing main task; "
-        "Leader: plan, inspect and accept/reject exact submissions, then complete the main task; "
-        "Worker: begin and submit outputs. Use task IDs and artifact IDs, not Project or storage paths. "
+        "Leader: plan only initial required work, never hypothetical correction nodes; handle failures with replacementNodes local IDs (entry dependsOn=[]), then verify and complete the main task; "
+        "Worker: begin and submit truthful outputs; normal planned SUCCESS hands off directly to ready downstream Workers. Use REVISION_NEEDED for failed checks, not SUCCESS. Use task IDs and artifact IDs, not Project or storage paths. "
         "The task system prepares rooms, dispatches dependencies and returns accepted reports/artifacts "
         "to the original conversation automatically. Do not send duplicate notifications. "
         "files_read returns bounded text; files_get returns a verified local path. "
@@ -55,8 +55,8 @@ TASK_SCHEMA = {
             "nodes": {"type": "array", "description": "For plan: complete execution DAG; no source routes or execution Task IDs.",
                       "items": {"type": "object", "additionalProperties": False, "required": ["id", "assignedTo", "spec", "dependsOn"],
                                 "properties": {"id": {"type": "string"}, "title": {"type": "string"},
-                                               "assignedTo": {"type": "string"}, "spec": {"type": "string"},
-                                               "dependsOn": {"type": "array", "items": {"type": "string"}, "description": "Required on every node. List all upstream local node IDs whose accepted outputs this node needs; use [] only for independent work."}}}},
+                                               "assignedTo": {"type": "string"}, "spec": {"type": "string", "description": "Only this node responsibility, inputs, outputs and acceptance checks. The original Human request is attached automatically; do not copy it or other nodes into each spec."},
+                                               "dependsOn": {"type": "array", "items": {"type": "string"}, "description": "Required on every node. List all upstream local node IDs whose completed outputs this node needs; use [] only for independent work."}}}},
             "summary": {"type": "string", "description": "For submit: actual result and validation summary."},
             "report": {"type": "string", "description": "For submit: optional detailed report; for complete: verified final human report."},
             "status": {"type": "string", "enum": ["SUCCESS", "SUCCESS_WITH_NOTES", "REVISION_NEEDED", "BLOCKED", "INTERRUPTED"]},
@@ -78,11 +78,17 @@ TASK_SCHEMA = {
 }
 
 
+TASK_SCHEMA["inputSchema"]["properties"]["replacementNodes"] = {
+    **copy.deepcopy(TASK_SCHEMA["inputSchema"]["properties"]["nodes"]),
+    "description": "For reject only: replace this failed step with a correction DAG, such as Developer fix then independent Reviewer. Requires replacementSpec. Entry nodes inherit this step's upstream inputs; downstream receives all corrected outputs and waits for the complete correction DAG. Use local IDs only. The main Task and prior attempts are retained.",
+}
+
+
 def schema(role: str) -> dict:
     """Present each runtime role's operations; API authorization remains final."""
     allowed = {
         "manager": {"create", "get", "cancel", "files_list", "files_read", "files_get"},
-        "leader": {"plan", "get", "accept", "reject", "complete", "cancel", "files_list", "files_read", "files_get"},
+        "leader": {"create", "plan", "get", "accept", "reject", "complete", "cancel", "files_list", "files_read", "files_get"},
         "worker": {"begin", "get", "submit", "files_list", "files_read", "files_get", "files_put"},
         "remote-member": {"begin", "get", "submit", "files_list", "files_read", "files_get", "files_put"},
     }.get(role, set(_ACTIONS))
@@ -93,6 +99,13 @@ def schema(role: str) -> dict:
             "including quick work that produces a file or other deliverable. The Task system delivers "
             "the accepted result to the original conversation. Use get to inspect an existing Task, "
             "cancel for its explicit withdrawal, and the file actions for its verified artifacts."
+        )
+    elif role == "leader":
+        result["description"] = (
+            "Use create only for a direct registered Team Admin work request in your private conversation; "
+            "set leader to your own registered identity and use the supplied Human input reference. "
+            "Preserve its receipt and wait for the admitted handoff before plan. "
+            "Use plan/review/completion only for the framework-prepared Task phase."
         )
     properties = result["inputSchema"]["properties"]
     fields = {"action", "taskId"}
@@ -140,10 +153,33 @@ def command(arguments: dict) -> tuple[list[str], dict[str, str]]:
         if field not in arguments:
             continue
         value = arguments[field]
-        if field == "nodes":
+        if field in {"nodes", "replacementNodes"}:
             if not isinstance(value, list):
                 raise ValueError("nodes must be an array")
-            argv += ["--json", json.dumps({"nodes": value}, ensure_ascii=False)]
+            if field == "replacementNodes":
+                if not arguments.get("replacementSpec", "").strip() or not 0 < len(value) <= 50:
+                    raise ValueError("replacementNodes requires replacementSpec and 1 to 50 nodes")
+                ids = [node.get("id") for node in value if isinstance(node, dict)]
+                if len(ids) != len(value) or any(not isinstance(identity, str) or not _ID.fullmatch(identity) or len(identity) > 64 for identity in ids) or len(set(ids)) != len(ids):
+                    raise ValueError("replacementNodes requires distinct local node IDs")
+                pending = {}
+                for node in value:
+                    if (set(node) - {"id", "title", "assignedTo", "spec", "dependsOn"}
+                            or any(not isinstance(node.get(key), str) or not node[key].strip() for key in ("assignedTo", "spec"))
+                            or ("title" in node and not isinstance(node["title"], str))):
+                        raise ValueError("replacementNodes requires assignedTo and spec, with only the public node fields")
+                    dependencies = node.get("dependsOn")
+                    if (not isinstance(dependencies, list) or any(not isinstance(dep, str) or dep not in ids or dep == node["id"] for dep in dependencies)
+                            or len(set(dependencies)) != len(dependencies)):
+                        raise ValueError("replacementNodes dependsOn uses only local correction IDs; use [] for entry nodes, which inherit prior inputs automatically")
+                    pending[node["id"]] = set(dependencies)
+                while pending:
+                    ready = {identity for identity, dependencies in pending.items() if not dependencies}
+                    if not ready:
+                        raise ValueError("replacementNodes must be acyclic")
+                    pending = {identity: dependencies - ready for identity, dependencies in pending.items() if identity not in ready}
+            argv += (["--json", json.dumps({"nodes": value}, ensure_ascii=False)] if field == "nodes"
+                     else ["--replacement-nodes", json.dumps(value, ensure_ascii=False)])
         elif field in {"offset", "limit"}:
             if type(value) is not int:
                 raise ValueError(field + " must be an integer")

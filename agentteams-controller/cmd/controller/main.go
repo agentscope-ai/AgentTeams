@@ -16,6 +16,12 @@ import (
 
 const shutdownTimeout = 10 * time.Second
 
+// version is the controller version string reported by GET
+// /api/v1/version. It is stamped at build time with
+// -ldflags "-X main.version=<value>" (see agentteams-controller/Dockerfile
+// and agentteams-controller/Makefile); unversioned builds remain "dev".
+var version = "dev"
+
 func main() {
 	ctrl.SetLogger(zap.New())
 
@@ -23,6 +29,7 @@ func main() {
 	defer cancel()
 
 	cfg := config.LoadConfig()
+	cfg.Version = version
 
 	application, err := app.New(ctx, cfg)
 	if err != nil {

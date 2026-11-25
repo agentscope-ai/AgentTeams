@@ -98,21 +98,25 @@ func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Req
 	if coordinationString(input.Arguments, "action") == "create" {
 		source := coordinationMap(input.Arguments, "_nativeSource")
 		event, room, user := coordinationString(source, "eventId"), coordinationString(source, "roomId"), coordinationString(source, "userId")
-		if caller.Role != authpkg.RoleManager || !strings.HasPrefix(event, "$") || !strings.HasPrefix(room, "!") || !strings.HasPrefix(user, "@") || h.coordination == nil {
+		if (caller.Role != authpkg.RoleManager && caller.Role != authpkg.RoleTeamLeader) || !strings.HasPrefix(event, "$") || !strings.HasPrefix(room, "!") || !strings.HasPrefix(user, "@") || h.coordination == nil {
 			writeError(w, 403, "verified original request required")
 			return "", scope, false
 		}
-		manager, err := h.coordination.manager(r.Context(), caller.Username)
-		if err != nil {
-			writeError(w, 403, "registered Manager required")
-			return "", scope, false
+		actorName := actor[2]
+		if caller.Role == authpkg.RoleManager {
+			manager, err := h.coordination.manager(r.Context(), caller.Username)
+			if err != nil {
+				writeError(w, 403, "registered Manager required")
+				return "", scope, false
+			}
+			actorName = manager.Name
 		}
-		original, status := h.coordination.taskSourceRequest(r.Context(), manager.Name, room, event, user)
+		original, status := h.coordination.taskSourceRequestFor(r.Context(), taskSourceKind(caller), actorName, room, event, user)
 		if status != 0 {
 			writeError(w, status, "original request authority unavailable")
 			return "", scope, false
 		}
-		actor[2] = manager.Name
+		actor[2] = actorName
 		// Source scope deliberately excludes Leader/arguments: changing the model's
 		// proposed plan or dispatch target cannot evade an unresolved source call.
 		actor = append(actor, "source", room, user, event)
@@ -129,7 +133,7 @@ func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Req
 					writeError(w, http.StatusBadRequest, "distinct related request event IDs required")
 					return "", scope, false
 				}
-				body, status := h.coordination.taskSourceRequest(r.Context(), manager.Name, room, id, user)
+				body, status := h.coordination.taskSourceRequestFor(r.Context(), taskSourceKind(caller), actorName, room, id, user)
 				if status != 0 {
 					writeError(w, status, "related request authority unavailable")
 					return "", scope, false
@@ -144,9 +148,7 @@ func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Req
 				httputil.WriteJSON(w, status, map[string]any{"ok": false, "effect": "none", "error": "invalid_task_handoff", "message": message})
 				return "", scope, false
 			}
-			identity, _ := json.Marshal([]string{resolved.ActorName, resolved.StorageTeam, resolved.RecipientName, event})
-			sum := sha256.Sum256(identity)
-			scope.TaskID = "task-" + hex.EncodeToString(sum[:16])
+			scope.TaskID = sourceMainTaskID(resolved.ActorName, resolved.StorageTeam, resolved.RecipientName, event)
 			scope.Team = resolved.StorageTeam
 			scope.TaskKey = path.Join("teams", scope.Team, "shared/tasks", scope.TaskID, "meta.json")
 		}

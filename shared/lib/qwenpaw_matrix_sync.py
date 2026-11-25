@@ -42,7 +42,7 @@ class ManagedNioSync:
             control = (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.coordination")
             meta = control.get("channel_meta", {}) if isinstance(control, dict) else {}
             assignment = meta.get("teamharness_coordination", {}) if isinstance(meta, dict) else {}
-            if isinstance(assignment, dict) and assignment.get("kind") == "assistant_digest":
+            if isinstance(assignment, dict) and assignment.get("kind") in {"assistant_digest", "handoff"}:
                 return self.channel._on_room_event
         if isinstance(event, (RoomEncryptedImage, RoomEncryptedAudio, RoomEncryptedVideo, RoomEncryptedFile)):
             return self.channel._on_room_encrypted_media_event

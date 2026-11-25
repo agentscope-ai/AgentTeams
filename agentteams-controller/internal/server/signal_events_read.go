@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +32,8 @@ const (
 	signalEventsDefaultLimit = 50
 	signalEventsMaxLimit     = 200
 )
+
+var signalArchiveName = regexp.MustCompile(`-archive-\d{8}(-[0-9a-f]{16})?\.json$`)
 
 type signalEventsResponse struct {
 	ProjectID  string        `json:"project_id"`
@@ -183,7 +186,7 @@ func (h *ProjectHandler) GetProjectSignalEvents(w http.ResponseWriter, r *http.R
 	projectOfTask := map[string]string{}
 	events := make([]signalEvent, 0, len(infos))
 	for _, info := range infos {
-		if !strings.HasSuffix(info.Name, ".json") {
+		if !strings.HasSuffix(info.Name, ".json") || signalArchiveName.MatchString(info.Name) {
 			continue
 		}
 		data, err := h.oss.GetObject(r.Context(), prefix+info.Name)

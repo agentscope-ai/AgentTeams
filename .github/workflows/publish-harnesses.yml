@@ -36,7 +36,7 @@ concurrency:
 env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
   CODEX_REF: 860b07d4027ea2bd48c0d4f4885b9a9612d1b446
-  CLAUDECODE_REF: dbd9613088fd950d25536c95366e0c72016e8979
+  CLAUDECODE_REF: dbc7e228eea00a1439254b5d4f3f0f5143004b62
   OPENCODE_REF: 318d1524535398d67a4a876fe07b966689d57361
 
 jobs:
@@ -95,6 +95,7 @@ jobs:
       - name: Build shared CLI and builtin assets on native runner
         env:
           CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           ARCH: ${{ matrix.arch }}
           REUSE_CONTROLLER: ${{ inputs.controller_image }}
         run: |
@@ -103,11 +104,13 @@ jobs:
             [[ "$REUSE_CONTROLLER" =~ ^higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller@sha256:[a-f0-9]{64}$ ]]
             docker pull --platform "linux/$ARCH" "$REUSE_CONTROLLER"
             revision=$(docker inspect "$REUSE_CONTROLLER" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+            version=$(docker inspect "$REUSE_CONTROLLER" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+            [[ "$version" == "$RELEASE_VERSION" ]]
             [[ "$revision" =~ ^[a-f0-9]{40}$ ]]
             git diff --exit-code "$revision" HEAD -- agentteams-controller manager/agent
             docker tag "$REUSE_CONTROLLER" "$image"
           else
-            make build-agentteams-controller LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \
+            make build-agentteams-controller VERSION="$RELEASE_VERSION" LOCAL_CONTROLLER="$image" DOCKER_PLATFORM="linux/$ARCH" \
               DOCKER_BUILD_ARGS="--label org.opencontainers.image.revision=${GITHUB_SHA}"
           fi
           docker run --rm --entrypoint agt "$image" tracing --help

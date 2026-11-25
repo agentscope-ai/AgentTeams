@@ -42,6 +42,7 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeQwenPaw, true},
 		{RuntimeDeepSeekHarness, true},
 		{RuntimeCodex, true},
+		{RuntimeQoder, true},
 		{RuntimeClaudeCode, true},
 		{"unknown", false},
 	}
@@ -57,6 +58,7 @@ func TestUsesMemberRuntimeConfig(t *testing.T) {
 		RuntimeQwenPaw:         true,
 		RuntimeDeepSeekHarness: true,
 		RuntimeCodex:           true,
+		RuntimeQoder:           true,
 		RuntimeClaudeCode:      true,
 		RuntimeOpenClaw:        false,
 		RuntimeCopaw:           false,

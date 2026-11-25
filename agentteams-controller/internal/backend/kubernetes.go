@@ -279,16 +279,18 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			if image == "" {
 				return nil, fmt.Errorf("opencode runtime requires spec.image or AGENTTEAMS_OPENCODE_WORKER_IMAGE")
 			}
-		case req.Runtime == RuntimeClaudeCode:
-			image = k.config.ClaudeCodeWorkerImage
-			if image == "" {
-				return nil, fmt.Errorf("claudecode runtime requires spec.image or AGENTTEAMS_CLAUDECODE_WORKER_IMAGE")
-			}
 		case req.Runtime == RuntimeCodex:
 			image = k.config.CodexWorkerImage
 			if image == "" {
 				return nil, fmt.Errorf("codex runtime requires spec.image or AGENTTEAMS_CODEX_WORKER_IMAGE")
 			}
+		case req.Runtime == RuntimeClaudeCode:
+			image = k.config.ClaudeCodeWorkerImage
+			if image == "" {
+				return nil, fmt.Errorf("claudecode runtime requires spec.image or AGENTTEAMS_CLAUDECODE_WORKER_IMAGE")
+			}
+		case req.Runtime == RuntimeQoder:
+			return nil, fmt.Errorf("qoder runtime requires an explicitly built spec.image")
 		case k.config.WorkerImage != "":
 			image = k.config.WorkerImage
 		}
@@ -791,8 +793,14 @@ func defaultRuntime(runtime string) string {
 		return RuntimeQwenPaw
 	case RuntimeDeepSeekHarness:
 		return RuntimeDeepSeekHarness
-	case RuntimeCodex, RuntimeOpenCode, RuntimeClaudeCode:
-		return runtime
+	case RuntimeCodex:
+		return RuntimeCodex
+	case RuntimeOpenCode:
+		return RuntimeOpenCode
+	case RuntimeQoder:
+		return RuntimeQoder
+	case RuntimeClaudeCode:
+		return RuntimeClaudeCode
 	default:
 		return RuntimeOpenClaw
 	}

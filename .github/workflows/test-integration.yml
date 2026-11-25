@@ -215,8 +215,15 @@ jobs:
         with:
           submodules: recursive
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Check integration scheduling
         run: |
+          python3 tests/test_runtime_hitl.py
+          python3 tests/test_attention_hitl.py
+          node --experimental-strip-types tests/test-openclaw-hitl.mjs
           python3 tests/check-integration-scheduling.py
           python3 tests/test-ci-interaction.py
           python3 tests/test_teamharness_notification_wait.py

@@ -175,6 +175,8 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 			if workerImage == "" {
 				return nil, fmt.Errorf("codex runtime requires spec.image or AGENTTEAMS_CODEX_WORKER_IMAGE")
 			}
+		case req.Runtime == RuntimeQoder:
+			return nil, fmt.Errorf("qoder runtime requires an explicitly built spec.image")
 		case s.config.WorkerImage != "":
 			workerImage = s.config.WorkerImage
 		}

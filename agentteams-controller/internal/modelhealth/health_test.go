@@ -119,6 +119,9 @@ func TestProbeProtocolsAndErrors(t *testing.T) {
 	}{
 		{"chat", "/v1/chat/completions", `{"choices":[{"message":{"content":"ok"}}]}`, "ok", 200},
 		{"responses", "/v1/responses", `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`, "ok", 200},
+		{"anthropic-messages", "/v1/messages", `{"type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`, "ok", 200},
+		{"anthropic-messages", "/v1/messages", `{"type":"message","role":"assistant","content":[]}`, "empty_response", 200},
+		{"anthropic-messages", "/v1/messages", `{"choices":[{"message":{"content":"ok"}}]}`, "invalid_response", 200},
 		{"chat", "/v1/chat/completions", `{"base_resp":{"status_code":1008,"status_msg":"secret"}}`, "billing_or_quota", 200},
 		{"chat", "/v1/chat/completions", `{"error":{"message":"unauthorized secret"}}`, "authentication", 200},
 		{"chat", "/v1/chat/completions", `{}`, "empty_response", 200},
@@ -139,6 +142,9 @@ func TestProbeProtocolsAndErrors(t *testing.T) {
 				json.NewDecoder(r.Body).Decode(&p)
 				if tc.protocol == "responses" && (p["input"] == nil || p["messages"] != nil) {
 					t.Error("wrong Responses request")
+				}
+				if tc.protocol == "anthropic-messages" && (r.Header.Get("anthropic-version") != "2023-06-01" || p["messages"] == nil || p["model"] != "selected") {
+					t.Error("wrong Anthropic Messages request")
 				}
 				w.WriteHeader(tc.code)
 				w.Write([]byte(tc.body))

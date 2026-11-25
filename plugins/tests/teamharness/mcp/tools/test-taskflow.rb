@@ -1841,6 +1841,11 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     att_body = att_ev[0]["content"].get("body", "")
     if f"ATTENTION_APPROVAL: {att_tid} - Ship to production?" not in att_body:
         raise AssertionError(f"attention event must carry the contract line: {att_body!r}")
+    hitl_block = att_ev[0]["content"]["org.agentteams.run"]["blocks"][0]
+    if hitl_block.get("confirmation_id") != att1["task"]["attention"][-1]["confirmation_id"]:
+        raise AssertionError(f"attention card must bind the persisted question: {hitl_block!r}")
+    if hitl_block.get("questions", [{}])[0].get("id") != "decision":
+        raise AssertionError(f"attention card must preserve the shared answer schema: {hitl_block!r}")
     mentions = (att_ev[0]["content"].get("m.mentions") or {}).get("user_ids", [])
     if "@admin:example.test" not in mentions or "@carol:example.test" not in mentions:
         raise AssertionError(f"attention event must mention leader and human: {mentions!r}")
@@ -2290,7 +2295,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         raise AssertionError(f"suggested must be written to the record: {nv_ok_records[0]!r}")
     if nv_ok_records[0].get("expiresAt") != "2026-10-29T08:00:00Z":
         raise AssertionError(f"expiresAt must be written to the record: {nv_ok_records[0]!r}")
-    # 5) omitted fields keep the legacy record shape (no new keys).
+    # 5) legacy arguments retain optional defaults and gain a stable HITL identity.
     nv_plain_tid = "att-options-plain"
     _lifecycle_setup(nv_plain_tid)
     nv_plain = payload("taskflow", {
@@ -2309,7 +2314,7 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
     # notification_log is the S4a outcome entry: it is always present on a
     # record that went through the notification stage, independent of the
     # optional S0 fields this shape check guards.
-    legacy_keys = {"kind", "question", "attempt", "requestedAt", "resolved", "eventId", "notification_log"}
+    legacy_keys = {"kind", "question", "attempt", "requestedAt", "resolved", "eventId", "notification_log", "confirmation_id", "requested_of"}
     if not set(nv_plain_records[0].keys()) <= legacy_keys:
         raise AssertionError(f"omitted fields must keep the legacy record shape: {nv_plain_records[0]!r}")
     if any(key in nv_plain_records[0] for key in ("options", "suggested", "expiresAt")):
@@ -2457,6 +2462,55 @@ Dir.mktmpdir("teamharness-taskflow-") do |dir|
         raise AssertionError(f"event id must be persisted once the state is durable: {ofail_meta2!r}")
     if ofail_meta2.get("projectCompletionEventId") != ofail_note.get("eventId"):
         raise AssertionError(f"persisted event id must match the sent event: {ofail_meta2!r}")
+
+    # Shared HITL consumption uses the real conditional meta HTTP endpoint and
+    # Matrix receipt transport; storage reads project the fake authoritative object.
+    import hitl_answer
+    hitl_tid = "hitl-durable-answer"
+    _lifecycle_setup(hitl_tid)
+    hitl_request = payload("taskflow", {
+        "role": "worker", "action": "request_attention", "payload": {
+            "taskId": hitl_tid, "kind": "decision", "question": "Continue?",
+            "options": [{"id": "go", "label": "Go"}],
+        },
+    })
+    hitl_id = hitl_request["task"]["attention"][-1]["confirmation_id"]
+    os.environ["TEAMHARNESS_SHARED_DIR"] = str(workspace / "shared")
+    os.environ["AGENTTEAMS_SHARED_STORAGE_PREFIX"] = "mock/shared"
+    os.environ["AGENTTEAMS_MATRIX_USER_ID"] = "@worker-a:example.test"
+
+    def hitl_pull(arguments, tid):
+        remote = _VIRTUAL_META.get(f"shared/tasks/{tid}/meta.json")
+        if remote is None:
+            return False
+        path = workspace / f"shared/tasks/{tid}/meta.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(remote[0]), encoding="utf-8")
+        return True
+
+    _sync_mod._pull_task = hitl_pull
+    _sync_mod._remote_task_meta_etag = lambda arguments, tid: _fake_etag(arguments, f"shared/tasks/{tid}/meta.json")
+    decision = {"room_id": "!team:example.test", "event_id": "$hitl-answer", "source": {
+        "sender": "@carol:example.test", "content": {"com.agentteams.answer": {
+            "kind": "ask_user", "agent_id": "@worker-a:example.test", "actor": "@forged:example.test",
+            "confirmation_id": hitl_id, "responses": [{"id": "decision", "selected": ["go"]}],
+        }},
+    }}
+    if hitl_answer.consume({**decision, "source": {**decision["source"], "sender": "@stranger:example.test"}})["accepted"]:
+        raise AssertionError("an unauthorized sender must not settle the question")
+    if not hitl_answer.consume(decision)["accepted"]:
+        raise AssertionError(f"the question must persist the authorized decision: {_VIRTUAL_META[f'shared/tasks/{hitl_tid}/meta.json'][0]!r}")
+    hitl_meta = _VIRTUAL_META[f"shared/tasks/{hitl_tid}/meta.json"][0]
+    answer_record = hitl_meta["attention"][-1]
+    if answer_record["answer"]["sender"] != "@carol:example.test" or hitl_meta["session_state"] != "running":
+        raise AssertionError(f"the actual sender and continuation state must be durable: {hitl_meta!r}")
+    if hitl_answer.consume({**decision, "event_id": "$different-answer"})["accepted"]:
+        raise AssertionError("another event must not replace the first accepted answer")
+    (workspace / f"shared/tasks/{hitl_tid}/meta.json").unlink()
+    if not hitl_answer.consume(decision)["accepted"]:
+        raise AssertionError("a replay must recover the committed decision without local task state")
+    if matrix["events"][-1]["content"]["org.agentteams.run"]["blocks"][0]["status"] != "answered":
+        raise AssertionError("a committed decision must produce the shared owner receipt")
 
     matrix_server.shutdown()
     matrix_server.server_close()

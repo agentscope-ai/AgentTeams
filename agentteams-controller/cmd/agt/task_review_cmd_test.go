@@ -81,3 +81,29 @@ func TestTaskRejectCommandIncludesExplicitReplacementSpec(t *testing.T) {
 		t.Fatal("replacement receipt lost")
 	}
 }
+
+func TestTaskRejectCommandSendsCorrectionGraph(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ReplacementNodes []struct {
+				ID         string   `json:"id"`
+				AssignedTo string   `json:"assignedTo"`
+				DependsOn  []string `json:"dependsOn"`
+			} `json:"replacementNodes"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || len(body.ReplacementNodes) != 2 || body.ReplacementNodes[1].DependsOn[0] != "fix" || body.ReplacementNodes[0].AssignedTo != "developer" {
+			t.Errorf("correction graph lost: %+v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"replacementTaskId":"exec-fix"}`))
+	}))
+	defer server.Close()
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "fixture")
+	cmd := newRootCommand("agt")
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"task", "reject", "t1", "--submission", "s1", "--note", "Failed review", "--replacement-spec", "Fix then recheck", "--replacement-nodes", `[{"id":"fix","assignedTo":"developer","spec":"Fix","dependsOn":[]},{"id":"review","assignedTo":"reviewer","spec":"Recheck","dependsOn":["fix"]}]`})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+}

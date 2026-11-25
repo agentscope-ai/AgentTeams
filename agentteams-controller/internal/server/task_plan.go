@@ -33,6 +33,7 @@ type taskPlanRequest struct {
 type taskPlan struct {
 	ID        string          `json:"id"`
 	ActorName string          `json:"actor_name"`
+	RoomID    string          `json:"room_id,omitempty"`
 	Request   taskPlanRequest `json:"request"`
 }
 
@@ -191,22 +192,8 @@ func (h *ProjectHandler) PlanTask(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 403, "registered Leader required")
 			return
 		}
-		for i := range input.Nodes {
-			worker, err := h.coordination.worker(r.Context(), input.Nodes[i].AssignedTo)
-			if err != nil || worker.Name == leader.Name {
-				writeError(w, 403, "execution must target an independent registered Worker")
-				return
-			}
-			if _, err := h.coordination.memberTeam(r.Context(), worker.Name, "worker", caller.Team); err != nil {
-				writeError(w, 403, "execution assignee is outside your Team")
-				return
-			}
-			var target coordinationEvent
-			if err := h.coordination.targetWorker(&target, worker); err != nil {
-				writeError(w, 409, "execution assignee is not ready for task coordination")
-				return
-			}
-			input.Nodes[i].AssignedTo = worker.Name
+		if !h.validatePlanAssignees(w, r, input.Nodes, leader.Name) {
+			return
 		}
 		canonical, _ := json.Marshal([]any{team, id, input, leader.Name})
 		sum := sha256.Sum256(canonical)
@@ -226,7 +213,7 @@ func (h *ProjectHandler) PlanTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		nodes, _ := main["tasks"].([]any)
-		if main["status"] != "planned" || len(nodes) != 0 || coordinationString(main, "room_id") != "" || strings.TrimSpace(coordinationString(main, "spec")) == "" {
+		if main["status"] != "planned" || len(nodes) != 0 || strings.TrimSpace(coordinationString(main, "spec")) == "" {
 			writeError(w, 409, "main task is not awaiting its first execution plan")
 			return
 		}
@@ -324,6 +311,28 @@ func validateTaskPlanCommit(w http.ResponseWriter, current, next []byte) bool {
 				return false
 			}
 		}
+	}
+	return true
+}
+
+func (h *ProjectHandler) validatePlanAssignees(w http.ResponseWriter, r *http.Request, nodes []taskPlanNode, leader string) bool {
+	caller := authpkg.CallerFromContext(r.Context())
+	for i := range nodes {
+		worker, err := h.coordination.worker(r.Context(), nodes[i].AssignedTo)
+		if err != nil || worker.Name == leader {
+			writeError(w, 403, "execution must target an independent registered Worker")
+			return false
+		}
+		if _, err := h.coordination.memberTeam(r.Context(), worker.Name, "worker", caller.Team); err != nil {
+			writeError(w, 403, "execution assignee is outside your Team")
+			return false
+		}
+		var target coordinationEvent
+		if err := h.coordination.targetWorker(&target, worker); err != nil {
+			writeError(w, 409, "execution assignee is not ready for task coordination")
+			return false
+		}
+		nodes[i].AssignedTo = worker.Name
 	}
 	return true
 }

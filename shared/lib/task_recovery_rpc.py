@@ -179,7 +179,7 @@ def execute(request):
     if action == 'prepare_reply':
         text = request['text']
         cp = task['execution'].get('checkpoint') or {}
-        if not text and (task['status'] != 'submitted' or not (task.get('result_path') or cp.get('result'))):
+        if not text and (task['status'] not in {'submitted', 'completed'} or not (task.get('result_path') or cp.get('result'))):
             raise RecoveryConflict('Native turn ended without a durable result')
         saved, text = recovery.prepare_reply(identity['task_id'], identity['team_id'], text)
         return {'saved': saved, 'text': text}

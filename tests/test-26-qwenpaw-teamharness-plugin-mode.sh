@@ -969,8 +969,8 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
         log_fail "${container} agent prompt files missing TEAMS.md"
     fi
 
-    local callable_ready=false
-    local callable_deadline=$(( $(date +%s) + 60 ))
+    callable_ready=false
+    callable_deadline=$(( $(date +%s) + 60 ))
     while [ "$(date +%s)" -lt "${callable_deadline}" ]; do
         TEAMHARNESS_MCP=$(_agent_api "${container}" GET /api/mcp/teamharness 2>/dev/null || echo "{}")
         TEAMHARNESS_TOOLS=$(_agent_api "${container}" GET /api/mcp/tools/teamharness 2>/dev/null || echo "[]")

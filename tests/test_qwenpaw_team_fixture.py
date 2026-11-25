@@ -58,3 +58,39 @@ def test_case26_accepts_verified_multi_step_delivery_without_weakening_file_chec
         invalid = copy.deepcopy(task)
         mutate(invalid)
         assert not accepted(invalid)
+
+
+def test_case26_waits_for_callable_tools_at_top_level(tmp_path):
+    source = (Path(__file__).parent / 'test-26-qwenpaw-teamharness-plugin-mode.sh').read_text()
+    marker = source.index('callable_ready=false')
+    start = source.rfind('\n', 0, marker) + 1
+    block = source[start:source.index('    PACKAGE_MCP=', start)]
+    script = '''
+date() { n=$(cat "$FIXTURE_CLOCK"); echo $((n + 1)) > "$FIXTURE_CLOCK"; echo "$n"; }
+sleep() { :; }
+log_pass() { echo PASS; }
+log_fail() { echo FAIL; }
+_agent_api() {
+    if [ "$3" = /api/mcp/teamharness ]; then
+        echo '{"enabled":true,"transport":"stdio","command":"python3","args":["server.py"]}'
+    else
+        n=$(cat "$FIXTURE_CALLS"); n=$((n + 1)); echo "$n" > "$FIXTURE_CALLS"
+        if [ "$n" -ge "$FIXTURE_READY_AFTER" ]; then
+            echo '[{"name":"health"},{"name":"filesync"},{"name":"task"}]'
+        else
+            echo '[]'
+        fi
+    fi
+}
+container=fixture
+''' + block
+    for ready_after, expected in ((2, 'PASS'), (999, 'FAIL')):
+        clock, calls = tmp_path / 'clock', tmp_path / 'calls'
+        clock.write_text('0'); calls.write_text('0')
+        env = {**os.environ, 'FIXTURE_CLOCK': str(clock), 'FIXTURE_CALLS': str(calls),
+               'FIXTURE_READY_AFTER': str(ready_after)}
+        result = subprocess.run(['bash'], input=script, env=env, text=True,
+                                capture_output=True, check=True, timeout=10)
+        assert result.stdout.strip() == expected, result.stderr
+        assert 'can only be used in a function' not in result.stderr
+        assert int(calls.read_text()) >= 2

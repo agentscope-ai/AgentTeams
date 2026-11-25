@@ -23,13 +23,15 @@ func TestNativeRecoveryPythonJournalRoundTrip(t *testing.T) {
 	}
 	store := ossfake.NewMemory()
 	project := newProjectTestHandler(t, store, teamWithRoster("alpha-team"))
-	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-dev", "status": "in_progress", "execution": map[string]any{"generation": 1, "instance_id": "instance", "process_id": "process", "state": "active"}}))
+	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-dev", "status": "in_progress", "task_kind": "execution", "project_id": "", "spec": "Continue the assigned work", "execution": map[string]any{"generation": 1, "instance_id": "instance", "process_id": "process", "state": "active"}}))
 	recovery := NewTaskRecoveryHandler(project, ServerDeps{})
+	project.recovery = recovery
 	recovery.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
 		return "instance", "openclaw", nil
 	}
 	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/tasks/{id}/begin", func(w http.ResponseWriter, r *http.Request) { project.BeginTask(w, withCaller(r, caller)) })
 	mux.HandleFunc("GET /api/v1/tasks/recoverable", func(w http.ResponseWriter, r *http.Request) { recovery.ListRecoverableTasks(w, withCaller(r, caller)) })
 	mux.HandleFunc("POST /api/v1/tasks/{id}/execution", func(w http.ResponseWriter, r *http.Request) { recovery.UpdateExecution(w, withCaller(r, caller)) })
 	mux.HandleFunc("POST /fixture-artifact", func(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +71,22 @@ def save(command,**kwargs):
 with patch('task_recovery.subprocess.run',side_effect=save):
  r.finish_tools(i,op,[dict(id='call',content=[dict(type='text',text='confirmed output')])])
 assert r.tools_current(i)['execution']['state']=='active'
+# A delivered progress response is not submission of the assigned Task.
+with patch('task_recovery.subprocess.run',side_effect=save):
+ r.save_reply('t1','alpha-team','The browser environment still needs setup.')
+r.delivered('t1','alpha-team','$progress')
+req=urllib.request.Request(os.environ['AGENTTEAMS_CONTROLLER_URL']+'/api/v1/tasks/t1/begin',data=b'{}',headers={'X-AgentTeams-Process-ID':'process'},method='POST')
+with urllib.request.urlopen(req) as response: assert response.status==200
+previous=r.current('t1','alpha-team')['execution']['checkpoint']
+next_call=dict(id='next-call',name='exec',arguments=dict(command='continue verified work'))
+op=r.begin_tools(i,[next_call])
+started=r.current('t1','alpha-team')['execution']['checkpoint']
+assert 'result' not in started and 'delivery' not in started and 'reply_txn' not in started
+assert started['completed_steps']==previous['completed_steps']
+assert started['artifacts']==previous['artifacts']
+with patch('task_recovery.subprocess.run',side_effect=save):
+ r.finish_tools(i,op,[dict(id='next-call',content=[dict(type='text',text='continued work')])])
+assert r.current('t1','alpha-team')['status']=='in_progress'
 `
 	command := exec.Command(python, "-c", script, library)
 	command.Env = append(os.Environ(), "AGENTTEAMS_PROCESS_ID=process", "AGENTTEAMS_CONTROLLER_URL="+server.URL, "AGENTTEAMS_AUTH_TOKEN_FILE="+token, "AGENTTEAMS_STORAGE_PREFIX=storage")

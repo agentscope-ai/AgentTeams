@@ -39,4 +39,5 @@ def pending(get_receipts, runtime):
         result = entry["result"]
         facts = get_receipts(result, entry["actor"])
         if len(facts) == len(result["assignments"]) + bool(result["notification"]):
-            yield {"key": path.stem, "target": entry["target"], "facts": [r["fact"] for r in facts]}
+            yield {"key": path.stem, "target": entry["target"], "facts": [r["fact"] for r in facts],
+                   "taskId": result["task"]["id"], "submissionId": result["task"]["submissionId"]}

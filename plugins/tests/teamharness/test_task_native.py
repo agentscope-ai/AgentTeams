@@ -503,4 +503,5 @@ def test_confirmed_handoff_only_reaches_the_submitting_native_session(bridge, tm
     assert read('openhuman') == []
     items = read('hermes')
     assert len(items) == 1 and items[0]['target'] == target
+    assert (items[0]['taskId'], items[0]['submissionId']) == ('stage', 's1')
     assert len(items[0]['facts']) == 1 and '"matrixEventId":"$actual"' in items[0]['facts'][0]

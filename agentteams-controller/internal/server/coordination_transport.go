@@ -544,11 +544,13 @@ func coordinationMatrixAssignment(e coordinationEvent, p map[string]any) map[str
 	nodes, _ := p["tasks"].([]any)
 	titles := map[string]string{}
 	var dependencies []any
+	var correction bool
 	for _, item := range nodes {
 		n, _ := item.(map[string]any)
 		titles[coordinationString(n, "task_id")] = coordinationString(n, "title")
 		if coordinationString(n, "task_id") == e.TaskID {
 			dependencies, _ = n["depends_on"].([]any)
+			correction = coordinationString(n, "revision_of") != ""
 		}
 	}
 	var prior []string
@@ -559,7 +561,9 @@ func coordinationMatrixAssignment(e coordinationEvent, p map[string]any) map[str
 		}
 	}
 	prefix := "任务已分配。"
-	if len(prior) > 0 {
+	if correction && e.ActorRole == authpkg.RoleTeamLeader {
+		prefix = "请按审核意见返工。"
+	} else if len(prior) > 0 {
 		prefix = "前置的" + strings.Join(prior, "、") + "环节已验收通过。"
 		if e.ActorRole == authpkg.RoleWorker {
 			prefix = "前置的" + strings.Join(prior, "、") + "环节已完成交付。"

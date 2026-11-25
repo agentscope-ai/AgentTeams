@@ -79,6 +79,12 @@ func TestMatrixAssignmentCarriesMentionsAndCanonicalPrerequisites(t *testing.T) 
 	if content["org.agentteams.coordination"].(map[string]any)["session_id"] != "coordination-task:dev:d1" {
 		t.Fatal("task execution lost its isolated session")
 	}
+	e.ActorRole = authpkg.RoleTeamLeader
+	p["tasks"].([]any)[1].(map[string]any)["revision_of"] = "failed"
+	correction := coordinationMatrixAssignment(e, p)["body"].(string)
+	if !strings.Contains(correction, "审核意见") || strings.Contains(correction, "已验收通过") {
+		t.Fatalf("first correction must follow the review decision: %s", correction)
+	}
 }
 
 func TestMatrixReviewWaitsForDurableAcceptanceAndQueuesMatrixClosure(t *testing.T) {

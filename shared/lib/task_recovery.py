@@ -209,13 +209,12 @@ class Recovery:
         decisions = [record for record in task.get('attention', []) if record.get('answer')]
         decision_context = {'human_decisions': decisions} if decisions else {}
         if task.get('task_plan_id'):
-            return ("Continue your existing Task through the common task protocol and its prepared output directory. "
-                "Your framework owns durable execution checkpoints and receipt recovery; do not call legacy taskflow/projectflow "
-                "or manufacture checkpoints. Do not replay an unconfirmed operation. Canonical or native unknown effects require "
-                "authoritative verification before reasoning or further tools. Preserve verified work and submit only the current "
-                "Task's outputs with the common task tool.\n"
+            progress = {key: checkpoint[key] for key in ('completed_steps', 'remaining_steps')
+                        if checkpoint and checkpoint.get(key)}
+            return ("Continue your existing Task through the common task protocol. Use its prepared inputs and output "
+                "directory; read missing details on demand. Preserve verified work and submit this Task's outputs.\n"
                 + json.dumps({'task_id': task['task_id'], 'team_id': task.get('team_id'), 'status': task['status'],
-                    'generation': execution['generation'], 'checkpoint': checkpoint, **decision_context}, ensure_ascii=False))
+                    **({'progress': progress} if progress else {}), **decision_context}, ensure_ascii=False))
         return ("Recover your existing Task from the authoritative task system. Do not create a new task.\n"
             "Before a new external side effect, record its operation identity with checkpoint_task. If an operation is "
             "started or unknown, verify its external outcome and save evidence before continuing; do not rerun it. "

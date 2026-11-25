@@ -265,3 +265,7 @@ python3 tests/task-protocol/summarize_runs.py /path/to/evidence/runs --source FU
 - `completed` 是直接成功交接的合法终态。当前同一代次、进程、实例只能完成已有工具返回及持久化、投递；不能以此重新进入模型或执行新工具。空最终文本只有存在权威持久结果才可收尾。
 - QwenPaw 的 Leader 直接接收其 Admin 的需求时，同样绑定原始 Human 来源，在原会话结束受理，进入任务房间规划。SDK 的原生上下文必须保留工具结果和已确认发送事实，不能只保存到旁路缓存。
 - OpenHuman 在终态关闭可复用会话登记后，仍须把真实工具历史和发送事实写入自身原生会话文件；停止登记不能成为跳过持久化的理由。恢复扫描不得重启已完成节点。
+
+### Managed Task recovery context
+
+Keep the durable checkpoint in the runtime and Controller. The model's managed Task resume message contains the current Task/team identity, status, completed/remaining business steps when present, and resolved Human decisions. It does not repeat the Task specification, result/report snapshots, operation records or delivery transaction fields. Prepare the current assignment with the common Task tool and read other files on demand. This projection must not erase authoritative recovery evidence or relax unknown-effect fences. Legacy taskflow recovery retains its existing contract.

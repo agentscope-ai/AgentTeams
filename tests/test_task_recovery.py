@@ -200,6 +200,26 @@ class RecoveryTests(unittest.TestCase):
         self.assertNotIn('taskflow.checkpoint_task', Recovery.resume_text(managed))
         self.assertIn('taskflow.checkpoint_task', Recovery.resume_text(self.task))
 
+    def test_managed_resume_keeps_business_progress_without_repeating_control_snapshots(self):
+        import json
+        task = copy.deepcopy(self.task)
+        task.update(task_plan_id='plan', team_id='team', spec='repeated whole requirement',
+                    history=[{'summary': 'old whole result'}])
+        checkpoint = task['execution']['checkpoint']
+        checkpoint.update(operation={'state': 'verified', 'result': 'internal tool snapshot'},
+                          artifacts={'report': {'content': 'whole report snapshot'}},
+                          result='saved final result', reply_txn='internal delivery transaction',
+                          delivery='delivered')
+        before = copy.deepcopy(task)
+        text = Recovery.resume_text(task)
+        payload = json.loads(text.split('\n')[-1])
+        self.assertEqual(payload, {'task_id': 'stable-task', 'team_id': 'team', 'status': 'in_progress',
+            'progress': {'completed_steps': ['one'], 'remaining_steps': ['two', 'three']}})
+        self.assertEqual(task, before, 'model projection must preserve authoritative recovery evidence')
+        for duplicate in ['internal tool snapshot', 'whole report snapshot', 'saved final result',
+                          'internal delivery transaction', 'repeated whole requirement', 'old whole result']:
+            self.assertNotIn(duplicate, text)
+
     def test_waiting_task_is_not_automatically_resumed_but_current_turn_can_checkpoint(self):
         self.task['session_state'] = 'waiting_user'
         self.assertEqual(self.recovery.discover()['tasks'], [])

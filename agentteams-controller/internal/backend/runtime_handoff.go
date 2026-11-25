@@ -227,10 +227,10 @@ func (k *K8sBackend) RemoveStoppedRuntime(ctx context.Context, name, instance st
 // The switch only selects an image explicitly associated with the target
 // Harness. A missing image must be detected before stopping the source.
 func (d *DockerBackend) HandoffTargetImage(runtime string) string {
-	return map[string]string{RuntimeOpenClaw: d.config.WorkerImage, RuntimeHermes: d.config.HermesWorkerImage, RuntimeCodex: d.config.CodexWorkerImage, RuntimeOpenCode: d.config.OpenCodeWorkerImage, RuntimeQwenPaw: d.config.QwenPawWorkerImage, RuntimeDeepSeekHarness: d.config.DeepSeekHarnessWorkerImage, RuntimeOpenHuman: d.config.OpenHumanWorkerImage}[runtime]
+	return map[string]string{RuntimeOpenClaw: d.config.WorkerImage, RuntimeHermes: d.config.HermesWorkerImage, RuntimeCodex: d.config.CodexWorkerImage, RuntimeOpenCode: d.config.OpenCodeWorkerImage, RuntimeClaudeCode: d.config.ClaudeCodeWorkerImage, RuntimeQwenPaw: d.config.QwenPawWorkerImage, RuntimeDeepSeekHarness: d.config.DeepSeekHarnessWorkerImage, RuntimeOpenHuman: d.config.OpenHumanWorkerImage}[runtime]
 }
 func (k *K8sBackend) HandoffTargetImage(runtime string) string {
-	return map[string]string{RuntimeOpenClaw: k.config.WorkerImage, RuntimeHermes: k.config.HermesWorkerImage, RuntimeCodex: k.config.CodexWorkerImage, RuntimeOpenCode: k.config.OpenCodeWorkerImage, RuntimeQwenPaw: k.config.QwenPawWorkerImage, RuntimeDeepSeekHarness: k.config.DeepSeekHarnessWorkerImage, RuntimeOpenHuman: k.config.OpenHumanWorkerImage}[runtime]
+	return map[string]string{RuntimeOpenClaw: k.config.WorkerImage, RuntimeHermes: k.config.HermesWorkerImage, RuntimeCodex: k.config.CodexWorkerImage, RuntimeOpenCode: k.config.OpenCodeWorkerImage, RuntimeClaudeCode: k.config.ClaudeCodeWorkerImage, RuntimeQwenPaw: k.config.QwenPawWorkerImage, RuntimeDeepSeekHarness: k.config.DeepSeekHarnessWorkerImage, RuntimeOpenHuman: k.config.OpenHumanWorkerImage}[runtime]
 }
 
 // RuntimeExitObservation describes read-only evidence about a source that

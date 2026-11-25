@@ -15,7 +15,7 @@ func (r *ManagerReconciler) reconcileManagerModelHealth(ctx context.Context, s *
 		return
 	}
 	checker, ok := r.Deployer.(interface {
-		CheckManagerModel(context.Context, string, string, string, string, modelhealth.Notify) error
+		CheckManagerHealth(context.Context, string, string, string, modelhealth.Notify) error
 	})
 	if !ok {
 		return
@@ -31,7 +31,7 @@ func (r *ManagerReconciler) reconcileManagerModelHealth(ctx context.Context, s *
 		return
 	}
 	runtime := resolveManagerRuntime(s.manager.Spec.Runtime, r.DefaultRuntime)
-	key, token, room := s.provResult.GatewayKey, s.provResult.MatrixToken, s.manager.Status.RoomID
+	token, room := s.provResult.MatrixToken, s.manager.Status.RoomID
 	go func() {
 		defer r.modelHealthRunning.Store(false)
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -39,7 +39,7 @@ func (r *ManagerReconciler) reconcileManagerModelHealth(ctx context.Context, s *
 		send := func(ctx context.Context, room, txn, body string) error {
 			return notifier.SendModelHealthNotice(ctx, room, token, txn, body)
 		}
-		if err := checker.CheckManagerModel(ctx, runtime, key, notifier.ModelHealthAdmin(), room, send); err != nil {
+		if err := checker.CheckManagerHealth(ctx, runtime, notifier.ModelHealthAdmin(), room, send); err != nil {
 			log.FromContext(ctx).Info("Manager model health diagnostics unavailable", "reason", err.Error())
 		}
 	}()

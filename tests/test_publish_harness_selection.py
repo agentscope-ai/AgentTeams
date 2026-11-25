@@ -14,6 +14,7 @@ SCRIPT = WORKFLOW["jobs"]["prepare"]["steps"][0]["run"]
 @pytest.mark.parametrize("runtime,architecture,publish,success,count", [
     ("all", "all", "false", True, 12),
     ("codex", "amd64", "false", True, 1),
+    ("claudecode", "all", "false", True, 2),
     ("opencode", "all", "false", True, 2),
     ("codex", "amd64", "true", False, 0),
     ("invalid", "all", "false", False, 0),
@@ -28,4 +29,6 @@ def test_actual_workflow_selection(tmp_path, runtime, architecture, publish, suc
     if success:
         values = dict(line.split("=", 1) for line in output.read_text().splitlines())
         assert len(json.loads(values["runtimes"])) * len(json.loads(values["architectures"])) == count
+        if runtime != "all":
+            assert json.loads(values["runtimes"]) == [runtime]
         assert "include" not in WORKFLOW["jobs"]["harness-platform"]["strategy"]["matrix"]

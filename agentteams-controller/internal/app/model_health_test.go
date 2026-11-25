@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
@@ -25,7 +26,7 @@ type modelHealthTestManager struct {
 
 func (m modelHealthTestManager) GetClient() client.Client { return m.client }
 
-func TestServiceLayerManagerPreflightUsesConfiguredGateway(t *testing.T) {
+func TestServiceLayerManagerHealthNeverBypassesHarness(t *testing.T) {
 	calls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -50,7 +51,9 @@ func TestServiceLayerManagerPreflightUsesConfiguredGateway(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.deployer.CheckManagerModel(ctx, "qwenpaw", "dummy-manager-key", "", "", nil); err != nil {
+	report, _ := json.Marshal(modelhealth.Report{Version: 1, Runtime: "qwenpaw", Member: "manager", Status: "ok", Reason: "ok", CheckedAt: time.Now().UTC()})
+	store.PutObject(ctx, "agents/manager/runtime/health.json", report)
+	if err := a.deployer.CheckManagerHealth(ctx, "qwenpaw", "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := store.GetObject(ctx, "agents/manager/model-health.json")
@@ -61,7 +64,7 @@ func TestServiceLayerManagerPreflightUsesConfiguredGateway(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || state.Status != "ok" {
-		t.Fatalf("configured gateway not checked: calls=%d state=%+v", calls, state)
+	if calls != 0 || state.Status != "ok" {
+		t.Fatalf("Controller must consume Harness evidence without model requests: calls=%d state=%+v", calls, state)
 	}
 }

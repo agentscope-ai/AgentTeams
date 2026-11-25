@@ -36,6 +36,7 @@ type K8sConfig struct {
 	DeepSeekHarnessWorkerImage string
 	CodexWorkerImage           string
 	OpenCodeWorkerImage        string
+	ClaudeCodeWorkerImage      string
 	WorkerCPU                  string
 	WorkerMemory               string
 
@@ -284,7 +285,10 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 				return nil, fmt.Errorf("codex runtime requires spec.image or AGENTTEAMS_CODEX_WORKER_IMAGE")
 			}
 		case req.Runtime == RuntimeClaudeCode:
-			return nil, fmt.Errorf("claudecode runtime requires an explicitly built spec.image")
+			image = k.config.ClaudeCodeWorkerImage
+			if image == "" {
+				return nil, fmt.Errorf("claudecode runtime requires spec.image or AGENTTEAMS_CLAUDECODE_WORKER_IMAGE")
+			}
 		case req.Runtime == RuntimeQoder:
 			return nil, fmt.Errorf("qoder runtime requires an explicitly built spec.image")
 		case k.config.WorkerImage != "":

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -68,7 +69,7 @@ func TestManagerGatewayProbeUsesSavedIdentityAndModel(t *testing.T) {
 	defer upstream.Close()
 	manager := &v1beta1.Manager{}
 	manager.Name, manager.Namespace, manager.Spec.Model = "default", "default", "saved-model"
-	h := &workerGatewayProbe{client: fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithObjects(manager).Build(), namespace: "default", gatewayURL: upstream.URL, manager: true, key: func(_ context.Context, name string) (string, error) {
+	h := &workerGatewayProbe{client: fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithObjects(manager).Build(), namespace: "default", gatewayURL: upstream.URL, manager: true, healthStore: ossfake.NewMemory(), key: func(_ context.Context, name string) (string, error) {
 		if name != "default" {
 			t.Errorf("wrong credential owner: %s", name)
 		}
@@ -78,7 +79,7 @@ func TestManagerGatewayProbeUsesSavedIdentityAndModel(t *testing.T) {
 	req.SetPathValue("name", "default")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if calls != 1 || !strings.Contains(rec.Body.String(), `"success":true`) || strings.Contains(rec.Body.String(), "private-response") || strings.Contains(rec.Body.String(), "saved-manager-key") {
+	if calls != 0 || rec.Code != 202 || !strings.Contains(rec.Body.String(), `"queued":true`) || strings.Contains(rec.Body.String(), "private-response") || strings.Contains(rec.Body.String(), "saved-manager-key") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 }

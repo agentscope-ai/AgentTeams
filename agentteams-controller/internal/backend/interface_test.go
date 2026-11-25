@@ -43,6 +43,7 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeDeepSeekHarness, true},
 		{RuntimeCodex, true},
 		{RuntimeQoder, true},
+		{RuntimeClaudeCode, true},
 		{"unknown", false},
 	}
 	for _, tc := range cases {
@@ -58,6 +59,7 @@ func TestUsesMemberRuntimeConfig(t *testing.T) {
 		RuntimeDeepSeekHarness: true,
 		RuntimeCodex:           true,
 		RuntimeQoder:           true,
+		RuntimeClaudeCode:      true,
 		RuntimeOpenClaw:        false,
 		RuntimeCopaw:           false,
 		RuntimeHermes:          false,

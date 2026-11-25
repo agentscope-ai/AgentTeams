@@ -73,11 +73,14 @@ func (s WorkerRuntimeStore) Load(ctx context.Context, name string) (*WorkerRunti
 	var state WorkerRuntimeState
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if !json.Valid(data) || dec.Decode(&state) != nil || state.SchemaVersion != 1 || state.Kind != "WorkerRuntimeState" || state.MemberPrefix != prefix || state.ActiveStart == nil || !validRuntimeStart(*state.ActiveStart) {
+	if !json.Valid(data) || dec.Decode(&state) != nil || state.SchemaVersion != 1 || state.Kind != "WorkerRuntimeState" || state.MemberPrefix != prefix || state.ActiveStart == nil {
 		return nil, "", fmt.Errorf("%w: unsupported or foreign runtime state", ErrWorkerStateInvalid)
 	}
+	if !validRuntimeStart(*state.ActiveStart) && (state.Handoff == nil || state.Handoff.Source != *state.ActiveStart || !validHandoffSource(state.Handoff.Source) || state.Handoff.Phase == "recovering" || state.Handoff.Phase == "completed") {
+		return nil, "", fmt.Errorf("%w: unsupported active start", ErrWorkerStateInvalid)
+	}
 	if op := state.Handoff; op != nil {
-		valid := validHandoffID(op.ID) && validRuntimeStart(op.Source) && validHandoffTarget(op.TargetRuntime)
+		valid := validHandoffID(op.ID) && validHandoffSource(op.Source) && validHandoffTarget(op.TargetRuntime)
 		switch op.Phase {
 		case "preflight", "draining", "source_lost", "checkpointed", "stopping", "stopped", "creating":
 			valid = valid && op.Source == *state.ActiveStart && op.Target == nil
@@ -200,6 +203,12 @@ func ValidWorkerHandoffRequest(id, target string) bool {
 func validRuntimeStart(start WorkerStart) bool {
 	return start.InstanceID != "" && start.ProcessID != "" && start.Runtime != "" && backend.ValidRuntime(start.Runtime)
 }
+
+// An offline source may have failed before process registration. Its backend
+// identity still fences stop/removal; the replacement must register normally.
+func validHandoffSource(start WorkerStart) bool {
+	return start.InstanceID != "" && start.Runtime != "" && backend.ValidRuntime(start.Runtime)
+}
 func validHandoffID(id string) bool { return len(id) <= 128 && workerStateName.MatchString(id) }
 func validHandoffTarget(runtime string) bool {
 	return runtime != "" && runtime != backend.RuntimeCopaw && backend.ValidRuntime(runtime)
@@ -208,8 +217,8 @@ func validHandoffTarget(runtime string) bool {
 // Preflight records a planned switch before either instance is modified. An
 // exact retry after a lost response returns the current phase of that operation.
 func (s WorkerRuntimeStore) Preflight(ctx context.Context, name, id, target, image string, source WorkerStart, expected string) (*WorkerRuntimeState, string, error) {
-	if !validRuntimeStart(source) || !validHandoffTarget(target) || !validHandoffID(id) || image == "" {
-		return nil, "", fmt.Errorf("%w: a registered source start, request ID and supported target Harness are required", ErrWorkerStateInvalid)
+	if !validHandoffSource(source) || !validHandoffTarget(target) || !validHandoffID(id) || image == "" {
+		return nil, "", fmt.Errorf("%w: a backend source identity, request ID and supported target Harness are required", ErrWorkerStateInvalid)
 	}
 	state, etag, err := s.Load(ctx, name)
 	if err != nil {
@@ -220,7 +229,8 @@ func (s WorkerRuntimeStore) Preflight(ctx context.Context, name, id, target, ima
 		if h.ID == id && h.Source == source && h.TargetRuntime == target {
 			return state, etag, nil
 		}
-		if h.Phase != "completed" || h.ID == id {
+		replacingTarget := (h.Phase == "creating" || h.Phase == "recovering") && source.InstanceID != h.Source.InstanceID && source.Runtime == h.TargetRuntime
+		if (!replacingTarget && h.Phase != "completed") || h.ID == id {
 			return nil, "", fmt.Errorf("%w: another handoff is already in progress", ErrWorkerStateConflict)
 		}
 	}

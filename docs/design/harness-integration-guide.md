@@ -117,6 +117,8 @@ SDK 能以结构化错误证明在任何副作用前拒绝时，框架可在准�
 
 Worker 接入必须支持同一 Harness 重启续跑，以及从已有 Harness 切入和向已有 Harness 切出。这里的切换是同一个 Worker 替换执行运行时，有实际停机和接管边界。异构 Leader、Worker 同时协作在第七节单独验证。
 
+阶段性聊天回复已送达不代表执行 Task 已提交。对仍在进行中的 Task，当前有效执行者可以重新准备输入并继续；下一次原生工具操作清除已送达回复的投递字段，保留完成步骤和工具证据。回复尚未送达时只恢复投递；未知副作用、过期执行身份及已提交或已完成的 Task 仍不能借此重新执行业务。
+
 1. **启动时自动发现。** 从公共配置恢复 Worker 身份、团队及通道，读取已接受但未处理的输入，主动发现已分配的可恢复 Task。即使房间没有新消息，启动入口也要完成发现和接管。中断前保存的进度、文件和回执由公共存储提供。
 2. **切换时隔离旧执行。** 通过受支持的生命周期入口停止源实例的新执行，核实其进程和工具状态，再启动目标 Harness。用目标实际实例、进程及新执行代次领取同一 Task。源实例的迟到工具、提交或回告不能覆盖新代次。
 3. **按检查点决策。** 已确认完成的步骤和产物保持不变，只续做剩余工作。已保存结果但尚未投递时，沿用原投递标识重试回告。工具结果或外部副作用不明确时进入待核验，获得可信结果后再继续。
@@ -263,3 +265,9 @@ python3 tests/task-protocol/summarize_runs.py /path/to/evidence/runs --source FU
 - `completed` 是直接成功交接的合法终态。当前同一代次、进程、实例只能完成已有工具返回及持久化、投递；不能以此重新进入模型或执行新工具。空最终文本只有存在权威持久结果才可收尾。
 - QwenPaw 的 Leader 直接接收其 Admin 的需求时，同样绑定原始 Human 来源，在原会话结束受理，进入任务房间规划。SDK 的原生上下文必须保留工具结果和已确认发送事实，不能只保存到旁路缓存。
 - OpenHuman 在终态关闭可复用会话登记后，仍须把真实工具历史和发送事实写入自身原生会话文件；停止登记不能成为跳过持久化的理由。恢复扫描不得重启已完成节点。
+
+### Managed Task recovery context
+
+Keep the durable checkpoint in the runtime and Controller. The model's managed Task resume message contains the current Task/team identity, status, completed/remaining business steps when present, and resolved Human decisions. It does not repeat the Task specification, result/report snapshots, operation records or delivery transaction fields. Prepare the current assignment with the common Task tool and read other files on demand. This projection must not erase authoritative recovery evidence or relax unknown-effect fences. Legacy taskflow recovery retains its existing contract.
+
+Apply the same model projection to nonterminal native Task tool results, including begin: retain the current assignment, exact input/artifact references and real local/output paths, but omit execution checkpoints/generations and upstream file previews. Framework-generated tools: operation hashes are control evidence, not business steps. Keep them in durable runtime storage, not in resume prose. Explicit files_read content and primary/extra receipt identities remain available.

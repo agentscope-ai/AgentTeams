@@ -123,8 +123,26 @@ func (h *TaskRecoveryHandler) currentInstance(ctx context.Context, caller *authp
 }
 
 func (h *TaskRecoveryHandler) runningWorkerInstance(ctx context.Context, w *v1beta1.Worker) (string, string, error) {
+	b, err := h.workerBackend(ctx, w)
+	if err != nil {
+		return "", "", err
+	}
+	status, err := b.Status(ctx, w.Name)
+	if err != nil {
+		return "", "", err
+	}
+	if status == nil || status.InstanceID == "" || (status.Status != backend.StatusRunning && status.Status != backend.StatusStarting && status.Status != backend.StatusReady) {
+		return "", "", fmt.Errorf("current worker start cannot be verified")
+	}
+	if status.Runtime == "" || !backend.ValidRuntime(status.Runtime) {
+		return "", "", fmt.Errorf("current worker Harness cannot be verified; recreate the instance with runtime identity")
+	}
+	return b.Name() + "/" + status.InstanceID, status.Runtime, nil
+}
+
+func (h *TaskRecoveryHandler) workerBackend(ctx context.Context, w *v1beta1.Worker) (backend.WorkerBackend, error) {
 	if h.deps.Backend == nil {
-		return "", "", fmt.Errorf("worker backend unavailable")
+		return nil, fmt.Errorf("worker backend unavailable")
 	}
 	var err error
 	recorded := w.Status.BackendRuntime
@@ -143,22 +161,12 @@ func (h *TaskRecoveryHandler) runningWorkerInstance(ctx context.Context, w *v1be
 		b, err = h.deps.Backend.GetBackendForType(ctx, recorded)
 	}
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	if b == nil {
-		return "", "", fmt.Errorf("worker backend unavailable")
+		return nil, fmt.Errorf("worker backend unavailable")
 	}
-	status, err := b.Status(ctx, w.Name)
-	if err != nil {
-		return "", "", err
-	}
-	if status == nil || status.InstanceID == "" || (status.Status != backend.StatusRunning && status.Status != backend.StatusStarting && status.Status != backend.StatusReady) {
-		return "", "", fmt.Errorf("current worker start cannot be verified")
-	}
-	if status.Runtime == "" || !backend.ValidRuntime(status.Runtime) {
-		return "", "", fmt.Errorf("current worker Harness cannot be verified; recreate the instance with runtime identity")
-	}
-	return b.Name() + "/" + status.InstanceID, status.Runtime, nil
+	return b, nil
 }
 
 func taskAssignedTo(task map[string]json.RawMessage, names ...string) bool {

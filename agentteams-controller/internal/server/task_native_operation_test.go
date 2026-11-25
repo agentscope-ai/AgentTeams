@@ -169,6 +169,33 @@ func TestNativeOperationGenerationChangeDoesNotReuseNativeBeginPaths(t *testing.
 	}
 }
 
+func TestNativeBeginReceiptCanBeVerifiedAfterGenerationChange(t *testing.T) {
+	h, store, caller := nativeOperationFixture(t)
+	args := map[string]any{"action": "begin", "taskId": "main"}
+	_, first := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+	key := "teams/alpha/shared/tasks/main/meta.json"
+	raw, _ := store.GetObject(t.Context(), key)
+	var task map[string]any
+	_ = json.Unmarshal(raw, &task)
+	task["status"], task["notifyTxn"] = "in_progress", "same-assignment"
+	task["execution"] = map[string]any{"generation": 2}
+	putTask(store, key, task)
+	receipt := map[string]any{"task": map[string]any{"id": "main", "status": "in_progress", "assignmentId": "same-assignment"}}
+	forged := map[string]any{"action": "begin", "taskId": "main", "team": "alpha"}
+	w, _ := callNativeOperation(h, caller, map[string]any{"mode": "finish", "arguments": forged, "operationId": first["operationId"], "result": receipt})
+	if w.Code != 409 {
+		t.Fatalf("changed original arguments verified: %d %s", w.Code, w.Body.String())
+	}
+	w, verified := callNativeOperation(h, caller, map[string]any{"mode": "finish", "arguments": args, "operationId": first["operationId"], "result": receipt})
+	if w.Code != 200 || verified["mode"] != "verified" {
+		t.Fatalf("verified acknowledgement stuck after restart: %d %s", w.Code, w.Body.String())
+	}
+	_, next := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+	if next["mode"] != "execute" {
+		t.Fatal("new generation reused old preparation paths", next)
+	}
+}
+
 func nativeOperationFixture(t *testing.T) (*ProjectHandler, *ossfake.Memory, *authpkg.CallerIdentity) {
 	t.Helper()
 	h, store, caller, _ := taskPlanFixture(t)

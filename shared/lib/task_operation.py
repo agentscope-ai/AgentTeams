@@ -14,6 +14,10 @@ def begin(checkpoint, anchor, calls):
     cp = dict(checkpoint or {})
     if (cp.get('operation') or {}).get('state') in {'started', 'unknown'}:
         raise RecoveryConflict('An unconfirmed native operation requires verification')
+    # A delivered progress reply must not fence the next native operation.
+    if cp.get('delivery') == 'delivered':
+        for field in ('result', 'delivery', 'reply_txn', 'reply_event', 'reply_attempt'):
+            cp.pop(field, None)
     operation = 'tools:' + Recovery.digest([anchor, calls])
     if operation in (cp.get('completed_steps') or []):
         raise RecoveryConflict('Tool operation already completed')

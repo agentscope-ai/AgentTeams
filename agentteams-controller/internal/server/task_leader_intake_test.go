@@ -145,6 +145,47 @@ func TestNativeLeaderCreateUsesSourceFenceAndRejectsReplacedProcess(t *testing.T
 	}
 }
 
+func TestLeaderInputRefreshFinishesWithTheSourceWorkersCredential(t *testing.T) {
+	h := leaderIntakeFixture(t)
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleTeamLeader, Username: "lead-cr", Team: "alpha"}
+	worker, err := h.coordination.worker(t.Context(), caller.Username)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = (&service.WorkerMatrixStore{Storage: h.oss}).Start(t.Context(), worker.Spec.EffectiveWorkerName(worker.Name), service.WorkerStart{InstanceID: "instance", ProcessID: "canonical-process", Runtime: "claudecode"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := map[string]any{"event_id": "$confirmation", "room_id": "!leader-dm:test", "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": "Create a page"}}
+	update := map[string]any{"event_id": "$amend", "sender": "@human:test", "type": "m.room.message", "content": map[string]any{"msgtype": "m.text", "body": "Include the report"}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer leader-intake-token" {
+			t.Error("used a different source actor")
+		}
+		if strings.HasSuffix(r.URL.Path, "/messages") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"chunk": []any{update, source}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(source)
+	}))
+	defer server.Close()
+	h.coordination.deps.MatrixConfig.ServerURL = server.URL
+	args := map[string]any{"action": "create", "leader": "lead-cr", "_nativeSource": map[string]any{"eventId": "$confirmation", "roomId": "!leader-dm:test", "userId": "@human:test"}}
+	w, opened := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+	if w.Code != 200 || opened["mode"] != "execute" {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	response := leaderCreate(t, h, caller.Role, caller.Username, "@human:test", "!leader-dm:test", "lead-cr")
+	var receipt map[string]any
+	if json.Unmarshal(response.Body.Bytes(), &receipt) != nil || receipt["outcome"] != "input_changed" {
+		t.Fatal(response.Body.String())
+	}
+	w, verified := callNativeOperation(h, caller, map[string]any{"mode": "finish", "arguments": args, "operationId": opened["operationId"], "result": receipt})
+	if w.Code != 200 || verified["mode"] != "verified" {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
 func TestLeaderIntakeReadsTheActualHumanEventBeforeRegistration(t *testing.T) {
 	h := leaderIntakeFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

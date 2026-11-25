@@ -197,6 +197,7 @@ def test_preparation_transport_failure_retains_retryability_without_execution_sc
     ({'action': 'complete', 'taskId': 'other', 'report': 'done'}, {'role': 'leader', 'completion': 'main'}),
     ({'action': 'cancel', 'taskId': 'main', 'reason': 'stop'}, {'role': 'worker'}),
     ({'action': 'create', 'leader': 'lead', 'title': 'work', '_nativeSource': {}}, {'role': 'manager'}),
+    ({'action': 'plan', 'taskId': 'main', 'nodes': [], '_nativeRunId': 'foreign'}, {'role': 'leader', 'planning': ['main']}),
 ])
 def test_wrong_scope_or_model_private_fields_never_reach_cli(bridge, arguments, context):
     with pytest.raises(ValueError):

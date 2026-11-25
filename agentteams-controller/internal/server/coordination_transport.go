@@ -645,7 +645,7 @@ func (h *CoordinationHandler) sendMatrixContent(ctx context.Context, kind, name,
 	control := coordinationMap(meta, "teamharness_coordination")
 	if content["msgtype"] == "m.notice" && control["kind"] == "handoff" && meta["agent_matrix_user_id"] == meta["sender_id"] && strings.HasPrefix(coordinationString(packet, "session_id"), "coordination-handoff:") {
 		// Runtimes with native support consume this wake without a chat bubble.
-		if worker, err := h.worker(ctx, name); err == nil && (worker.Spec.Runtime == "codex" || worker.Spec.Runtime == "qwenpaw") {
+		if worker, err := h.worker(ctx, name); err == nil && (worker.Spec.Runtime == "codex" || worker.Spec.Runtime == "qwenpaw" || worker.Spec.Runtime == "claudecode" || worker.Spec.Runtime == "deepseek-harness") {
 			eventType = "org.agentteams.coordination"
 		}
 	}

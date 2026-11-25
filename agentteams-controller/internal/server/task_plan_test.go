@@ -657,7 +657,7 @@ func TestTaskHandoffWaitsForTheActualStageResultMessage(t *testing.T) {
 }
 
 func TestPlanningWakeUsesANonChatProtocolEvent(t *testing.T) {
-	for _, runtime := range []string{"codex", "qwenpaw"} {
+	for _, runtime := range []string{"codex", "qwenpaw", "claudecode", "deepseek-harness"} {
 		t.Run(runtime, func(t *testing.T) {
 			h, _, _, _ := taskPlanFixture(t)
 			worker, err := h.coordination.worker(t.Context(), "lead-cr")

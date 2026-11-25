@@ -177,8 +177,8 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
     arguments, context = payload.get("arguments"), payload.get("context")
     if not isinstance(arguments, dict) or not isinstance(context, dict):
         raise ValueError("model arguments and trusted native context required")
-    if "_nativeSource" in arguments:
-        raise ValueError("model arguments cannot supply _nativeSource")
+    if "_nativeSource" in arguments or "_nativeRunId" in arguments:
+        raise ValueError("model arguments cannot supply native source or run identity")
     arguments = dict(arguments)
     action, identity = arguments.get("action"), arguments.get("taskId")
     allowed = task_cli.schema(native_role(context.get("role")))["inputSchema"]["properties"]["action"]["enum"]

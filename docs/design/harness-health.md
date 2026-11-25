@@ -85,7 +85,7 @@ require existing administrator/Manager gateway-management permission. The
 Controller resolves the storage identity from the saved resource; callers cannot
 supply a URL, credential, model or executable.
 
-POST returns **202 pending**, a request ID and `queued: true`. This is not probe
+POST returns **202 pending**, a request ID, its two-minute expiry and `queued: true`. This is not probe
 success. Clients read GET until a result acknowledges that ID, or the request
 expires. A later request can supersede a pending request for the same member.
 The existing `gateway-probe` route delegates `kind=model` to this same contract;

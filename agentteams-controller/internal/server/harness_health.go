@@ -80,12 +80,12 @@ func (h *harnessHealth) Probe(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, 503, "Harness probe identity unavailable")
 		return
 	}
-	request := modelhealth.Request{Version: 1, ID: hex.EncodeToString(id[:]), ExpiresAt: time.Now().UTC().Add(time.Minute)}
+	request := modelhealth.Request{Version: 1, ID: hex.EncodeToString(id[:]), ExpiresAt: time.Now().UTC().Add(2 * time.Minute)}
 	data, _ := json.Marshal(request)
 	if h.store.PutObject(r.Context(), "agents/"+member+"/runtime/health-request.json", data) != nil {
 		httputil.WriteError(w, 503, "Harness probe request unavailable")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	httputil.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "pending", "queued": true, "request_id": request.ID, "message": "Harness model check queued; read the member health result"})
+	httputil.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "pending", "queued": true, "request_id": request.ID, "expires_at": request.ExpiresAt, "message": "Harness model check queued; read the member health result"})
 }

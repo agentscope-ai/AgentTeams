@@ -16,6 +16,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/gateway"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/modelhealth"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -27,6 +28,7 @@ type workerGatewayProbe struct {
 	key                   func(context.Context, string) (string, error)
 	manager               bool
 	gateway               gateway.Client
+	healthStore           modelhealth.Store
 }
 
 func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -42,52 +44,28 @@ func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, 400, "kind must be model or mcp")
 		return
 	}
+	if input.Kind == "model" {
+		(&harnessHealth{client: h.client, namespace: h.namespace, store: h.healthStore, manager: h.manager}).Probe(w, r)
+		return
+	}
+	if h.manager {
+		httputil.WriteError(w, 400, "manager probes support model only")
+		return
+	}
 	var worker v1beta1.Worker
 	name := r.PathValue("name")
-	model, provider, consumer := "", "", ""
-	var servers []v1beta1.MCPServer
-	if h.manager {
-		if input.Kind != "model" {
-			httputil.WriteError(w, 400, "manager probes support model only")
-			return
-		}
-		var manager v1beta1.Manager
-		if err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &manager); err != nil {
-			writeK8sError(w, "get manager", err)
-			return
-		}
-		model, provider, consumer = manager.Spec.Model, manager.Spec.ModelProvider, "manager"
-	} else {
-		if err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
-			writeK8sError(w, "get worker", err)
-			return
-		}
-		model, provider = worker.Spec.Model, worker.Spec.ModelProvider
-		consumer = "worker-" + worker.Spec.EffectiveWorkerName(worker.Name)
-		servers = worker.Spec.McpServers
+	if err := h.client.Get(r.Context(), client.ObjectKey{Name: name, Namespace: h.namespace}, &worker); err != nil {
+		writeK8sError(w, "get worker", err)
+		return
 	}
+	consumer := "worker-" + worker.Spec.EffectiveWorkerName(worker.Name)
+	servers := worker.Spec.McpServers
 	base, err := url.Parse(h.gatewayURL)
 	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") || base.User != nil {
 		httputil.WriteError(w, 503, "gateway URL not configured")
 		return
 	}
-	endpoint := strings.TrimRight(h.gatewayURL, "/") + "/v1/chat/completions"
-	if input.Kind == "model" && provider != "" {
-		if h.gateway == nil {
-			httputil.WriteError(w, 501, "provider-specific gateway probing is unavailable")
-			return
-		}
-		info, err := h.gateway.ResolveModelProvider(r.Context(), provider)
-		if err != nil || info == nil {
-			httputil.WriteError(w, 409, "model provider has no usable gateway route")
-			return
-		}
-		endpoint = strings.TrimRight(info.IntranetURL, "/") + "/chat/completions"
-	}
-	if input.Kind == "model" && model == "" {
-		httputil.WriteError(w, 409, "save an explicit model before probing")
-		return
-	}
+	endpoint := ""
 	if input.Kind == "mcp" {
 		endpoint = ""
 		for _, srv := range servers {
@@ -168,18 +146,7 @@ func (h *workerGatewayProbe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return b, nil
 	}
 	var probeErr error
-	if input.Kind == "model" {
-		var raw json.RawMessage
-		raw, probeErr = call(map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": "Reply OK."}}, "max_tokens": 8, "stream": false})
-		if probeErr == nil {
-			var response struct {
-				Choices []json.RawMessage `json:"choices"`
-			}
-			if json.Unmarshal(raw, &response) != nil || len(response.Choices) == 0 {
-				probeErr = fmt.Errorf("gateway response did not contain model choices")
-			}
-		}
-	} else {
+	{
 		rpc := func(id int, method string, params any) (json.RawMessage, error) {
 			payload := map[string]any{"jsonrpc": "2.0", "method": method, "params": params}
 			if id > 0 {

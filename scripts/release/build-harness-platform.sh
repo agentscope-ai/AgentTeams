@@ -13,6 +13,10 @@ case "$runtime" in
   hermes) target=hermes-worker; output=LOCAL_HERMES_WORKER ;;
   deepseek) target=deepseek-harness-worker; output=LOCAL_DEEPSEEK_HARNESS_WORKER ;;
   openhuman) target=openhuman-worker; output=LOCAL_OPENHUMAN_WORKER ;;
+  claudecode)
+    docker build --platform "$platform" --build-context agentteams=. "${common[@]}" \
+      --build-arg "AGENTTEAMS_CONTROLLER_IMAGE=$controller" -t "$image" claudecode-harness
+    ;;
   opencode)
     docker build --platform "$platform" --build-context at=. "${common[@]}" \
       --build-arg "AGENTTEAMS_CONTROLLER_IMAGE=$controller" -t "$image" opencode-harness
@@ -23,7 +27,7 @@ case "$runtime" in
     ;;
   *) echo "Unknown runtime: $runtime" >&2; exit 1 ;;
 esac
-if [[ "$runtime" != codex && "$runtime" != opencode ]]; then
+if [[ "$runtime" != codex && "$runtime" != opencode && "$runtime" != claudecode ]]; then
   make -o build-agentteams-controller "build-${target}" \
     "$output=$image" "LOCAL_CONTROLLER_BUILD_IMAGE=$controller" "OPENCLAW_BASE_VERSION=$RELEASE_VERSION" \
     "DOCKER_PLATFORM=$platform" HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
@@ -37,6 +41,10 @@ case "$runtime" in
   hermes) docker run --rm --platform "$platform" --entrypoint /opt/venv/hermes/bin/python "$image" -c 'import hermes_worker' ;;
   deepseek) docker run --rm --platform "$platform" --entrypoint python3 -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/smoke.py:ro" "$image" /tmp/smoke.py ;;
   openhuman) docker run --rm --platform "$platform" --entrypoint openhuman-core "$image" --help ;;
+  claudecode)
+    docker run --rm --platform "$platform" --network none --entrypoint python3 \
+      --workdir /opt/agentteams/claude-code "$image" -c 'import bridge, claude_agent_sdk'
+    ;;
   opencode)
     docker run --rm --platform "$platform" --entrypoint python3 "$image" -c 'import agentteams_opencode.bridge'
     docker run --rm --platform "$platform" --network none --env AGENTTEAMS_OTEL_ENABLED=false --env XDG_DATA_HOME=/tmp/at-search-fresh --entrypoint bun \

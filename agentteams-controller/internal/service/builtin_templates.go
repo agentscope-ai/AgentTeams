@@ -18,6 +18,7 @@ var AllWorkerRuntimes = []string{
 	backend.RuntimeDeepSeekHarness,
 	backend.RuntimeCodex,
 	backend.RuntimeOpenCode,
+	backend.RuntimeClaudeCode,
 }
 
 // BuiltinAgentDir returns the agent template directory that seeds the given

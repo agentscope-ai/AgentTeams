@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -8,11 +9,42 @@ import (
 	"strings"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
 	"testing"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 )
+
+func TestClaudeCodeHandoffRecordsEitherDirection(t *testing.T) {
+	for _, pair := range [][2]string{{"claudecode", "qwenpaw"}, {"qwenpaw", "claudecode"}} {
+		store := WorkerRuntimeStore{Storage: ossfake.NewMemory()}
+		source := WorkerStart{InstanceID: "docker/boot", ProcessID: "registered-start", Runtime: pair[0]}
+		got, _, err := store.Preflight(t.Context(), "agent", "switch", pair[1], "image:dev", source, "")
+		if err != nil || got.Handoff.Source != source || got.Handoff.TargetRuntime != pair[1] || got.Handoff.Phase != "stopping" {
+			t.Fatalf("%s to %s: got %+v, %v", pair[0], pair[1], got, err)
+		}
+	}
+}
+
+func TestClaudeCodeHandoffRejectsEncryptionBeforeRoomCheck(t *testing.T) {
+	w := &v1beta1.Worker{}
+	calls := 0
+	m := WorkerHandoffMatrix{CheckPlaintextRooms: func(context.Context, string) error { calls++; return nil }}
+	for _, value := range []string{"1", "true", "TRUE"} {
+		w.Spec.Env = map[string]string{"AGENTTEAMS_MATRIX_E2EE": value}
+		if err := m.Validate(t.Context(), w, backend.RuntimeClaudeCode); !errors.Is(err, ErrWorkerStateConflict) {
+			t.Fatalf("encrypted ClaudeCode handoff accepted: %v", err)
+		}
+	}
+	if calls != 0 {
+		t.Fatal("encrypted handoff reached room checks")
+	}
+	w.Spec.Env = nil
+	if err := m.Validate(t.Context(), w, backend.RuntimeClaudeCode); err != nil || calls != 1 {
+		t.Fatalf("plaintext handoff did not check rooms: %v, calls=%d", err, calls)
+	}
+}
 
 func TestHandoffPreflightConcurrentRequestsKeepOneOperation(t *testing.T) {
 	source := WorkerStart{InstanceID: "docker/boot", ProcessID: "registered-start", Runtime: "hermes"}

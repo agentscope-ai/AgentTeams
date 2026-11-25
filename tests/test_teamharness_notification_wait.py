@@ -17,13 +17,13 @@ class PublicTaskObservationTests(unittest.TestCase):
         return subprocess.run(['bash', '-c', script[start:end] + '\n' + function],
             input=json.dumps(payload), capture_output=True, text=True, env={**os.environ,
                 'TASK_ID': 'main', 'TEST_TEAM': 'team', 'TEST_WORKER': 'worker',
-                'TEST_MATRIX_DOMAIN': 'test', 'MARKER': 'CURRENT',
+                'TEST_LEADER': 'leader', 'LEADER_MXID': '@leader:test', 'TEST_MATRIX_DOMAIN': 'test', 'MARKER': 'CURRENT',
                 'ARTIFACT_ID': 'a1', 'ARTIFACT_VERSION': 'v1'})
 
     def task(self):
         artifact = {'taskId': 'execution', 'artifactId': 'a1', 'version': 'v1'}
         return {'task': {'id': 'main', 'team': 'team', 'kind': 'main',
-            'status': 'completed', 'completionId': 'completion',
+            'status': 'completed', 'assignedTo': '@leader:test', 'completionId': 'completion',
             'acceptedResults': [{'assignedTo': 'worker', 'status': 'completed',
                 'resultStatus': 'SUCCESS', 'submissionId': 's1',
                 'review': {'accepted': True, 'status': 'completed', 'submissionId': 's1'},
@@ -43,6 +43,30 @@ class PublicTaskObservationTests(unittest.TestCase):
             if label == 'wrong-worker': child['assignedTo'] = 'leader'
             if label == 'stale-file': main['artifacts'] = [{'artifactId': 'a1', 'version': 'v0'}]
             if label == 'pending': main['status'] = 'in_progress'
+            with self.subTest(label=label):
+                self.assertNotEqual(self.call('_task_check_succeeded', changed).returncode, 0)
+
+    def test_frozen_worker_handoff_requires_exact_identity_and_leader_closure(self):
+        task = self.task()
+        child = task['task']['acceptedResults'][0]
+        child.pop('review')
+        child['handoff'] = {'submissionId': 's1', 'actorName': 'worker', 'actorRole': 'worker'}
+        self.assertEqual(self.call('_task_check_succeeded', task).returncode, 0)
+        for label in ('wrong-submission', 'wrong-worker', 'wrong-role', 'no-receipt',
+                      'wrong-leader', 'resource-name', 'no-completion', 'pending', 'wrong-candidate', 'stale-file'):
+            changed = copy.deepcopy(task)
+            main = changed['task']
+            child = main['acceptedResults'][0]
+            if label == 'wrong-submission': child['handoff']['submissionId'] = 's0'
+            if label == 'wrong-worker': child['handoff']['actorName'] = 'other'
+            if label == 'wrong-role': child['handoff']['actorRole'] = 'manager'
+            if label == 'no-receipt': child.pop('handoff')
+            if label == 'wrong-leader': main['assignedTo'] = '@other:test'
+            if label == 'resource-name': main['assignedTo'] = 'leader'
+            if label == 'no-completion': main['completionId'] = ''
+            if label == 'pending': main['status'] = 'in_progress'
+            if label == 'wrong-candidate': child['candidate']['id'] = 's0'
+            if label == 'stale-file': main['artifacts'] = [{'artifactId': 'a1', 'version': 'v0'}]
             with self.subTest(label=label):
                 self.assertNotEqual(self.call('_task_check_succeeded', changed).returncode, 0)
 

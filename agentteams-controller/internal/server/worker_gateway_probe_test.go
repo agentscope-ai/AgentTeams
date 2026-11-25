@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,7 +22,7 @@ func probeFixture(t *testing.T, gateway string) *workerGatewayProbe {
 	worker.Spec.Model = "saved-model"
 	worker.Spec.WorkerName = "runtime-alice"
 	worker.Spec.McpServers = []v1beta1.MCPServer{{Name: "github", URL: gateway + "/mcp-servers/github/mcp"}}
-	return &workerGatewayProbe{client: fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithObjects(worker).Build(), namespace: "default", gatewayURL: gateway, key: func(context.Context, string) (string, error) { return "worker-secret", nil }}
+	return &workerGatewayProbe{client: fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithObjects(worker).Build(), namespace: "default", gatewayURL: gateway, healthStore: ossfake.NewMemory(), key: func(context.Context, string) (string, error) { return "worker-secret", nil }}
 }
 
 func runProbe(h *workerGatewayProbe, body string) *httptest.ResponseRecorder {
@@ -32,24 +33,18 @@ func runProbe(h *workerGatewayProbe, body string) *httptest.ResponseRecorder {
 	return rec
 }
 
-func TestGatewayProbeUsesWorkerIdentityAndSavedModel(t *testing.T) {
+func TestGatewayModelProbeQueuesHarnessRequestWithoutCallingProvider(t *testing.T) {
 	calls := 0
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if r.Header.Get("Authorization") != "Bearer worker-secret" || r.URL.Path != "/v1/chat/completions" {
-			t.Error("wrong worker identity or endpoint")
-		}
-		var body map[string]any
-		json.NewDecoder(r.Body).Decode(&body)
-		if body["model"] != "saved-model" || body["max_tokens"] != float64(8) {
-			t.Error("wrong saved model or bound")
-		}
-		w.Write([]byte(`{"choices":[{"message":{"content":"private-output"}}]}`))
-	}))
+	gateway := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
 	defer gateway.Close()
-	rec := runProbe(probeFixture(t, gateway.URL), `{"kind":"model","model":"injected","url":"http://invalid"}`)
-	if calls != 1 || !strings.Contains(rec.Body.String(), `"success":true`) || strings.Contains(rec.Body.String(), "private-output") || strings.Contains(rec.Body.String(), "worker-secret") {
-		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	h := probeFixture(t, gateway.URL)
+	rec := runProbe(h, `{"kind":"model","model":"injected","url":"http://invalid"}`)
+	if rec.Code != 202 || calls != 0 || !strings.Contains(rec.Body.String(), `"queued":true`) {
+		t.Fatal(rec.Code, rec.Body.String(), calls)
+	}
+	data, err := h.healthStore.GetObject(context.Background(), "agents/runtime-alice/runtime/health-request.json")
+	if err != nil || strings.Contains(string(data), "injected") || strings.Contains(string(data), "invalid") {
+		t.Fatal(string(data), err)
 	}
 }
 
@@ -85,20 +80,12 @@ func TestGatewayProbeMCPInitializationAndTools(t *testing.T) {
 	}
 }
 
-func TestGatewayProbeRejectsUnauthorizedAndDoesNotFollowRedirect(t *testing.T) {
-	for _, status := range []int{401, 403, 302} {
-		calls := 0
-		gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			calls++
-			w.Header().Set("Location", "http://127.0.0.1:1/private")
-			w.WriteHeader(status)
-			w.Write([]byte("worker-secret"))
-		}))
-		rec := runProbe(probeFixture(t, gateway.URL), `{"kind":"model"}`)
-		gateway.Close()
-		if calls != 1 || !strings.Contains(rec.Body.String(), `"success":false`) || strings.Contains(rec.Body.String(), "worker-secret") {
-			t.Fatal(rec.Body.String())
-		}
+func TestGatewayModelProbeDoesNotFallBackWhenHarnessStorageIsUnavailable(t *testing.T) {
+	h := probeFixture(t, "http://127.0.0.1:1/private")
+	h.healthStore = nil
+	rec := runProbe(h, `{"kind":"model"}`)
+	if rec.Code != 503 {
+		t.Fatal(rec.Code, rec.Body.String())
 	}
 }
 

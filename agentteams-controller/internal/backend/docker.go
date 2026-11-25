@@ -34,6 +34,7 @@ type DockerConfig struct {
 	DeepSeekHarnessWorkerImage string // default DeepSeek Harness worker image (AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE)
 	CodexWorkerImage           string
 	OpenCodeWorkerImage        string
+	ClaudeCodeWorkerImage      string
 	DefaultNetwork             string // default Docker network (default "agentteams-net")
 }
 
@@ -132,13 +133,16 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			if image == "" {
 				return nil, fmt.Errorf("opencode runtime requires spec.image or AGENTTEAMS_OPENCODE_WORKER_IMAGE")
 			}
+		case req.Runtime == RuntimeClaudeCode:
+			image = d.config.ClaudeCodeWorkerImage
+			if image == "" {
+				return nil, fmt.Errorf("claudecode runtime requires spec.image or AGENTTEAMS_CLAUDECODE_WORKER_IMAGE")
+			}
 		case req.Runtime == RuntimeCodex:
 			image = d.config.CodexWorkerImage
 			if image == "" {
 				return nil, fmt.Errorf("codex runtime requires spec.image or AGENTTEAMS_CODEX_WORKER_IMAGE")
 			}
-		case req.Runtime == RuntimeClaudeCode:
-			return nil, fmt.Errorf("claudecode runtime requires an explicitly built spec.image")
 		case req.Runtime == RuntimeQoder:
 			return nil, fmt.Errorf("qoder runtime requires an explicitly built spec.image")
 		default:

@@ -616,6 +616,8 @@ _create_team_cr() {
         --arg namespace "${K8S_NAMESPACE}" \
         --arg leader "${TEST_LEADER}" \
         --arg worker "${TEST_WORKER}" \
+        --arg admin "${TEST_ADMIN_USER}" \
+        --arg admin_mxid "@${TEST_ADMIN_USER}:${TEST_MATRIX_DOMAIN}" \
         --argjson labels "${labels}" \
         '{
             apiVersion:"agentteams.io/v1beta1",
@@ -623,6 +625,7 @@ _create_team_cr() {
             metadata:{name:$name, namespace:$namespace, labels:$labels},
             spec:{
                 teamName:$name,
+                admin:{name:$admin, matrixUserId:$admin_mxid},
                 workerMembers:[
                     {name:$leader, role:"team_leader"},
                     {name:$worker, role:"worker"}
@@ -1311,22 +1314,24 @@ else
     log_fail "QwenPaw worker hello script did not write expected marker"
 fi
 
-# Assert public task facts, including the exact frozen candidate independently verified
-# by the Leader. A completed label or a queued notification is insufficient.
+# Check the frozen Worker handoff (or saved review) and assigned Leader closure.
+# A completed label or queued notification alone is insufficient.
 _task_check_succeeded() {
     jq -e --arg task "${TASK_ID}" \
-        --arg team "${TEST_TEAM}" --arg worker "${TEST_WORKER}" '
+        --arg team "${TEST_TEAM}" --arg worker "${TEST_WORKER}" --arg leader "${LEADER_MXID}" '
         .task as $main |
         $main.id == $task and $main.team == $team and $main.kind == "main" and
         ($main.projectId // "") == "" and $main.status == "completed" and
+        $main.assignedTo == $leader and
         ($main.completionId | length > 0) and
         ($main.acceptedResults | length == 1) and
         ($main.acceptedResults[0] |
             .assignedTo == $worker and .status == "completed" and
             .resultStatus == "SUCCESS" and
             ((.review.accepted == true and .review.status == "completed" and
-                .review.submissionId == .submissionId) or
-             (.handoff.submissionId == .submissionId and .handoff.actorName == $worker)) and
+              .review.submissionId == .submissionId) or
+             (.handoff.submissionId == .submissionId and
+              .handoff.actorName == $worker and .handoff.actorRole == "worker")) and
             .candidate.id == .submissionId and
             (.candidate.artifacts | length == 1)) and
         ($main.artifacts | length == 1) and
@@ -1354,7 +1359,7 @@ _delivered_result() {
 SOURCE_ROOM=$(matrix_find_dm_room "${ADMIN_TOKEN}" "@manager:${TEST_MATRIX_DOMAIN}" 2>/dev/null || true)
 assert_not_empty "${SOURCE_ROOM}" "Original human/Manager conversation found"
 DELIVERABLE_NAME="readiness-${TEST_RUN_ID}.txt"
-TASK_PROMPT="CI input fixture: the test driver will register this request through the public Task CLI; wait for that handoff instead of registering it again. Requirement: ask the registered Team Leader ${TEST_LEADER} to delegate one readiness note to ${TEST_WORKER}. The worker must write ${DELIVERABLE_NAME} containing exactly ${MARKER}. The Leader must independently inspect and accept that exact candidate, then complete the main Task with this file and a final report containing ${MARKER}. Use the public Task tool and the directories from begin. No Project is required."
+TASK_PROMPT="CI input fixture: the test driver will register this request through the public Task CLI; wait for that handoff instead of registering it again. Requirement: ask the registered Team Leader ${TEST_LEADER} to delegate one readiness note to ${TEST_WORKER}. The worker must write ${DELIVERABLE_NAME} containing exactly ${MARKER}. The Leader must independently verify the frozen Worker handoff, then complete the main Task with this file and a final report containing ${MARKER}. Use the public Task tool and the directories from begin. No Project is required."
 SOURCE_EVENT=$(matrix_send_message "${ADMIN_TOKEN}" "${SOURCE_ROOM}" "${TASK_PROMPT}" | jq -r '.event_id // empty')
 assert_not_empty "${SOURCE_EVENT}" "Real human request persisted in the original conversation"
 
@@ -1388,7 +1393,7 @@ while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
     sleep 5
 done
 if echo "${TASK_CHECK}" | _task_check_succeeded; then
-    log_pass "Leader independently accepted the Worker candidate and completed the public Task"
+    log_pass "Leader verified the frozen Worker result and completed the public Task"
 else
     log_fail "Public Task did not reach verified acceptance and completion (task=${TASK_ID})"
     _dump_debug_snapshot

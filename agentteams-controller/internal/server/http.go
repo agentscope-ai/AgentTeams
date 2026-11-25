@@ -167,16 +167,22 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	// stable while specs are, so it is ETag/304-protected (#1475 PR-3).
 	mux.Handle("GET /api/v1/mcp-servers", mw.RequireAuthz(authpkg.ActionList, "mcp-server", nil)(httputil.ETagMiddleware(http.HandlerFunc(rh.ListMCPServers))))
 
-	probe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, gateway: deps.Gateway}
+	probe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, gateway: deps.Gateway, healthStore: deps.OSS}
 	if deps.Provisioner != nil {
 		probe.key = deps.Provisioner.WorkerGatewayKey
 	}
 	mux.Handle("POST /api/v1/workers/{name}/gateway-probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(probe))
-	managerProbe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, manager: true, gateway: deps.Gateway}
+	managerProbe := &workerGatewayProbe{client: deps.Client, namespace: deps.Namespace, gatewayURL: deps.GatewayURL, manager: true, gateway: deps.Gateway, healthStore: deps.OSS}
 	if deps.Provisioner != nil {
 		managerProbe.key = deps.Provisioner.ManagerGatewayKey
 	}
 	mux.Handle("POST /api/v1/managers/{name}/gateway-probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(managerProbe))
+	workerHealth := &harnessHealth{client: deps.Client, namespace: deps.Namespace, store: deps.OSS}
+	managerHealth := &harnessHealth{client: deps.Client, namespace: deps.Namespace, store: deps.OSS, manager: true}
+	mux.Handle("GET /api/v1/workers/{name}/health", mw.RequireAuthz(authpkg.ActionGet, "worker", nameFn)(http.HandlerFunc(workerHealth.Get)))
+	mux.Handle("POST /api/v1/workers/{name}/health/probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(http.HandlerFunc(workerHealth.Probe)))
+	mux.Handle("GET /api/v1/managers/{name}/health", mw.RequireAuthz(authpkg.ActionGet, "manager", nameFn)(http.HandlerFunc(managerHealth.Get)))
+	mux.Handle("POST /api/v1/managers/{name}/health/probe", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(http.HandlerFunc(managerHealth.Probe)))
 	modelStatus := &managerModelStatus{client: deps.Client, namespace: deps.Namespace, gateway: deps.Gateway}
 	mux.Handle("GET /api/v1/managers/{name}/model-status", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(modelStatus))
 

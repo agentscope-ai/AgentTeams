@@ -109,6 +109,12 @@ spec:
               value: {{ include "agentteams.worker.openhumanImage" . | quote }}
             - name: AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE
               value: {{ include "agentteams.worker.deepseekHarnessImage" . | quote }}
+            {{- with index .Values.worker.defaultImage "claudecode" }}
+            {{- if .repository }}
+            - name: AGENTTEAMS_CLAUDECODE_WORKER_IMAGE
+              value: {{ printf "%s:%s" .repository (required "worker.defaultImage.claudecode.tag is required" .tag) | quote }}
+            {{- end }}
+            {{- end }}
             {{- $codexImage := .Values.worker.defaultImage.codex | default dict }}
             {{- if $codexImage.repository }}
             - name: AGENTTEAMS_CODEX_WORKER_IMAGE

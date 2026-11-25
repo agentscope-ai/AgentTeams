@@ -8,11 +8,9 @@ import threading
 import tempfile
 import time
 import uuid
-import json
 import argparse
 import re
 import datetime
-import urllib.request
 
 lib_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(lib_dir))
@@ -78,42 +76,19 @@ def main():
         threading.Thread(target=handoff.monitor, daemon=True).start()
     def monitor():
         runtime = os.environ['AGENTTEAMS_LOG_RUNTIME']
-        # Hermes' wrapper endpoint is liveness-only; its live event says so explicitly.
-        if runtime == 'hermes':
-            event('runtime.live', evidence='entrypoint_process', matrix_verified=False)
+        from harness_health import readiness
+        live_reported = False
         deadline = time.monotonic() + int(os.getenv('AGENTTEAMS_STARTUP_TIMEOUT', '300'))
         while child.poll() is None and time.monotonic() < deadline:
-            try:
-                if runtime in ('codex', 'deepseek-harness', 'hermes', 'opencode'):
-                    status = json.loads((log_dir() / 'status.json').read_text())
-                    if status.get('boot_id') == os.environ['AGENTTEAMS_BOOT_ID'] and status.get('state') == 'ready':
-                        return
-                    time.sleep(2)
-                    continue
-                if runtime == 'openclaw':
-                    probe = subprocess.run(['openclaw', 'gateway', 'health', '--json'], capture_output=True, text=True, timeout=5)
-                    ready = probe.returncode == 0 and json.loads(probe.stdout).get('ok') is True
-                    evidence = 'native_gateway_health'
-                else:
-                    port = os.getenv('AGENTTEAMS_CONSOLE_PORT', '8088')
-                    url = f'http://127.0.0.1:{port}/healthz'
-                    if runtime == 'qwenpaw':
-                        url = f'http://127.0.0.1:{port}/api/version'
-                    elif runtime == 'openhuman':
-                        url = f'http://127.0.0.1:{os.getenv("OPENHUMAN_CORE_PORT", "7788")}/health'
-                    with urllib.request.urlopen(url, timeout=3) as response:
-                        body = response.read()
-                    if runtime in ('qwenpaw', 'openhuman'):
-                        ready = True  # Native API HTTP success, not model inference.
-                    else:
-                        data = json.loads(body)
-                        ready = data.get('ok') is True
-                    evidence = 'native_api'
-                if ready:
-                    event('runtime.ready', evidence=evidence, duration_ms=round((time.monotonic()-started)*1000))
-                    return
-            except (OSError, ValueError, subprocess.SubprocessError):
-                pass
+            status = readiness()
+            if status.get('status') == 'ready':
+                event('runtime.ready', evidence=status.get('evidence', 'harness_health'),
+                      matrix_verified=status.get('matrix_verified', False),
+                      duration_ms=round((time.monotonic()-started)*1000))
+                return
+            if status.get('status') == 'live' and not live_reported:
+                event('runtime.live', evidence=status.get('evidence', 'harness_health'), matrix_verified=False)
+                live_reported = True
             time.sleep(2)
         if child.poll() is None:
             event('startup.timeout', duration_ms=round((time.monotonic()-started)*1000))

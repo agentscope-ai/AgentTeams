@@ -691,13 +691,13 @@ func TestSkillsCatalogGolden(t *testing.T) {
 	if !reflect.DeepEqual(fs.Agents, wantAgents) {
 		t.Errorf("file-sync agents = %v, want %v", fs.Agents, wantAgents)
 	}
-	wantRuntimes := []string{"codex", "copaw", "deepseek-harness", "openclaw", "opencode", "openhuman", "qwenpaw"}
+	wantRuntimes := []string{"claudecode", "codex", "copaw", "deepseek-harness", "openclaw", "opencode", "openhuman", "qwenpaw"}
 	if !reflect.DeepEqual(fs.Runtimes, wantRuntimes) {
 		t.Errorf("file-sync runtimes = %v, want %v", fs.Runtimes, wantRuntimes)
 	}
 
 	fsk := skillByName(t, skills, "find-skills")
-	if want := []string{"codex", "deepseek-harness", "openclaw", "opencode", "openhuman", "qwenpaw"}; !reflect.DeepEqual(fsk.Runtimes, want) {
+	if want := []string{"claudecode", "codex", "deepseek-harness", "openclaw", "opencode", "openhuman", "qwenpaw"}; !reflect.DeepEqual(fsk.Runtimes, want) {
 		t.Errorf("find-skills runtimes = %v, want %v", fsk.Runtimes, want)
 	}
 

@@ -50,6 +50,27 @@ fi
 grep -qF "worker.defaultImage.codex.tag is required" "${drift_err}"
 echo "PASS: Codex has a default image and requires its independent tag"
 
+if grep -qF -- "- name: AGENTTEAMS_CLAUDECODE_WORKER_IMAGE" "${render}"; then
+    echo "FAIL: Claude Code must remain opt-in"
+    exit 1
+fi
+helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set worker.defaultImage.claudecode=null > "${upg_render}"
+helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set manager.runtime=claudecode \
+    --set worker.defaultImage.claudecode.repository=example.test/claudecode \
+    --set worker.defaultImage.claudecode.tag=dev > "${upg_render}"
+grep -qF -- "- name: AGENTTEAMS_CLAUDECODE_WORKER_IMAGE" "${upg_render}"
+grep -qF -- 'value: "example.test/claudecode:dev"' "${upg_render}"
+if helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+    --set worker.defaultImage.claudecode.repository=example.test/claudecode \
+    --set worker.defaultImage.claudecode.tag= > /dev/null 2> "${drift_err}"; then
+    echo "FAIL: Claude Code image requires an explicit tag"
+    exit 1
+fi
+grep -qF "worker.defaultImage.claudecode.tag is required" "${drift_err}"
+echo "PASS: Claude Code supports old values and explicit Manager/Worker image selection"
+
 # ---------------------------------------------------------------------------
 # Legacy CoPaw worker image (issue #1310 / PR #1335)
 # ---------------------------------------------------------------------------

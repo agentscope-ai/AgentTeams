@@ -132,7 +132,7 @@ type WorkerHandoffMatrix struct {
 }
 
 func (m WorkerHandoffMatrix) Validate(ctx context.Context, w *v1beta1.Worker, target string) error {
-	if target != backend.RuntimeCodex && target != backend.RuntimeDeepSeekHarness && target != backend.RuntimeOpenCode {
+	if target != backend.RuntimeCodex && target != backend.RuntimeDeepSeekHarness && target != backend.RuntimeOpenCode && target != backend.RuntimeClaudeCode {
 		return nil
 	}
 	value := w.Spec.Env["AGENTTEAMS_MATRIX_E2EE"]

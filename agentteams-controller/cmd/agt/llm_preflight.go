@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/modelhealth"
 	"github.com/spf13/cobra"
 )
 
@@ -249,7 +248,7 @@ func runLLMPreflightAttempt(ctx context.Context, client *http.Client, cfg llmPre
 		return fmt.Errorf("LLM preflight response read failed")
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		reason := modelhealth.Validate(body, "chat")
+		reason := validateLLMPreflight(body)
 		if reason != "ok" {
 			return fmt.Errorf("LLM preflight failed: %s", reason)
 		}

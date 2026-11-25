@@ -223,6 +223,8 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
     admission = task_canonical.admit(context)
     if admission.get('ok') is not True:
         return admission
+    if action in {"plan", "accept", "reject"} and context.get("runId"):
+        arguments["_nativeRunId"] = context["runId"]
     result = call(arguments)
     response = {"result": result, "phaseComplete": False}
     if action == "create":

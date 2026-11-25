@@ -93,7 +93,7 @@ def execute(request):
                     intent = previous['intent']
                 elif source['content'].get('org.agentteams.coordination') is not None:
                     try:
-                        packet = notification(source['content'], room, source['sender'], request['account'])
+                        packet = notification(source['content'], room, source['sender'], request['account'], event_id=event_id)
                     except IgnoredNotification:
                         continue
                     if not packet:

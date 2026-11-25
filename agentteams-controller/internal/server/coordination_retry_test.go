@@ -245,7 +245,7 @@ func TestCoordinationHandoffWaitsForAllDurablePlans(t *testing.T) {
 }
 
 func TestRetryWakesNativeRecipientWithoutRepeatingPublicMessage(t *testing.T) {
-	for _, runtime := range []string{"claudecode", "codex", "qwenpaw", "deepseek-harness", "openclaw"} {
+	for _, runtime := range []string{"claudecode", "codex", "qwenpaw", "deepseek-harness", "hermes", "openhuman", "openclaw"} {
 		e := coordinationEvent{Protocol: "task/v1", Kind: "main_task_ready", RecipientRuntime: runtime}
 		d := coordinationDelivery{}
 		if d.notificationEventType(e) != "m.room.message" {

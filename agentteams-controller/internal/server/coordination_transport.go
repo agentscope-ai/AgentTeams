@@ -632,7 +632,7 @@ func (h *CoordinationHandler) projectContent(ctx context.Context, kind, name, ro
 	return h.sendMatrixContent(ctx, kind, name, room, txn, content, true)
 }
 func supportsInternalTaskWake(runtime string) bool {
-	return runtime == "codex" || runtime == "qwenpaw" || runtime == "claudecode" || runtime == "deepseek-harness"
+	return runtime == "codex" || runtime == "qwenpaw" || runtime == "claudecode" || runtime == "deepseek-harness" || runtime == "hermes" || runtime == "openhuman"
 }
 
 func (d coordinationDelivery) notificationEventType(e coordinationEvent) string {

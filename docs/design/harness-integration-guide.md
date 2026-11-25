@@ -253,3 +253,11 @@ python3 tests/task-protocol/summarize_runs.py /path/to/evidence/runs --source FU
 真实 SDK 的本地协议夹具只证明原生结束和持久化边界；混合 Task 实跑、保留数据切换与完整准入认证分别记录。中途更换镜像造成的未知工具结果保留为失败/人工干预，不能补成干净成功。
 
 原生直出 Trace 仍须带共享可见性字段：真实 Worker 身份、`langfuse.user.id`、原生 session、`agentteams/worker-turn/runtime` 标签以及 Task/Team/Room 关联。仅有 OTLP 到达或能用内部 Langfuse API 找到 Trace，不代表经过 Dashboard 权限过滤后可见。模型/工具 span 按真实原生事件分类，使用实际返回的 token 字段；没有提供的数量保持未知。核对 SDK 自己登记的进行中工具时，`needs_verification` 不是执行权丢失：先比较 generation/instance/process，不能把自己的正常工具打断再重试推理。
+
+### 其他原生 Harness 的同一约束（2026-11-25）
+
+- OpenClaw、QwenPaw、Hermes、OpenHuman 都通过公共 `model_context` 与 `model_result` 投影自动准备的上下文和终态工具返回。显式读取仍返回请求的数据；自动交接不重复携带整个 Task、全部报告和文件预览。正常规划完成也不产生成功控制回执聊天。
+- 受信 Matrix 用户身份须同时覆盖实时消息与恢复入口，否则提交回执虽保存，实际发送事实无法回填。身份来自已登录原生客户端，不来自模型参数。
+- `completed` 是直接成功交接的合法终态。当前同一代次、进程、实例只能完成已有工具返回及持久化、投递；不能以此重新进入模型或执行新工具。空最终文本只有存在权威持久结果才可收尾。
+- QwenPaw 的 Leader 直接接收其 Admin 的需求时，同样绑定原始 Human 来源，在原会话结束受理，进入任务房间规划。SDK 的原生上下文必须保留工具结果和已确认发送事实，不能只保存到旁路缓存。
+- OpenHuman 在终态关闭可复用会话登记后，仍须把真实工具历史和发送事实写入自身原生会话文件；停止登记不能成为跳过持久化的理由。恢复扫描不得重启已完成节点。

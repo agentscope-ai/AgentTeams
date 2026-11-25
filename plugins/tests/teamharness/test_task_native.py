@@ -287,6 +287,7 @@ def test_planning_ends_only_after_every_admitted_request_is_planned(bridge):
     second = bridge.invoke({'operation': 'task', 'arguments': {'action': 'plan', 'taskId': 'main-b', 'nodes': []},
                              'context': context}, call=call)
     assert second['phaseComplete'] is True
+    assert 'displayText' not in second
 
 
 def test_delivery_acknowledgement_is_returned_without_mutating_native_state(bridge):

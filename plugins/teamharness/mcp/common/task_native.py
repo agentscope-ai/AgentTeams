@@ -261,9 +261,8 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         display = terminal_display(action, arguments, result)
         if display is not None:
             response["displayText"] = display
-        elif action == "plan":
-            response["displayText"] = ("任务规划已保存，后续推进由任务系统接管" if result.get("progress") == "ready"
-                                       else "任务规划已保存，调度尚未完成，请查看任务状态。")
+        elif action == "plan" and result.get("progress") != "ready":
+            response["displayText"] = "任务规划已保存，调度尚未完成，请查看任务状态。"
     return response
 
 

@@ -309,7 +309,7 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 				return
 			}
 			// Matrix transaction IDs make an uncertain send safe to retry.
-			id, sendErr := h.sendMatrixContent(ctx, e.ActorRole, e.ActorName, e.RoomID, d.matrixTransactionID(), coordinationMatrixNotification(e, p), false)
+			id, sendErr := h.sendMatrixEvent(ctx, e.ActorRole, e.ActorName, e.RoomID, d.matrixTransactionID(), d.notificationEventType(e), coordinationMatrixNotification(e, p), false)
 			if sendErr != nil {
 				d.Error = "Matrix coordination notification unavailable"
 				return
@@ -631,7 +631,23 @@ func (h *CoordinationHandler) project(ctx context.Context, e coordinationEvent, 
 func (h *CoordinationHandler) projectContent(ctx context.Context, kind, name, room, txn string, content map[string]any) (string, error) {
 	return h.sendMatrixContent(ctx, kind, name, room, txn, content, true)
 }
+func supportsInternalTaskWake(runtime string) bool {
+	return runtime == "codex" || runtime == "qwenpaw" || runtime == "claudecode" || runtime == "deepseek-harness"
+}
+
+func (d coordinationDelivery) notificationEventType(e coordinationEvent) string {
+	// A previous dispatch already notified the room. Only wake the restarted recipient.
+	if d.Replays > 0 && e.Protocol == "task/v1" && supportsInternalTaskWake(e.RecipientRuntime) {
+		return "org.agentteams.coordination"
+	}
+	return "m.room.message"
+}
+
 func (h *CoordinationHandler) sendMatrixContent(ctx context.Context, kind, name, room, txn string, content map[string]any, progressOnly bool) (string, error) {
+	return h.sendMatrixEvent(ctx, kind, name, room, txn, "m.room.message", content, progressOnly)
+}
+
+func (h *CoordinationHandler) sendMatrixEvent(ctx context.Context, kind, name, room, txn, eventType string, content map[string]any, progressOnly bool) (string, error) {
 	if h.deps.Provisioner == nil || h.deps.MatrixConfig.ServerURL == "" || !strings.HasPrefix(room, "!") {
 		return "", fmt.Errorf("Matrix projection unavailable")
 	}
@@ -639,13 +655,12 @@ func (h *CoordinationHandler) sendMatrixContent(ctx context.Context, kind, name,
 	if err != nil {
 		return "", err
 	}
-	eventType := "m.room.message"
 	packet := coordinationMap(content, "org.agentteams.coordination")
 	meta := coordinationMap(packet, "channel_meta")
 	control := coordinationMap(meta, "teamharness_coordination")
 	if content["msgtype"] == "m.notice" && control["kind"] == "handoff" && meta["agent_matrix_user_id"] == meta["sender_id"] && strings.HasPrefix(coordinationString(packet, "session_id"), "coordination-handoff:") {
 		// Runtimes with native support consume this wake without a chat bubble.
-		if worker, err := h.worker(ctx, name); err == nil && (worker.Spec.Runtime == "codex" || worker.Spec.Runtime == "qwenpaw" || worker.Spec.Runtime == "claudecode" || worker.Spec.Runtime == "deepseek-harness") {
+		if worker, err := h.worker(ctx, name); err == nil && supportsInternalTaskWake(worker.Spec.Runtime) {
 			eventType = "org.agentteams.coordination"
 		}
 	}

@@ -54,7 +54,10 @@ def dispatched_receipts(result, actor, get_json, *, wait_for_send=False):
                 saved = get_json("coordination/events/" + event)
             except (OSError, ValueError):
                 saved = {}  # The canonical fact remains queued, not sent.
-            native = saved.get("native_id", "")
+            # A receiver retry has its own wake ID. The sender reports the
+            # original public handoff, including while the receiver is restarting.
+            previous = saved.get("previous_native_ids") or []
+            native = previous[0] if previous else saved.get("native_id", "")
             scope_matches = (saved.get("task_id") == identity and saved.get("kind") == kind)
             if kind == "task_submitted" and saved.get("kind") == "main_task_ready":
                 scope_matches = saved.get("main_task_id") == task.get("mainTaskId")

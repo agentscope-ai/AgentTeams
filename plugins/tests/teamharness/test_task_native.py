@@ -438,6 +438,9 @@ def test_dispatch_receipts_confirm_actual_sender_event_without_a_model_turn(brid
     rows=bridge.dispatched_receipts(result,'@sender:test',lambda _:saved)
     assert len(rows)==1
     assert '"status":"sent"' in rows[0]['fact'] and '"matrixEventId":"$sent"' in rows[0]['fact']
+    for current in ["", "matrix:$internal-recovery"]:
+        retried = {**saved, "previous_native_ids": ["matrix:$sent"], "native_id": current}
+        assert bridge.dispatched_receipts(result, "@sender:test", lambda _: retried) == rows
     for change in [{'actor':'@another:test'},{'native_id':''},{'event_id':'foreign'},{'task_id':'other'}]:
         assert bridge.dispatched_receipts(result,'@sender:test',lambda _:{**saved,**change})==[]
     def unavailable(_):raise OSError('temporarily unavailable')

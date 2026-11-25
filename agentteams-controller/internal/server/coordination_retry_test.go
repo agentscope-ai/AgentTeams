@@ -243,3 +243,18 @@ func TestCoordinationHandoffWaitsForAllDurablePlans(t *testing.T) {
 		t.Fatalf("settled handoff remains %s: %s", delivery.Status, delivery.Error)
 	}
 }
+
+func TestRetryWakesNativeRecipientWithoutRepeatingPublicMessage(t *testing.T) {
+	for _, runtime := range []string{"claudecode", "codex", "qwenpaw", "deepseek-harness", "openclaw"} {
+		e := coordinationEvent{Protocol: "task/v1", Kind: "main_task_ready", RecipientRuntime: runtime}
+		d := coordinationDelivery{}
+		if d.notificationEventType(e) != "m.room.message" {
+			t.Fatalf("%s lost the initial public handoff", runtime)
+		}
+		d.Replays = 1
+		internal := d.notificationEventType(e) == "org.agentteams.coordination"
+		if internal != (runtime != "openclaw") {
+			t.Fatalf("%s retry internal=%t", runtime, internal)
+		}
+	}
+}

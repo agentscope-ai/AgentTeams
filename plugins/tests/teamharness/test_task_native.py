@@ -42,6 +42,24 @@ def test_model_result_retains_terminal_facts_without_repeating_canonical_snapsho
         assert bridge.invoke({'operation': 'model_result', 'outcome': {'result': result}}) == result
 
 
+def test_model_begin_result_keeps_prepared_paths_without_control_or_file_snapshots(bridge):
+    result = {'task': {'id': 'own', 'spec': 'Current assignment'}, 'generation': 6,
+              'checkpoint': {'operation': {'id': 'tools:internal', 'state': 'verified'},
+                             'result': 'Repeated old result'},
+              'outputDirectory': '/worker/task/output',
+              'inputs': [{'directory': '/worker/task/inputs', 'files': [
+                  {'artifactId': 'accepted', 'localPath': '/worker/task/inputs/report.md',
+                   'preview': {'text': 'Repeated upstream report'}}]}]}
+    projected = bridge.invoke({'operation': 'model_result', 'outcome': {'result': result}})
+    assert 'checkpoint' not in projected and 'generation' not in projected
+    assert projected['task'] == result['task']
+    assert projected['outputDirectory'] == result['outputDirectory']
+    assert projected['inputs'][0]['files'] == [
+        {'artifactId': 'accepted', 'localPath': '/worker/task/inputs/report.md'}]
+    assert result['checkpoint']['result'] == 'Repeated old result'
+    assert result['inputs'][0]['files'][0]['preview']['text'] == 'Repeated upstream report'
+
+
 def test_json_roster_uses_trusted_native_team_scope_once(bridge):
     calls = []
     def get(route):

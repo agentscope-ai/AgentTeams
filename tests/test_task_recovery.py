@@ -206,6 +206,7 @@ class RecoveryTests(unittest.TestCase):
         task.update(task_plan_id='plan', team_id='team', spec='repeated whole requirement',
                     history=[{'summary': 'old whole result'}])
         checkpoint = task['execution']['checkpoint']
+        checkpoint['completed_steps'].append('tools:internal-verified-call')
         checkpoint.update(operation={'state': 'verified', 'result': 'internal tool snapshot'},
                           artifacts={'report': {'content': 'whole report snapshot'}},
                           result='saved final result', reply_txn='internal delivery transaction',

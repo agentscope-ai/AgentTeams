@@ -6,10 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -87,7 +85,14 @@ func (h *gatewayAssets) probeModel(parent context.Context, req gatewayAssetReque
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || config.Token == "" {
 		return nil, assetError(400, "valid model endpoint and credential are required")
 	}
-	if !modelProbeHostAllowed(u.Hostname()) {
+	policy := environmentModelProbePolicy()
+	if h.resources != nil {
+		policy, _, err = h.resources.readModelProbePolicy(parent)
+		if err != nil {
+			return nil, assetError(503, "cannot read model probe address configuration")
+		}
+	}
+	if !policy.hostAllowed(u.Hostname()) {
 		return nil, assetError(400, "model probe endpoint is outside the configured network allowlist")
 	}
 	headers := map[string]string{"Content-Type": "application/json", "Authorization": "Bearer " + config.Token}
@@ -168,28 +173,4 @@ func hasModelText(value any) bool {
 		}
 	}
 	return false
-}
-
-func modelProbeHostAllowed(host string) bool {
-	host = strings.ToLower(host)
-	if os.Getenv("MODEL_PROBE_ALLOW_PRIVATE_NETWORK") == "1" {
-		return true
-	}
-	for _, allowed := range strings.Split(os.Getenv("MODEL_PROBE_ALLOW_HOSTS"), ",") {
-		if strings.EqualFold(strings.TrimSpace(allowed), host) {
-			return true
-		}
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified() && !ip.IsMulticast()
-	}
-	if host == "localhost" {
-		return false
-	}
-	for _, suffix := range []string{".svc", ".svc.cluster.local", ".cluster.local", ".local"} {
-		if strings.HasSuffix(host, suffix) {
-			return false
-		}
-	}
-	return true
 }

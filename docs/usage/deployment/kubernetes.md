@@ -141,6 +141,28 @@ credentials:
   llmBaseUrl: https://your-provider.example.com/v1
 ```
 
+Internal model connectivity tests can be approved dynamically in Dashboard under
+**Models → Model connections → Probe addresses**. Only administrators can change
+the policy. Controller saves it in the namespace's `agentteams-model-probe-policy`
+ConfigMap; saves and removals apply to subsequent probes without a restart.
+Controller reads the current API-server value rather than a lagging informer
+cache. Preserve this ConfigMap when migrating the installation.
+
+Until the first save, `MODEL_PROBE_ALLOW_HOSTS` and
+`MODEL_PROBE_ALLOW_PRIVATE_NETWORK` provide legacy defaults. Once saved, the
+persistent policy overrides both, including an empty host list and disabled
+private-network access. The existing broad-private mode remains available in
+the advanced setting; normal host entries contain no scheme, port, path,
+wildcard or CIDR. This setting governs the Controller's model connection test,
+not chart preflight jobs or Worker runtime health checks.
+
+For automation, administrators can `GET` and `PUT`
+`/api/v1/gateway/model-probe-policy`. A PUT replaces the policy with
+`{"allowedHosts":["172.16.50.89"],"allowPrivateNetwork":false,"revision":"<GET revision>"}`.
+Use the empty revision returned before the first save. A concurrent edit returns
+409 and requires reloading; unavailable or invalid configuration returns 503
+and does not fall back to broader environment permissions.
+
 ### Qwen
 
 ```yaml

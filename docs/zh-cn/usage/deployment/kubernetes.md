@@ -141,6 +141,20 @@ credentials:
   llmBaseUrl: https://your-provider.example.com/v1
 ```
 
+内网模型的连接测试可在 Dashboard **模型 → 模型连接 → 探测地址** 中动态放行，仅管理员可修改。
+Controller 将策略保存到当前 namespace 的 `agentteams-model-probe-policy` ConfigMap，新增或移除后，后续测试立即生效，无需重启。
+读取使用 API Server 的最新配置，避免 informer 缓存延迟；迁移安装时请保留这个 ConfigMap。
+
+首次保存前，沿用 `MODEL_PROBE_ALLOW_HOSTS` 和 `MODEL_PROBE_ALLOW_PRIVATE_NETWORK` 的旧默认值；
+保存后，持久化配置覆盖这两个环境变量，空列表和关闭内网全量放行也会生效。
+高级选项保留原有的允许所有内网地址模式；普通主机条目仅填写主机名或 IP，不含协议、端口、路径、通配符或 CIDR。
+此配置只控制 Controller 的模型连接测试，不控制 Chart 安装前探测或 Worker 运行时健康检查。
+
+管理员也可通过 `GET` / `PUT /api/v1/gateway/model-probe-policy` 管理策略。PUT 使用
+`{"allowedHosts":["172.16.50.89"],"allowPrivateNetwork":false,"revision":"<GET 返回值>"}`
+整体替换；首次保存前 GET 的 revision 为空字符串。并发修改返回 409，需重新读取后再保存；
+配置不可用或损坏时返回 503，不会回退到更宽泛的环境变量权限。
+
 ### 通义千问
 
 ```yaml

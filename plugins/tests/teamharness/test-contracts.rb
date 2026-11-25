@@ -59,6 +59,9 @@ assert(!leader_guidance.match?(/^\s*agt worker (wake|sleep|ensure-ready)\b/), "L
 assert(leader_guidance.include?("Manager or platform Admin"), "Leader runtime blockers must name the resource authority")
 
 task_skill = normalized(read(plugin_root / "skills/team/task-management/SKILL.md"))
+assert(task_skill.include?("Your own package bootstrap, onboarding, configuration and readiness checks are runtime administration") &&
+       task_skill.include?("Do not delegate them to another Worker or create a business Task for them"),
+       "Leader intake must distinguish its own runtime administration from business delivery")
 assert(task_skill.include?("distinct Worker identities") && task_skill.include?("every required upstream result"),
        "Leader planning must preserve explicit independent assignees and all required inputs to aggregation")
 

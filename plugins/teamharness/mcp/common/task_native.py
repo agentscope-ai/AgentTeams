@@ -17,8 +17,9 @@ import urllib.request
 from urllib.parse import quote
 
 if __package__:
-    from . import phase_recovery, task_cli, task_context, task_roster, task_receipt as receipts
+    from . import task_handoff_context, phase_recovery, task_cli, task_context, task_roster, task_receipt as receipts
 else:
+    import task_handoff_context
     import task_cli
     import task_context
     import task_receipt as receipts
@@ -122,6 +123,9 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         raise ValueError("native bridge request must be an object")
     call = call or task_cli.run
     operation = payload.get("operation")
+    if operation == "confirmed_handoffs":
+        verified = lambda result, actor: dispatched_receipts(result, actor, get_json or controller_json)
+        return {"items": list(task_handoff_context.pending(verified, payload["runtime"]))}
     if operation == "canonical_receipts":
         if __package__:
             from . import task_canonical
@@ -266,8 +270,11 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
             response["phaseComplete"] = True
     if (receipt and response["phaseComplete"] and action == "submit" and context.get("actor")
             and (get_json or os.getenv("AGENTTEAMS_CONTROLLER_URL"))):
-        response["extraReceipts"] = dispatched_receipts(result, context["actor"],
-            get_json or (lambda route: controller_json(route, timeout=2)), wait_for_send=True)
+        if context.get("handoffTarget"):
+            task_handoff_context.remember(result, context["actor"], context["handoffTarget"])
+        else:
+            response["extraReceipts"] = dispatched_receipts(result, context["actor"],
+                get_json or (lambda route: controller_json(route, timeout=2)), wait_for_send=True)
     if receipt and response["phaseComplete"]:
         display = terminal_display(action, arguments, result)
         if display is not None:

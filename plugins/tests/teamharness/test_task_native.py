@@ -482,3 +482,25 @@ def test_dispatch_wait_expires_without_claiming_delivery(bridge,monkeypatch):
     ticks=iter([0,1,3]);monkeypatch.setattr(bridge.time,"monotonic",lambda:next(ticks))
     monkeypatch.setattr(bridge.time,"sleep",lambda _:None)
     assert bridge.dispatched_receipts(result,"@sender:test",lambda _:saved,wait_for_send=True)==[]
+
+
+def test_confirmed_handoff_only_reaches_the_submitting_native_session(bridge, tmp_path, monkeypatch):
+    monkeypatch.setenv('AGENTTEAMS_WORKER_HOME', str(tmp_path))
+    result = {'task': {'id': 'stage', 'mainTaskId': 'main', 'submissionId': 's1', 'spec': 'private business input'},
+              'assignments': [{'taskId': 'next', 'status': 'queued', 'eventId': 'dispatch'}]}
+    owner = '@developer:test'
+    target = {'runtime': 'hermes', 'session': 'native-session'}
+    for _ in range(2):
+        bridge.task_handoff_context.remember(result, owner, target)
+    files = list((tmp_path / '.agentteams/native-handoffs').glob('*.json'))
+    assert len(files) == 1 and 'private business input' not in files[0].read_text()
+    receipt = {'event_id': 'dispatch', 'kind': 'task_assigned', 'task_id': 'next', 'actor': owner,
+               'recipient': '@tester:test', 'room_id': '!room:test', 'native_id': ''}
+    def read(runtime):
+        return bridge.invoke({'operation': 'confirmed_handoffs', 'runtime': runtime}, get_json=lambda _: receipt)['items']
+    assert read('hermes') == []
+    receipt['native_id'] = 'matrix:$actual'
+    assert read('openhuman') == []
+    items = read('hermes')
+    assert len(items) == 1 and items[0]['target'] == target
+    assert len(items[0]['facts']) == 1 and '"matrixEventId":"$actual"' in items[0]['facts'][0]

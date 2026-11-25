@@ -249,7 +249,9 @@ func (h *ProjectHandler) GetTaskTraces(w http.ResponseWriter, r *http.Request) {
 	}
 	// Query the whole project, without a time cutoff, so late spans, retries,
 	// old rounds and reverse causal references are discoverable.
-	rows, err := config.readPages(ctx, "traces", url.Values{"tags": {"agentteams", "project:" + projectID}, "filter": {traceWorkerFilter(workers)}})
+	params := url.Values{"tags": {"agentteams", "project:" + projectID}}
+	params.Set("filter", traceWorkerFilter(workers, params))
+	rows, err := config.readPages(ctx, "traces", params)
 	if err != nil {
 		httputil.WriteError(w, 502, err.Error())
 		return

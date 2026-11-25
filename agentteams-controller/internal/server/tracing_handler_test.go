@@ -5,9 +5,46 @@ import (
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestTraceStructuredFilterRetainsSelectedWorkerBoundsAndTags(t *testing.T) {
+	h := tracingFixture(t)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var filters []map[string]any
+		if err := json.Unmarshal([]byte(r.URL.Query().Get("filter")), &filters); err != nil {
+			t.Fatal(err)
+		}
+		for _, encoded := range []string{
+			`{"type":"string","column":"userId","operator":"=","value":"worker"}`,
+			`{"type":"datetime","column":"timestamp","operator":">=","value":"2026-11-11T00:00:00Z"}`,
+			`{"type":"datetime","column":"timestamp","operator":"<","value":"2026-11-11T02:00:00Z"}`,
+			`{"type":"arrayOptions","column":"tags","operator":"all of","value":["agentteams","worker-turn","task:work","team:alpha","project:p","room:!task:test","hermes"]}`,
+		} {
+			var wanted map[string]any
+			_ = json.Unmarshal([]byte(encoded), &wanted)
+			found := false
+			for _, filter := range filters {
+				found = found || reflect.DeepEqual(filter, wanted)
+			}
+			if !found {
+				t.Errorf("structured filter overrides legacy query fields; missing %s in %v", encoded, filters)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{}, "meta": map[string]any{"totalPages": 0}})
+	}))
+	defer backend.Close()
+	saveTraceBackend(t, h, backend.URL)
+	r := taskTraceRequest("alpha")
+	r.URL, _ = r.URL.Parse("/api/v1/traces?worker=worker-cr&since=2026-11-11T00:00:00Z&until=2026-11-11T02:00:00Z&task=work&team=alpha&project=p&room=!task:test&runtime=hermes")
+	rec := httptest.NewRecorder()
+	h.ListTraces(rec, r)
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
 
 func TestTraceQueryRejectsInvalidBoundsAndPaging(t *testing.T) {
 	h := tracingFixture(t)
@@ -67,6 +104,18 @@ func TestTracingAPIUsesRuntimeIdentityAndRejectsForeignRows(t *testing.T) {
 			return map[string]any{"id": id, "userId": worker, "sessionId": "session", "tags": []string{"team:alpha", "task:work", "project:p"}, "metadata": map[string]any{"agentteams.team.id": "alpha", "agentteams.project.id": "p", "agentteams.task.id": "work"}}
 		}
 		if r.URL.Path == "/api/public/traces" {
+			var filters []map[string]any
+			_ = json.Unmarshal([]byte(r.URL.Query().Get("filter")), &filters)
+			foundSession := false
+			for _, filter := range filters {
+				foundSession = foundSession || (filter["column"] == "sessionId" && filter["value"] == "session")
+				if filter["column"] == "timestamp" {
+					t.Error("whole-session structured filter used a time cutoff")
+				}
+			}
+			if !foundSession {
+				t.Error("native session predicate was omitted from structured filter")
+			}
 			if r.URL.Query().Get("userId") != "worker" {
 				t.Error("CR identity was not translated to runtime identity")
 			}

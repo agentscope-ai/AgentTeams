@@ -505,3 +505,18 @@ def test_confirmed_handoff_only_reaches_the_submitting_native_session(bridge, tm
     assert len(items) == 1 and items[0]['target'] == target
     assert (items[0]['taskId'], items[0]['submissionId']) == ('stage', 's1')
     assert len(items[0]['facts']) == 1 and '"matrixEventId":"$actual"' in items[0]['facts'][0]
+
+
+@pytest.mark.parametrize("requested,expected", [("page", "dev"), ("test-report", "test"), ("shared", None), ("unknown", None)])
+def test_final_review_reads_only_unambiguous_accepted_artifacts(bridge, monkeypatch, requested, expected):
+    import task_canonical
+    monkeypatch.setattr(task_canonical, "admit", lambda _: {"ok": True})
+    accepted = [{"id": "dev", "candidate": {"artifacts": [{"artifactId": "page"}, {"artifactId": "shared"}]}},
+                {"id": "test", "candidate": {"artifacts": [{"artifactId": "shared"}], "reportFile": {"artifactId": "test-report"}}}]
+    calls = []
+    def call(args):
+        calls.append(args)
+        return {"ok": False, "effect": "none"}
+    bridge.invoke({"operation": "task", "arguments": {"action": "files_read", "artifactId": requested},
+                   "context": {"role": "leader", "completion": "main", "context": {"acceptedResults": accepted}}}, call=call)
+    assert calls[0].get("taskId") == expected

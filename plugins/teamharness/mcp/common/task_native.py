@@ -191,6 +191,15 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
     allowed = task_cli.schema(native_role(context.get("role")))["inputSchema"]["properties"]["action"]["enum"]
     if action not in allowed:
         raise ValueError("task action unavailable to this runtime role")
+    if action == "files_read" and context.get("completion") and not identity and arguments.get("artifactId"):
+        owners = set()
+        for child in context.get("context", {}).get("acceptedResults", []):
+            candidate = child.get("candidate") or {}
+            refs = [*(candidate.get("artifacts") or []), candidate.get("reportFile") or {}]
+            if any(ref.get("artifactId") == arguments["artifactId"] for ref in refs):
+                owners.add(child["id"])
+        if len(owners) == 1:
+            arguments["taskId"] = owners.pop()
     review = context.get("review")
     if action in {"begin", "submit"} and (not context.get("execution") or identity != context["execution"]):
         raise ValueError("task operation does not match the current execution")

@@ -337,6 +337,31 @@ def test_export_normalizes_returned_tool_error_and_redacts(monkeypatch):
     assert "gen_ai.input.messages" not in exporter.get_finished_spans()[-1].attributes
 
 
+def test_native_model_metadata_does_not_turn_diagnostics_into_extra_generations():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(telemetry.SanitizingExporter(exporter)))
+    tracer = provider.get_tracer("native-boundaries")
+    with tracer.start_as_current_span("native.turn", attributes={"langfuse.observation.type": "agent"}) as root:
+        cases = [
+            ("claude-code.model.response", {"gen_ai.response.model": "native-model"}, "span"),
+            ("get_model_info", {"gen_ai.request.model": "native-model"}, "span"),
+            ("native.request", {"gen_ai.operation.name": "chat", "gen_ai.request.model": "native-model"}, "generation"),
+            ("native.tool", {"langfuse.observation.type": "tool"}, "tool"),
+        ]
+        for name, attrs, expected in cases:
+            with tracer.start_as_current_span(name, attributes=attrs):
+                pass
+            recorded = exporter.get_finished_spans()[-1]
+            assert recorded.attributes["langfuse.observation.type"] == expected
+            assert recorded.parent.span_id == root.get_span_context().span_id
+            assert recorded.context.trace_id == root.get_span_context().trace_id
+            for key, value in attrs.items():
+                assert recorded.attributes[key] == value
+    assert sum(span.attributes["langfuse.observation.type"] == "generation"
+               for span in exporter.get_finished_spans()) == 1
+
+
 def test_agentloop_semantics_preserve_langfuse_io_and_content_controls(monkeypatch):
     exporter = InMemorySpanExporter()
     provider = TracerProvider()

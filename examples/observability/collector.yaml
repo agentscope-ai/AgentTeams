@@ -10,6 +10,15 @@ processors:
     check_interval: 1s
     limit_mib: 128
     spike_limit_mib: 32
+  transform/native-kinds:
+    error_mode: propagate
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["langfuse.observation.type"], "generation") where attributes["langfuse.observation.type"] == nil and attributes["gen_ai.operation.name"] == "chat"
+          - set(attributes["langfuse.observation.type"], "tool") where attributes["langfuse.observation.type"] == nil and attributes["gen_ai.operation.name"] == "execute_tool"
+          - set(attributes["langfuse.observation.type"], "agent") where attributes["langfuse.observation.type"] == nil and attributes["gen_ai.operation.name"] == "invoke_agent"
+          - set(attributes["langfuse.observation.type"], "span") where attributes["langfuse.observation.type"] == nil
   batch:
     timeout: 1s
     send_batch_size: 256
@@ -34,5 +43,5 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, transform/native-kinds, batch]
       exporters: [otlphttp/langfuse]

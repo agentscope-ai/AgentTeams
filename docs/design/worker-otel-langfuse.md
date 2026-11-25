@@ -62,6 +62,8 @@ flowchart LR
 
 标准 gen_ai.* 映射为 Langfuse GENERATION/TOOL/AGENT、输入输出与 usage，原始属性保留。身份、session、标签和业务元数据传播到每个 span。worker-turn 标签将真实执行与后台健康检查区分。
 
+模型名称本身不是一次模型调用的证据。共享导出器和示例 Collector 保留原生声明的类型，并按 `chat`、`execute_tool`、`invoke_agent` 语义补全类型；其余未声明类型的记录明确标记为普通 `span`，避免后端把响应片段、模型配置读取等内部观测重复计为推理。原始记录、模型字段、时间和父子关系保留。`worker-turn` 也只能对应真实执行边界，不能仅因为带有某种 runtime 标签就应用到所有后台记录。
+
 ## Dashboard 与质量分析
 
 支持 Worker、runtime、Task、Team、Room、session、时间筛选；session 查询覆盖所有时间范围并可逐页浏览。详情提供父子瀑布、模型/工具内容、错误、耗时、token、上游跳转与 Langfuse 链接。会话 JSON 导出读取全部分页和每轮 observations，供后续离线标注、评估和比较。

@@ -79,6 +79,39 @@ func (h *ProjectHandler) reconcileTaskPlan(ctx context.Context, key string) erro
 	if !strings.HasPrefix(coordinationString(main, "room_id"), "!") {
 		return oss.ErrPreconditionFailed
 	}
+	// Publish the saved plan before creating any executable assignment. A lost
+	// send response retries the same Matrix transaction; a confirmed send is kept
+	// in the plan, including across Controller restarts.
+	if plan.Request.Overview != "" && plan.OverviewEventID == "" {
+		eventID, err := h.coordination.sendMatrixContent(ctx, authpkg.RoleTeamLeader, plan.ActorName, plan.RoomID, "task-plan-overview:"+plan.ID, taskBusinessText(plan.Request.Overview, plan.RunID), true)
+		if err != nil {
+			return err
+		}
+		for attempt := 0; attempt < 3; attempt++ {
+			latest, saved, body, err := h.readTaskPlan(ctx, key, plan.ID)
+			if err != nil {
+				return err
+			}
+			if saved.OverviewEventID != "" {
+				plan = saved
+				break
+			}
+			saved.OverviewEventID = eventID
+			latest["task_plan"] = saved
+			next, _ := json.Marshal(latest)
+			if err := strict.PutObjectIfMatchStrict(ctx, key, next, contentETag(body)); err != nil {
+				if errors.Is(err, oss.ErrPreconditionFailed) {
+					continue
+				}
+				return err
+			}
+			plan = saved
+			break
+		}
+		if plan.OverviewEventID == "" {
+			return oss.ErrPreconditionFailed
+		}
+	}
 	nodes, _ := main["tasks"].([]any)
 	states := map[string]string{}
 	for _, item := range nodes {
@@ -129,6 +162,7 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 	}
 	key := path.Join(path.Dir(path.Dir(mainKey)), id, "meta.json")
 	actorRole, actorName := authpkg.RoleTeamLeader, plan.ActorName
+	revision := coordinationString(node, "revision_of")
 	var lastCompletion time.Time
 	// Validate actual accepted dependency identities before creating work. Begin
 	// repeats this check and materializes their exact immutable file versions.
@@ -149,6 +183,11 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 		}
 		if child["main_task_id"] != mainID || !taskResultCompleted(child) || !taskReviewMembership(main, child) {
 			return fmt.Errorf("prerequisite is not an accepted candidate of this main task")
+		}
+		// An inherited input predates the rejection. The Leader dispatches the
+		// first correction; subsequent corrections can hand off directly.
+		if revision != "" && coordinationString(child, "revision_of") != revision {
+			continue
 		}
 		if handoff := taskHandoffOf(child); handoff != nil {
 			completed, err := time.Parse(time.RFC3339Nano, coordinationString(child, "submitted_at"))
@@ -292,4 +331,12 @@ func (h *ProjectHandler) assignTaskPlanNode(ctx context.Context, key, planID, id
 		return nil
 	}
 	return oss.ErrPreconditionFailed
+}
+
+func taskBusinessText(text, runID string) map[string]any {
+	content := map[string]any{"msgtype": "m.text", "body": text}
+	if runID != "" {
+		content["org.agentteams.run"] = map[string]any{"version": "1", "run_id": runID, "blocks": []any{map[string]any{"type": "text", "text": text}}}
+	}
+	return content
 }

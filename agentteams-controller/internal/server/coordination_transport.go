@@ -261,6 +261,19 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 			return
 		}
 		if d.Transport == "matrix" {
+			pending, err := h.taskResultPublicationPending(ctx, e, p, t)
+			if err != nil {
+				d.Error = "upstream stage publication state unavailable"
+				return
+			}
+			if pending {
+				d.Error = ""
+				return
+			}
+			if err := h.projectStageArtifacts(ctx, e, p, d, persist); err != nil {
+				d.Error = "stage artifact projection unavailable"
+				return
+			}
 			if coordinationCompleted(e.Kind) {
 				// The canonical completed state/report was re-read by resolve above.
 				// Relay as the registered Manager without opening another Agent turn.
@@ -622,7 +635,17 @@ func (h *CoordinationHandler) sendMatrixContent(ctx context.Context, kind, name,
 	if err != nil {
 		return "", err
 	}
-	target := strings.TrimRight(h.deps.MatrixConfig.ServerURL, "/") + "/_matrix/client/v3/rooms/" + url.PathEscape(room) + "/send/m.room.message/" + url.PathEscape(txn)
+	eventType := "m.room.message"
+	packet := coordinationMap(content, "org.agentteams.coordination")
+	meta := coordinationMap(packet, "channel_meta")
+	control := coordinationMap(meta, "teamharness_coordination")
+	if content["msgtype"] == "m.notice" && control["kind"] == "handoff" && meta["agent_matrix_user_id"] == meta["sender_id"] && strings.HasPrefix(coordinationString(packet, "session_id"), "coordination-handoff:") {
+		// Runtimes with native support consume this wake without a chat bubble.
+		if worker, err := h.worker(ctx, name); err == nil && (worker.Spec.Runtime == "codex" || worker.Spec.Runtime == "qwenpaw") {
+			eventType = "org.agentteams.coordination"
+		}
+	}
+	target := strings.TrimRight(h.deps.MatrixConfig.ServerURL, "/") + "/_matrix/client/v3/rooms/" + url.PathEscape(room) + "/send/" + eventType + "/" + url.PathEscape(txn)
 	if _, exists := content["m.mentions"]; !exists {
 		content["m.mentions"] = map[string]any{"user_ids": []string{}}
 	}
@@ -685,4 +708,57 @@ func (h *CoordinationHandler) projectApprovals(ctx context.Context, e coordinati
 			d.Approvals[id] = status
 		}
 	}
+}
+
+// The overview contract opts into result and file publication before handoff.
+func taskRoomStageIDs(e coordinationEvent, main map[string]any) []string {
+	if e.MainTaskID == "" {
+		return nil
+	}
+	var plan taskPlan
+	encoded, _ := json.Marshal(main["task_plan"])
+	if json.Unmarshal(encoded, &plan) != nil || plan.Request.Overview == "" {
+		return nil
+	}
+	ids := []string{}
+	switch e.Kind {
+	case "task_submitted":
+		ids = append(ids, e.TaskID)
+	case "task_assigned", "main_task_ready":
+		nodes, _ := main["tasks"].([]any)
+		for _, raw := range nodes {
+			node, _ := raw.(map[string]any)
+			if e.Kind == "main_task_ready" {
+				if node["status"] == "completed" {
+					ids = append(ids, coordinationString(node, "task_id"))
+				}
+			} else if node["task_id"] == e.TaskID {
+				data, _ := json.Marshal(node["depends_on"])
+				_ = json.Unmarshal(data, &ids)
+				break
+			}
+		}
+	default:
+		return nil
+	}
+	return ids
+}
+
+func (h *CoordinationHandler) taskResultPublicationPending(ctx context.Context, e coordinationEvent, main, child map[string]any) (bool, error) {
+	ids := taskRoomStageIDs(e, main)
+	for _, id := range ids {
+		if !isSafeTaskID(id) {
+			return true, fmt.Errorf("invalid stage identity")
+		}
+		stage, err := h.read(ctx, path.Join("teams", e.StorageTeam, "shared/tasks", id, "meta.json"))
+		if err != nil {
+			return true, err
+		}
+		execution := coordinationMap(stage, "execution")
+		checkpoint := coordinationMap(execution, "checkpoint")
+		if checkpoint["delivery"] != "delivered" || coordinationString(checkpoint, "reply_event") == "" {
+			return true, nil
+		}
+	}
+	return false, nil
 }

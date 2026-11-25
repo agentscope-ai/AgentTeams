@@ -581,3 +581,108 @@ func TestPlanReusesIntakeRoomAndInvitesExecutionMembers(t *testing.T) {
 		t.Fatalf("plan in intake room: %d %s rooms=%d joined=%v", w.Code, w.Body.String(), mx.creates, mx.joined)
 	}
 }
+
+func TestTaskPlanPublishesOverviewBeforeDispatchAndRetriesWithoutDuplicating(t *testing.T) {
+	h, store, caller, _ := taskPlanFixture(t)
+	sends := 0
+	reject := true
+	matrix := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pending, _, _ := store.ListObjectsRecursive(r.Context(), coordinationPending, "", 100)
+		if len(pending) != 0 && sends == 0 {
+			t.Error("assignment queued before the overview")
+		}
+		var content map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&content)
+		run := coordinationMap(content, "org.agentteams.run")
+		if !strings.Contains(coordinationString(content, "body"), "交付独立页面") || run["run_id"] != "codex:planning:one" || content["org.agentteams.progress_only"] != true {
+			t.Errorf("overview lost its business content or planning run: %v", content)
+		}
+		if reject {
+			w.WriteHeader(503)
+			return
+		}
+		sends++
+		_, _ = w.Write([]byte(`{"event_id":"$overview"}`))
+	}))
+	defer matrix.Close()
+	h.coordination.deps.MatrixConfig.ServerURL = matrix.URL
+	input, _ := json.Marshal(planRequest())
+	var request map[string]any
+	_ = json.Unmarshal(input, &request)
+	request["overview"] = "当前任务：交付独立页面。要求：中文。验收：可打开且测试通过。分工：A、B 独立开发，C 集成。"
+	call := func() *httptest.ResponseRecorder {
+		body, _ := json.Marshal(request)
+		r := httptest.NewRequest("POST", "/api/v1/tasks/main/plan", strings.NewReader(string(body)))
+		r.SetPathValue("id", "main")
+		r.Header.Set("X-AgentTeams-Run-ID", "codex:planning:one")
+		w := httptest.NewRecorder()
+		h.PlanTask(w, withCaller(r, caller))
+		return w
+	}
+	first := call()
+	pending, _, _ := store.ListObjectsRecursive(t.Context(), coordinationPending, "", 100)
+	if first.Code != 200 || !strings.Contains(first.Body.String(), `"progress":"pending"`) || len(pending) != 0 {
+		t.Fatalf("overview failure must block dispatch: %d %s %v", first.Code, first.Body.String(), pending)
+	}
+	reject = false
+	next := call()
+	if next.Code != 200 || !strings.Contains(next.Body.String(), `"progress":"ready"`) {
+		t.Fatalf("retry failed: %d %s", next.Code, next.Body.String())
+	}
+	_ = call()
+	if sends != 1 {
+		t.Fatalf("overview repeated after its confirmed delivery: %d", sends)
+	}
+}
+
+func TestTaskHandoffWaitsForTheActualStageResultMessage(t *testing.T) {
+	h, store, _, _ := taskPlanFixture(t)
+	main := map[string]any{"task_plan": map[string]any{"request": map[string]any{"overview": "verified plan"}}, "tasks": []any{map[string]any{"task_id": "dev", "status": "completed"}, map[string]any{"task_id": "test", "depends_on": []string{"dev"}, "status": "assigned"}}}
+	for _, kind := range []string{"task_assigned", "main_task_ready", "task_submitted"} {
+		t.Run(kind, func(t *testing.T) {
+			e := coordinationEvent{Kind: kind, MainTaskID: "main", StorageTeam: "alpha", TaskID: "test"}
+			if kind == "task_submitted" {
+				e.TaskID = "dev"
+			}
+			putTask(store, "teams/alpha/shared/tasks/dev/meta.json", map[string]any{"execution": map[string]any{"checkpoint": map[string]any{"delivery": "pending"}}})
+			if pending, err := h.coordination.taskResultPublicationPending(t.Context(), e, main, nil); err != nil || !pending {
+				t.Fatalf("handoff overtook stage result: %v %v", pending, err)
+			}
+			putTask(store, "teams/alpha/shared/tasks/dev/meta.json", map[string]any{"execution": map[string]any{"checkpoint": map[string]any{"delivery": "delivered", "reply_event": "$real-result"}}})
+			if pending, err := h.coordination.taskResultPublicationPending(t.Context(), e, main, nil); err != nil || pending {
+				t.Fatalf("confirmed result did not release handoff: %v %v", pending, err)
+			}
+		})
+	}
+}
+
+func TestPlanningWakeUsesANonChatProtocolEvent(t *testing.T) {
+	for _, runtime := range []string{"codex", "qwenpaw"} {
+		t.Run(runtime, func(t *testing.T) {
+			h, _, _, _ := taskPlanFixture(t)
+			worker, err := h.coordination.worker(t.Context(), "lead-cr")
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker.Spec.Runtime = runtime
+			if err := h.client.Update(t.Context(), worker); err != nil {
+				t.Fatal(err)
+			}
+			sends := 0
+			mx := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sends++
+				if !strings.Contains(r.URL.Path, "/send/org.agentteams.coordination/") {
+					t.Errorf("internal wake became a Matrix chat message: %s", r.URL.Path)
+				}
+				_, _ = w.Write([]byte(`{"event_id":"$internal-control"}`))
+			}))
+			defer mx.Close()
+			h.coordination.deps.MatrixConfig.ServerURL = mx.URL
+			event := coordinationEvent{Kind: "handoff", Protocol: "task/v1", Actor: "@lead:test", Recipient: "@lead:test", ActorName: "lead-cr", ActorRole: authpkg.RoleTeamLeader, ID: "0123456789abcdef0123456789abcdef", RoomID: "!planned:test"}
+			content := coordinationMatrixNotification(event, coordinationPayload(event))
+			if _, err := h.coordination.sendMatrixContent(t.Context(), event.ActorRole, event.ActorName, event.RoomID, "once", content, false); err != nil || sends != 1 {
+				t.Fatalf("control send: %v sends=%d", err, sends)
+			}
+		})
+	}
+}

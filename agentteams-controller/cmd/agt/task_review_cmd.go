@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -38,8 +39,12 @@ func taskReviewCmd(accepted bool) *cobra.Command {
 			}
 			body["replacementNodes"] = nodes
 		}
+		headers := http.Header{}
+		if run := os.Getenv("AGENTTEAMS_RUN_ID"); run != "" {
+			headers.Set("X-AgentTeams-Run-ID", run)
+		}
 		response, err := NewAPIClient().doWithHeadersContext(cmd.Context(), http.MethodPost,
-			"/api/v1/tasks/"+url.PathEscape(args[0])+"/"+action+"?"+query.Encode(), body, nil)
+			"/api/v1/tasks/"+url.PathEscape(args[0])+"/"+action+"?"+query.Encode(), body, headers)
 		if err != nil {
 			return err
 		}

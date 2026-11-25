@@ -28,13 +28,16 @@ type taskPlanNode struct {
 }
 
 type taskPlanRequest struct {
-	Nodes []taskPlanNode `json:"nodes"`
+	Nodes    []taskPlanNode `json:"nodes"`
+	Overview string         `json:"overview,omitempty"`
 }
 type taskPlan struct {
-	ID        string          `json:"id"`
-	ActorName string          `json:"actor_name"`
-	RoomID    string          `json:"room_id,omitempty"`
-	Request   taskPlanRequest `json:"request"`
+	ID              string          `json:"id"`
+	RunID           string          `json:"run_id,omitempty"`
+	OverviewEventID string          `json:"overview_event_id,omitempty"`
+	ActorName       string          `json:"actor_name"`
+	RoomID          string          `json:"room_id,omitempty"`
+	Request         taskPlanRequest `json:"request"`
 }
 
 type taskPlanAssignment struct {
@@ -80,6 +83,7 @@ func (h *ProjectHandler) taskPlanAssignments(ctx context.Context, key string, ma
 }
 
 func normalizeTaskPlan(input *taskPlanRequest) error {
+	input.Overview = strings.TrimSpace(input.Overview)
 	if len(input.Nodes) == 0 || len(input.Nodes) > 50 {
 		return fmt.Errorf("plan requires 1 to 50 execution nodes")
 	}
@@ -197,7 +201,7 @@ func (h *ProjectHandler) PlanTask(w http.ResponseWriter, r *http.Request) {
 		}
 		canonical, _ := json.Marshal([]any{team, id, input, leader.Name})
 		sum := sha256.Sum256(canonical)
-		plan := taskPlan{ID: hex.EncodeToString(sum[:]), ActorName: leader.Name, Request: input}
+		plan := taskPlan{ID: hex.EncodeToString(sum[:]), ActorName: leader.Name, Request: input, RunID: strings.TrimSpace(r.Header.Get("X-AgentTeams-Run-ID"))}
 		if raw, exists := main["task_plan"]; exists {
 			encoded, _ := json.Marshal(raw)
 			var old taskPlan

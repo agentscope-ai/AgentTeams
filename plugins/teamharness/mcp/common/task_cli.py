@@ -14,7 +14,7 @@ import subprocess
 # executable, shell, environment, storage path, recipient or Project routing.
 _ACTIONS = {
     "create": (("leader", "title"), ("spec", "inputId"), {"relatedInputIds": "related-input-id"}),
-    "plan": (("nodes",), ("team",), {}),
+    "plan": (("nodes",), ("team", "overview"), {}),
     "get": ((), ("team",), {}),
     "begin": ((), ("team",), {}),
     "submit": (("summary",), ("report", "status", "team"), {"files": "file"}),
@@ -52,6 +52,7 @@ TASK_SCHEMA = {
             "inputId": {"type": "string", "description": "For create: source input reference supplied by the framework; required when more than one message could be the original request. This is not a room, Project or storage path."},
             "relatedInputIds": {"type": "array", "items": {"type": "string"}, "description": "For create: later corrections or supplements to this same request, in supplied input order; same Human conversation only. Never use this field to merge distinct work requests merely because their text matches. The task system captures their exact bodies automatically."},
             "spec": {"type": "string", "description": "For create: only necessary earlier context outside the supplied inputs. Bind supplied corrections with relatedInputIds; never put only their paraphrase here. The task system captures original Human bodies automatically."},
+            "overview": {"type": "string", "description": "For plan: concise room message with the task goal, requirements, acceptance criteria, planned responsibilities and final deliverables. Publish once after planning, before assigning the first node. Never repeat the full original request or embed tool/control receipts."},
             "nodes": {"type": "array", "description": "For plan: complete execution DAG; no source routes or execution Task IDs.",
                       "items": {"type": "object", "additionalProperties": False, "required": ["id", "assignedTo", "spec", "dependsOn"],
                                 "properties": {"id": {"type": "string"}, "title": {"type": "string"},
@@ -243,10 +244,12 @@ def retryable_cli_error(message: str) -> bool:
     return bool(re.match(r'^(?:Error: )?(?:Get|Post|Put|Patch|Delete|Head) "https?://[^"\n]+": ', first))
 
 
-def _run(arguments: dict) -> dict:
+def _run(arguments: dict, *, run_id=None) -> dict:
     failure_effect = "none"
     try:
         argv, env = command(arguments)
+        if run_id:
+            env["AGENTTEAMS_RUN_ID"] = run_id
         if os.getenv("AGENTTEAMS_OTEL_ENABLED", "").lower() in {"true", "1"}:
             try:
                 from opentelemetry.propagate import inject
@@ -297,10 +300,20 @@ def _validate_mutation(arguments: dict) -> None:
 
 
 def run(arguments: dict) -> dict:
+    call = _run
+    if isinstance(arguments, dict) and "_nativeRunId" in arguments:
+        arguments = dict(arguments)
+        run_id = arguments.pop("_nativeRunId")
+        if (arguments.get("action") not in {"plan", "accept", "reject"} or not isinstance(run_id, str)
+                or not re.fullmatch(r"[!-~]{1,1024}", run_id)):
+            return {"ok": False, "effect": "none", "error": "invalid_native_run_id"}
+        # Execution correlation is transport metadata, outside the operation's durable identity.
+        from functools import partial
+        call = partial(_run, run_id=run_id)
     if not os.getenv("AGENTTEAMS_CONTROLLER_URL"):
-        return _run(arguments)
+        return call(arguments)
     if __package__:
         from . import task_canonical
     else:
         import task_canonical
-    return task_canonical.run(arguments, _run, validate=_validate_mutation)
+    return task_canonical.run(arguments, call, validate=_validate_mutation)

@@ -371,3 +371,22 @@ func TestSavedReplyDeviceBindingIsImmutableAndExclusive(t *testing.T) {
 		t.Fatal("legacy record became unreadable")
 	}
 }
+
+func TestMatrixQuietCompletionRetainsResultWithoutPublishingAReply(t *testing.T) {
+	f := newMatrixExecutionFixture(t, nil)
+	f.expect("claim", nil, 200)
+	f.expect("complete", nil, 409)
+	result := f.artifact("receipt.txt", "verified planning fact")
+	cp := &taskCheckpoint{Version: 1, Result: &result, Delivery: "pending", ReplyTxn: "not-sent", ReplyAttempt: &matrixReplyAttempt{State: "ready"}}
+	f.expect("checkpoint", cp, 200)
+	response := f.expect("complete", nil, 200)
+	var execution taskExecution
+	_ = json.Unmarshal(response["execution"], &execution)
+	if string(response["recovery"]) != `"done"` || execution.State != "completed" || execution.Checkpoint.Result.SHA256 != result.SHA256 || execution.Checkpoint.ReplyEvent != "" {
+		t.Fatalf("quiet completion lost the durable fact or invented a public message: %s", response)
+	}
+	f.replace()
+	if response := f.expect("claim", nil, 200); string(response["recovery"]) != `"done"` {
+		t.Fatalf("quiet completion repeated inference: %s", response)
+	}
+}

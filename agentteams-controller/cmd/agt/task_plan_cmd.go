@@ -12,7 +12,7 @@ import (
 )
 
 func taskPlanCmd() *cobra.Command {
-	var filename, inline, team string
+	var filename, inline, team, overview string
 	cmd := &cobra.Command{Use: "plan <main-task-id>", Short: "Save your execution DAG and let the task system prepare rooms and dispatch ready nodes", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if !taskIdentifier.MatchString(args[0]) || (filename == "") == (inline == "") {
 			return fmt.Errorf("valid main task id and exactly one of --file or --json required")
@@ -32,11 +32,23 @@ func taskPlanCmd() *cobra.Command {
 		if len(body) > 1<<20 || !json.Valid(body) {
 			return fmt.Errorf("plan must be valid JSON no larger than 1 MiB")
 		}
+		if cmd.Flags().Changed("overview") {
+			var plan map[string]json.RawMessage
+			if json.Unmarshal(body, &plan) != nil || plan == nil {
+				return fmt.Errorf("plan must be a JSON object")
+			}
+			plan["overview"], _ = json.Marshal(overview)
+			body, _ = json.Marshal(plan)
+		}
+		headers := http.Header{}
+		if run := os.Getenv("AGENTTEAMS_RUN_ID"); run != "" {
+			headers.Set("X-AgentTeams-Run-ID", run)
+		}
 		query := url.Values{}
 		if team != "" {
 			query.Set("team", team)
 		}
-		response, err := NewAPIClient().doWithHeadersContext(cmd.Context(), http.MethodPost, "/api/v1/tasks/"+url.PathEscape(args[0])+"/plan?"+query.Encode(), json.RawMessage(body), nil)
+		response, err := NewAPIClient().doWithHeadersContext(cmd.Context(), http.MethodPost, "/api/v1/tasks/"+url.PathEscape(args[0])+"/plan?"+query.Encode(), json.RawMessage(body), headers)
 		if err != nil {
 			return err
 		}
@@ -48,6 +60,7 @@ func taskPlanCmd() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&filename, "file", "", "Local JSON plan file with nodes, local IDs and dependencies")
 	cmd.Flags().StringVar(&inline, "json", "", "Inline JSON plan using the same nodes schema")
+	cmd.Flags().StringVar(&overview, "overview", "", "Human-readable goal, requirements, acceptance criteria and planned responsibilities, published before dispatch")
 	cmd.Flags().StringVar(&team, "team", "", "Task's owning Team when its ID is ambiguous")
 	return cmd
 }

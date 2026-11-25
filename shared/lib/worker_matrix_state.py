@@ -316,5 +316,9 @@ class WorkerMatrix:
         cp.update(version=cp["version"]+1, delivery="delivered", reply_event=event_id)
         return self._message_view(identity["event_key"], self._message_update(identity["event_key"], entry, "checkpoint", cp))
 
+    def message_complete(self, identity):
+        """Retain a verified internal result without sending a room reply."""
+        return self._message_view(identity["event_key"], self._message_update(identity["event_key"], self._message_owned(identity), "complete"))
+
     def message_cancel(self, identity):
         return self._message_view(identity["event_key"], self._message_update(identity["event_key"], self._message_owned(identity), "cancel"))

@@ -293,10 +293,11 @@ def _validate_mutation(arguments: dict) -> None:
         raise ValueError("Could not read the accepted Task results. Retry before completing.")
     if "acceptedResults" not in task and not task.get("planId"):
         return  # Older main tasks do not expose the saved accepted-result projection.
-    accepted = {artifact["artifactId"] for result in task.get("acceptedResults", [])
+    accepted = {artifact["artifactId"]: artifact["name"] for result in task.get("acceptedResults", [])
                 for artifact in result["candidate"]["artifacts"]}
     if len(selectors) != len(set(selectors)) or any(ref not in accepted for ref in selectors):
-        raise ValueError("Use distinct accepted artifactId values, or omit artifacts to deliver all accepted outputs.")
+        raise ValueError("Select distinct accepted artifactId values. Available artifactId and filename pairs: " +
+                         json.dumps(accepted, ensure_ascii=False))
 
 
 def run(arguments: dict) -> dict:

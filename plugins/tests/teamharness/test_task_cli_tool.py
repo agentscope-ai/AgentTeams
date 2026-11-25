@@ -213,11 +213,12 @@ def test_file_identity_can_include_consistency_check_name(monkeypatch):
     assert argv == ["/usr/local/bin/agt", "task", "files", "read", "a", "--name", "app.py", "--artifact", "opaque", "--version", "v1"]
 
 
-def test_execution_and_leader_schemas_require_task_identity(monkeypatch):
+def test_intake_schemas_allow_create_while_execution_still_requires_task_identity(monkeypatch):
     tool = load(monkeypatch)
-    for role in ["leader", "worker"]:
-        assert set(tool.schema(role)["inputSchema"]["required"]) == {"action", "taskId"}
-    assert tool.schema("manager")["inputSchema"]["required"] == ["action"]
+    assert set(tool.schema("worker")["inputSchema"]["required"]) == {"action", "taskId"}
+    for role in ["manager", "leader"]:
+        assert tool.schema(role)["inputSchema"]["required"] == ["action"]
+        assert "create" in tool.schema(role)["inputSchema"]["properties"]["action"]["enum"]
 
 
 @pytest.mark.parametrize("message, retryable", [
@@ -258,3 +259,24 @@ def test_create_binds_related_corrections_in_a_private_process_environment(monke
     arguments["relatedInputIds"] = ["input-2", "input-3"]
     with pytest.raises(ValueError):
         tool.command(arguments)
+
+
+def test_rejection_sends_correction_graph_as_one_json_argument(monkeypatch):
+    tool = load(monkeypatch)
+    nodes = [{"id": "fix", "assignedTo": "developer", "spec": "Fix $(literal)", "dependsOn": []},
+             {"id": "review", "assignedTo": "reviewer", "spec": "Recheck", "dependsOn": ["fix"]}]
+    argv, _ = tool.command({"action": "reject", "taskId": "t1", "submissionId": "s1", "note": "Failed review",
+                           "replacementSpec": "Correct then independently recheck", "replacementNodes": nodes})
+    assert json.loads(argv[argv.index("--replacement-nodes") + 1]) == nodes
+    assert "replacementNodes" in tool.schema("leader")["inputSchema"]["properties"]
+
+
+def test_invalid_correction_dependencies_are_rejected_before_native_ledger(monkeypatch):
+    tool = load(monkeypatch)
+    monkeypatch.setenv("AGENTTEAMS_CONTROLLER_URL", "http://controller.test")
+    monkeypatch.setattr(tool.subprocess, "run", lambda *args, **kwargs: pytest.fail("invalid graph reached CLI"))
+    args = {"action": "reject", "taskId": "t1", "submissionId": "s1", "note": "Failed review", "replacementSpec": "Fix",
+            "replacementNodes": [{"id": "fix", "assignedTo": "dev", "spec": "Fix", "dependsOn": ["original-analysis"]}]}
+    result = tool.run(args)
+    assert result["effect"] == "none" and result["error"] == "invalid_task_arguments"
+    assert "local correction IDs" in result["message"]

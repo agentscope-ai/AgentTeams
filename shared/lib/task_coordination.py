@@ -100,7 +100,7 @@ def notification(content, room, sender, own, *, fetch=controller_json, event_id=
             if (plan.get("status") not in ({"in_progress", "submitted"} if main else {"active"})
                     or (main and plan.get("task_kind") != "main")
                     or not leaves or any(n.get("status") != "completed" for n in leaves)
-                    or sender != own):
+                    or (not main and sender != own)):
                 raise IgnoredNotification("plan is not ready to close")
         elif kind == "assistant_digest":
             meta = packet["channel_meta"]

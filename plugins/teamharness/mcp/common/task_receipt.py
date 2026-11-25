@@ -175,6 +175,13 @@ def creation_receipt(result: object, source: str) -> tuple[str, str] | None:
     if not isinstance(task, dict) or not isinstance(notice, dict):
         return None
     identity, recipient, event = task.get("id"), notice.get("recipient"), notice.get("eventId")
+    if (notice.get("status") == "inline" and isinstance(identity, str) and _ID.fullmatch(identity)
+            and task.get("kind") == "main" and task.get("originEventId") == source
+            and task.get("status") in {"planned", "assigned", "in_progress", "completed", "cancelled"}
+            and isinstance(recipient, str) and _ID.fullmatch(recipient) and not event):
+        key = json.dumps(["create", source, identity, "inline"], separators=(",", ":"))
+        return key, f"[Task system receipt]\nTask {identity} is registered for this Human input. Continue planning this same Task in your current context. Do not send a self-notification or create another Task."
+
     if (not isinstance(identity, str) or not _ID.fullmatch(identity) or task.get("kind") != "main"
             or task.get("status") not in {"planned", "assigned", "in_progress", "submitted", "completed", "cancelled", "blocked", "revision", "paused"}
             or notice.get("status") != "queued" or not isinstance(recipient, str) or not _ID.fullmatch(recipient)
@@ -224,7 +231,25 @@ def task_receipt(result: object, task_id: str, action: str) -> tuple[str, str] |
     if not isinstance(result, dict) or result.get("ok") is False:
         return None
     task, notification = result.get("task"), result.get("notification")
-    if not isinstance(task, dict) or not isinstance(notification, dict):
+    if not isinstance(task, dict):
+        return None
+    if action == "submit" and task.get("status") == "completed":
+        handoff = task.get("handoff")
+        submission = task.get("submissionId")
+        assignments = assignment_facts(result.get("assignments"))
+        if (task.get("id") != task_id or not isinstance(submission, str) or not submission
+                or not isinstance(handoff, dict) or handoff.get("submissionId") != submission
+                or handoff.get("actorRole") not in {"worker", "team_leader"} or not handoff.get("actorName")
+                or result.get("mainProjection") not in {"applied", "pending"}
+                or result.get("dispatchStatus") not in {"ready", "pending"} or assignments is None):
+            return None
+        identities, fact = assignments
+        if result["mainProjection"] == "pending" or result["dispatchStatus"] == "pending":
+            fact += " Synchronization or downstream dispatch is pending; the task system will retry."
+        identity = json.dumps([action, task_id, submission, result["mainProjection"], result["dispatchStatus"], identities], separators=(",", ":"))
+        return identity, (f"[Task system receipt]\nTask {task_id} completed with its immutable delivery. {fact} "
+                          "End this execution. Do not notify the Leader, repeat assignments, or poll.")
+    if not isinstance(notification, dict):
         return None
     if action not in {"submit", "complete"}:
         return None

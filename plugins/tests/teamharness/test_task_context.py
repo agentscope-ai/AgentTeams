@@ -101,6 +101,18 @@ def test_closure_requires_all_public_nodes_accepted():
     with pytest.raises(ValueError): context.prepare("main_task_ready", event, result)
 
 
+def test_final_acceptance_consumes_exact_handoff_without_inventing_leader_review():
+    event, result = closure()
+    child = result['task']['acceptedResults'][0]
+    del child['review']
+    child.update(resultStatus='SUCCESS', handoff={'submissionId': 's1', 'actorName': 'dev', 'actorRole': 'worker'})
+    prepared = context.prepare('main_task_ready', event, result)
+    assert prepared['completion'] == 'main'
+    assert 'review' not in prepared['context']['acceptedResults'][0]
+    child['handoff']['submissionId'] = 'other'
+    with pytest.raises(ValueError): context.prepare('main_task_ready', event, result)
+
+
 @pytest.mark.parametrize("change", ["missing", "wrong-task", "wrong-main", "unreviewed", "wrong-candidate", "wrong-review", "duplicate"])
 def test_closure_rejects_missing_or_mismatched_accepted_evidence(change):
     event, result = closure()
@@ -113,3 +125,30 @@ def test_closure_rejects_missing_or_mismatched_accepted_evidence(change):
     elif change == "wrong-review": accepted["review"]["submissionId"] = "other"
     else: task["acceptedResults"].append(copy.deepcopy(accepted))
     with pytest.raises(ValueError): context.prepare("main_task_ready", event, result)
+
+
+def test_model_context_deduplicates_only_exact_original_and_node_spec_without_mutation():
+    original = "Keep all original requirements, including keyboard access."
+    node = {"taskId": "t1", "spec": "Independently verify the published HTML."}
+    value = {"id": "main", "spec": original, "nodes": [node], "acceptedResults": [
+        {"id": "t1", "spec": "# Original request\n" + original + "\n\n# Your assignment\n" + node["spec"],
+         "candidate": {"report": "Measured evidence", "artifacts": [{"artifactId": "f1", "sha256": "abc"}]}},
+        {"id": "t2", "spec": "Unique correction requirements"}]}
+    before = copy.deepcopy(value)
+    result = context.model_context(value)
+    assert result["spec"] == original
+    assert "spec" not in result["acceptedResults"][0]
+    assert result["acceptedResults"][0]["candidate"] == value["acceptedResults"][0]["candidate"]
+    assert result["acceptedResults"][1]["spec"] == "Unique correction requirements"
+    assert value == before
+
+
+def test_prepared_inputs_carry_manifest_not_whole_file_previews():
+    value = {"task": {"id":"t1","spec":"Your task requirements"}, "inputs":[{"taskId":"upstream","summary":"PASS, head abc", "files":[
+        {"name":"page.html","localPath":"/inputs/page.html","sha256":"sha","version":"sha","preview":{"text":"large source"}},
+        {"name":"test.md","localPath":"/inputs/test.md","artifactId":"report","preview":{"text":"large report"}}]}]}
+    result=context.model_context(value)
+    assert result['task']==value['task']
+    assert result['inputs'][0]['summary']=='PASS, head abc'
+    assert result['inputs'][0]['files'][0]=={'name':'page.html','localPath':'/inputs/page.html','sha256':'sha','version':'sha'}
+    assert 'preview' in value['inputs'][0]['files'][0]

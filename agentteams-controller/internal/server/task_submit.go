@@ -34,8 +34,8 @@ type taskSubmission struct {
 	InstanceID string            `json:"instance_id"`
 }
 
-// SubmitTask commits a candidate and its notification intent atomically. Only
-// Leader acceptance may complete the execution and release dependent work.
+// SubmitTask commits a candidate and its notification intent atomically.
+// Ordinary managed executions hand off directly; exceptions still reach the Leader.
 func (h *ProjectHandler) SubmitTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !isSafeTaskID(id) {
@@ -122,6 +122,11 @@ func (h *ProjectHandler) SubmitTask(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 409, err.Error())
 			return
 		}
+		direct, err := h.directTaskHandoff(r, key, task)
+		if err != nil {
+			writeError(w, 409, err.Error())
+			return
+		}
 		var index taskFileIndex
 		if len(input.Artifacts) > 0 && json.Unmarshal(raw["task_files"], &index) != nil {
 			writeError(w, 404, "artifact not registered for this task")
@@ -178,11 +183,17 @@ func (h *ProjectHandler) SubmitTask(w http.ResponseWriter, r *http.Request) {
 		task["status"], task["submission_id"], task["summary"], task["result_status"] = "submitted", submissionID, input.Summary, input.Status
 		task["result_path"] = "shared/tasks/" + id + "/artifacts/" + reportDigest
 		task["deliverables"], task["deliverable_refs"] = deliverables, input.Artifacts
-		task["submitted_at"] = time.Now().UTC().Format(time.RFC3339)
+		task["submitted_at"] = time.Now().UTC().Format(time.RFC3339Nano)
 		caller := authpkg.CallerFromContext(r.Context())
 		event := coordinationEvent{Kind: "task_submitted", TaskID: id, MainTaskID: coordinationString(task, "main_task_id"), ProjectID: coordinationString(task, "project_id"), SubmissionID: submissionID}
 		task["task_notifications"] = map[string]taskNotificationIntent{"submitted": {Event: event, ActorRole: caller.Role, ActorName: caller.Username, Team: caller.Team, Status: "pending"}}
 		appendTaskOperationHistory(task, "in_progress", "submitted", "submit_task", authzActor(caller))
+		if direct && (input.Status == "SUCCESS" || input.Status == "SUCCESS_WITH_NOTES") {
+			task["task_handoff"] = taskHandoff{SubmissionID: submissionID, ActorName: caller.Username, ActorRole: caller.Role}
+			task["status"] = "completed"
+			delete(task, "task_notifications")
+			appendTaskOperationHistory(task, "submitted", "completed", "handoff_task", authzActor(caller))
+		}
 		next, err := json.Marshal(task)
 		if err != nil || len(next) > taskMetaCommitMaxBytes {
 			writeError(w, 413, "submission exceeds task record limit")
@@ -202,6 +213,10 @@ func (h *ProjectHandler) SubmitTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectHandler) writeTaskSubmission(w http.ResponseWriter, r *http.Request, key, id, team string, task map[string]any) {
+	if taskHandoffOf(task) != nil {
+		h.writeTaskHandoff(w, r, key, id, team, task)
+		return
+	}
 	notification := h.flushTaskNotification(r.Context(), key, "submitted")
 	nextAction := "Task system has taken responsibility for automatically notifying your Team Leader for review. Do not resend the notification; wait for acceptance or revision."
 	if notification.Status == "queued" {
@@ -215,6 +230,12 @@ func (h *ProjectHandler) writeTaskSubmission(w http.ResponseWriter, r *http.Requ
 }
 
 func validateTaskSubmissionCommit(w http.ResponseWriter, current, next []byte) bool {
+	handoffBefore, hadHandoff := rawJSONField(current, "task_handoff")
+	handoffAfter, hasHandoff := rawJSONField(next, "task_handoff")
+	if hadHandoff != hasHandoff || (hadHandoff && !sameJSONValue(handoffBefore, handoffAfter)) {
+		writeError(w, 403, "task handoff is server-owned; use the task submit API")
+		return false
+	}
 	before, had := rawJSONField(current, "task_submission")
 	after, has := rawJSONField(next, "task_submission")
 	if had != has || (had && !sameJSONValue(before, after)) {

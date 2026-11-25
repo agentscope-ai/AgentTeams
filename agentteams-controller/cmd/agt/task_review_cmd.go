@@ -15,7 +15,7 @@ func taskReviewCmd(accepted bool) *cobra.Command {
 	if accepted {
 		action = "accept"
 	}
-	var submission, note, team, replacement string
+	var submission, note, team, replacement, replacementNodes string
 	cmd := &cobra.Command{Use: action + " <task-id>", Short: "Record your business review of an exact submitted candidate", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if !taskIdentifier.MatchString(args[0]) || strings.TrimSpace(submission) == "" || strings.TrimSpace(note) == "" {
 			return fmt.Errorf("valid task id, exact submission identity and business review note required")
@@ -24,12 +24,19 @@ func taskReviewCmd(accepted bool) *cobra.Command {
 		if team != "" {
 			query.Set("team", team)
 		}
-		body := map[string]string{"submissionId": submission, "note": note}
+		body := map[string]any{"submissionId": submission, "note": note}
 		if replacement != "" {
 			if strings.TrimSpace(replacement) == "" {
 				return fmt.Errorf("replacement spec must not be blank")
 			}
 			body["replacementSpec"] = replacement
+		}
+		if replacementNodes != "" {
+			var nodes []map[string]any
+			if json.Unmarshal([]byte(replacementNodes), &nodes) != nil || len(nodes) == 0 || strings.TrimSpace(replacement) == "" {
+				return fmt.Errorf("replacement nodes must be a nonempty JSON array with correction requirements")
+			}
+			body["replacementNodes"] = nodes
 		}
 		response, err := NewAPIClient().doWithHeadersContext(cmd.Context(), http.MethodPost,
 			"/api/v1/tasks/"+url.PathEscape(args[0])+"/"+action+"?"+query.Encode(), body, nil)
@@ -46,6 +53,7 @@ func taskReviewCmd(accepted bool) *cobra.Command {
 	cmd.Flags().StringVar(&note, "note", "", "Your business validation evidence or rejection reason")
 	if !accepted {
 		cmd.Flags().StringVar(&replacement, "replacement-spec", "", "Explicit correction requirements for a new execution in the same main task")
+		cmd.Flags().StringVar(&replacementNodes, "replacement-nodes", "", "JSON execution DAG replacing the failed step (for example correction then independent review)")
 	}
 	cmd.Flags().StringVar(&team, "team", "", "Task's owning Team when its ID is ambiguous")
 	_ = cmd.MarkFlagRequired("submission")

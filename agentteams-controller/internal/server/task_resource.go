@@ -21,6 +21,7 @@ type taskResource struct {
 	PlanID                 string                            `json:"planId,omitempty"`
 	Nodes                  []taskPlanNodeResource            `json:"nodes,omitempty"`
 	ID                     string                            `json:"id"`
+	RoomID                 string                            `json:"roomId,omitempty"`
 	Team                   string                            `json:"team"`
 	Kind                   string                            `json:"kind,omitempty"`
 	Title                  string                            `json:"title,omitempty"`
@@ -36,6 +37,7 @@ type taskResource struct {
 	Candidate              *taskCandidateResource            `json:"candidate,omitempty"`
 	CompletionID           string                            `json:"completionId,omitempty"`
 	Review                 *taskReview                       `json:"review,omitempty"`
+	Handoff                *taskHandoff                      `json:"handoff,omitempty"`
 	ResultStatus           string                            `json:"resultStatus,omitempty"`
 	Artifacts              []taskFinalArtifact               `json:"artifacts,omitempty"`
 	OriginEventID          string                            `json:"originEventId,omitempty"`
@@ -138,7 +140,7 @@ func (h *ProjectHandler) GetTaskResource(w http.ResponseWriter, r *http.Request)
 			}
 			accepted := publicTaskResource(node.TaskID, team, child)
 			projection, _ := storedNodes[i].(map[string]any)
-			if accepted.Candidate == nil || accepted.Review == nil || !accepted.Review.Accepted || accepted.Review.Status != "completed" || accepted.Review.ID == "" || accepted.Review.ID != coordinationString(projection, "review_id") || accepted.Review.SubmissionID != accepted.SubmissionID || accepted.Candidate.ID != accepted.SubmissionID || accepted.SubmissionID != coordinationString(projection, "submission_id") {
+			if accepted.Candidate == nil || !taskResultCompleted(child) || (accepted.Handoff == nil && (accepted.Review == nil || accepted.Review.ID != coordinationString(projection, "review_id"))) || accepted.Candidate.ID != accepted.SubmissionID || accepted.SubmissionID != coordinationString(projection, "submission_id") {
 				writeError(w, 503, "accepted candidate or review identity unavailable")
 				return
 			}
@@ -172,6 +174,9 @@ func publicTaskResource(id, team string, record map[string]any) taskResource {
 			_ = json.Unmarshal(data, &dependencies)
 			step := coordinationString(node, "step_id")
 			nodes = append(nodes, taskPlanNodeResource{RevisionOf: coordinationString(node, "revision_of"), RevisionSpec: coordinationString(node, "revision_spec"), ID: step, TaskID: coordinationString(node, "task_id"), Title: coordinationString(node, "title"), AssignedTo: coordinationString(node, "assigned_to"), Status: coordinationString(node, "status"), Spec: byStep[step], DependsOn: dependencies})
+			if nodes[len(nodes)-1].Spec == "" {
+				nodes[len(nodes)-1].Spec = coordinationString(node, "spec")
+			}
 		}
 	}
 	var review *taskReview
@@ -207,11 +212,11 @@ func publicTaskResource(id, team string, record map[string]any) taskResource {
 			notices[kind] = taskNotificationStatus{Status: intent.Status, EventID: intent.EventID, Recipient: intent.Recipient}
 		}
 	}
-	return taskResource{
+	return taskResource{RoomID: coordinationString(record, "room_id"),
 		Cancellation: cancellation, CancellationProjection: cancellationProjection,
 		RevisionOf: coordinationString(record, "revision_of"), Candidate: publicTaskCandidate(record),
 		PlanID: plan.ID, Nodes: nodes,
-		Review: review, ResultStatus: coordinationString(record, "result_status"),
+		Review: review, Handoff: taskHandoffOf(record), ResultStatus: coordinationString(record, "result_status"),
 		OriginEventID: origin.EventID, Notifications: notices,
 		CompletionID: completion.ID, Artifacts: completion.Artifacts,
 		ID: id, Team: team,

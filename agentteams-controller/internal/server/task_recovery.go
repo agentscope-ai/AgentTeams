@@ -208,6 +208,15 @@ func recoveryStatus(task map[string]json.RawMessage) bool {
 		return false
 	}
 	if cp := execution.Checkpoint; cp != nil {
+		// Direct handoff commits before the native submit callback returns.
+		// Keep the owned operation discoverable so its exact return can close;
+		// claim still fences an unknown outcome and never restarts its tools.
+		var handoff taskHandoff
+		var submissionID string
+		_ = json.Unmarshal(task["submission_id"], &submissionID)
+		if json.Unmarshal(task["task_handoff"], &handoff) == nil && handoff.SubmissionID != "" && handoff.SubmissionID == submissionID && unresolvedOperation(cp) {
+			return true
+		}
 		if cp.Delivery == "pending" && cp.Result != nil {
 			return true
 		}

@@ -27,7 +27,7 @@ func TestTaskReplacementPreservesRejectedAttemptAndReleasesOnlyCorrectedInput(t 
 		t.Fatal(w.Body.String())
 	}
 	oldID := taskPlanExecutionID("alpha", "main", "A")
-	submission := submitPlannedCandidate(t, h, store, oldID, "worker-cr", "Incorrect output")
+	submission := submitPlannedCandidate(t, h, store, oldID, "worker-cr", "Incorrect output", "REVISION_NEEDED")
 	oldKey := "teams/alpha/shared/tasks/" + oldID + "/meta.json"
 	w := rejectWithReplacement(h, leader, oldID, submission, "Use exact integer cents and retain the requested interface")
 	var receipt struct {
@@ -62,8 +62,7 @@ func TestTaskReplacementPreservesRejectedAttemptAndReleasesOnlyCorrectedInput(t 
 	if _, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+consumerID+"/meta.json"); err == nil {
 		t.Fatal("rejected prerequisite released consumer")
 	}
-	newSubmission := submitPlannedCandidate(t, h, store, newID, "worker-cr", "Corrected output")
-	acceptPlannedCandidate(t, h, leader, newID, newSubmission)
+	submitPlannedCandidate(t, h, store, newID, "worker-cr", "Corrected output")
 	consumer, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+consumerID+"/meta.json")
 	if err != nil || consumer["status"] != "assigned" {
 		t.Fatalf("corrected prerequisite did not release consumer: %+v %v", consumer, err)
@@ -83,8 +82,7 @@ func TestTaskReplacementPreservesRejectedAttemptAndReleasesOnlyCorrectedInput(t 
 	if string(oldBefore) != string(oldAfter) {
 		t.Fatal("rejected execution changed during replacement")
 	}
-	consumerSubmission := submitPlannedCandidate(t, h, store, consumerID, "second-cr", "Verified integration")
-	acceptPlannedCandidate(t, h, leader, consumerID, consumerSubmission)
+	submitPlannedCandidate(t, h, store, consumerID, "second-cr", "Verified integration")
 	completed := callTaskComplete(h, leader, "Corrected outputs accepted")
 	var final struct {
 		Task taskResource `json:"task"`
@@ -109,7 +107,7 @@ func TestTaskReplacementRejectsFreezeAndActivatedConsumerBeforeSavingDecision(t 
 				t.Fatal(w.Body.String())
 			}
 			id := taskPlanExecutionID("alpha", "main", "A")
-			submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "Bad")
+			submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "Bad", "REVISION_NEEDED")
 			key := "teams/alpha/shared/tasks/main/meta.json"
 			main, _ := h.coordination.read(t.Context(), key)
 			if scenario == "frozen" {
@@ -135,7 +133,7 @@ func TestTaskReplacementKeepsR1AcceptanceGate(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 	id := taskPlanExecutionID("alpha", "main", "A")
-	submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "Bad")
+	submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "Bad", "REVISION_NEEDED")
 	key := "teams/alpha/shared/tasks/" + id + "/meta.json"
 	child, _ := h.coordination.read(t.Context(), key)
 	child["decision_class"] = "r1"
@@ -172,7 +170,7 @@ func TestTaskReplacementRecordLimitIsCheckedBeforeSavingRejection(t *testing.T) 
 		t.Fatalf("plan code %d", w.Code)
 	}
 	id := taskPlanExecutionID("alpha", "main", "A")
-	submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "Bad")
+	submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "Bad", "REVISION_NEEDED")
 	w := rejectWithReplacement(h, leader, id, submission, strings.Repeat("c", 100000))
 	child, _ := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+id+"/meta.json")
 	if w.Code != 413 || child["status"] != "submitted" || child["task_review"] != nil {
@@ -188,7 +186,7 @@ func TestTaskReplacementRecoversCommittedRejectionAfterParentCASFailure(t *testi
 		t.Fatal(w.Body.String())
 	}
 	id := taskPlanExecutionID("alpha", "main", "A")
-	submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "Bad output")
+	submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "Bad output", "REVISION_NEEDED")
 	fault := &reviewProjectionFailure{Memory: store, fail: true}
 	h.oss = fault
 	w := rejectWithReplacement(h, leader, id, submission, "Fix the result")

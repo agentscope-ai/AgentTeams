@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss"
@@ -49,7 +50,7 @@ func (h *ProjectHandler) reconcileTaskPlan(ctx context.Context, key string) erro
 		if status, message := h.taskExecutionAdmissionFailure(ctx, key, main); status != 0 {
 			return fmt.Errorf("%s", message)
 		}
-		if strings.HasPrefix(coordinationString(main, "room_id"), "!") {
+		if strings.HasPrefix(coordinationString(main, "room_id"), "!") && plan.RoomID == main["room_id"] {
 			break
 		}
 		room, err := h.coordination.ensureTaskPlanRoom(ctx, main, plan)
@@ -57,6 +58,8 @@ func (h *ProjectHandler) reconcileTaskPlan(ctx context.Context, key string) erro
 			return err
 		}
 		main["room_id"] = room
+		plan.RoomID = room
+		main["task_plan"] = plan
 		next, _ := json.Marshal(main)
 		if err := strict.PutObjectIfMatchStrict(ctx, key, next, contentETag(body)); err != nil {
 			if errors.Is(err, oss.ErrPreconditionFailed) {
@@ -125,6 +128,8 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 		return fmt.Errorf("invalid execution node")
 	}
 	key := path.Join(path.Dir(path.Dir(mainKey)), id, "meta.json")
+	actorRole, actorName := authpkg.RoleTeamLeader, plan.ActorName
+	var lastCompletion time.Time
 	// Validate actual accepted dependency identities before creating work. Begin
 	// repeats this check and materializes their exact immutable file versions.
 	dependencies, _ := node["depends_on"].([]any)
@@ -139,14 +144,20 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 		}
 		body, err := h.oss.GetObject(ctx, path.Join(path.Dir(path.Dir(mainKey)), name, "meta.json"))
 		var child map[string]any
-		var review taskReview
 		if err != nil || json.Unmarshal(body, &child) != nil {
 			return fmt.Errorf("accepted prerequisite unavailable")
 		}
-		encoded, _ := json.Marshal(child["task_review"])
-		_ = json.Unmarshal(encoded, &review)
-		if child["status"] != "completed" || child["main_task_id"] != mainID || !review.Accepted || review.SubmissionID != child["submission_id"] || !taskReviewMembership(main, child) {
+		if child["main_task_id"] != mainID || !taskResultCompleted(child) || !taskReviewMembership(main, child) {
 			return fmt.Errorf("prerequisite is not an accepted candidate of this main task")
+		}
+		if handoff := taskHandoffOf(child); handoff != nil {
+			completed, err := time.Parse(time.RFC3339Nano, coordinationString(child, "submitted_at"))
+			if err != nil {
+				return fmt.Errorf("prerequisite completion time unavailable")
+			}
+			if lastCompletion.IsZero() || completed.After(lastCompletion) {
+				actorRole, actorName, lastCompletion = handoff.ActorRole, handoff.ActorName, completed
+			}
 		}
 	}
 	create, ok := h.oss.(createIfAbsentWriter)
@@ -167,7 +178,7 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 	child := map[string]any{"task_id": id, "task_kind": "execution", "task_plan_id": plan.ID, "main_task_id": mainID, "parent_task_id": mainID,
 		"project_id": coordinationString(main, "project_id"), "team_id": coordinationString(main, "team_id"), "assigned_to": node["assigned_to"], "title": node["title"],
 		"spec": node["spec"], "spec_path": "shared/tasks/" + id + "/spec.md", "room_id": main["room_id"], "status": "prepared", "notifyTxn": delivery, "decision_class": "r3",
-		"task_notifications": map[string]taskNotificationIntent{"assigned": {Event: coordinationEvent{Kind: "task_assigned", TaskID: id, MainTaskID: mainID, ProjectID: coordinationString(main, "project_id"), DeliveryID: delivery}, ActorRole: authpkg.RoleTeamLeader, ActorName: plan.ActorName, Team: coordinationString(main, "team_id"), Status: "pending"}}}
+		"task_notifications": map[string]taskNotificationIntent{"assigned": {Event: coordinationEvent{Kind: "task_assigned", TaskID: id, MainTaskID: mainID, ProjectID: coordinationString(main, "project_id"), DeliveryID: delivery}, ActorRole: actorRole, ActorName: actorName, Team: coordinationString(main, "team_id"), Status: "pending"}}}
 	if class := coordinationString(node, "decision_class"); class != "" {
 		child["decision_class"] = class
 	}

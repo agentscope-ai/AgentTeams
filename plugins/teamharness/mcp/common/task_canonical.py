@@ -151,7 +151,7 @@ def admit(context, *, rpc=None):
         return {'ok': True, 'receipts': []}
     rpc = rpc or request
     requests = []
-    if context.get('role') == 'manager':
+    if context.get('role') in {'manager', 'leader', 'team_leader'}:
         requests.extend({'action': 'create', '_nativeSource': {key: source[key] for key in ('eventId', 'roomId', 'userId')}}
                         for source in context.get('sources') or [])
     ids = [context.get('execution'), context.get('completion'), *(context.get('planning') or [])]

@@ -203,15 +203,16 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		if len(e.Tasks) > 0 {
 			e.Protocol = "task/v1"
 		}
-		if caller.Role != authpkg.RoleManager || e.OriginEventID == "" || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_session"), "!") || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_user"), "@") {
+		if (caller.Role != authpkg.RoleManager && caller.Role != authpkg.RoleTeamLeader) || e.OriginEventID == "" || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_session"), "!") || !strings.HasPrefix(coordinationString(e.SourceRoute, "target_user"), "@") {
 			return reject()
 		}
-		actor, err := h.manager(ctx, caller.Username)
-		if err != nil {
-			return e, err
+		if caller.Role == authpkg.RoleManager {
+			actor, err := h.manager(ctx, caller.Username)
+			if err != nil {
+				return e, err
+			}
+			e.Actor, e.ActorName = actor.Status.MatrixUserID, actor.Name
 		}
-		e.Actor = actor.Status.MatrixUserID
-		e.ActorName = actor.Name
 		recipient, err := h.worker(ctx, e.Recipient)
 		if err != nil {
 			return e, err
@@ -222,6 +223,37 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		}
 		e.Team = tm.Name
 		e.StorageTeam = tm.Spec.EffectiveTeamName(tm.Name)
+		if caller.Role == authpkg.RoleTeamLeader {
+			route, err := NewAssistantHandler(h.deps).routeFor(ctx, caller, tm.Name)
+			room, user := coordinationString(e.SourceRoute, "target_session"), coordinationString(e.SourceRoute, "target_user")
+			if err != nil || caller.Team != tm.Name || route.name != recipient.Name || route.room != room || route.user != user || len(e.Tasks) > 1 {
+				return reject()
+			}
+			e.Actor, e.ActorName = recipient.Status.MatrixUserID, recipient.Name
+			original, status := h.taskSourceRequestFor(ctx, "worker", recipient.Name, room, e.OriginEventID, user)
+			if status != 0 {
+				return reject()
+			}
+			if e.RoomID != room {
+				if len(e.Tasks) != 1 {
+					return reject()
+				}
+				request := e.Tasks[0]
+				main, err := h.read(ctx, path.Join("teams", e.StorageTeam, "shared/tasks", request.TaskID, "meta.json"))
+				origin := coordinationMap(main, "task_origin")
+				if err != nil || main["task_kind"] != "main" || main["room_id"] != e.RoomID || main["title"] != request.Title || main["spec"] != request.Spec || main["assigned_to"] != recipient.Status.MatrixUserID || origin["event_id"] != e.OriginEventID || origin["room_id"] != room || origin["requester"] != user || origin["dispatch_agent"] != recipient.Name {
+					return reject()
+				}
+			}
+			if len(e.Tasks) == 1 {
+				if e.Tasks[0].TaskID != sourceMainTaskID(e.ActorName, e.StorageTeam, recipient.Name, e.OriginEventID) {
+					return reject()
+				}
+				if !strings.Contains(e.Tasks[0].Spec, original) {
+					return reject()
+				}
+			}
+		}
 		if !coordinationStorageTeamSafe(e.StorageTeam) {
 			return reject()
 		}
@@ -322,8 +354,17 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		}
 		switch e.Kind {
 		case "task_assigned":
-			if caller.Role != authpkg.RoleTeamLeader || e.DeliveryID == "" || coordinationString(task, "notifyTxn") != e.DeliveryID {
+			if e.DeliveryID == "" || coordinationString(task, "notifyTxn") != e.DeliveryID {
 				return reject()
+			}
+			if caller.Role != authpkg.RoleTeamLeader {
+				var notices map[string]taskNotificationIntent
+				data, _ := json.Marshal(task["task_notifications"])
+				_ = json.Unmarshal(data, &notices)
+				intent := notices["assigned"]
+				if caller.Role != authpkg.RoleWorker || e.Protocol != "task/v1" || coordinationString(task, "task_plan_id") == "" || intent.ActorRole != caller.Role || intent.ActorName != actor.Name || intent.Event.DeliveryID != e.DeliveryID || intent.Event.TaskID != e.TaskID {
+					return reject()
+				}
 			}
 			status := coordinationString(task, "status")
 			if status == "" {
@@ -366,10 +407,28 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			fence = e.TaskID + "\x00" + e.SubmissionID
 
 		case "project_ready", "main_task_ready":
-			if caller.Role != authpkg.RoleTeamLeader || !coordinationReady(project) || (e.Kind == "main_task_ready") != (e.MainTaskID != "") {
+			if !coordinationReady(project) || (e.Kind == "main_task_ready") != (e.MainTaskID != "") {
 				return reject()
 			}
-			if err = h.targetWorker(&e, actor); err != nil {
+			recipient := actor
+			if caller.Role != authpkg.RoleTeamLeader {
+				var notices map[string]taskNotificationIntent
+				data, _ := json.Marshal(project["task_notifications"])
+				_ = json.Unmarshal(data, &notices)
+				intent := notices["ready"]
+				if caller.Role != authpkg.RoleWorker || e.Protocol != "task/v1" || intent.ActorRole != caller.Role || intent.ActorName != actor.Name || intent.Event.Kind != e.Kind || intent.Event.MainTaskID != e.MainTaskID {
+					return reject()
+				}
+				recipient, err = h.worker(ctx, coordinationString(coordinationMap(project, "task_plan"), "actor_name"))
+				if err != nil {
+					return e, err
+				}
+				leaderTeam, err := h.memberTeam(ctx, recipient.Name, "team_leader", tm.Name)
+				if err != nil || leaderTeam.Name != tm.Name {
+					return reject()
+				}
+			}
+			if err = h.targetWorker(&e, recipient); err != nil {
 				return e, err
 			}
 			context := []map[string]any{}
@@ -428,6 +487,15 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 
 			route := coordinationMap(project, "reply_route")
 			target := coordinationString(route, "target_user")
+			origin := coordinationMap(project, "task_origin")
+			if e.Kind == "main_task_completed" && target == actor.Status.MatrixUserID &&
+				coordinationString(origin, "dispatch_agent") == actor.Name && coordinationString(origin, "dispatch_agent_role") == authpkg.RoleTeamLeader {
+				if err = h.targetWorker(&e, actor); err != nil {
+					return e, err
+				}
+				fence = coordinationScopeID(e)
+				break // Return the frozen report directly using this Leader's dispatch identity.
+			}
 			var managers v1beta1.ManagerList
 			if err = h.deps.Client.List(ctx, &managers, client.InNamespace(h.deps.Namespace)); err != nil {
 				return e, err
@@ -514,7 +582,7 @@ func coordinationClip(text string, limit int) string {
 // Each managed Harness consumes authenticated Task notifications over Matrix.
 func coordinationRuntimeSupported(runtime string) bool {
 	switch runtime {
-	case "qwenpaw", "openclaw", "hermes", "deepseek-harness", "openhuman", "codex", "opencode":
+	case "qwenpaw", "openclaw", "hermes", "deepseek-harness", "openhuman", "codex", "opencode", "qoder", "claudecode":
 		return true
 	default:
 		return false

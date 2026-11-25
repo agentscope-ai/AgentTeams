@@ -85,10 +85,12 @@ class RecoveryRPCTest(unittest.TestCase):
         with self.assertRaisesRegex(rpc.RecoveryConflict, 'durable result'):
             rpc.execute({'action': 'prepare_reply', 'identity': self.identity, 'text': ''})
         self.recovery.prepare_reply.assert_not_called()
-        self.task.update(status='submitted', result_path='shared/tasks/T/report.md')
-        self.recovery.prepare_reply.return_value = (self.task, 'verified saved report')
-        result = rpc.execute({'action': 'prepare_reply', 'identity': self.identity, 'text': ''})
-        self.assertEqual(result['text'], 'verified saved report')
+        for status in ('submitted', 'completed'):
+            with self.subTest(status=status):
+                self.task.update(status=status, result_path='shared/tasks/T/report.md')
+                self.recovery.prepare_reply.return_value = (self.task, 'verified saved report')
+                result = rpc.execute({'action': 'prepare_reply', 'identity': self.identity, 'text': ''})
+                self.assertEqual(result['text'], 'verified saved report')
 
     def test_delivery_uses_shared_implementation_and_original_identity(self):
         rpc.execute({'action': 'delivered', 'identity': self.identity, 'event_id': '$event'})

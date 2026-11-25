@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -64,7 +65,7 @@ func TestTaskReviewBindsExactCandidateAndQueuesMainClosureOnce(t *testing.T) {
 	}
 	_ = json.Unmarshal(a.Body.Bytes(), &first)
 	_ = json.Unmarshal(b.Body.Bytes(), &retry)
-	if first.Task.Status != "completed" || first.Review.ID == "" || first.Review != retry.Review || first.MainProjection != "applied" || first.Notification.Status != "queued" || first.Notification.Recipient != "lead-cr" || first.Notification != retry.Notification {
+	if first.Task.Status != "completed" || first.Review.ID == "" || !reflect.DeepEqual(first.Review, retry.Review) || first.MainProjection != "applied" || first.Notification.Status != "queued" || first.Notification.Recipient != "lead-cr" || first.Notification != retry.Notification {
 		t.Fatalf("invalid acceptance/closure receipt: %s / %s", a.Body.String(), b.Body.String())
 	}
 	main, _ := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/main/meta.json")

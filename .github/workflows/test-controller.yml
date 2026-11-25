@@ -18,6 +18,8 @@ on:
       - 'tests/test_worker_sessions.py'
       - 'tests/test_worker_matrix*.py'
       - 'tests/test_task_recovery*.py'
+      - 'tests/test_qwenpaw_team_fixture.py'
+      - 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh'
       - 'tests/test-skill-runtime-warnings.py'
       - 'tests/test_harness_session_receipts.py'
       - 'tests/test_export_debug_log.py'
@@ -58,6 +60,8 @@ on:
       - 'tests/test_worker_sessions.py'
       - 'tests/test_worker_matrix*.py'
       - 'tests/test_task_recovery*.py'
+      - 'tests/test_qwenpaw_team_fixture.py'
+      - 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh'
       - 'tests/test-skill-runtime-warnings.py'
       - 'tests/test_harness_session_receipts.py'
       - 'tests/test_export_debug_log.py'
@@ -198,7 +202,7 @@ jobs:
           NO_PROXY: 127.0.0.1,localhost
         run: |
           ruby plugins/tests/teamharness/test-contracts.rb
-          python -m pytest tests/test_task_coordination.py tests/test_teamharness_notification_wait.py -q
+          python -m pytest tests/test_task_coordination.py tests/test_teamharness_notification_wait.py tests/test_qwenpaw_team_fixture.py -q
           python -m pytest tests/test_task_recovery.py shared/tests/test_harness_health.py -q
           python -m pytest tests/test_worker_matrix*.py tests/test_worker_sessions.py tests/test_worker_handoff.py -q
           python -m unittest discover -s tests -p 'test_task_recovery_rpc.py' -v

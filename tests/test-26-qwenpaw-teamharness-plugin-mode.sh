@@ -616,6 +616,8 @@ _create_team_cr() {
         --arg namespace "${K8S_NAMESPACE}" \
         --arg leader "${TEST_LEADER}" \
         --arg worker "${TEST_WORKER}" \
+        --arg admin "${TEST_ADMIN_USER}" \
+        --arg admin_mxid "@${TEST_ADMIN_USER}:${TEST_MATRIX_DOMAIN}" \
         --argjson labels "${labels}" \
         '{
             apiVersion:"agentteams.io/v1beta1",
@@ -623,6 +625,7 @@ _create_team_cr() {
             metadata:{name:$name, namespace:$namespace, labels:$labels},
             spec:{
                 teamName:$name,
+                admin:{name:$admin, matrixUserId:$admin_mxid},
                 workerMembers:[
                     {name:$leader, role:"team_leader"},
                     {name:$worker, role:"worker"}

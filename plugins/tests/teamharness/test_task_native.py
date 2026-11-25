@@ -520,3 +520,7 @@ def test_final_review_reads_only_unambiguous_accepted_artifacts(bridge, monkeypa
     bridge.invoke({"operation": "task", "arguments": {"action": "files_read", "artifactId": requested},
                    "context": {"role": "leader", "completion": "main", "context": {"acceptedResults": accepted}}}, call=call)
     assert calls[0].get("taskId") == expected
+    for input_id, resolved in [("main", expected or "main"), ("explicit-child", "explicit-child")]:
+        bridge.invoke({"operation": "task", "arguments": {"action": "files_read", "taskId": input_id, "artifactId": requested},
+                       "context": {"role": "leader", "completion": "main", "context": {"acceptedResults": accepted}}}, call=call)
+        assert calls[-1]["taskId"] == resolved

@@ -254,6 +254,20 @@ def test_verified_submission_adds_the_shared_receipt_fact(bridge):
     assert 'Delivery and acceptance are not yet confirmed' in result['fact']
 
 
+def test_verified_submission_displays_saved_business_conclusion_and_artifact_names(bridge):
+    result = bridge.invoke({'operation': 'task', 'arguments': {'action': 'submit', 'taskId': 't1', 'summary': 'uncommitted wording'},
+                            'context': {'role': 'worker', 'execution': 't1'}},
+                           call=lambda _: {'task': {'id': 't1', 'status': 'submitted', 'submissionId': 's1',
+                             'candidate': {'id': 's1', 'summary': '页面搜索功能已实现，独立检查通过。',
+                               'artifacts': [{'artifactId': 'html', 'name': 'index.html'}], 'report': 'Large repeated report'}},
+                             'notification': {'status': 'queued', 'recipient': 'lead', 'eventId': 'notice'}})
+    assert result['phaseComplete'] is True
+    assert result['displayText'] == '页面搜索功能已实现，独立检查通过。\n\n产物：index.html'
+    assert 'uncommitted wording' not in result['displayText']
+    assert 'Large repeated report' not in result['displayText']
+    assert 'Task system receipt' not in result['displayText']
+
+
 def test_direct_handoff_ends_worker_phase_without_notifying_leader(bridge):
     result = bridge.invoke({'operation': 'task', 'arguments': {'action': 'submit', 'taskId': 't1', 'summary': 'done'},
                             'context': {'role': 'worker', 'execution': 't1'}},

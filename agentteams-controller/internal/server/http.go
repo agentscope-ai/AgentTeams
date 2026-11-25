@@ -576,6 +576,8 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("PUT /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PutTaskMeta)))
 
 	// --- Gateway ---
+	mux.Handle("GET /api/v1/gateway/model-probe-policy", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(http.HandlerFunc(rh.GetModelProbePolicy)))
+	mux.Handle("PUT /api/v1/gateway/model-probe-policy", mw.RequireAuthz(authpkg.ActionUpdate, "gateway", nil)(http.HandlerFunc(rh.PutModelProbePolicy)))
 	gh := NewGatewayHandler(deps.Gateway)
 	assets := &gatewayAssets{gateway: deps.Gateway, resources: rh, gatewayURL: deps.GatewayURL}
 	mux.Handle("GET /api/v1/gateway/assets/{asset}", mw.RequireAuthz(authpkg.ActionGet, "gateway", nil)(assets))

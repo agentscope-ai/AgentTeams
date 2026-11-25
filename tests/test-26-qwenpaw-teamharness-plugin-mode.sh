@@ -1318,7 +1318,7 @@ fi
 # A completed label or queued notification alone is insufficient.
 _task_check_succeeded() {
     jq -e --arg task "${TASK_ID}" \
-        --arg team "${TEST_TEAM}" --arg worker "${TEST_WORKER}" --arg leader "${TEST_LEADER}" '
+        --arg team "${TEST_TEAM}" --arg worker "${TEST_WORKER}" --arg leader "${LEADER_MXID}" '
         .task as $main |
         $main.id == $task and $main.team == $team and $main.kind == "main" and
         ($main.projectId // "") == "" and $main.status == "completed" and

@@ -53,7 +53,7 @@ AgentTeams 不再实现 Agent 运行时本身，而是编排和管理多个 Agen
 
 - **一条命令启动**：一个 `curl | bash` 搞定所有组件 — Higress AI 网关、Matrix 服务器、文件存储、Web 客户端和 Manager Agent 本身。
 
-- **技能生态**：Worker 可以按需从 [skills.sh](https://skills.sh) 获取技能（社区已有 80,000+ 个）。因为 Worker 本身就拿不到真实凭证，所以可以放心使用公开技能库。
+- **技能生态**：Worker 可以按需从 [skills.sh](https://skills.sh) 获取技能（社区已有 80,000+ 个）。Worker 隔离能限制技能的影响范围，但不能保证第三方技能安全。优先选择熟悉且可信的发布者，并在安装前检查技能的文件和命令。
 
 ## 快速开始
 **前置条件**：OrbStack、Docker Desktop、Docker Engine 或兼容的 Podman。未安装或未启动时，安装器会引导安装和启动，并等待引擎就绪后继续。若在 ECS 或云桌面等虚拟机上部署，请采用 Linux 系统，图形化需求，请使用 Ubuntu，官方镜像包暂不支持虚拟机上的 Window 系统，原因是虚拟机上的 Window 系统不是 Linux Container。

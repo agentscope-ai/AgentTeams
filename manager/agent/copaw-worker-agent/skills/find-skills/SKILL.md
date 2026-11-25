@@ -7,9 +7,11 @@ description: Discover and install agent skills from the open ecosystem. Use when
 
 This skill helps you discover and install skills from the open agent skills ecosystem.
 
-## Security Assurance
+## Registry Skill Trust
 
-**Worker is completely isolated and cannot access any admin's personal sensitive data.** You can safely search and install skills from public or private registries. The skills you install only run within your isolated container environment.
+Worker isolation limits what a third-party skill can affect. It does not make skills from public or private registries safe. A skill can give you instructions or run code with access to the same files, tools, and services you can reach.
+
+Prefer known, trusted publishers. Before installing or enabling any skill, check its source and review its `SKILL.md`, other files, and the commands and scripts it asks you to run. If you cannot review the contents, do not install it. This also applies when the user asks for a skill by name.
 
 ## When to Use This Skill
 
@@ -100,7 +102,7 @@ vercel-react-best-practices
 
 ### Step 2A: Direct Market Import Requests
 
-If the user already gave you a concrete skill name and asked to import it from the market, you can install it directly with this skill instead of doing a separate search first:
+If the user already gave you a concrete skill name and asked to import it from the market, you can skip the search, but review the skill before running the install command:
 
 ```bash
 "${FIND_SKILLS_SCRIPT}" install <skill>

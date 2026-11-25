@@ -59,3 +59,29 @@ provider.shutdown()
 '''
     result = subprocess.run([sys.executable, '-c', code], env=env, capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_python_without_optional_otel_keeps_business_output_clean():
+    root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, 'AGENTTEAMS_OTEL_ENABLED': 'true',
+           'PYTHONPATH': str(root / 'shared/lib/telemetry')}
+    result = subprocess.run([sys.executable, '-S', '-c',
+                             'import sitecustomize; print("business-result")'],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0
+    assert result.stdout == 'business-result\n'
+    assert result.stderr == ''
+
+
+def test_bootstrap_keeps_unrelated_import_failures_visible(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / 'at_telemetry.py').write_text('import missing_application_dependency\n')
+    env = {**os.environ, 'AGENTTEAMS_OTEL_ENABLED': 'true',
+           'PYTHONPATH': str(tmp_path) + os.pathsep + str(root / 'shared/lib/telemetry')}
+    result = subprocess.run([sys.executable, '-S', '-c',
+                             'import sitecustomize; print("business-result")'],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0
+    assert result.stdout == 'business-result\n'
+    assert 'OTel bootstrap failed' in result.stderr
+    assert 'missing_application_dependency' in result.stderr

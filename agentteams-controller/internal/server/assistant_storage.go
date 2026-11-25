@@ -71,9 +71,9 @@ func (h *AssistantHandler) Business(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Owner    string  `json:"owner"`
 			Revision *string `json:"revision"`
-			Summary  string  `json:"summary"`
+			Summary  *string `json:"summary"`
 		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&input) != nil {
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&input) != nil || input.Summary == nil {
 			httputil.WriteError(w, 400, "invalid business context")
 			return
 		}
@@ -81,7 +81,7 @@ func (h *AssistantHandler) Business(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, 409, "business context or execution changed; reload context")
 			return
 		}
-		state.Summary = input.Summary
+		state.Summary = *input.Summary
 		revision, err = h.save(r.Context(), key, state, revision)
 		if err != nil {
 			h.storageError(w, err)

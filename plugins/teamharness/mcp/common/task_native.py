@@ -105,6 +105,12 @@ def terminal_display(action, arguments, result):
         return "已受理「" + task.get("title", task["id"]) + "」，接下来在任务房间规划和执行。[查看任务](" + link + ")"
     if action == "complete":
         return arguments.get("report") or task.get("report") or result.get("report")
+    if action == "submit":
+        candidate = task.get("candidate") or {}
+        summary = candidate.get("summary")
+        if candidate.get("id") == task.get("submissionId") and isinstance(summary, str) and summary.strip():
+            names = [item["name"] for item in candidate.get("artifacts", []) if item.get("name")]
+            return summary.strip() + ("\n\n产物：" + "、".join(names) if names else "")
 
 
 def _invoke(payload, *, call=None, get_json=None, notify=None):

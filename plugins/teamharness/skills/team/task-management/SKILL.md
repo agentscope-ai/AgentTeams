@@ -161,6 +161,10 @@ ready downstream Worker in the same Task room using your identity; you do not
 need a Leader turn or another message. This records delivery, not whole-request
 acceptance. Exceptions, explicit Human approval gates and legacy tasks still go
 to your Leader. End after the durable receipt; do not repeat assignments or poll.
+Your saved submission summary and actual artifact names are the visible stage
+conclusion. Include what you changed or verified and its outcome; the runtime
+shows this business result with your folded tool process without another model
+turn. Do not replace it with an acknowledgement or a control receipt.
 
 ## Review as Leader
 

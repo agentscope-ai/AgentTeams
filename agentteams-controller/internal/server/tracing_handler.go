@@ -71,7 +71,7 @@ func traceIsVisible(row map[string]any, workers map[string]traceWorkerAccess) bo
 	return workers[worker].Teams[traceIdentity(row, "team")]
 }
 
-func traceWorkerFilter(workers map[string]traceWorkerAccess) string {
+func traceWorkerFilter(workers map[string]traceWorkerAccess, params url.Values) string {
 	seen := map[string]bool{}
 	names := []string{}
 	for _, worker := range workers {
@@ -80,7 +80,26 @@ func traceWorkerFilter(workers map[string]traceWorkerAccess) string {
 			seen[worker.RuntimeName] = true
 		}
 	}
-	filter, _ := json.Marshal([]map[string]any{{"type": "stringOptions", "column": "userId", "operator": "any of", "value": names}})
+	filters := []map[string]any{{"type": "stringOptions", "column": "userId", "operator": "any of", "value": names}}
+	add := func(kind, column, operator string, value any) {
+		filters = append(filters, map[string]any{"type": kind, "column": column, "operator": operator, "value": value})
+	}
+	// Langfuse's structured filter replaces its legacy query predicates.
+	for _, column := range []string{"userId", "sessionId"} {
+		if value := params.Get(column); value != "" {
+			add("string", column, "=", value)
+		}
+	}
+	if value := params.Get("fromTimestamp"); value != "" {
+		add("datetime", "timestamp", ">=", value)
+	}
+	if value := params.Get("toTimestamp"); value != "" {
+		add("datetime", "timestamp", "<", value)
+	}
+	if tags := params["tags"]; len(tags) > 0 {
+		add("arrayOptions", "tags", "all of", tags)
+	}
+	filter, _ := json.Marshal(filters)
 	return string(filter)
 }
 
@@ -162,7 +181,6 @@ func (h *ProjectHandler) ListTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := url.Values{"tags": {"agentteams", "worker-turn"}, "orderBy": {"timestamp.desc"}}
-	params.Set("filter", traceWorkerFilter(workers))
 	if session := query.Get("session"); session != "" {
 		params.Set("sessionId", session)
 	} else if since.IsZero() && until.IsZero() {
@@ -185,6 +203,7 @@ func (h *ProjectHandler) ListTraces(w http.ResponseWriter, r *http.Request) {
 	if runtime := query.Get("runtime"); runtime != "" {
 		params.Add("tags", runtime)
 	}
+	params.Set("filter", traceWorkerFilter(workers, params))
 	visible := make([]map[string]any, 0)
 	if len(workers) > 0 {
 		config, err := h.langfuseConfiguration(r.Context())

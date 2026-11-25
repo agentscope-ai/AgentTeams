@@ -142,7 +142,7 @@ credentials:
 ```
 
 Internal model connectivity tests can be approved dynamically in Dashboard under
-**Models → Model connections → Probe addresses**. Only administrators can change
+**Models → Internal allowlist**. Only administrators can change
 the policy. Controller saves it in the namespace's `agentteams-model-probe-policy`
 ConfigMap; saves and removals apply to subsequent probes without a restart.
 Controller reads the current API-server value rather than a lagging informer
@@ -155,6 +155,12 @@ private-network access. The existing broad-private mode remains available in
 the advanced setting; normal host entries contain no scheme, port, path,
 wildcard or CIDR. This setting governs the Controller's model connection test,
 not chart preflight jobs or Worker runtime health checks.
+
+When a model test is blocked, Dashboard can ask the administrator to approve
+the actual rejected host, save it to the latest policy and retry the same model.
+The rejection includes `code: model_probe_host_not_allowed` and `host` from the
+Controller-resolved endpoint, including saved providers. Browser endpoint
+parameters cannot replace this host when stored credentials are selected.
 
 For automation, administrators can `GET` and `PUT`
 `/api/v1/gateway/model-probe-policy`. A PUT replaces the policy with

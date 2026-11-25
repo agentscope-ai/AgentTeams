@@ -44,10 +44,14 @@ type gatewayAssetRequest struct {
 type gatewayAssetError struct {
 	status  int
 	message string
+	code    string
+	host    string
 }
 
-func (e *gatewayAssetError) Error() string        { return e.message }
-func assetError(status int, message string) error { return &gatewayAssetError{status, message} }
+func (e *gatewayAssetError) Error() string { return e.message }
+func assetError(status int, message string) error {
+	return &gatewayAssetError{status: status, message: message}
+}
 
 var assetName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 
@@ -79,10 +83,15 @@ func (h *gatewayAssets) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status := 502
 		var typed *gatewayAssetError
+		body := map[string]any{"error": err.Error()}
 		if errors.As(err, &typed) {
 			status = typed.status
+			if typed.code != "" {
+				body["code"], body["host"] = typed.code, typed.host
+			}
 		}
-		httputil.WriteJSON(w, status, map[string]any{"error": err.Error(), "fallbackAllowed": status == 501})
+		body["fallbackAllowed"] = status == 501
+		httputil.WriteJSON(w, status, body)
 		return
 	}
 	httputil.WriteJSON(w, 200, result)

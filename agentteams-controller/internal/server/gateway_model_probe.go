@@ -93,7 +93,7 @@ func (h *gatewayAssets) probeModel(parent context.Context, req gatewayAssetReque
 		}
 	}
 	if !policy.hostAllowed(u.Hostname()) {
-		return nil, assetError(400, "model probe endpoint is outside the configured network allowlist")
+		return nil, &gatewayAssetError{status: 400, message: "model probe endpoint is outside the configured network allowlist", code: "model_probe_host_not_allowed", host: u.Hostname()}
 	}
 	headers := map[string]string{"Content-Type": "application/json", "Authorization": "Bearer " + config.Token}
 	payload := map[string]any{"model": config.Model, "messages": []any{map[string]string{"role": "user", "content": "Reply with only one word: OK"}}, "stream": false}

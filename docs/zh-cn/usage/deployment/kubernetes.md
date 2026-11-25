@@ -141,7 +141,7 @@ credentials:
   llmBaseUrl: https://your-provider.example.com/v1
 ```
 
-内网模型的连接测试可在 Dashboard **模型 → 模型连接 → 探测地址** 中动态放行，仅管理员可修改。
+内网模型的连接测试可在 Dashboard **模型 → 内网白名单** 中动态放行，仅管理员可修改。
 Controller 将策略保存到当前 namespace 的 `agentteams-model-probe-policy` ConfigMap，新增或移除后，后续测试立即生效，无需重启。
 读取使用 API Server 的最新配置，避免 informer 缓存延迟；迁移安装时请保留这个 ConfigMap。
 
@@ -149,6 +149,10 @@ Controller 将策略保存到当前 namespace 的 `agentteams-model-probe-policy
 保存后，持久化配置覆盖这两个环境变量，空列表和关闭内网全量放行也会生效。
 高级选项保留原有的允许所有内网地址模式；普通主机条目仅填写主机名或 IP，不含协议、端口、路径、通配符或 CIDR。
 此配置只控制 Controller 的模型连接测试，不控制 Chart 安装前探测或 Worker 运行时健康检查。
+
+模型测试被规则拦截后，Dashboard 可弹窗确认加入实际被拦截的主机，保存到最新配置后重试当前模型。
+拦截响应提供 `code: model_probe_host_not_allowed` 和 `host`，主机来自 Controller 最终解析的模型地址；
+使用已保存连接时，不会用浏览器传入的覆盖地址替代它。
 
 管理员也可通过 `GET` / `PUT /api/v1/gateway/model-probe-policy` 管理策略。PUT 使用
 `{"allowedHosts":["172.16.50.89"],"allowPrivateNetwork":false,"revision":"<GET 返回值>"}`

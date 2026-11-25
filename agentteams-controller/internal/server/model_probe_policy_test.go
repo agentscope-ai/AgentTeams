@@ -227,3 +227,20 @@ func TestModelProbePolicyStorageOutageIsNotAnEnvironmentFallback(t *testing.T) {
 		t.Fatalf("probe bypassed unavailable policy: %d", w.Code)
 	}
 }
+
+func TestModelProbePolicyReportsResolvedBlockedHost(t *testing.T) {
+	h := policyFixture(t)
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }))
+	defer upstream.Close()
+	g := &assetGateway{responses: map[string]any{"GET providers/saved": map[string]any{"name": "saved", "type": "openai", "tokens": []string{"stored-secret"}, "rawConfigs": map[string]any{"openaiCustomUrl": upstream.URL + "/v1"}}}}
+	response := assetRequest(t, &gatewayAssets{gateway: g, resources: h}, "models", `{"action":"probe","input":{"providerName":"saved","model":"test","baseUrl":"https://browser-override.example/v1","token":"browser-secret"}}`)
+	var body map[string]any
+	_ = json.Unmarshal(response.Body.Bytes(), &body)
+	if response.Code != 400 || body["code"] != "model_probe_host_not_allowed" || body["host"] != "127.0.0.1" || calls != 0 {
+		t.Fatalf("wrong blocked host: %d %s calls%d", response.Code, response.Body.String(), calls)
+	}
+	if strings.Contains(response.Body.String(), "secret") || strings.Contains(response.Body.String(), "browser-override") {
+		t.Fatal("blocked metadata leaked or trusted browser overrides")
+	}
+}

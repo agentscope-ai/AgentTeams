@@ -1318,14 +1318,15 @@ fi
 # A completed label or queued notification alone is insufficient.
 _task_check_succeeded() {
     jq -e --arg task "${TASK_ID}" \
-        --arg team "${TEST_TEAM}" --arg worker "${TEST_WORKER}" --arg leader "${LEADER_MXID}" '
+        --arg team "${TEST_TEAM}" --arg worker "${TEST_WORKER}" --arg leader "${LEADER_MXID}" \
+        --arg filename "${DELIVERABLE_NAME}" '
         .task as $main |
         $main.id == $task and $main.team == $team and $main.kind == "main" and
         ($main.projectId // "") == "" and $main.status == "completed" and
         $main.assignedTo == $leader and
         ($main.completionId | length > 0) and
-        ($main.acceptedResults | length == 1) and
-        ($main.acceptedResults[0] |
+        ($main.acceptedResults | length > 0) and
+        all($main.acceptedResults[];
             .assignedTo == $worker and .status == "completed" and
             .resultStatus == "SUCCESS" and
             ((.review.accepted == true and .review.status == "completed" and
@@ -1333,10 +1334,11 @@ _task_check_succeeded() {
              (.handoff.submissionId == .submissionId and
               .handoff.actorName == $worker and .handoff.actorRole == "worker")) and
             .candidate.id == .submissionId and
-            (.candidate.artifacts | length == 1)) and
-        ($main.artifacts | length == 1) and
-        $main.artifacts[0].artifactId == $main.acceptedResults[0].candidate.artifacts[0].artifactId and
-        $main.artifacts[0].version == $main.acceptedResults[0].candidate.artifacts[0].version
+            (.candidate.artifacts | length > 0)) and
+        ([$main.artifacts[] | select(.name == $filename)] | length == 1) and
+        all($main.artifacts[]; . as $file |
+            any($main.acceptedResults[].candidate.artifacts[];
+                .artifactId == $file.artifactId and .version == $file.version))
     ' >/dev/null 2>&1
 }
 
@@ -1402,9 +1404,10 @@ else
     exit 1
 fi
 
-CHILD_TASK=$(echo "${TASK_CHECK}" | jq -r '.task.artifacts[0].taskId // empty')
-ARTIFACT_ID=$(echo "${TASK_CHECK}" | jq -r '.task.artifacts[0].artifactId // empty')
-ARTIFACT_VERSION=$(echo "${TASK_CHECK}" | jq -r '.task.artifacts[0].version // empty')
+DELIVERABLE=$(echo "${TASK_CHECK}" | jq -c --arg name "${DELIVERABLE_NAME}" '.task.artifacts[] | select(.name == $name)')
+CHILD_TASK=$(echo "${DELIVERABLE}" | jq -r '.taskId // empty')
+ARTIFACT_ID=$(echo "${DELIVERABLE}" | jq -r '.artifactId // empty')
+ARTIFACT_VERSION=$(echo "${DELIVERABLE}" | jq -r '.version // empty')
 if [ -n "${CHILD_TASK}" ] && [ -n "${ARTIFACT_ID}" ] && [ -n "${ARTIFACT_VERSION}" ]; then
     FILE_VIEW=$(exec_in_agent agt task files read "${CHILD_TASK}" --team "${TEST_TEAM}" \
         --artifact "${ARTIFACT_ID}" --version "${ARTIFACT_VERSION}" 2>/dev/null || echo "{}")

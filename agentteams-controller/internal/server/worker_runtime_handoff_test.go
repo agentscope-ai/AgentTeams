@@ -211,6 +211,91 @@ func TestRuntimeHandoffSourceCanFinishWritesWhileStopping(t *testing.T) {
 	}
 }
 
+func TestRuntimeHandoffAcceptsUnavailableWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name, desired string
+		status        backend.WorkerStatus
+		registered    bool
+		failedHandoff bool
+	}{
+		{"stopped", "Sleeping", backend.StatusStopped, true, false},
+		{"failed-before-registration", "Running", backend.StatusFailed, false, false},
+		{"stopped-before-registration", "Sleeping", backend.StatusStopped, false, false},
+		{"removed", "Stopped", backend.StatusNotFound, true, false},
+		{"never-started", "Stopped", backend.StatusNotFound, false, false},
+		{"failed-handoff-target", "Running", backend.StatusFailed, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := ossfake.NewMemory()
+			worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: "test-ns"}, Spec: v1beta1.WorkerSpec{Runtime: "codex", State: &tc.desired}}
+			k8s := fake.NewClientBuilder().WithScheme(newProjectTestScheme(t)).WithObjects(worker).Build()
+			b := &operatorHandoffBackend{MockWorkerBackend: mocks.NewMockWorkerBackend()}
+			label, expected := "", "*"
+			if tc.failedHandoff {
+				state, etag, err := (service.WorkerRuntimeStore{Storage: storage}).Preflight(t.Context(), "alice", "previous-switch", "codex", "codex:fixture", service.WorkerStart{InstanceID: "mock/old", ProcessID: "old-process", Runtime: "hermes"}, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, etag, err = (service.WorkerRuntimeStore{Storage: storage}).AdvanceLifecycle(t.Context(), "alice", "previous-switch", "stopping", "stopped", etag, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, etag, err = (service.WorkerRuntimeStore{Storage: storage}).AdvanceLifecycle(t.Context(), "alice", "previous-switch", "stopped", "creating", etag, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				label, expected = state.Handoff.TargetLabel(), `"`+etag+`"`
+			}
+			b.StatusFn = func(context.Context, string) (*backend.WorkerResult, error) {
+				if tc.status == backend.StatusNotFound {
+					return &backend.WorkerResult{Status: tc.status}, nil
+				}
+				return &backend.WorkerResult{Status: tc.status, Runtime: "codex", InstanceID: "source", HandoffLabel: label}, nil
+			}
+			if tc.registered {
+				matrix := service.WorkerMatrixStore{Storage: storage}
+				_, _, err := matrix.Start(t.Context(), "alice", service.WorkerStart{InstanceID: "mock/source", ProcessID: "registered", Runtime: "codex"}, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			middleware := authpkg.NewMiddleware(&roleAuthenticator{identity: &authpkg.CallerIdentity{Role: authpkg.RoleAdmin}}, nil, authpkg.NewAuthorizer(), k8s, "test-ns")
+			controller := NewHTTPServer(":0", ServerDeps{Client: k8s, Namespace: "test-ns", OSS: storage, Backend: backend.NewRegistry([]backend.WorkerBackend{b}), AuthMw: middleware})
+			t.Cleanup(controller.coordinationCancel)
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/workers/alice/runtime-handoff", strings.NewReader(`{"request_id":"switch","target_runtime":"qwenpaw"}`))
+			r.Header.Set("Authorization", "Bearer fixture")
+			if expected == "*" {
+				r.Header.Set("If-None-Match", expected)
+			} else {
+				r.Header.Set("If-Match", expected)
+			}
+			response := httptest.NewRecorder()
+			controller.Mux.ServeHTTP(response, r)
+			if response.Code != 200 {
+				t.Fatalf("switch rejected: %d %s", response.Code, response.Body)
+			}
+			var saved v1beta1.Worker
+			if err := k8s.Get(t.Context(), client.ObjectKeyFromObject(worker), &saved); err != nil {
+				t.Fatal(err)
+			}
+			if saved.Spec.DesiredState() != "Running" {
+				t.Fatalf("target left stopped: %+v", saved.Spec)
+			}
+			state, _, err := (service.WorkerRuntimeStore{Storage: storage}).Load(t.Context(), "alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.status == backend.StatusNotFound {
+				if saved.Spec.Runtime != "qwenpaw" || state.Handoff != nil {
+					t.Fatalf("absent Worker was not started declaratively: %+v %+v", saved.Spec, state)
+				}
+			} else if state.Handoff == nil || state.Handoff.Source.InstanceID != "mock/source" || state.Handoff.TargetRuntime != "qwenpaw" {
+				t.Fatalf("source identity lost: %+v", state)
+			}
+		})
+	}
+}
+
 func TestRuntimeHandoffBlocksClaimStraddlingHandoffWrite(t *testing.T) {
 	f := newMatrixExecutionFixture(t, nil)
 	storage := &matrixExecutionCASStore{Memory: f.storage, eventKey: f.objectKey()}

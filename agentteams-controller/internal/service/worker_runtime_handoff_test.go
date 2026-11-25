@@ -27,6 +27,37 @@ func TestClaudeCodeHandoffRecordsEitherDirection(t *testing.T) {
 	}
 }
 
+func TestHandoffUnregisteredSourceStillRequiresRegisteredTarget(t *testing.T) {
+	store := WorkerRuntimeStore{Storage: ossfake.NewMemory()}
+	source := WorkerStart{InstanceID: "docker/failed-boot", Runtime: "codex"}
+	_, etag, err := store.Preflight(t.Context(), "alice", "switch", "qwenpaw", "qwenpaw:fixture", source, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, transition := range [][2]string{{"stopping", "stopped"}, {"stopped", "creating"}} {
+		_, etag, err = store.AdvanceLifecycle(t.Context(), "alice", "switch", transition[0], transition[1], etag, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := WorkerStart{InstanceID: "docker/new-boot", Runtime: "qwenpaw"}
+	if _, _, err := store.AdvanceLifecycle(t.Context(), "alice", "switch", "creating", "recovering", etag, &target); !errors.Is(err, ErrWorkerStateInvalid) {
+		t.Fatalf("unregistered target accepted: %v", err)
+	}
+	target.ProcessID = "registered-process"
+	state, etag, err := store.AdvanceLifecycle(t.Context(), "alice", "switch", "creating", "recovering", etag, &target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.Complete(t.Context(), state, etag); err != nil {
+		t.Fatal(err)
+	}
+	state, _, err = store.Load(t.Context(), "alice")
+	if err != nil || state.Handoff.Phase != "completed" || *state.ActiveStart != target {
+		t.Fatalf("completion: %+v %v", state, err)
+	}
+}
+
 func TestClaudeCodeHandoffRejectsEncryptionBeforeRoomCheck(t *testing.T) {
 	w := &v1beta1.Worker{}
 	calls := 0

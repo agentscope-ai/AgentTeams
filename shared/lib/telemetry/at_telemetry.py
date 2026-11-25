@@ -165,6 +165,8 @@ class SanitizingExporter(SpanExporter):
                     attrs["langfuse.observation.status_message"] = str(sanitize(error))
             elif operation_name == "invoke_agent":
                 attrs["langfuse.observation.type"] = "agent"
+            else:
+                attrs.setdefault("langfuse.observation.type", "span")
             for dest, sources in {
                 "langfuse.observation.input": ("gen_ai.input.messages", "gen_ai.tool.call.arguments"),
                 "langfuse.observation.output": ("gen_ai.output.messages", "gen_ai.tool.call.result"),

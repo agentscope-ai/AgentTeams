@@ -12,6 +12,14 @@ input/output/scratch paths, then use the common `task` tool action `submit`
 with output-relative files. The task system sends your result to the Leader.
 Do not call legacy ACK/submit or send a second completion notification.
 
+## Standalone Shared Files
+
+For an ordinary file request without a registered execution assignment, use
+`teamharness-file-sharing` and publish the exact requested path with `filesync`
+`push`, then check that same shared path with `stat`. Private workspace backup
+or `agentteams-sync` does not publish a shared deliverable. Do not create a Task
+or invent an assignment merely to deliver an ordinary file request.
+
 ## Legacy Assigned Task Lifecycle
 
 Use this section only for a verified legacy assignment without the common

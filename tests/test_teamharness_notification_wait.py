@@ -18,10 +18,10 @@ class PublicTaskObservationTests(unittest.TestCase):
             input=json.dumps(payload), capture_output=True, text=True, env={**os.environ,
                 'TASK_ID': 'main', 'TEST_TEAM': 'team', 'TEST_WORKER': 'worker',
                 'TEST_LEADER': 'leader', 'LEADER_MXID': '@leader:test', 'TEST_MATRIX_DOMAIN': 'test', 'MARKER': 'CURRENT',
-                'ARTIFACT_ID': 'a1', 'ARTIFACT_VERSION': 'v1'})
+                'ARTIFACT_ID': 'a1', 'ARTIFACT_VERSION': 'v1', 'DELIVERABLE_NAME': 'readiness.txt'})
 
     def task(self):
-        artifact = {'taskId': 'execution', 'artifactId': 'a1', 'version': 'v1'}
+        artifact = {'taskId': 'execution', 'artifactId': 'a1', 'version': 'v1', 'name': 'readiness.txt'}
         return {'task': {'id': 'main', 'team': 'team', 'kind': 'main',
             'status': 'completed', 'assignedTo': '@leader:test', 'completionId': 'completion',
             'acceptedResults': [{'assignedTo': 'worker', 'status': 'completed',

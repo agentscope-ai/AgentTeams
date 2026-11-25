@@ -7,6 +7,15 @@ description: "Use for TeamHarness shared workspace paths, filesync, artifact pub
 
 Use shared workspace paths in task specs and team messages.
 
+For a standalone request without a registered execution assignment, write the
+requested workspace-relative file, call `filesync` with `action="push"` and
+that path, then `action="stat"` with the same path. Only the successful shared
+operation confirms publication. Private Worker workspace backup is a separate
+namespace; a bulk sync or an `agents/<worker>/shared/...` backup is not evidence
+that the requested shared file was delivered. Do not create a Task for this.
+For verified `task/v1` assignments, use the prepared Task `submit` tool; its
+receipt handles publication and handoff without a second filesync cycle.
+
 Project files belong under `shared/projects/{project-id}/`. Task specs,
 deliverables, and results belong under `shared/tasks/{task-id}/`.
 

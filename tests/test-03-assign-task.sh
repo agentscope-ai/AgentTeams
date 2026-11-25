@@ -43,13 +43,32 @@ assert_not_empty "${ALICE_ROOM}" "Alice's registered Worker room found"
 METRICS_BASELINE=$(snapshot_baseline "alice")
 TASK_ID="test03-$(date +%s)-$$"
 RESULT_PATH="shared/test-fixtures/${TASK_ID}/README.md"
+ALICE_USER="@alice:${TEST_MATRIX_DOMAIN}"
+assignment_received() {
+    local token="$1" room="$2" require_mention="$3"
+    matrix_read_messages "${token}" "${room}" 50 | jq -e \
+        --arg worker "${ALICE_USER}" --arg manager "${MANAGER_USER}" \
+        --arg marker "${TASK_ID}" --arg path "${RESULT_PATH}" \
+        --argjson require_mention "${require_mention}" '
+        any(.chunk[]?; .type == "m.room.message" and .sender == $manager and
+            .content.msgtype == "m.text" and .content["org.agentteams.progress_only"] != true and
+            (if $require_mention then ((.content["m.mentions"].user_ids // []) | index($worker)) != null else true end) and
+            ((.content["org.agentteams.report"].text // .content.body // "") | contains($marker) and contains($path)))' >/dev/null
+}
+
+
 matrix_send_message "${ADMIN_TOKEN}" "${DM_ROOM}" \
-    "Send this one-line request verbatim using Matrix target room:${ALICE_ROOM}, then acknowledge with marker ${TASK_ID}. This is a standalone Worker request with no separate Task record. Message: @alice:${TEST_MATRIX_DOMAIN} Write a hello-world README with name, description, usage and marker ${TASK_ID} at ${RESULT_PATH} in your workspace. Call the TeamHarness filesync tool with action=push and path=${RESULT_PATH}, then with action=stat and the same path. If the native tool is unavailable, run: mcporter call --stdio python3 --stdio-arg /opt/agentteams/plugins/teamharness/mcp/server.py filesync --args '{\"action\":\"push\",\"path\":\"${RESULT_PATH}\"}' --output json. Repeat with action stat. Use the TeamHarness shared storage result to verify completion. Bulk worker workspace sync writes to a private location and cannot deliver this file."
+    "Send this one-line request verbatim using Matrix target room:${ALICE_ROOM}, do not send a separate acknowledgement. This is a standalone Worker request with no separate Task record. Message: @alice:${TEST_MATRIX_DOMAIN} Write a hello-world README with name, description, usage and marker ${TASK_ID} at ${RESULT_PATH} in your workspace. Call the TeamHarness filesync tool with action=push and path=${RESULT_PATH}, then with action=stat and the same path. If the native tool is unavailable, run: mcporter call --stdio python3 --stdio-arg /opt/agentteams/plugins/teamharness/mcp/server.py filesync --args '{\"action\":\"push\",\"path\":\"${RESULT_PATH}\"}' --output json. Repeat with action stat. Use the TeamHarness shared storage result to verify completion. Bulk worker workspace sync writes to a private location and cannot deliver this file."
 
-log_info "Waiting for Manager to process task..."
-REPLY=$(matrix_wait_for_reply_matching "${ADMIN_TOKEN}" "${DM_ROOM}" "@manager" "${TASK_ID}" 180)
-
-assert_not_empty "${REPLY}" "Manager acknowledged task assignment"
+log_info "Waiting for the actual Manager assignment in Alice's registered room..."
+ASSIGNMENT_DEADLINE=$(( $(date +%s) + 180 ))
+while ! assignment_received "${ADMIN_TOKEN}" "${ALICE_ROOM}" true; do
+    if [ "$(date +%s)" -ge "${ASSIGNMENT_DEADLINE}" ]; then
+        log_fail "Manager assignment was not delivered within 180s"
+        break
+    fi
+    sleep 2
+done
 
 log_section "Verify Task in MinIO"
 
@@ -74,17 +93,6 @@ else
     fi
 fi
 
-ALICE_USER="@alice:${TEST_MATRIX_DOMAIN}"
-assignment_received() {
-    local token="$1" room="$2" require_mention="$3"
-    matrix_read_messages "${token}" "${room}" 50 | jq -e \
-        --arg worker "${ALICE_USER}" --arg manager "${MANAGER_USER}" \
-        --arg marker "${TASK_ID}" --arg path "${RESULT_PATH}" \
-        --argjson require_mention "${require_mention}" '
-        any(.chunk[]?; .type == "m.room.message" and .sender == $manager and
-            (if $require_mention then ((.content["m.mentions"].user_ids // []) | index($worker)) != null else true end) and
-            ((.content["org.agentteams.report"].text // .content.body // "") | contains($marker) and contains($path)))' >/dev/null
-}
 
 if assignment_received "${ADMIN_TOKEN}" "${ALICE_ROOM}" true; then
     log_pass "Manager assigned the task in Alice's registered Worker room"

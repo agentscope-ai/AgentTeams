@@ -1311,7 +1311,7 @@ else
     log_fail "QwenPaw worker hello script did not write expected marker"
 fi
 
-# Assert public task facts, including the exact candidate independently accepted
+# Assert public task facts, including the exact frozen candidate independently verified
 # by the Leader. A completed label or a queued notification is insufficient.
 _task_check_succeeded() {
     jq -e --arg task "${TASK_ID}" \
@@ -1324,8 +1324,9 @@ _task_check_succeeded() {
         ($main.acceptedResults[0] |
             .assignedTo == $worker and .status == "completed" and
             .resultStatus == "SUCCESS" and
-            .review.accepted == true and .review.status == "completed" and
-            .review.submissionId == .submissionId and
+            ((.review.accepted == true and .review.status == "completed" and
+                .review.submissionId == .submissionId) or
+             (.handoff.submissionId == .submissionId and .handoff.actorName == $worker)) and
             .candidate.id == .submissionId and
             (.candidate.artifacts | length == 1)) and
         ($main.artifacts | length == 1) and

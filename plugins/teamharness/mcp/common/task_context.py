@@ -125,6 +125,8 @@ def prepare(kind, event, result):
 def model_context(value):
     """Project prepared evidence as references; preserve the canonical snapshot."""
     projected = copy.deepcopy(value)
+    projected.pop("checkpoint", None)
+    projected.pop("generation", None)
     for upstream in projected.get("inputs", []):
         for file in upstream.get("files", []):
             # Begin already materialized and verified this exact local file.

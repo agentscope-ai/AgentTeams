@@ -37,13 +37,8 @@ CHANNEL_MODULE_PATH = (
     / "channel.py"
 )
 
-_spec = importlib.util.spec_from_file_location(
-    "agentteams_matrix_channel", CHANNEL_MODULE_PATH
-)
-assert _spec is not None and _spec.loader is not None
-channel_module = importlib.util.module_from_spec(_spec)
-sys.modules["agentteams_matrix_channel"] = channel_module
-_spec.loader.exec_module(channel_module)
+sys.path.insert(0, str(CHANNEL_MODULE_PATH.parent.parent))
+channel_module = importlib.import_module("agentteams_matrix.channel")
 
 AgentTeamsMatrixChannel = channel_module.AgentTeamsMatrixChannel
 
@@ -133,8 +128,9 @@ def test_tool_call_message_sets_activity_flag_and_reasoning_does_not(monkeypatch
     class _Event:
         def __init__(self, type_):
             self.type = type_
+            self.content = []
 
-    tool_meta = {}
+    tool_meta = {"org.agentteams.run_id": "test-run"}
     asyncio.run(
         channel.on_event_message_completed(
             None, ROOM, _Event(channel_module.MessageType.FUNCTION_CALL), tool_meta
@@ -182,8 +178,9 @@ def test_tool_output_message_sets_activity_flag(monkeypatch):
     class _Event:
         def __init__(self, type_):
             self.type = type_
+            self.content = []
 
-    tool_output_meta = {}
+    tool_output_meta = {"org.agentteams.run_id": "test-run"}
     asyncio.run(
         channel.on_event_message_completed(
             None,
@@ -210,8 +207,9 @@ def test_quiet_tool_output_turn_keeps_the_done_marker(monkeypatch):
     class _Event:
         def __init__(self, type_):
             self.type = type_
+            self.content = []
 
-    send_meta = {}
+    send_meta = {"org.agentteams.run_id": "test-run"}
     asyncio.run(
         channel.on_event_message_completed(
             None,

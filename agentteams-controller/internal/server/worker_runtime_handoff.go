@@ -92,7 +92,8 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	setAnnotation := func(value string) error {
-		if worker.Annotations[service.WorkerRuntimeHandoffAnnotation] == value {
+		wake := strings.HasPrefix(value, "request:") && worker.Spec.DesiredState() != "Running"
+		if worker.Annotations[service.WorkerRuntimeHandoffAnnotation] == value && !wake {
 			return nil
 		}
 		before := worker.DeepCopy()
@@ -100,6 +101,10 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 			worker.Annotations = make(map[string]string)
 		}
 		worker.Annotations[service.WorkerRuntimeHandoffAnnotation] = value
+		if wake {
+			running := "Running"
+			worker.Spec.State = &running
+		}
 		return h.deps.Client.Patch(r.Context(), &worker, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
 	}
 	enroll := func() bool {
@@ -118,29 +123,34 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 			// the durable operation so an idle Worker need not wait to poll.
 			if signalErr := setAnnotation("request:" + state.Handoff.ID); signalErr != nil {
 				log.FromContext(r.Context()).Error(signalErr, "could not notify Worker reconciler of durable handoff", "worker", worker.Name)
+				writeK8sError(w, "start Worker runtime handoff", signalErr)
+				return
 			}
 		}
 		respond(state, etag, err)
 	}
-	current, _, err := store.Load(r.Context(), name)
+	current, currentETag, err := store.Load(r.Context(), name)
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
 	if op := current.Handoff; op != nil && (op.Phase != "completed" || op.ID == input.RequestID) {
 		if op.ID != input.RequestID || op.TargetRuntime != input.Target {
-			writeError(w, 409, "another handoff is already in progress")
+			if op.ID == input.RequestID || h.handoffTargetFailure(r.Context(), worker.Name, op) == "" {
+				writeError(w, 409, "another handoff is already in progress")
+				return
+			}
+		} else {
+			if !enroll() {
+				return
+			}
+			// A lost response may be retried after the source went offline.
+			respondToOperation(store.ResumeStop(r.Context(), name))
 			return
 		}
-		if !enroll() {
-			return
-		}
-		// A lost response may be retried after the source went offline.
-		respondToOperation(store.ResumeStop(r.Context(), name))
-		return
 	}
-	if !worker.Spec.DesiredContainerMan() || worker.Spec.DesiredState() != "Running" || (worker.Spec.DeployMode != nil && *worker.Spec.DeployMode == v1beta1.DeployModeEdge) {
-		writeError(w, 409, "preflight requires a managed Worker with desired state Running")
+	if !worker.Spec.DesiredContainerMan() || (worker.Spec.DeployMode != nil && *worker.Spec.DeployMode == v1beta1.DeployModeEdge) {
+		writeError(w, 409, "preflight requires a managed Worker")
 		return
 	}
 	matrix, _, err := h.store.Load(r.Context(), name)
@@ -148,20 +158,38 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 		h.writeError(w, err)
 		return
 	}
-	instance, runtime, err := h.recovery.runningWorkerInstance(r.Context(), &worker)
+	wb, err := h.recovery.workerBackend(r.Context(), &worker)
 	if err != nil {
-		writeError(w, 503, "current Worker start unavailable")
+		writeError(w, 503, "source backend unavailable")
+		return
+	}
+	actual, err := wb.Status(r.Context(), worker.Name)
+	if errors.Is(err, backend.ErrNotFound) {
+		actual, err = &backend.WorkerResult{Status: backend.StatusNotFound}, nil
+	}
+	if err != nil || actual == nil {
+		writeError(w, 503, "current Worker status unavailable")
+		return
+	}
+	absent := actual.Status == backend.StatusNotFound
+	runtime := actual.Runtime
+	if absent {
+		runtime = worker.Spec.Runtime
+	}
+	if !absent && (actual.InstanceID == "" || runtime == "" || !backend.ValidRuntime(runtime)) {
+		writeError(w, 409, "current Worker backend identity unavailable")
 		return
 	}
 	start := matrix.ActiveStart
-	if start.InstanceID != instance || start.Runtime != runtime || start.ProcessID == "" {
-		writeError(w, 409, "the running Worker must register its current source start")
-		return
+	if !absent && (start.InstanceID != wb.Name()+"/"+actual.InstanceID || start.Runtime != runtime || start.ProcessID == "") {
+		if actual.Status != backend.StatusStopped && actual.Status != backend.StatusFailed {
+			writeError(w, 409, "the running Worker must register its current source start")
+			return
+		}
+		start = service.WorkerStart{InstanceID: wb.Name() + "/" + actual.InstanceID, Runtime: runtime}
 	}
-	backendName, _, _ := strings.Cut(instance, "/")
-	wb, err := h.deps.Backend.GetWorkerBackend(r.Context(), backendName)
-	if err != nil {
-		writeError(w, 503, "source backend unavailable")
+	if op := current.Handoff; op != nil && op.Phase != "completed" && (absent || actual.HandoffLabel != op.TargetLabel() || actual.Runtime != op.TargetRuntime || (actual.Status != backend.StatusStopped && actual.Status != backend.StatusFailed)) {
+		writeError(w, 409, "handoff target changed before replacement")
 		return
 	}
 	if err := h.deps.HandoffMatrix.Validate(r.Context(), &worker, input.Target); err != nil {
@@ -171,6 +199,27 @@ func (h *WorkerMatrixHandler) RuntimeHandoff(w http.ResponseWriter, r *http.Requ
 	image, err := service.HandoffTargetImage(&worker, wb, runtime, input.Target)
 	if err != nil {
 		h.writeError(w, err)
+		return
+	}
+	if absent {
+		if expected != currentETag {
+			h.writeError(w, service.ErrWorkerStateConflict)
+			return
+		}
+		// With no backend resource to hand off, the Worker CR is the durable
+		// start intent. An optimistic patch arbitrates concurrent selections.
+		before := worker.DeepCopy()
+		if runtime != input.Target {
+			worker.Spec.Image = ""
+		}
+		worker.Spec.Runtime = input.Target
+		running := "Running"
+		worker.Spec.State = &running
+		if err := h.deps.Client.Patch(r.Context(), &worker, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			writeK8sError(w, "start Worker with selected runtime", err)
+			return
+		}
+		respond(current, currentETag, nil)
 		return
 	}
 	if !enroll() {

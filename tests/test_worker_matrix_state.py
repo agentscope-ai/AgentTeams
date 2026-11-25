@@ -104,3 +104,18 @@ def test_common_transport_sends_create_precondition_without_task_lease():
     assert headers["if-none-match"] == "*"
     assert "if-match" not in headers
     assert json.loads(request.data)["action"] == "start"
+
+
+@pytest.mark.parametrize("changed_content", [False, True])
+def test_replay_of_legacy_control_with_missing_sdk_timestamp(changed_content):
+    matrix = WorkerMatrix("openhuman", recovery=Mock())
+    stored = {"sender": "@leader:test", "type": "org.agentteams.coordination",
+              "origin_server_ts": 0, "content": {"body": "plan"}}
+    source = {**stored, "origin_server_ts": 1234}
+    if changed_content:
+        source["content"] = {"body": "different"}
+    with patch("runtime_hitl.consume_attention", return_value=None), patch.object(
+        matrix, "input", return_value={"intent": "control", "input": stored}
+    ):
+        item = matrix.prepare_input("!room:test", "$wake", source, "control")
+    assert item["input"] == (source if changed_content else stored)

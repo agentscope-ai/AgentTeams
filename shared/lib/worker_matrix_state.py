@@ -71,6 +71,11 @@ class WorkerMatrix:
         if previous:
             # Reassignment/mention policy changes cannot reclassify an input
             # already accepted. The server still compares immutable bytes.
+            # Early Hermes control records omitted the server timestamp. On
+            # replay retain those exact bytes only when every other field agrees.
+            if (previous["intent"] == "control" and source.get("type") == "org.agentteams.coordination"
+                    and source.get("origin_server_ts") and previous["input"] == {**source, "origin_server_ts": 0}):
+                input_["input"] = previous["input"]
             input_["intent"] = previous["intent"]
             if previous.get("work"):
                 input_["work"] = previous["work"]

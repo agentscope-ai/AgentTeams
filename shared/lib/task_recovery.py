@@ -209,7 +209,7 @@ class Recovery:
         decisions = [record for record in task.get('attention', []) if record.get('answer')]
         decision_context = {'human_decisions': decisions} if decisions else {}
         if task.get('task_plan_id'):
-            progress = {key: [step for step in (checkpoint or {}).get(key, []) if not step.startswith('tools:')]
+            progress = {key: [step for step in ((checkpoint or {}).get(key) or []) if not step.startswith('tools:')]
                         for key in ('completed_steps', 'remaining_steps')}
             progress = {key: steps for key, steps in progress.items() if steps}
             return ("Continue your existing Task through the common task protocol. Use its prepared inputs and output "

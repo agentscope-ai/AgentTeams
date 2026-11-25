@@ -221,6 +221,20 @@ class RecoveryTests(unittest.TestCase):
                           'internal delivery transaction', 'repeated whole requirement', 'old whole result']:
             self.assertNotIn(duplicate, text)
 
+    def test_managed_resume_accepts_controller_null_step_lists(self):
+        import json
+        task = copy.deepcopy(self.task)
+        task['task_plan_id'] = 'plan'
+        for completed, remaining in ((None, None), (['one'], None), (None, ['two'])):
+            with self.subTest(completed=completed, remaining=remaining):
+                task['execution']['checkpoint'].update(completed_steps=completed, remaining_steps=remaining)
+                before = copy.deepcopy(task)
+                payload = json.loads(Recovery.resume_text(task).split('\n')[-1])
+                self.assertEqual(payload.get('progress', {}), {
+                    key: value for key, value in {'completed_steps': completed, 'remaining_steps': remaining}.items()
+                    if value})
+                self.assertEqual(task, before)
+
     def test_waiting_task_is_not_automatically_resumed_but_current_turn_can_checkpoint(self):
         self.task['session_state'] = 'waiting_user'
         self.assertEqual(self.recovery.discover()['tasks'], [])

@@ -87,6 +87,12 @@ assert started['artifacts']==previous['artifacts']
 with patch('task_recovery.subprocess.run',side_effect=save):
  r.finish_tools(i,op,[dict(id='next-call',content=[dict(type='text',text='continued work')])])
 assert r.current('t1','alpha-team')['status']=='in_progress'
+# Go encodes an empty remaining_steps slice as null, including after a real
+# native tool return. The managed model projection must still be resumable.
+current=r.current('t1','alpha-team')
+assert current['execution']['checkpoint']['remaining_steps'] is None
+current['task_plan_id']='fixture-plan'
+assert 'common task protocol' in Recovery.resume_text(current)
 `
 	command := exec.Command(python, "-c", script, library)
 	command.Env = append(os.Environ(), "AGENTTEAMS_PROCESS_ID=process", "AGENTTEAMS_CONTROLLER_URL="+server.URL, "AGENTTEAMS_AUTH_TOKEN_FILE="+token, "AGENTTEAMS_STORAGE_PREFIX=storage")

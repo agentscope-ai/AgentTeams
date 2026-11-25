@@ -280,6 +280,11 @@ func (h *ProjectHandler) NativeTaskOperation(w http.ResponseWriter, r *http.Requ
 		httputil.WriteJSON(w, 200, map[string]any{"mode": "execute", "operationId": scope.ID})
 		return
 	}
+	// Verify the original acknowledgement after a restart without reusing its
+	// native preparation paths. Other unknown mutations keep their replay fence.
+	if input.Mode == "finish" && saved.Action == "begin" && scope.Action == "begin" {
+		intent = canonicalNativeHash([]any{input.Arguments, input.ContentFingerprints, saved.Generation})
+	}
 	if absent || input.OperationID != saved.ID || intent != saved.Intent {
 		writeError(w, 409, "native operation ownership changed")
 		return

@@ -88,7 +88,7 @@ def native_role(value):
 def model_result(outcome):
     """Keep native terminal facts, without another copy of the Task snapshot."""
     if not outcome.get("phaseComplete"):
-        result = outcome.get("result", outcome)
+        result = task_context.model_context(outcome.get("result", outcome))
         return {**result, **{key: outcome[key] for key in ("receiptId", "fact", "extraReceipts") if key in outcome}}
     task = (outcome.get("result") or {}).get("task") or {}
     return {"phaseComplete": True,

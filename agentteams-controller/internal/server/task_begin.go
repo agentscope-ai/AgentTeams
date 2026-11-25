@@ -184,7 +184,7 @@ func (h *ProjectHandler) BeginTask(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if cp := execution.Checkpoint; cp != nil && cp.Result != nil {
+		if cp := execution.Checkpoint; cp != nil && cp.Result != nil && cp.Delivery != "delivered" {
 			writeError(w, 409, "saved task result requires delivery recovery, not new business execution")
 			return
 		}

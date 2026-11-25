@@ -74,6 +74,17 @@ func TestTaskTracesAllPagesAndRelatedEvidence(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/api/public/traces" {
+			var filters []map[string]any
+			_ = json.Unmarshal([]byte(r.URL.Query().Get("filter")), &filters)
+			projectFiltered := false
+			for _, filter := range filters {
+				if filter["column"] == "tags" {
+					projectFiltered = filter["operator"] == "all of" && fmt.Sprint(filter["value"]) == "[agentteams project:p]"
+				}
+			}
+			if !projectFiltered {
+				t.Error("Task project restriction was omitted from structured filter")
+			}
 			page := r.URL.Query().Get("page")
 			index := 0
 			if page == "2" {

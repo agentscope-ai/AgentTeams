@@ -99,7 +99,13 @@ precedence over supplementary context and execution assignments.
 
 ## Plan as Leader
 
-For a direct work request from your registered Team Admin in your private Leader conversation, you may first call `create` with your own registered Leader identity, a title and the supplied Human input reference. The Controller verifies the original Human event and current private conversation; reminders and Agent messages cannot register work this way. Keep any existing business-to-Task mapping and reuse it for follow-ups. Preserve the returned main Task ID. On a queued creation receipt, end this intake turn. Your planning continues in the created Task room on its admitted internal handoff; do not plan the DAG in the original private conversation or notify yourself. Older Controllers may explicitly return an inline receipt; only that receipt permits planning in the current context. Do not invent a Task ID or plan an unregistered request.
+Classify the request before creating a Task. Your own package bootstrap, onboarding,
+configuration and readiness checks are runtime administration: follow your installed
+instructions and perform those checks directly with your available tools. Do not
+delegate them to another Worker or create a business Task for them. Questions,
+clarifications and withdrawals also do not automatically request a new Task.
+
+For a direct business work request from your registered Team Admin in your private Leader conversation, you may first call `create` with your own registered Leader identity, a title and the supplied Human input reference. The Controller verifies the original Human event and current private conversation; reminders and Agent messages cannot register work this way. Keep any existing business-to-Task mapping and reuse it for follow-ups. Preserve the returned main Task ID. On a queued creation receipt, end this intake turn. Your planning continues in the created Task room on its admitted internal handoff; do not plan the DAG in the original private conversation or notify yourself. Older Controllers may explicitly return an inline receipt; only that receipt permits planning in the current context. Do not invent a Task ID or plan an unregistered request.
 
 Preserve the main task registered by its verified intake receipt. Call `plan` once with
 `taskId` and the complete `nodes` array. Each node has a local `id`, registered

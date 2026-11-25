@@ -15,7 +15,7 @@ type healthDeployer struct {
 	entered, release, done chan struct{}
 }
 
-func (h *healthDeployer) CheckManagerModel(context.Context, string, string, string, string, modelhealth.Notify) error {
+func (h *healthDeployer) CheckManagerHealth(context.Context, string, string, string, modelhealth.Notify) error {
 	close(h.entered)
 	<-h.release
 	close(h.done)

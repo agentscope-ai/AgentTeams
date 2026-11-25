@@ -4,53 +4,37 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/matrix"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/modelhealth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestManagerHealthEffectiveContract(t *testing.T) {
-	for _, runtime := range []string{"qwenpaw", "codex", "claudecode", "openclaw"} {
+func TestManagerHealthConsumesSameReportForEveryHarness(t *testing.T) {
+	for _, runtime := range []string{"openclaw", "qwenpaw", "hermes", "deepseek-harness", "openhuman", "codex", "opencode", "qoder", "claudecode"} {
 		t.Run(runtime, func(t *testing.T) {
-			path := "/v1/chat/completions"
-			body := `{"choices":[{"message":{"content":"ok"}}]}`
-			if runtime == "codex" {
-				path = "/v1/responses"
-				body = `{"status":"completed","output":[{"content":[{"type":"output_text","text":"ok"}]}]}`
-			} else if runtime == "claudecode" {
-				path = "/v1/messages"
-				body = `{"type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`
-			}
-			calls := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls++
-				if runtime == "claudecode" && r.Header.Get("anthropic-version") != "2023-06-01" {
-					t.Error("missing Anthropic Messages protocol header")
-				}
-				if r.URL.Path != path || r.Header.Get("Authorization") != "Bearer effective-key" {
-					t.Errorf("wrong effective route %s", r.URL.Path)
-				}
-				w.Write([]byte(body))
-			}))
-			defer srv.Close()
+			ctx := context.Background()
 			store := ossfake.NewMemory()
 			d := NewDeployer(DeployerConfig{OSS: store})
-			ctx := context.Background()
-			config := `{"desired":{"model":{"model":"effective-model","gatewayUrl":"` + srv.URL + `"}}}`
-			key := "agents/manager/runtime/runtime.yaml"
-			if runtime == "openclaw" {
-				key = "agents/manager/openclaw.json"
-				config = `{"agents":{"defaults":{"model":{"primary":"custom/effective-model"}}},"models":{"providers":{"custom":{"baseUrl":"` + srv.URL + `/v1","apiKey":"effective-key","api":"openai-completions"}}}}`
-			}
-			store.PutObject(ctx, key, []byte(config))
-			if err := d.CheckManagerModel(ctx, runtime, "effective-key", "admin", "room", nil); err != nil {
+			data, _ := json.Marshal(modelhealth.Report{Version: 1, Runtime: runtime, Member: "manager", Status: "ok", Reason: "ok", CheckedAt: time.Now().UTC()})
+			store.PutObject(ctx, "agents/manager/runtime/health.json", data)
+			if err := d.CheckManagerHealth(ctx, runtime, "admin", "room", nil); err != nil {
 				t.Fatal(err)
 			}
-			b, _ := store.GetObject(ctx, "agents/manager/model-health.json")
-			if !strings.Contains(string(b), `"status":"ok"`) || calls != 1 {
-				t.Fatalf("health %s calls %d", b, calls)
+			saved, _ := store.GetObject(ctx, "agents/manager/model-health.json")
+			if !strings.Contains(string(saved), `"status":"ok"`) {
+				t.Fatal(string(saved))
+			}
+			store.DeleteObject(ctx, "agents/manager/runtime/health.json")
+			if err := d.CheckManagerHealth(ctx, runtime, "admin", "room", nil); err != nil {
+				t.Fatal(err)
+			}
+			saved, _ = store.GetObject(ctx, "agents/manager/model-health.json")
+			if !strings.Contains(string(saved), `"status":"unknown"`) {
+				t.Fatal("old success survived missing Harness report")
 			}
 		})
 	}
@@ -102,11 +86,13 @@ func TestModelHealthGatewayMatrixHTTP(t *testing.T) {
 	d := NewDeployer(DeployerConfig{OSS: store})
 	store.PutObject(ctx, "agents/manager/runtime/runtime.yaml", []byte(`{"desired":{"model":{"model":"configured","gatewayUrl":"`+srv.URL+`/v1"}}}`))
 	p := &Provisioner{matrix: matrix.NewTuwunelClient(matrix.Config{ServerURL: srv.URL}, srv.Client()), adminUser: "admin", matrixDomain: "test"}
+	report, _ := json.Marshal(modelhealth.Report{Version: 1, Runtime: "qwenpaw", Member: "manager", Status: "failed", Reason: "billing_or_quota", CheckedAt: time.Now().UTC()})
+	store.PutObject(ctx, "agents/manager/runtime/health.json", report)
 	send := func(ctx context.Context, room, txn, body string) error {
 		return p.SendModelHealthNotice(ctx, room, "matrix-dummy", txn, body)
 	}
 	for i := 0; i < 3; i++ {
-		if err := d.CheckManagerModel(ctx, "qwenpaw", "gateway-dummy", p.ModelHealthAdmin(), "!admin:test", send); err != nil {
+		if err := d.CheckManagerHealth(ctx, "qwenpaw", p.ModelHealthAdmin(), "!admin:test", send); err != nil {
 			t.Fatal(err)
 		}
 	}

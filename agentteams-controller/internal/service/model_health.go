@@ -2,82 +2,24 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"os"
+	"time"
 
-	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/modelhealth"
-	"sigs.k8s.io/yaml"
 )
 
-// CheckManagerModel reads the deployed contract and uses the Harness credential.
-func (d *Deployer) CheckManagerModel(ctx context.Context, runtime, key, admin, room string, notify modelhealth.Notify) error {
-	cfg := modelhealth.Config{Runtime: runtime, Key: key, Admin: admin, Room: room, Protocol: "chat"}
-	if backend.UsesMemberRuntimeConfig(runtime) {
-		b, err := d.oss.GetObject(ctx, memberRuntimeConfigObjectKey("manager"))
-		if err != nil {
-			return errors.New("model health configuration unavailable")
-		}
-		var doc memberRuntimeConfigDocument
-		if yaml.Unmarshal(b, &doc) != nil {
-			return errors.New("model health configuration invalid")
-		}
-		if doc.Desired.Model != nil {
-			cfg.Model = doc.Desired.Model.Model
-			cfg.URL = doc.Desired.Model.GatewayURL
-			if doc.Desired.Model.GatewayKey != "" {
-				cfg.Key = doc.Desired.Model.GatewayKey
-			}
-		}
-		if runtime == "codex" {
-			cfg.Protocol = "responses"
-		} else if runtime == backend.RuntimeClaudeCode {
-			cfg.Protocol = "anthropic-messages"
-		}
-		cfg.URL = strings.TrimRight(cfg.URL, "/")
-		if cfg.URL != "" && !strings.HasSuffix(cfg.URL, "/v1") {
-			cfg.URL += "/v1"
-		}
-	} else {
-		b, err := d.oss.GetObject(ctx, "agents/manager/openclaw.json")
-		if err != nil {
-			return errors.New("model health configuration unavailable")
-		}
-		var doc struct {
-			Agents struct {
-				Defaults struct {
-					Model struct {
-						Primary string `json:"primary"`
-					} `json:"model"`
-				} `json:"defaults"`
-			} `json:"agents"`
-			Models struct {
-				Providers map[string]struct {
-					URL string `json:"baseUrl"`
-					Key string `json:"apiKey"`
-					API string `json:"api"`
-				}
-			} `json:"models"`
-		}
-		if json.Unmarshal(b, &doc) != nil {
-			return errors.New("model health configuration invalid")
-		}
-		pid, model, ok := strings.Cut(doc.Agents.Defaults.Model.Primary, "/")
-		if !ok {
-			return errors.New("model health model selection invalid")
-		}
-		p, ok := doc.Models.Providers[pid]
-		if !ok {
-			return errors.New("model health provider unavailable")
-		}
-		cfg.Model = model
-		cfg.URL = p.URL
-		cfg.Key = p.Key
-		cfg.Protocol = p.API
+// CheckManagerHealth reads the Harness result; protocol and credentials stay in the Harness.
+func (d *Deployer) CheckManagerHealth(ctx context.Context, runtime, admin, room string, notify modelhealth.Notify) error {
+	report := modelhealth.Unknown("missing_report")
+	data, err := d.oss.GetObject(ctx, "agents/manager/runtime/health.json")
+	if err == nil {
+		report = modelhealth.Parse(data, runtime, "manager", time.Now().UTC())
+	} else if !os.IsNotExist(err) {
+		return errors.New("Harness health report unavailable")
 	}
-	return modelhealth.Check(ctx, d.oss, "agents/manager/model-health.json", cfg, nil, notify)
+	return modelhealth.Check(ctx, d.oss, "agents/manager/model-health.json", modelhealth.Config{Runtime: runtime, Admin: admin, Room: room}, report, notify)
 }
 func (p *Provisioner) ModelHealthAdmin() string {
 	return fmt.Sprintf("@%s:%s", p.adminUser, p.matrixDomain)

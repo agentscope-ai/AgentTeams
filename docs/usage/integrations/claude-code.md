@@ -28,6 +28,11 @@ To set a deployment-wide image, configure `AGENTTEAMS_CLAUDECODE_WORKER_IMAGE` o
 
 The adapter resolves the model and gateway credential from the Controller's member contract. The gateway accepts the member's bearer token and serves streaming Anthropic Messages at `/v1/messages`. A route prefix such as `/team-a` is preserved. Test a tool call as well as plain text when qualifying a new provider. [Claude Code gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol) · [Higress AI Proxy](https://higress.io/en/docs/latest/plugins/ai/api-provider/ai-proxy/)
 
+Health follows the [shared Harness health contract](../../design/harness-health.md).
+The image owns its readiness and model protocol bridge; the Controller consumes
+versioned results and never sends an Anthropic request. Manual checks are
+asynchronous and return pending until the Harness reports a result.
+
 Send text to the member's personal room or mention it in the team room. The adapter applies the projected sender policy, binds the role prompts, skills and TeamHarness MCP server, and returns the result to the originating event. Incoming files are available in `inbox/`. Put files to return under `outbox/`. Declared HTTP MCP servers on the model gateway receive the member credential. Native file tools operate in the turn's workspace. `AGENTTEAMS_YOLO=1` also enables Bash for ordinary turns in the member container.
 
 Each room has its own Claude session. Workers persist accepted Matrix inputs and device-specific cursors through the Controller. Manager and Leader room turns also persist their delivery journal and transcripts. Role prompts bind the public Task contract, the current roster and Matrix input references. The Manager reads final delivery facts on its next conversation turn. A transient preparation or SDK handshake timeout retries the same pending input with backoff. After three consecutive failed polls, the process exits with the error. A turn with a possible tool effect uses the persisted operation or delivery record before further execution.

@@ -195,7 +195,7 @@ jobs:
         run: |
           ruby plugins/tests/teamharness/test-contracts.rb
           python -m pytest tests/test_task_coordination.py tests/test_teamharness_notification_wait.py -q
-          python -m pytest tests/test_task_recovery.py -q
+          python -m pytest tests/test_task_recovery.py shared/tests/test_harness_health.py -q
           python -m pytest tests/test_worker_matrix*.py tests/test_worker_sessions.py tests/test_worker_handoff.py -q
           python -m unittest discover -s tests -p 'test_task_recovery_rpc.py' -v
           python -m unittest discover -s tests -p 'test_runtime_recovery_*.py' -v

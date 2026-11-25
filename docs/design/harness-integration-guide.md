@@ -21,7 +21,7 @@ Core 中的 `worker/`、`qwenpaw/`、`hermes/`、`deepseek-harness/`、`openhuma
 2. 在 Core 对接运行时注册与构建引用。使用同一候选的 Core 和 Harness 版本构建或部署，验证实际加载的公共资产、角色、运行时身份和镜像摘要。
 3. 用真实会话跑完下述准入验证。组合间发现协议缺口时，在公共契约或产生不合约事实的一侧修复。
 
-[公共协议与 CLI](teamharness/task-cli-protocol.md) · [成员运行时配置](member-runtime-config-contract.md)
+[公共协议与 CLI](teamharness/task-cli-protocol.md) · [成员运行时配置](member-runtime-config-contract.md) · [统一健康接口](harness-health.md)
 
 ## 一、启动配置与打包
 
@@ -35,6 +35,8 @@ Core 中的 `worker/`、`qwenpaw/`、`hermes/`、`deepseek-harness/`、`openhuma
 | Matrix 登录与房间绑定 | Runtime 需要有效的 Matrix 连接、原生账号和已登记的会话路由。角色身份和路由由部署与收件链路提供 | 收到实际消息并核验收件人、发送人和房间。分清 Manager 与 Leader 的交接私聊、执行房间、原始 Human 会话 |
 | 工作区与存储 | Runtime 启动时准备共享目录、Task 工作区和对象存储访问。共享 CLI 解析文件源时使用 `TEAMHARNESS_SHARED_DIR` 或 `AGENTTEAMS_SHARED_DIR`。共享恢复上传检查点时使用 `AGENTTEAMS_STORAGE_PREFIX` 和可用的 `mc` | 用该角色实际文件权限验证可读输入、可写输出及检查点读写。存储配置留在运行环境，模型只收到 Task 标识、文件引用和准备后的本地路径 |
 | Trace | 联调和认证启用 `AGENTTEAMS_OTEL_ENABLED=true` 与可达的 OTLP Collector，设置 `AGENTTEAMS_OTEL_CAPTURE_CONTENT=false`。按运行时实际传输配置 endpoint、协议和必要的认证 header | 在 Collector 或 Langfuse 回查真实 span，核对 Harness 标签、角色、事件 ID 和内容采集开关 |
+
+所有托管 Harness 镜像提供 `/opt/agentteams/harness-health`，按统一契约报告原生就绪和模型探测结果。Controller 只消费统一结果和下发探测请求；模型协议、凭据解析与原生探测桥接留在 Harness 仓库。进程存活、Matrix 就绪和模型可用分别验收，旧镜像缺少接口时为 unknown。详见[统一健康接口](harness-health.md)。
 
 记录 Controller SHA、Harness SHA、SDK/CLI 版本和实际镜像 ID。构建阶段成功与启动阶段生效各自验收。镜像更新后，核对持久工作区覆盖规则、内置插件标记以及模型真正收到的系统提示词和 schema。直接修改工作区只适用于隔离诊断。
 

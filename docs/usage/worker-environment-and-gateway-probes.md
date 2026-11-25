@@ -24,11 +24,11 @@ Environment changes reuse the existing container specification reconciliation: a
 {"kind":"mcp","server":"github"}
 ```
 
-Admin/Manager access and gateway-update authorization are required. The handler reloads the saved Worker spec and persisted Consumer credential. It never accepts a caller-supplied URL, credential, model override, prompt or tool call. It does not modify authorization.
+Admin/Manager access and gateway-update authorization are required. The handler resolves the saved Worker identity; the MCP diagnostic also reloads its persisted Consumer credential. It never accepts a caller-supplied URL, credential, model override, prompt or tool call. It does not modify authorization.
 
-- Model: sends one non-streaming `chat/completions` request using the saved explicit model, requesting at most 8 output tokens. This can incur a small inference charge. It checks for model choices without returning generated content.
+- Model: queues a [Harness-owned model check](../design/harness-health.md) and returns **202 pending** with `request_id`. Read `GET /api/v1/workers/{name}/health` until the result acknowledges that ID or the request expires. The Harness uses its selected binding and native protocol for a bounded, tool-free inference; this can incur a small inference charge. Missing or stale Harness reports are `unknown`.
 - MCP: uses a saved Streamable HTTP endpoint on the configured gateway under `/mcp-servers/`, initializes the protocol and lists tools using the Worker credential. It never executes tools. Legacy SSE endpoints and arbitrary external MCP hosts are outside this probe's scope; upstream SSE services may be proxied behind a Streamable HTTP gateway endpoint.
 
-Requests have a 20-second deadline, bounded response reads, and no redirects. Upstream error bodies and credentials are not returned. The result identifies the Worker Consumer and whether this gateway request passed, not whether a running Worker task or its local networking succeeded. Provider-specific gateway endpoints are reported as unsupported rather than incorrectly testing the deployment default gateway.
+MCP requests have a 20-second deadline, bounded response reads, and no redirects. Upstream error bodies and credentials are not returned. The MCP result identifies the Worker Consumer and whether this gateway request passed, not whether a running Worker task or its local networking succeeded. Provider-specific gateway endpoints are reported as unsupported rather than incorrectly testing the deployment default gateway.
 
 For a denied call, inspect the target route's Consumer allowlist and upstream configuration. Do not disable authentication or grant every Worker access merely to make a probe pass.

@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -76,15 +78,33 @@ func TestModelHealthRealHigressTuwunel(t *testing.T) {
 	_, err = gw.EnsureConsumer(ctx, gateway.ConsumerRequest{Name: "preflight-manager", CredentialKey: "dummy-gateway-key"})
 	must(err)
 	must(gw.AuthorizeAIRoutes(ctx, "preflight-manager", ""))
-	cfg := modelhealth.Config{URL: "http://preflight-infra:8080/v1", Key: "dummy-gateway-key", Model: "fixture-model", Protocol: "chat"}
+	// The deployed Harness adapter, not the Controller, speaks the model protocol.
+	command := os.Getenv("AGENTTEAMS_PREFLIGHT_HARNESS_COMMAND")
+	if command == "" {
+		t.Fatal("AGENTTEAMS_PREFLIGHT_HARNESS_COMMAND must name the built Harness health command")
+	}
+	home := t.TempDir()
+	must(os.MkdirAll(filepath.Join(home, "runtime"), 0700))
+	configFile := filepath.Join(home, "runtime/runtime.yaml")
+	gatewayKey := "dummy-gateway-key"
+	probeModel := func(key string) modelhealth.Report {
+		t.Helper()
+		must(os.WriteFile(configFile, []byte(`{"desired":{"model":{"model":"fixture-model","gatewayUrl":"http://preflight-infra:8080/v1"}}}`), 0600))
+		cmd := exec.CommandContext(ctx, command, "--json")
+		cmd.Env = append(os.Environ(), "AGENTTEAMS_WORKER_HOME="+home, "TEAMHARNESS_RUNTIME_CONFIG="+configFile, "AGENTTEAMS_WORKER_GATEWAY_KEY="+key)
+		data, err := cmd.Output()
+		must(err)
+		var report modelhealth.Report
+		must(json.Unmarshal(data, &report))
+		report.Version, report.Runtime, report.Member, report.CheckedAt = 1, "qwenpaw", "manager", time.Now().UTC()
+		return report
+	}
 	deadline := time.Now().Add(100 * time.Second)
 	last := ""
 	for time.Now().Before(deadline) {
-		last = modelhealth.Probe(ctx, httpClient, cfg)
+		last = probeModel(gatewayKey).Reason
 		if last == "ok" && authenticatedUpstream.Load() {
-			denied := cfg
-			denied.Key = "invalid-dummy-key"
-			if modelhealth.Probe(ctx, httpClient, denied) == "authentication" {
+			if probeModel("invalid-dummy-key").Reason == "authentication" {
 				break
 			}
 		}
@@ -94,11 +114,9 @@ func TestModelHealthRealHigressTuwunel(t *testing.T) {
 		t.Fatalf("gateway did not converge: %s upstream_calls=%d", last, upstreamCalls.Load())
 	}
 	t.Logf("real Higress success: upstream_calls=%d", upstreamCalls.Load())
-	cfg.Key = "invalid-dummy-key"
-	if got := modelhealth.Probe(ctx, httpClient, cfg); got != "authentication" {
+	if got := probeModel("invalid-dummy-key").Reason; got != "authentication" {
 		t.Fatalf("Higress key-auth result %s", got)
 	}
-	cfg.Key = "dummy-gateway-key"
 	mx := matrix.NewTuwunelClient(matrix.Config{ServerURL: "http://preflight-infra:6167", Domain: "preflight.test", RegistrationToken: "preflight-dummy-registration"}, httpClient)
 	admin, err := mx.EnsureUser(ctx, matrix.EnsureUserRequest{Username: "preflight-admin", Password: "dummy-admin-password-123"})
 	must(err)
@@ -126,7 +144,10 @@ func TestModelHealthRealHigressTuwunel(t *testing.T) {
 	}
 	run := func() {
 		t.Helper()
-		must(d.CheckManagerModel(ctx, "qwenpaw", "dummy-gateway-key", admin.UserID, room.RoomID, send))
+		report := probeModel(gatewayKey)
+		data, _ := json.Marshal(report)
+		must(store.PutObject(ctx, "agents/manager/runtime/health.json", data))
+		must(d.CheckManagerHealth(ctx, "qwenpaw", admin.UserID, room.RoomID, send))
 	}
 	state := func() modelhealth.State {
 		t.Helper()
@@ -183,7 +204,7 @@ func TestModelHealthRealHigressTuwunel(t *testing.T) {
 	expire()
 	run()
 	firstTxn := state().Transaction
-	if state().Reason != "empty_response" || state().Notified || countNotices() != 1 {
+	if state().Reason != "invalid_response" || state().Notified || countNotices() != 1 {
 		t.Fatalf("invalid response state %+v", state())
 	}
 	// A new Deployer represents restart: durable state and stable transaction survive.

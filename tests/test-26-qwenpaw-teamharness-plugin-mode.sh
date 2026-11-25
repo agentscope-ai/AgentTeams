@@ -969,10 +969,19 @@ for container in "${LEADER_CONTAINER}" "${WORKER_CONTAINER}"; do
         log_fail "${container} agent prompt files missing TEAMS.md"
     fi
 
-    TEAMHARNESS_MCP=$(_agent_api "${container}" GET /api/mcp/teamharness 2>/dev/null || echo "{}")
-    TEAMHARNESS_TOOLS=$(_agent_api "${container}" GET /api/mcp/tools/teamharness 2>/dev/null || echo "[]")
-    if echo "${TEAMHARNESS_MCP}" | jq -e '.enabled == true and .transport == "stdio" and .command and (.args | length > 0)' >/dev/null 2>&1 && \
-       echo "${TEAMHARNESS_TOOLS}" | jq -e '([.[].name] | index("health") and index("filesync") and index("task"))' >/dev/null 2>&1; then
+    local callable_ready=false
+    local callable_deadline=$(( $(date +%s) + 60 ))
+    while [ "$(date +%s)" -lt "${callable_deadline}" ]; do
+        TEAMHARNESS_MCP=$(_agent_api "${container}" GET /api/mcp/teamharness 2>/dev/null || echo "{}")
+        TEAMHARNESS_TOOLS=$(_agent_api "${container}" GET /api/mcp/tools/teamharness 2>/dev/null || echo "[]")
+        if echo "${TEAMHARNESS_MCP}" | jq -e '.enabled == true and .transport == "stdio" and .command and (.args | length > 0)' >/dev/null 2>&1 && \
+           echo "${TEAMHARNESS_TOOLS}" | jq -e '([.[].name] | index("health") and index("filesync") and index("task"))' >/dev/null 2>&1; then
+            callable_ready=true
+            break
+        fi
+        sleep 2
+    done
+    if [ "${callable_ready}" = true ]; then
         log_pass "${container} QwenPaw API exposes callable TeamHarness MCP"
     else
         log_fail "${container} QwenPaw API missing callable TeamHarness MCP"

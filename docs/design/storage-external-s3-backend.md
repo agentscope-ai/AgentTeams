@@ -111,6 +111,27 @@ object a worker wrote to the target back to the stale source content.
 Correctness is therefore measured against the **baseline manifest**
 captured right after the bulk copy, not against "source equals target".
 
+### Automated migration tool
+
+[`scripts/storage-migrate/`](../../scripts/storage-migrate/README.md) implements
+the phases above as a resumable state machine (`preflight → data → IAM replay →
+verify → cutover`), including the baseline manifest, the shadow delta gates and
+the rollback checklist. It supports three data modes (`mirror`, RustFS `odm`,
+`inplace`) and refuses `cutover` until `verify` is green.
+
+```bash
+bash scripts/storage-migrate/storage-migrate.sh --src-endpoint … --dst-endpoint … \
+  --mode mirror --state-dir /var/lib/storage-migrate --dry-run
+```
+
+The tool never changes production by itself: `--phase cutover` only produces a
+checklist for a human to execute (see the
+[Cutover runbook (operator)](#5-cutover-runbook-operator)), and
+`--mark-cutover-done` records the operator's acknowledgement only — it does
+not verify restarts or configuration. The container image
+(`scripts/storage-migrate/Dockerfile.runner`) carries the whole toolchain for
+hosts without `mc`/`jq`/`curl`.
+
 ### 1. Bulk copy
 
 ```sh
@@ -244,22 +265,106 @@ all three as the shadow delta; do not "fix" them by copying the source
 over them — re-copying a shadow deletion from the source is exactly the
 data resurrection Gate B forbids.
 
-### 5. Cutover
+### 5. Cutover runbook (operator)
 
-1. Freeze writes on the target (short window; scale the workers down).
-2. Re-check **Gate A** (source unchanged vs baseline) — read-only.
-3. Only if Gate A is non-empty (the freeze was breached and the source
-   did receive writes): reconcile **those listed keys one by one** into
-   the target, after confirming the source copy is newer. Never run a
-   whole-bucket `mc mirror --overwrite src → dst` — the target holds the
-   shadow-era writes, and a blanket copy reverts them.
-4. Re-check **Gate B** (untouched baseline keys intact, the recorded
-   shadow delta — creates, updates **and deletions** — still holding, and
-   no key outside baseline ∪ created on the target).
-5. Update the deployment: `storage.provider=s3`, `storage.s3.endpoint=...`,
-   credentials secret. `helm upgrade`.
-6. Verify: controller log shows `storage provider: s3 (external)`; one
-   worker round-trips a file through MinIO.
+The cutover is a **human-executed sequence**. The migration tool never
+freezes writers, flips the deployment config, or restarts consumers:
+`--phase cutover` runs the final delta, writes both write probes, and
+generates the nine steps below as `cutover-checklist.sh` (preview it before
+the cutover with `--print-checklist --deploy-mode embedded|helm|both`, a
+read-only print that needs no state and no mc). Each step is tagged
+`[tool]` (done by the tool run), `[manual]` (an operator runs it) or
+`[verify]` (check the evidence).
+
+**Why running consumers keep the old endpoint.** The controller injects
+`AGENTTEAMS_FS_ENDPOINT`/`AGENTTEAMS_FS_BUCKET`/`AGENTTEAMS_FS_STORAGE_PREFIX`
+and the per-worker credentials into every Manager/Worker container at
+creation time; a container's/pod's env is baked in and is **not** re-read on
+"restart". The rebuild decision (`hashAppliedWorkerSpec`) hashes only the
+member CR spec — it does not include the controller's own storage
+configuration and there is no configuration generation — so changing the
+controller config alone never recreates running members and leaves a mixed
+backend. Only deleting the member container/pod makes the controller
+recreate it from the current config. That is why this runbook recreates
+every consumer after the config flip instead of "changing the endpoint and
+re-applying".
+
+Freeze order matters for the embedded mode: the embedded MinIO lives inside
+the controller container, so the members are frozen **before** the
+controller is touched (a stopped controller means a stopped source, and the
+final delta must run before that).
+
+1. `[tool]` Final delta + verify — already done by the tool run (see
+   `report-cutover.json`). On a RustFS target the ODM source fallback stays
+   off after cutover (`RUSTFS_ON_DEMAND_MIGRATION_ENABLED=false`).
+2. `[manual]` Freeze all writers — external clients → members → controller.
+   - embedded: `agt update worker <name> --state Stopped` (repeat per worker)
+     and `agt update manager <name> --state Stopped`. Do **not** delete
+     pods/containers to freeze — they are recreated immediately and keep
+     writing. No CR/config changes during the window.
+   - helm: `kubectl -n <ns> patch worker <name> --type merge -p '{"spec":{"state":"Stopped"}}'`
+     (same for `manager`). Strict tier (optional):
+     `kubectl -n <ns> scale deploy <release>-controller --replicas=0`.
+   - `[verify]` no writes: object counts stable on both ends for N seconds.
+3. `[manual]` Switch the deployment config atomically (provider + endpoint +
+   bucket + credentials in ONE change).
+   - embedded: the installer does not support external S3 yet (it hard-codes
+     `MINIO_ENDPOINT`/`FS_ENDPOINT=http://127.0.0.1:9000` and
+     `MINIO_BUCKET=agentteams-storage`); recreate the controller container
+     by hand:
+     ```sh
+     docker inspect agentteams-controller --format '{{json .Config.Env}}'   # capture the full current env first
+     docker rm -f agentteams-controller
+     docker run -d --name agentteams-controller --network agentteams-net \
+       --network-alias matrix-local.agentteams.io --network-alias aigw-local.agentteams.io --network-alias fs-local.agentteams.io \
+       <all previous -e flags> \
+       -e AGENTTEAMS_STORAGE_PROVIDER=s3 \
+       -e AGENTTEAMS_FS_ENDPOINT=<dst endpoint> -e AGENTTEAMS_FS_BUCKET=<bucket> \
+       -e AGENTTEAMS_FS_ACCESS_KEY=<key> -e AGENTTEAMS_FS_SECRET_KEY=<secret> \
+       -v /var/run/docker.sock:/var/run/docker.sock --security-opt label=disable \
+       -v agentteams-data:/data -v <workspace>:/root/agentteams-fs/agents/manager \
+       -p 8080:8080 -p 8001:8001 -p 18088:8088 --restart unless-stopped <embedded image>
+     ```
+     **WARNING:** never use the installer's reinstall path to change storage
+     config — it deletes `agentteams-data`, the workspace and the env file.
+     Installer support for external S3 is tracked separately.
+   - helm:
+     ```sh
+     helm upgrade --install <release> <chart> -n <ns> \
+       --set storage.provider=s3 --set storage.mode=existing --set storage.bucket=<bucket> \
+       --set storage.s3.endpoint=<dst endpoint> --set storage.s3.existingSecret=<secret>
+     ```
+     The MinIO StatefulSet stops rendering after the switch; **do not delete
+     its PVC** — it is the rollback data source.
+   - `[verify]` the controller log shows the s3 (external) provider in use
+     and the new container/pod env shows the new `AGENTTEAMS_FS_*`.
+4. `[manual]` Recreate every consumer (env is baked at creation; "restart"
+   does NOT re-read env):
+   - embedded: `docker rm -f <prefix><manager> <prefix><worker-1> ...` — the
+     controller recreates them from the current config.
+   - helm: `kubectl -n <ns> delete pod <prefix><manager>` and
+     `kubectl -n <ns> delete pod <prefix><worker>`.
+   - `[verify]` inside a recreated consumer: `env | grep AGENTTEAMS_FS_`
+     shows the new endpoint and the same bucket as the controller.
+5. `[manual]` Per-component read/write + permission checks: the controller
+   (trigger one config deploy and confirm the object lands on the target),
+   the manager (write + read one object), each worker (write + read with its
+   own credentials — proves the per-worker IAM policy exists on the target),
+   and the negative case (worker A must get a 403 reading worker B's prefix).
+6. `[manual]` Resume traffic: `agt update worker --state Running` (or
+   `kubectl patch` the CRs back); watch errors/audit.
+7. `[manual]` Keep the source read-only for the shadow window; do not delete
+   it.
+8. `[manual]` Rollback (preserves target-side writes): freeze the target
+   writers first, then per bucket
+   `mc mirror --overwrite --remove <dst>/<bucket> <src>/<bucket>`.
+   `--remove` is safe only while the source took no writes (Gate A empty);
+   otherwise reconcile key by key and do NOT use `--remove`. Then flip the
+   config back (provider=minio / the captured previous env), recreate all
+   consumers again, and re-run step 5.
+9. `[manual]` Record completion: `--mark-cutover-done` records an operator
+   ACKNOWLEDGEMENT only — it does not verify the restarts, the
+   configuration or any object.
 
 ### Rollback after writes have begun on the target
 

@@ -38,7 +38,7 @@ class ManagedNioSync:
     def handler(self, event):
         if isinstance(event, RoomMessageText):
             return self.channel._on_room_event
-        if isinstance(event, RoomMessageNotice):
+        if isinstance(event, RoomMessageNotice) or getattr(event, "source", {}).get("type") == "org.agentteams.coordination":
             control = (getattr(event, "source", {}) or {}).get("content", {}).get("org.agentteams.coordination")
             meta = control.get("channel_meta", {}) if isinstance(control, dict) else {}
             assignment = meta.get("teamharness_coordination", {}) if isinstance(meta, dict) else {}
@@ -76,7 +76,7 @@ class ManagedNioSync:
             # The SDK's normal ACL gate has side effects (pending request and
             # deny notice), so defer those until after committing a live batch.
             if intent != "task_notification":
-                blocked = await self.acl_denial(room, event.sender, event.body or "")
+                blocked = await self.acl_denial(room, event.sender, event.source["content"].get("body", ""))
                 if blocked:
                     if denials is not None and intent != "context":
                         denials.append(blocked)
@@ -159,7 +159,7 @@ class ManagedNioSync:
         event = waiting[1] if waiting else Event.parse_event({
             **record["input"], "room_id": room, "event_id": record["event_id"]})
         handler = self.handler(event)
-        if handler and not await self.acl_denial(room, event.sender, event.body or ""):
+        if handler and not await self.acl_denial(room, event.sender, event.source["content"].get("body", "")):
             async with self.messages.admission_lock:
                 control = record["input"]["content"].get("com.agentteams.control")
                 steering = (hasattr(self.channel, "_handle_direct_control")

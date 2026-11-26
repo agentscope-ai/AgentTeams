@@ -175,7 +175,7 @@ class Recovery:
         cp = claimed["execution"].get("checkpoint") or {}
         if cp.get("delivery") == "pending":
             return claimed, claimed["saved_result"]
-        if cp.get("delivery") == "delivered" and claimed["task"]["status"] == "submitted":
+        if cp.get("delivery") == "delivered" and claimed["task"]["status"] in {"submitted", "completed"}:
             return claimed, ""
         return self.save_reply(task_id, team, text), text
 

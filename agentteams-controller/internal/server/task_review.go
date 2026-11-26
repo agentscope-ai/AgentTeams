@@ -26,6 +26,7 @@ type taskReviewRequest struct {
 }
 
 type taskReview struct {
+	RunID            string         `json:"run_id,omitempty"`
 	ReplacementNodes []taskPlanNode `json:"replacementNodes,omitempty"`
 	ReplacementSpec  string         `json:"replacementSpec,omitempty"`
 	ID               string         `json:"id"`
@@ -185,7 +186,7 @@ func (h *ProjectHandler) ReviewTask(accepted bool) http.HandlerFunc {
 			}
 			identity, _ := json.Marshal([]any{team, id, input, accepted, actor})
 			sum := sha256.Sum256(identity)
-			review := taskReview{ReplacementSpec: input.ReplacementSpec, ReplacementNodes: input.ReplacementNodes, ID: hex.EncodeToString(sum[:]), SubmissionID: input.SubmissionID, Note: input.Note, Accepted: accepted, Status: status, Actor: actor}
+			review := taskReview{RunID: r.Header.Get("X-AgentTeams-Run-ID"), ReplacementSpec: input.ReplacementSpec, ReplacementNodes: input.ReplacementNodes, ID: hex.EncodeToString(sum[:]), SubmissionID: input.SubmissionID, Note: input.Note, Accepted: accepted, Status: status, Actor: actor}
 			if review.ReplacementSpec != "" {
 				var preview map[string]any
 				_ = json.Unmarshal(mainBody, &preview)
@@ -369,6 +370,16 @@ func (h *ProjectHandler) projectTaskOutcome(ctx context.Context, key string, chi
 			}
 			if main["status"] != "in_progress" || taskStatusIsTerminal(coordinationString(node, "status")) {
 				return nil, fmt.Errorf("main task or node cannot accept this decision")
+			}
+			plan := coordinationMap(main, "task_plan")
+			if review != nil && coordinationString(coordinationMap(plan, "request"), "overview") != "" {
+				// A later reconciliation retries this same Matrix transaction before
+				// exposing the decision to the scheduler.
+				_, leader := parseActor(review.Actor)
+				_, err := h.coordination.sendMatrixContent(ctx, authpkg.RoleTeamLeader, leader, coordinationString(main, "room_id"), "task-review:"+review.ID, taskBusinessText(review.Note, review.RunID), true)
+				if err != nil {
+					return nil, err
+				}
 			}
 			node["status"], node["review_id"], node["submission_id"] = outcome.Status, outcome.ReviewID, outcome.SubmissionID
 		}

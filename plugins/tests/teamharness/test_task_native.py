@@ -197,6 +197,7 @@ def test_preparation_transport_failure_retains_retryability_without_execution_sc
     ({'action': 'complete', 'taskId': 'other', 'report': 'done'}, {'role': 'leader', 'completion': 'main'}),
     ({'action': 'cancel', 'taskId': 'main', 'reason': 'stop'}, {'role': 'worker'}),
     ({'action': 'create', 'leader': 'lead', 'title': 'work', '_nativeSource': {}}, {'role': 'manager'}),
+    ({'action': 'plan', 'taskId': 'main', 'nodes': [], '_nativeRunId': 'foreign'}, {'role': 'leader', 'planning': ['main']}),
 ])
 def test_wrong_scope_or_model_private_fields_never_reach_cli(bridge, arguments, context):
     with pytest.raises(ValueError):
@@ -305,6 +306,16 @@ def test_incomplete_handoff_proof_cannot_end_native_execution(bridge):
                                  'handoff': {'submissionId': 'other', 'actorName': 'dev', 'actorRole': 'worker'}},
                          'mainProjection': 'applied', 'dispatchStatus': 'ready', 'assignments': []})
     assert result['phaseComplete'] is False
+
+
+@pytest.mark.parametrize("overview", [None, "  "])
+def test_room_plan_requires_visible_overview_before_dispatch(bridge, overview):
+    payload = {"operation": "task", "context": {"role": "leader", "planning": ["main"], "runId": "native-run"},
+               "arguments": {"action": "plan", "taskId": "main", "nodes": []}}
+    if overview is not None:
+        payload["arguments"]["overview"] = overview
+    with pytest.raises(ValueError, match="overview"):
+        bridge.invoke(payload, call=lambda _: pytest.fail("dispatched a plan without its overview"))
 
 
 def test_planning_ends_only_after_every_admitted_request_is_planned(bridge):
@@ -437,6 +448,9 @@ def test_dispatch_receipts_confirm_actual_sender_event_without_a_model_turn(brid
     rows=bridge.dispatched_receipts(result,'@sender:test',lambda _:saved)
     assert len(rows)==1
     assert '"status":"sent"' in rows[0]['fact'] and '"matrixEventId":"$sent"' in rows[0]['fact']
+    for current in ["", "matrix:$internal-recovery"]:
+        retried = {**saved, "previous_native_ids": ["matrix:$sent"], "native_id": current}
+        assert bridge.dispatched_receipts(result, "@sender:test", lambda _: retried) == rows
     for change in [{'actor':'@another:test'},{'native_id':''},{'event_id':'foreign'},{'task_id':'other'}]:
         assert bridge.dispatched_receipts(result,'@sender:test',lambda _:{**saved,**change})==[]
     def unavailable(_):raise OSError('temporarily unavailable')
@@ -478,3 +492,45 @@ def test_dispatch_wait_expires_without_claiming_delivery(bridge,monkeypatch):
     ticks=iter([0,1,3]);monkeypatch.setattr(bridge.time,"monotonic",lambda:next(ticks))
     monkeypatch.setattr(bridge.time,"sleep",lambda _:None)
     assert bridge.dispatched_receipts(result,"@sender:test",lambda _:saved,wait_for_send=True)==[]
+
+
+def test_confirmed_handoff_only_reaches_the_submitting_native_session(bridge, tmp_path, monkeypatch):
+    monkeypatch.setenv('AGENTTEAMS_WORKER_HOME', str(tmp_path))
+    result = {'task': {'id': 'stage', 'mainTaskId': 'main', 'submissionId': 's1', 'spec': 'private business input'},
+              'assignments': [{'taskId': 'next', 'status': 'queued', 'eventId': 'dispatch'}]}
+    owner = '@developer:test'
+    target = {'runtime': 'hermes', 'session': 'native-session'}
+    for _ in range(2):
+        bridge.task_handoff_context.remember(result, owner, target)
+    files = list((tmp_path / '.agentteams/native-handoffs').glob('*.json'))
+    assert len(files) == 1 and 'private business input' not in files[0].read_text()
+    receipt = {'event_id': 'dispatch', 'kind': 'task_assigned', 'task_id': 'next', 'actor': owner,
+               'recipient': '@tester:test', 'room_id': '!room:test', 'native_id': ''}
+    def read(runtime):
+        return bridge.invoke({'operation': 'confirmed_handoffs', 'runtime': runtime}, get_json=lambda _: receipt)['items']
+    assert read('hermes') == []
+    receipt['native_id'] = 'matrix:$actual'
+    assert read('openhuman') == []
+    items = read('hermes')
+    assert len(items) == 1 and items[0]['target'] == target
+    assert (items[0]['taskId'], items[0]['submissionId']) == ('stage', 's1')
+    assert len(items[0]['facts']) == 1 and '"matrixEventId":"$actual"' in items[0]['facts'][0]
+
+
+@pytest.mark.parametrize("requested,expected", [("page", "dev"), ("test-report", "test"), ("shared", None), ("unknown", None)])
+def test_final_review_reads_only_unambiguous_accepted_artifacts(bridge, monkeypatch, requested, expected):
+    import task_canonical
+    monkeypatch.setattr(task_canonical, "admit", lambda _: {"ok": True})
+    accepted = [{"id": "dev", "candidate": {"artifacts": [{"artifactId": "page"}, {"artifactId": "shared"}]}},
+                {"id": "test", "candidate": {"artifacts": [{"artifactId": "shared"}], "reportFile": {"artifactId": "test-report"}}}]
+    calls = []
+    def call(args):
+        calls.append(args)
+        return {"ok": False, "effect": "none"}
+    bridge.invoke({"operation": "task", "arguments": {"action": "files_read", "artifactId": requested},
+                   "context": {"role": "leader", "completion": "main", "context": {"acceptedResults": accepted}}}, call=call)
+    assert calls[0].get("taskId") == expected
+    for input_id, resolved in [("main", expected or "main"), ("explicit-child", "explicit-child")]:
+        bridge.invoke({"operation": "task", "arguments": {"action": "files_read", "taskId": input_id, "artifactId": requested},
+                       "context": {"role": "leader", "completion": "main", "context": {"acceptedResults": accepted}}}, call=call)
+        assert calls[-1]["taskId"] == resolved

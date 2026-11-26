@@ -142,6 +142,18 @@ func TestTaskHandoffReviewFailureRepairsAndRechecksWithinSameMainTask(t *testing
 	if fix == "" || review == "" {
 		t.Fatal("missing correction or independent review")
 	}
+	assertSender := func(taskID, want string) {
+		t.Helper()
+		child, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+taskID+"/meta.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		notice := coordinationMap(coordinationMap(child, "task_notifications"), "assigned")
+		if notice["actor_name"] != want {
+			t.Fatalf("correction dispatch sender = %v, want %s", notice["actor_name"], want)
+		}
+	}
+	assertSender(fix, "lead-cr")
 	for i := 0; i < 2; i++ {
 		h.recoverTaskNotifications(t.Context())
 	}
@@ -152,6 +164,7 @@ func TestTaskHandoffReviewFailureRepairsAndRechecksWithinSameMainTask(t *testing
 	if _, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+tester+"/meta.json"); err == nil {
 		t.Fatal("correction bypassed independent re-review")
 	}
+	assertSender(review, "worker-cr")
 	submitPlannedCandidate(t, h, store, review, "second-cr", "Correction independently verified")
 	next, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+tester+"/meta.json")
 	if err != nil || next["status"] != "assigned" {

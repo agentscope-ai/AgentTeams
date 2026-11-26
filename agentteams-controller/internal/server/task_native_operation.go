@@ -20,6 +20,7 @@ import (
 // A separate framework ledger fences ambiguous canonical CLI calls without
 // blocking their own Task transactions with a generic started operation.
 type canonicalNativeOperation struct {
+	sourceActor   string         // Current authenticated Matrix identity, resolved for this request only.
 	Generation    uint64         `json:"generation,omitempty"`
 	Action        string         `json:"action"`
 	SourceEventID string         `json:"source_event_id,omitempty"`
@@ -121,6 +122,7 @@ func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Req
 		// proposed plan or dispatch target cannot evade an unresolved source call.
 		actor = append(actor, "source", room, user, event)
 		scope.SourceEventID = event
+		scope.sourceActor = actorName
 		if input.Mode == "begin" {
 			related, _ := source["relatedSources"].([]any)
 			if len(related) > 50 {
@@ -295,7 +297,7 @@ func (h *ProjectHandler) NativeTaskOperation(w http.ResponseWriter, r *http.Requ
 			saved.State = "unknown"
 		}
 	} else if input.Result["outcome"] == "input_changed" {
-		if !h.nativeInputRefreshReceipt(w, r, saved, input) {
+		if !h.nativeInputRefreshReceipt(w, r, saved, input, scope.sourceActor) {
 			return
 		}
 		saved.State, saved.Result = "verified", input.Result
@@ -375,7 +377,7 @@ func (h *ProjectHandler) NativeTaskOperation(w http.ResponseWriter, r *http.Requ
 // A successful input refresh is explicit no-effect authority, not a CLI error.
 // Reuse the same Matrix frontier reader as CreateTask and verify the returned
 // prefix; a concurrently newer message need not invalidate the earlier receipt.
-func (h *ProjectHandler) nativeInputRefreshReceipt(w http.ResponseWriter, r *http.Request, saved canonicalNativeOperation, input canonicalNativeRequest) bool {
+func (h *ProjectHandler) nativeInputRefreshReceipt(w http.ResponseWriter, r *http.Request, saved canonicalNativeOperation, input canonicalNativeRequest, sourceActor string) bool {
 	if saved.Action != "create" || input.Result["ok"] != true || input.Result["noTaskRegistered"] != true || coordinationString(input.Result, "sourceEventId") != saved.SourceEventID {
 		writeError(w, 409, "verified input refresh control result required")
 		return false
@@ -389,12 +391,8 @@ func (h *ProjectHandler) nativeInputRefreshReceipt(w http.ResponseWriter, r *htt
 	if frontier == "" {
 		frontier = saved.SourceEventID
 	}
-	manager, err := h.coordination.manager(r.Context(), authpkg.CallerFromContext(r.Context()).Username)
-	if err != nil {
-		writeError(w, 503, "source identity unavailable")
-		return false
-	}
-	updates, status := h.coordination.taskNewerInputs(r.Context(), manager.Name, coordinationString(source, "roomId"), coordinationString(source, "userId"), frontier)
+	kind := taskSourceKind(authpkg.CallerFromContext(r.Context()))
+	updates, status := h.coordination.taskNewerInputsFor(r.Context(), kind, sourceActor, coordinationString(source, "roomId"), coordinationString(source, "userId"), frontier)
 	if status != 0 {
 		writeError(w, status, "source frontier authority unavailable")
 		return false

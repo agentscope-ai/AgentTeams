@@ -300,12 +300,8 @@ func validateTaskOriginCommit(w http.ResponseWriter, current, next []byte) bool 
 	return true
 }
 
-// taskNewerInputs compares a native input frontier against the Matrix room's
+// taskNewerInputsFor compares a native input frontier against the Matrix room's
 // current timeline. It never classifies request intent or creates a task.
-func (h *CoordinationHandler) taskNewerInputs(ctx context.Context, manager, room, requester, frontier string) ([]map[string]string, int) {
-	return h.taskNewerInputsFor(ctx, "manager", manager, room, requester, frontier)
-}
-
 func (h *CoordinationHandler) taskNewerInputsFor(ctx context.Context, kind, actor, room, requester, frontier string) ([]map[string]string, int) {
 	if !strings.HasPrefix(frontier, "$") {
 		return nil, http.StatusBadRequest

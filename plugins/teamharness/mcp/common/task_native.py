@@ -17,8 +17,9 @@ import urllib.request
 from urllib.parse import quote
 
 if __package__:
-    from . import phase_recovery, task_cli, task_context, task_roster, task_receipt as receipts
+    from . import task_handoff_context, phase_recovery, task_cli, task_context, task_roster, task_receipt as receipts
 else:
+    import task_handoff_context
     import task_cli
     import task_context
     import task_receipt as receipts
@@ -54,7 +55,10 @@ def dispatched_receipts(result, actor, get_json, *, wait_for_send=False):
                 saved = get_json("coordination/events/" + event)
             except (OSError, ValueError):
                 saved = {}  # The canonical fact remains queued, not sent.
-            native = saved.get("native_id", "")
+            # A receiver retry has its own wake ID. The sender reports the
+            # original public handoff, including while the receiver is restarting.
+            previous = saved.get("previous_native_ids") or []
+            native = previous[0] if previous else saved.get("native_id", "")
             scope_matches = (saved.get("task_id") == identity and saved.get("kind") == kind)
             if kind == "task_submitted" and saved.get("kind") == "main_task_ready":
                 scope_matches = saved.get("main_task_id") == task.get("mainTaskId")
@@ -119,6 +123,9 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         raise ValueError("native bridge request must be an object")
     call = call or task_cli.run
     operation = payload.get("operation")
+    if operation == "confirmed_handoffs":
+        verified = lambda result, actor: dispatched_receipts(result, actor, get_json or controller_json)
+        return {"items": list(task_handoff_context.pending(verified, payload["runtime"]))}
     if operation == "canonical_receipts":
         if __package__:
             from . import task_canonical
@@ -177,18 +184,31 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
     arguments, context = payload.get("arguments"), payload.get("context")
     if not isinstance(arguments, dict) or not isinstance(context, dict):
         raise ValueError("model arguments and trusted native context required")
-    if "_nativeSource" in arguments:
-        raise ValueError("model arguments cannot supply _nativeSource")
+    if "_nativeSource" in arguments or "_nativeRunId" in arguments:
+        raise ValueError("model arguments cannot supply native source or run identity")
     arguments = dict(arguments)
     action, identity = arguments.get("action"), arguments.get("taskId")
     allowed = task_cli.schema(native_role(context.get("role")))["inputSchema"]["properties"]["action"]["enum"]
     if action not in allowed:
         raise ValueError("task action unavailable to this runtime role")
+    if action == "files_read" and context.get("completion") and identity in (None, "", context["completion"]) and arguments.get("artifactId"):
+        owners = set()
+        for child in context.get("context", {}).get("acceptedResults", []):
+            candidate = child.get("candidate") or {}
+            refs = [*(candidate.get("artifacts") or []), candidate.get("reportFile") or {}]
+            if any(ref.get("artifactId") == arguments["artifactId"] for ref in refs):
+                owners.add(child["id"])
+        if len(owners) == 1:
+            arguments["taskId"] = owners.pop()
     review = context.get("review")
     if action in {"begin", "submit"} and (not context.get("execution") or identity != context["execution"]):
         raise ValueError("task operation does not match the current execution")
     if action == "plan" and identity not in (context.get("planning") or []):
         raise ValueError("task plan does not match the admitted handoff")
+    if action == "plan" and context.get("runId"):
+        overview = arguments.get("overview")
+        if not isinstance(overview, str) or not overview.strip():
+            raise ValueError("plan requires overview: summarize the goal, acceptance criteria, responsibilities and final files before dispatch")
     if action == "complete" and (not context.get("completion") or identity != context["completion"]):
         raise ValueError("task completion does not match the accepted main task")
     if action == "complete" and not arguments.get("artifacts"):
@@ -220,6 +240,8 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
     admission = task_canonical.admit(context)
     if admission.get('ok') is not True:
         return admission
+    if action in {"plan", "accept", "reject"} and context.get("runId"):
+        arguments["_nativeRunId"] = context["runId"]
     result = call(arguments)
     response = {"result": result, "phaseComplete": False}
     if action == "create":
@@ -261,8 +283,11 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
             response["phaseComplete"] = True
     if (receipt and response["phaseComplete"] and action == "submit" and context.get("actor")
             and (get_json or os.getenv("AGENTTEAMS_CONTROLLER_URL"))):
-        response["extraReceipts"] = dispatched_receipts(result, context["actor"],
-            get_json or (lambda route: controller_json(route, timeout=2)), wait_for_send=True)
+        if context.get("handoffTarget"):
+            task_handoff_context.remember(result, context["actor"], context["handoffTarget"])
+        else:
+            response["extraReceipts"] = dispatched_receipts(result, context["actor"],
+                get_json or (lambda route: controller_json(route, timeout=2)), wait_for_send=True)
     if receipt and response["phaseComplete"]:
         display = terminal_display(action, arguments, result)
         if display is not None:

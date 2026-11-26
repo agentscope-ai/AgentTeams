@@ -108,8 +108,9 @@ def publish_raw_saved(client, room_id, text, checkpoint, expected_sender, bind, 
 class RawWorkerSync:
     """Commit unencrypted native sync and history pages before dispatching shared work."""
 
-    def __init__(self, matrix, client, sender, classify, observe_rooms):
+    def __init__(self, matrix, client, sender, classify, observe_rooms, *, event_types=("m.room.message",)):
         self.matrix = matrix
+        self.event_types = event_types
         self.client = client
         self.sender = sender
         self.classify = classify
@@ -132,7 +133,7 @@ class RawWorkerSync:
                 raise RecoveryConflict("Matrix returned an event for a different room")
             if event.get("type") == "m.room.encrypted":
                 raise RecoveryConflict("Raw Matrix consumer cannot decode encrypted input")
-            if event.get("type") != "m.room.message" or not event.get("event_id"):
+            if event.get("type") not in self.event_types or not event.get("event_id"):
                 continue
             self.require_room(room)
             event_id = event["event_id"]

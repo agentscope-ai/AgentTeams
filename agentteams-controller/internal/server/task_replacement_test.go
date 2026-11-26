@@ -205,3 +205,52 @@ func TestTaskReplacementRecoversCommittedRejectionAfterParentCASFailure(t *testi
 		t.Fatal("replacement history lost or duplicated")
 	}
 }
+
+func TestTaskReviewPublishesDecisionBeforeRework(t *testing.T) {
+	h, store, leader, _ := taskPlanFixture(t)
+	var reviewTxns []string
+	matrix := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var content map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&content)
+		if content["body"] != "规划一个验证节点" {
+			if content["body"] != "实测结果不符合要求，需要返工。" || coordinationMap(content, "org.agentteams.run")["run_id"] != "review-run" {
+				t.Errorf("unexpected review message: %v", content)
+			}
+			reviewTxns = append(reviewTxns, r.URL.Path)
+			if len(reviewTxns) == 1 {
+				w.WriteHeader(503)
+				return
+			}
+		}
+		_, _ = w.Write([]byte(`{"event_id":"$published"}`))
+	}))
+	defer matrix.Close()
+	h.coordination.deps.MatrixConfig.ServerURL = matrix.URL
+	input := planRequest()
+	input.Overview = "规划一个验证节点"
+	input.Nodes = input.Nodes[:1]
+	if w := callPlan(h, leader, input); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	id := taskPlanExecutionID("alpha", "main", "A")
+	submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "数值错误", "REVISION_NEEDED")
+	reject := func() string {
+		body, _ := json.Marshal(taskReviewRequest{SubmissionID: submission, Note: "实测结果不符合要求，需要返工。", ReplacementSpec: "修正数值"})
+		r := httptest.NewRequest("POST", "/reject", strings.NewReader(string(body)))
+		r.SetPathValue("id", id)
+		r.Header.Set("X-AgentTeams-Run-ID", "review-run")
+		w := httptest.NewRecorder()
+		h.ReviewTask(false)(w, withCaller(r, leader))
+		return w.Body.String()
+	}
+	if got := reject(); !strings.Contains(got, `"mainProjection":"pending"`) {
+		t.Fatalf("replacement released before review was visible: %s", got)
+	}
+	if got := reject(); !strings.Contains(got, `"mainProjection":"applied"`) {
+		t.Fatal(got)
+	}
+	_ = reject()
+	if len(reviewTxns) != 2 || reviewTxns[0] != reviewTxns[1] {
+		t.Fatalf("review publication was not idempotent: %v", reviewTxns)
+	}
+}

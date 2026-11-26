@@ -59,7 +59,7 @@ class RecoveryRPCTest(unittest.TestCase):
         request = dict(action='matrix.prepare', runtime='openhuman', room_id='!r:d', account='@worker:d',
                        events=[event, dict(event, event_id='$two'), dict(event, event_id='$three')])
         self.assertEqual(rpc.execute(request), [('$one','task_notification','T'), ('$two','context',None)])
-        self.assertEqual(verify.call_count, 2)
+        self.assertEqual([c.kwargs["event_id"] for c in verify.call_args_list], ["$one", "$three"])
         with self.assertRaises(NotificationUnavailable):
             rpc.execute(dict(request, events=[event]))
 

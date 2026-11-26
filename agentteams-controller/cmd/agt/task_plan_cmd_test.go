@@ -64,3 +64,25 @@ func TestTaskPlanRejectsAmbiguousOrMalformedLocalInput(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskPlanOverviewUsesTheFrameworkRunIdentity(t *testing.T) {
+	const overview = "目标与要求；验收标准；开发、审查、测试分工。"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["overview"] != overview || r.Header.Get("X-AgentTeams-Run-ID") != "native-run" {
+			t.Errorf("lost overview or native run: %v", body)
+		}
+		_, _ = w.Write([]byte(`{"progress":"ready"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", srv.URL)
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "fixture")
+	t.Setenv("AGENTTEAMS_RUN_ID", "native-run")
+	cmd := newRootCommand("agt")
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"task", "plan", "main", "--json", `{"nodes":[]}`, "--overview", overview})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -167,7 +167,9 @@ def test_saved_result_is_only_resent_with_its_durable_transaction(adapter):
     delivered = []
     authority.delivered = lambda *args: (delivered.append(args), copy.deepcopy(task))[1]
     asyncio.run(recovery.recover())
-    channel.send_task_reply.assert_awaited_once_with("!task:hs", "saved answer", "stable-transaction")
+    channel.send_task_reply.assert_awaited_once_with("!task:hs", "saved answer", "stable-transaction", ANY)
+    identity = channel.send_task_reply.await_args.args[3]
+    assert (identity["team_id"], identity["task_id"], identity["generation"]) == ("team", "T", 2)
     assert delivered == [("T", "team", "$reply")]
     channel.enqueue_recovered_task.assert_not_awaited()
 
@@ -224,7 +226,7 @@ def test_same_process_retries_saved_delivery_only_after_native_stream_closes(
         await recovery.recover()  # No restart or new Matrix message.
         assert cp["delivery"] == "delivered"
         assert channel.send_task_reply.await_args_list[0] == channel.send_task_reply.await_args_list[1]
-        channel.send_task_reply.assert_awaited_with("!task:hs", "saved answer", "stable-txn")
+        channel.send_task_reply.assert_awaited_with("!task:hs", "saved answer", "stable-txn", ANY)
         channel.enqueue_recovered_task.assert_awaited_once()
         assert task["execution"]["generation"] == 2
         await recovery.recover()
@@ -252,7 +254,7 @@ def test_empty_native_final_requires_a_submitted_authoritative_report(adapter, s
         if allowed:
             await recovery.finish({'task_id': 'T', 'team_id': 'team', **task['execution']}, 'session', '')
             assert prepared == [('T', 'team', '')]
-            channel.send_task_reply.assert_awaited_once_with('!task:hs', 'authoritative report', 'saved-report')
+            channel.send_task_reply.assert_awaited_once_with('!task:hs', 'authoritative report', 'saved-report', ANY)
         else:
             with pytest.raises(RuntimeError, match='without a durable result'):
                 await recovery.finish({'task_id': 'T', 'team_id': 'team', **task['execution']}, 'session', '')
@@ -452,13 +454,15 @@ def test_reply_uses_saved_transaction_and_requires_matrix_event_id(native_channe
     channel = native_channel.AgentTeamsMatrixChannel(process=lambda _: None)
     channel._room_send_with_retry = AsyncMock(return_value=SimpleNamespace(event_id="$persisted"))
     async def scenario():
-        assert await channel.send_task_reply("!room", "saved result", "stable-txn") == "$persisted"
+        assert await channel.send_task_reply("!room", "saved result", "stable-txn", {"team_id": "team", "task_id": "T", "generation": 2}) == "$persisted"
         channel._room_send_with_retry.assert_awaited_once_with("!room", "m.room.message", {
             "msgtype": "m.text", "body": "saved result", "org.agentteams.progress_only": True, "org.agentteams.reply_txn": "stable-txn",
+            "org.agentteams.run_id": "qwenpaw:task:team:T:2",
+            "org.agentteams.run": {"version": "1", "run_id": "qwenpaw:task:team:T:2", "blocks": [{"type": "text", "text": "saved result"}]},
         }, tx_id="stable-txn")
         channel._room_send_with_retry.return_value = SimpleNamespace()
         with pytest.raises(RuntimeError, match="not acknowledged"):
-            await channel.send_task_reply("!room", "saved result", "stable-txn")
+            await channel.send_task_reply("!room", "saved result", "stable-txn", {"team_id": "team", "task_id": "T", "generation": 2})
     asyncio.run(scenario())
 
 
@@ -627,7 +631,7 @@ def test_final_callback_prefers_authoritative_saved_result(adapter):
     delivered = []
     authority.delivered = lambda *args: (delivered.append(args), copy.deepcopy(task))[1]
     asyncio.run(recovery.finish({"task_id": "T", "team_id": "team", **task["execution"]}, "native-session", "stale native answer"))
-    channel.send_task_reply.assert_awaited_once_with("!task:hs", "saved authoritative answer", "saved-txn")
+    channel.send_task_reply.assert_awaited_once_with("!task:hs", "saved authoritative answer", "saved-txn", ANY)
     assert delivered == [("T", "team", "$reply")]
 
 

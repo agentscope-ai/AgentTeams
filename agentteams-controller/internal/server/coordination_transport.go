@@ -261,6 +261,19 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 			return
 		}
 		if d.Transport == "matrix" {
+			pending, err := h.taskResultPublicationPending(ctx, e, p, t)
+			if err != nil {
+				d.Error = "upstream stage publication state unavailable"
+				return
+			}
+			if pending {
+				d.Error = ""
+				return
+			}
+			if err := h.projectStageArtifacts(ctx, e, p, d, persist); err != nil {
+				d.Error = "stage artifact projection unavailable"
+				return
+			}
 			if coordinationCompleted(e.Kind) {
 				// The canonical completed state/report was re-read by resolve above.
 				// Relay as the registered Manager without opening another Agent turn.
@@ -296,7 +309,7 @@ func (h *CoordinationHandler) advance(ctx context.Context, d *coordinationDelive
 				return
 			}
 			// Matrix transaction IDs make an uncertain send safe to retry.
-			id, sendErr := h.sendMatrixContent(ctx, e.ActorRole, e.ActorName, e.RoomID, d.matrixTransactionID(), coordinationMatrixNotification(e, p), false)
+			id, sendErr := h.sendMatrixEvent(ctx, e.ActorRole, e.ActorName, e.RoomID, d.matrixTransactionID(), d.notificationEventType(e), coordinationMatrixNotification(e, p), false)
 			if sendErr != nil {
 				d.Error = "Matrix coordination notification unavailable"
 				return
@@ -531,11 +544,13 @@ func coordinationMatrixAssignment(e coordinationEvent, p map[string]any) map[str
 	nodes, _ := p["tasks"].([]any)
 	titles := map[string]string{}
 	var dependencies []any
+	var correction bool
 	for _, item := range nodes {
 		n, _ := item.(map[string]any)
 		titles[coordinationString(n, "task_id")] = coordinationString(n, "title")
 		if coordinationString(n, "task_id") == e.TaskID {
 			dependencies, _ = n["depends_on"].([]any)
+			correction = coordinationString(n, "revision_of") != ""
 		}
 	}
 	var prior []string
@@ -546,7 +561,9 @@ func coordinationMatrixAssignment(e coordinationEvent, p map[string]any) map[str
 		}
 	}
 	prefix := "任务已分配。"
-	if len(prior) > 0 {
+	if correction && e.ActorRole == authpkg.RoleTeamLeader {
+		prefix = "请按审核意见返工。"
+	} else if len(prior) > 0 {
 		prefix = "前置的" + strings.Join(prior, "、") + "环节已验收通过。"
 		if e.ActorRole == authpkg.RoleWorker {
 			prefix = "前置的" + strings.Join(prior, "、") + "环节已完成交付。"
@@ -614,7 +631,23 @@ func (h *CoordinationHandler) project(ctx context.Context, e coordinationEvent, 
 func (h *CoordinationHandler) projectContent(ctx context.Context, kind, name, room, txn string, content map[string]any) (string, error) {
 	return h.sendMatrixContent(ctx, kind, name, room, txn, content, true)
 }
+func supportsInternalTaskWake(runtime string) bool {
+	return runtime == "codex" || runtime == "qwenpaw" || runtime == "claudecode" || runtime == "deepseek-harness" || runtime == "hermes" || runtime == "openhuman"
+}
+
+func (d coordinationDelivery) notificationEventType(e coordinationEvent) string {
+	// A previous dispatch already notified the room. Only wake the restarted recipient.
+	if d.Replays > 0 && e.Protocol == "task/v1" && supportsInternalTaskWake(e.RecipientRuntime) {
+		return "org.agentteams.coordination"
+	}
+	return "m.room.message"
+}
+
 func (h *CoordinationHandler) sendMatrixContent(ctx context.Context, kind, name, room, txn string, content map[string]any, progressOnly bool) (string, error) {
+	return h.sendMatrixEvent(ctx, kind, name, room, txn, "m.room.message", content, progressOnly)
+}
+
+func (h *CoordinationHandler) sendMatrixEvent(ctx context.Context, kind, name, room, txn, eventType string, content map[string]any, progressOnly bool) (string, error) {
 	if h.deps.Provisioner == nil || h.deps.MatrixConfig.ServerURL == "" || !strings.HasPrefix(room, "!") {
 		return "", fmt.Errorf("Matrix projection unavailable")
 	}
@@ -622,7 +655,16 @@ func (h *CoordinationHandler) sendMatrixContent(ctx context.Context, kind, name,
 	if err != nil {
 		return "", err
 	}
-	target := strings.TrimRight(h.deps.MatrixConfig.ServerURL, "/") + "/_matrix/client/v3/rooms/" + url.PathEscape(room) + "/send/m.room.message/" + url.PathEscape(txn)
+	packet := coordinationMap(content, "org.agentteams.coordination")
+	meta := coordinationMap(packet, "channel_meta")
+	control := coordinationMap(meta, "teamharness_coordination")
+	if content["msgtype"] == "m.notice" && control["kind"] == "handoff" && meta["agent_matrix_user_id"] == meta["sender_id"] && strings.HasPrefix(coordinationString(packet, "session_id"), "coordination-handoff:") {
+		// Runtimes with native support consume this wake without a chat bubble.
+		if worker, err := h.worker(ctx, name); err == nil && supportsInternalTaskWake(worker.Spec.Runtime) {
+			eventType = "org.agentteams.coordination"
+		}
+	}
+	target := strings.TrimRight(h.deps.MatrixConfig.ServerURL, "/") + "/_matrix/client/v3/rooms/" + url.PathEscape(room) + "/send/" + eventType + "/" + url.PathEscape(txn)
 	if _, exists := content["m.mentions"]; !exists {
 		content["m.mentions"] = map[string]any{"user_ids": []string{}}
 	}
@@ -685,4 +727,57 @@ func (h *CoordinationHandler) projectApprovals(ctx context.Context, e coordinati
 			d.Approvals[id] = status
 		}
 	}
+}
+
+// The overview contract opts into result and file publication before handoff.
+func taskRoomStageIDs(e coordinationEvent, main map[string]any) []string {
+	if e.MainTaskID == "" {
+		return nil
+	}
+	var plan taskPlan
+	encoded, _ := json.Marshal(main["task_plan"])
+	if json.Unmarshal(encoded, &plan) != nil || plan.Request.Overview == "" {
+		return nil
+	}
+	ids := []string{}
+	switch e.Kind {
+	case "task_submitted":
+		ids = append(ids, e.TaskID)
+	case "task_assigned", "main_task_ready":
+		nodes, _ := main["tasks"].([]any)
+		for _, raw := range nodes {
+			node, _ := raw.(map[string]any)
+			if e.Kind == "main_task_ready" {
+				if node["status"] == "completed" {
+					ids = append(ids, coordinationString(node, "task_id"))
+				}
+			} else if node["task_id"] == e.TaskID {
+				data, _ := json.Marshal(node["depends_on"])
+				_ = json.Unmarshal(data, &ids)
+				break
+			}
+		}
+	default:
+		return nil
+	}
+	return ids
+}
+
+func (h *CoordinationHandler) taskResultPublicationPending(ctx context.Context, e coordinationEvent, main, child map[string]any) (bool, error) {
+	ids := taskRoomStageIDs(e, main)
+	for _, id := range ids {
+		if !isSafeTaskID(id) {
+			return true, fmt.Errorf("invalid stage identity")
+		}
+		stage, err := h.read(ctx, path.Join("teams", e.StorageTeam, "shared/tasks", id, "meta.json"))
+		if err != nil {
+			return true, err
+		}
+		execution := coordinationMap(stage, "execution")
+		checkpoint := coordinationMap(execution, "checkpoint")
+		if checkpoint["delivery"] != "delivered" || coordinationString(checkpoint, "reply_event") == "" {
+			return true, nil
+		}
+	}
+	return false, nil
 }

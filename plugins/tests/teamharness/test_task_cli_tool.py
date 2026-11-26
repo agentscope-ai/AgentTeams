@@ -280,3 +280,28 @@ def test_invalid_correction_dependencies_are_rejected_before_native_ledger(monke
     result = tool.run(args)
     assert result["effect"] == "none" and result["error"] == "invalid_task_arguments"
     assert "local correction IDs" in result["message"]
+
+
+def test_native_run_correlation_is_private_to_each_cli_invocation(monkeypatch):
+    tool = load(monkeypatch)
+    calls = []
+    def execute(argv, **kwargs):
+        calls.append(kwargs["env"].get("AGENTTEAMS_RUN_ID"))
+        return SimpleNamespace(returncode=0, stdout='{"ok":true}', stderr='')
+    monkeypatch.setattr(tool.subprocess, "run", execute)
+    monkeypatch.delenv("AGENTTEAMS_RUN_ID", raising=False)
+    args = {"action": "accept", "taskId": "exec", "submissionId": "s1", "note": "符合要求"}
+    assert tool.run({**args, "_nativeRunId": "qwenpaw:message:!room:local:$review"}).get("ok")
+    assert tool.run(args).get("ok")
+    assert calls == ["qwenpaw:message:!room:local:$review", None]
+    assert "_nativeRunId" not in tool.schema("leader")["inputSchema"]["properties"]
+
+def test_invalid_selection_returns_exact_ids_and_filenames_for_correction(monkeypatch):
+    tool = load(monkeypatch)
+    files = [{"name": "page.html", "artifactId": "html-accepted"}, {"name": "report.md", "artifactId": "report-accepted"}]
+    monkeypatch.setattr(tool, "_run", lambda _: {"task": {"id": "main", "acceptedResults": [{"candidate": {"artifacts": files}}]}})
+    args = {"action": "complete", "taskId": "main", "report": "Tested.", "artifacts": ["html-accepted", "report-typo"]}
+    with pytest.raises(ValueError) as caught:
+        tool._validate_mutation(args)
+    assert '"report-accepted": "report.md"' in str(caught.value)
+    tool._validate_mutation({**args, "artifacts": ["html-accepted", "report-accepted"]})

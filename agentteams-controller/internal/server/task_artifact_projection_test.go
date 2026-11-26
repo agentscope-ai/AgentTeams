@@ -129,3 +129,83 @@ func TestFinalArtifactsResumePartialProgressAndDoNotRepeatReport(t *testing.T) {
 		}
 	}
 }
+
+func TestStageArtifactIsARealFileInTheTaskRoomAndResumesWithoutDuplication(t *testing.T) {
+	h, store, _ := taskCompleteFixture(t)
+	stage, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/t1/meta.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage["execution"] = map[string]any{"checkpoint": map[string]any{"delivery": "delivered", "reply_event": "$stage-result"}}
+	putTask(store, "teams/alpha/shared/tasks/t1/meta.json", stage)
+	main := map[string]any{"task_plan": map[string]any{"request": map[string]any{"overview": "Published task overview"}}, "tasks": []any{map[string]any{"task_id": "t1", "status": "completed"}}}
+	e := coordinationEvent{Kind: "main_task_ready", MainTaskID: "main", StorageTeam: "alpha", RoomID: "!task:test", ID: "outgoing-one"}
+	uploads, sends := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer stage-worker-token" {
+			t.Error("stage artifact was not sent by its actual owner")
+		}
+		if r.URL.Path == "/_matrix/media/v3/upload" {
+			uploads++
+			bytes, _ := io.ReadAll(r.Body)
+			if string(bytes) != "Verified report\n" {
+				t.Errorf("wrong artifact bytes: %q", bytes)
+			}
+			_, _ = w.Write([]byte(`{"content_uri":"mxc://test/stage-file"}`))
+			return
+		}
+		if !strings.Contains(r.URL.Path, "/rooms/!task:test/send/m.room.message/") {
+			t.Errorf("stage file did not reach task room: %s", r.URL.Path)
+		}
+		sends++
+		var content map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&content)
+		if content["msgtype"] != "m.file" || content["body"] != "report.md" || content["filename"] != "report.md" || content["url"] != "mxc://test/stage-file" || coordinationString(coordinationMap(content, "m.relates_to"), "event_id") != "$stage-result" {
+			t.Errorf("not a real clickable stage attachment: %v", content)
+		}
+		_, _ = w.Write([]byte(`{"event_id":"$stage-file"}`))
+	}))
+	defer server.Close()
+	creds := &service.FileCredentialStore{Dir: t.TempDir()}
+	if err := creds.Save(t.Context(), "worker-cr", &service.WorkerCredentials{MatrixToken: "stage-worker-token"}); err != nil {
+		t.Fatal(err)
+	}
+	h.coordination.deps.Provisioner = service.NewProvisioner(service.ProvisionerConfig{Creds: creds})
+	h.coordination.deps.MatrixConfig = matrix.Config{ServerURL: server.URL}
+	delivery := coordinationDelivery{}
+	snapshots := 0
+	persist := func() error { snapshots++; return nil }
+	for i := 0; i < 2; i++ {
+		if err := h.coordination.projectStageArtifacts(t.Context(), e, main, &delivery, persist); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if uploads != 1 || sends != 1 || snapshots != 1 {
+		t.Fatalf("stage retry duplicated attachment or did not persist receipt: uploads=%d sends=%d snapshots=%d", uploads, sends, snapshots)
+	}
+}
+
+func TestStageFileTransactionIsStableAcrossFanoutNotifications(t *testing.T) {
+	h, store, _ := taskCompleteFixture(t)
+	stage, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/t1/meta.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage["execution"] = map[string]any{"checkpoint": map[string]any{"delivery": "delivered", "reply_event": "$result"}}
+	putTask(store, "teams/alpha/shared/tasks/t1/meta.json", stage)
+	main := map[string]any{"task_plan": map[string]any{"request": map[string]any{"overview": "Planned"}}, "tasks": []any{map[string]any{"task_id": "a", "depends_on": []string{"t1"}}, map[string]any{"task_id": "b", "depends_on": []string{"t1"}}}}
+	transactions := map[string]int{}
+	h.coordination.projectArtifact = func(_ context.Context, e coordinationEvent, f taskFinalArtifact, parent, txn string) (string, error) {
+		transactions[txn]++
+		return "$same-file", nil
+	}
+	for _, target := range []string{"a", "b"} {
+		e := coordinationEvent{Kind: "task_assigned", MainTaskID: "main", StorageTeam: "alpha", RoomID: "!task:test", TaskID: target, ID: target}
+		if err := h.coordination.projectStageArtifacts(t.Context(), e, main, &coordinationDelivery{}, func() error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(transactions) != 1 {
+		t.Fatalf("parallel handoffs would duplicate the same room attachment: %v", transactions)
+	}
+}

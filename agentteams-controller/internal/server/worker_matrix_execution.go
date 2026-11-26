@@ -47,7 +47,7 @@ func savedReplyUpdateOnly(old, next *taskCheckpoint) bool {
 }
 
 func matrixRecoveryMode(execution taskExecution) string {
-	if execution.State == "cancelled" || (execution.Checkpoint != nil && execution.Checkpoint.Delivery == "delivered") {
+	if (execution.State == "cancelled" || execution.State == "completed") || (execution.Checkpoint != nil && execution.Checkpoint.Delivery == "delivered") {
 		return "done"
 	}
 	if unresolvedOperation(execution.Checkpoint) {
@@ -196,10 +196,19 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		if unresolvedOperation(execution.Checkpoint) {
 			execution.State = "needs_verification"
 		}
-	case "checkpoint", "release", "cancel":
+	case "checkpoint", "release", "cancel", "complete":
 		if !sameProcess || execution.Generation == 0 || request.Generation != execution.Generation || execution.State == "released" {
 			writeError(w, 409, "message execution ownership changed")
 			return
+		}
+		if request.Action == "complete" {
+			cp := execution.Checkpoint
+			if cp == nil || cp.Result == nil || len(cp.RemainingSteps) != 0 || unresolvedOperation(cp) || cp.Delivery != "pending" || (cp.ReplyAttempt == nil || cp.ReplyAttempt.State != "ready") {
+				writeError(w, 409, "quiet completion requires a saved result with no outstanding operation or attempted reply")
+				return
+			}
+			execution.State = "completed"
+			break
 		}
 		if request.Action == "cancel" {
 			execution.State = "cancelled"

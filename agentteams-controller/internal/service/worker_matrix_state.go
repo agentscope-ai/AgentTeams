@@ -302,7 +302,7 @@ func (input *WorkerMatrixInput) needsPending() (bool, error) {
 	if err := json.Unmarshal(input.Execution, &execution); err != nil {
 		return false, fmt.Errorf("%w: unreadable Matrix execution: %v", ErrWorkerStateInvalid, err)
 	}
-	return execution.State != "cancelled" && execution.Checkpoint.Delivery != "delivered", nil
+	return execution.State != "cancelled" && execution.State != "completed" && execution.Checkpoint.Delivery != "delivered", nil
 }
 
 // persistInputs is shared by incremental sync and backwards pagination. Both

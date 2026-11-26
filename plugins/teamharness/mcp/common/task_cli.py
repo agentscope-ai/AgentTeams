@@ -106,7 +106,7 @@ def schema(role: str) -> dict:
             "Use create only for a direct registered Team Admin work request in your private conversation; "
             "set leader to your own registered identity and use the supplied Human input reference. "
             "Preserve its receipt and wait for the admitted handoff before plan. "
-            "Use plan/review/completion only for the framework-prepared Task phase."
+            "Use plan/review/completion only for the framework-prepared Task phase. With plan, include the room overview alongside nodes."
         )
     properties = result["inputSchema"]["properties"]
     fields = {"action", "taskId"}

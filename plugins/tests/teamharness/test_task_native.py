@@ -308,6 +308,16 @@ def test_incomplete_handoff_proof_cannot_end_native_execution(bridge):
     assert result['phaseComplete'] is False
 
 
+@pytest.mark.parametrize("overview", [None, "  "])
+def test_room_plan_requires_visible_overview_before_dispatch(bridge, overview):
+    payload = {"operation": "task", "context": {"role": "leader", "planning": ["main"], "runId": "native-run"},
+               "arguments": {"action": "plan", "taskId": "main", "nodes": []}}
+    if overview is not None:
+        payload["arguments"]["overview"] = overview
+    with pytest.raises(ValueError, match="overview"):
+        bridge.invoke(payload, call=lambda _: pytest.fail("dispatched a plan without its overview"))
+
+
 def test_planning_ends_only_after_every_admitted_request_is_planned(bridge):
     context = {'role': 'leader', 'planning': ['main-a', 'main-b']}
     def call(arguments):

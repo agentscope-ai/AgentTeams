@@ -205,6 +205,10 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         raise ValueError("task operation does not match the current execution")
     if action == "plan" and identity not in (context.get("planning") or []):
         raise ValueError("task plan does not match the admitted handoff")
+    if action == "plan" and context.get("runId"):
+        overview = arguments.get("overview")
+        if not isinstance(overview, str) or not overview.strip():
+            raise ValueError("plan requires overview: summarize the goal, acceptance criteria, responsibilities and final files before dispatch")
     if action == "complete" and (not context.get("completion") or identity != context["completion"]):
         raise ValueError("task completion does not match the accepted main task")
     if action == "complete" and not arguments.get("artifacts"):

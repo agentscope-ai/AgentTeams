@@ -109,9 +109,16 @@ type CredentialBinding struct {
 // control is the gateway operator's responsibility (or, for local Higress
 // deployments, handled out-of-band by Manager skills).
 type MCPServer struct {
-	Name      string `json:"name"`
-	URL       string `json:"url"`
-	Transport string `json:"transport,omitempty"`
+	Approvals *MCPApprovals `json:"approvals,omitempty"`
+	Name      string        `json:"name"`
+	URL       string        `json:"url"`
+	Transport string        `json:"transport,omitempty"`
+}
+
+// MCPApprovals controls native tool calls on this agent's MCP binding.
+type MCPApprovals struct {
+	Tools string `json:"tools"`
+	Mode  string `json:"mode"`
 }
 
 // RemoteSkill identifies one skill from a remote source.

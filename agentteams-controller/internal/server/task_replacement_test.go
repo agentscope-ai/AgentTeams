@@ -97,6 +97,39 @@ func TestTaskReplacementPreservesRejectedAttemptAndReleasesOnlyCorrectedInput(t 
 	}
 }
 
+func TestLeaderCanResumeReviewedBlockedExecution(t *testing.T) {
+	h, store, leader, _ := taskPlanFixture(t)
+	if w := callPlan(h, leader, planRequest()); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	id := taskPlanExecutionID("alpha", "main", "A")
+	submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "Awaiting asset permission", "BLOCKED")
+	first := rejectWithReplacement(h, leader, id, submission, "")
+	if first.Code != 200 {
+		t.Fatal(first.Body.String())
+	}
+	const context = "Admin approved the assets; continue the offline checks"
+	w := rejectWithReplacement(h, leader, id, submission, context)
+	var result struct {
+		ReplacementTaskID string
+		MainProjection    string
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.MainProjection != "applied" || result.ReplacementTaskID == "" {
+		t.Fatalf("resume: %d %s", w.Code, w.Body.String())
+	}
+	next, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+result.ReplacementTaskID+"/meta.json")
+	if err != nil || next["status"] != "assigned" || !strings.Contains(coordinationString(next, "spec"), context) {
+		t.Fatalf("replacement: %+v %v", next, err)
+	}
+	retry := rejectWithReplacement(h, leader, id, submission, context)
+	if retry.Code != 200 || !strings.Contains(retry.Body.String(), result.ReplacementTaskID) {
+		t.Fatal(retry.Body.String())
+	}
+	if w := rejectWithReplacement(h, leader, id, submission, "Different continuation"); w.Code != 409 {
+		t.Fatal(w.Body.String())
+	}
+}
+
 func TestTaskReplacementRejectsFreezeAndActivatedConsumerBeforeSavingDecision(t *testing.T) {
 	for _, scenario := range []string{"frozen", "activated-consumer"} {
 		t.Run(scenario, func(t *testing.T) {

@@ -231,6 +231,10 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		worker.Spec.Model != "" {
 		h.appendModelGrant(r.Context(), worker, worker.Spec.ModelProvider, worker.Spec.Model)
 	}
+	if err := validateMCPApprovals(worker.Spec.Runtime, worker.Spec.McpServers); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	h.stampControllerLabel(&worker.ObjectMeta)
 
 	if err := h.client.Create(r.Context(), worker); err != nil {
@@ -705,6 +709,10 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			h.appendModelGrant(ctx, &worker, worker.Spec.ModelProvider, worker.Spec.Model)
 		}
 
+		if err := validateMCPApprovals(worker.Spec.Runtime, worker.Spec.McpServers); err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if err := h.client.Update(ctx, &worker); err != nil {
 			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
 				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
@@ -1727,6 +1735,10 @@ func (h *ResourceHandler) CreateManager(w http.ResponseWriter, r *http.Request) 
 		mgr.Spec.Config = *req.Config
 	}
 
+	if err := validateMCPApprovals(mgr.Spec.Runtime, mgr.Spec.McpServers); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	h.stampControllerLabel(&mgr.ObjectMeta)
 
 	if err := h.client.Create(r.Context(), mgr); err != nil {
@@ -1840,6 +1852,10 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 			mgr.Spec.Resources = req.Resources
 		}
 
+		if err := validateMCPApprovals(mgr.Spec.Runtime, mgr.Spec.McpServers); err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if err := h.client.Update(ctx, &mgr); err != nil {
 			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
 				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
@@ -2384,4 +2400,20 @@ func writeK8sError(w http.ResponseWriter, op string, err error) {
 	default:
 		httputil.WriteError(w, http.StatusInternalServerError, op+": "+err.Error())
 	}
+}
+
+func validateMCPApprovals(runtime string, servers []v1beta1.MCPServer) error {
+	for _, server := range servers {
+		p := server.Approvals
+		if p == nil {
+			continue
+		}
+		if runtime != "codex" {
+			return fmt.Errorf("runtime %q does not support MCP approval rules for %s", runtime, server.Name)
+		}
+		if p.Tools != "*" || (p.Mode != "ask" && p.Mode != "allow") {
+			return fmt.Errorf("MCP %s approvals require tools '*' and mode ask or allow", server.Name)
+		}
+	}
+	return nil
 }

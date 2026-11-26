@@ -220,6 +220,19 @@ def test_review_uses_prepared_submission_when_model_omits_it(bridge, action):
     assert 'submissionId' not in arguments
 
 
+def test_leader_resumes_blocked_submission_from_followup(bridge):
+    calls = []
+    def call(bound):
+        calls.append(bound)
+        if bound["action"] == "get":
+            return {"task": {"id": "t1", "status": "blocked", "submissionId": "original"}}
+        return {"ok": False, "effect": "none"}
+    args = {"action": "reject", "taskId": "t1", "team": "alpha",
+            "note": "Authorization received", "replacementSpec": "Use the approved assets"}
+    bridge.invoke({"operation": "task", "arguments": args, "context": {"role": "leader"}}, call=call)
+    assert calls == [{"action": "get", "taskId": "t1", "team": "alpha"}, {**args, "submissionId": "original"}]
+
+
 @pytest.mark.parametrize("role", ["manager", "leader"])
 def test_create_keeps_source_binding_and_finishes_only_leader_intake(bridge, role):
     original = {'inputId': 'ref', 'eventId': '$source', 'roomId': '!room:test', 'userId': '@human:test'}

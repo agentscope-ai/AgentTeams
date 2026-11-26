@@ -221,6 +221,15 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
                             "message": "Accepted results contain repeated output filenames. Select the final deliverable set explicitly with artifactId values from acceptedResults; exclude superseded intermediate versions."},
                             "phaseComplete": False}
                 names.add(name)
+    resume_blocked = action == "reject" and not review and bool(arguments.get("replacementSpec")) and bool(identity)
+    if resume_blocked:
+        lookup = {"action": "get", "taskId": identity}
+        if arguments.get("team"):
+            lookup["team"] = arguments["team"]
+        task = call(lookup).get("task") or {}
+        if task.get("id") != identity or task.get("status") != "blocked":
+            raise ValueError("continuation requires a reviewed blocked execution")
+        review = [identity, task.get("submissionId")]
     if action in {"accept", "reject"}:
         arguments["submissionId"] = receipts.prepared_submission_id(arguments, review)
     source = ""

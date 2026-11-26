@@ -14,6 +14,9 @@ spec:
           properties:
             spec:
               type: object
+              x-kubernetes-validations:
+                - rule: "!has(self.mcpServers) || self.mcpServers.all(s, !has(s.approvals)) || (has(self.runtime) && self.runtime == 'codex')"
+                  message: This runtime does not support native MCP approval policies.
               required: [model]
               properties:
                 model:
@@ -170,6 +173,16 @@ spec:
                     type: object
                     required: [name, url]
                     properties:
+                      approvals:
+                        type: object
+                        required: [tools, mode]
+                        properties:
+                          tools:
+                            type: string
+                            enum: ["*"]
+                          mode:
+                            type: string
+                            enum: [ask, allow]
                       name:
                         type: string
                         description: Key in mcporter-servers.json; used by tool calls as <name>.<tool>.

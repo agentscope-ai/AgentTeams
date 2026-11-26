@@ -209,6 +209,11 @@ this correction graph; do not send code changes to the Reviewer or bypass the
 recheck. Omit replacement requirements when no replacement is intended. Do not reopen the rejected
 execution, replace the main task or bypass required Human approval.
 
+When a Human resolves a blocker after you have already reviewed the blocked execution,
+use `reject` on that execution with the new context in `replacementSpec` and your
+reason in `note`. You can do this from the follow-up conversation. The system
+binds the recorded blocked submission and dispatches a successor in the same plan.
+
 After acceptance the task system dispatches ready dependencies automatically.
 End this turn; do not assign them again or wait for their results.
 

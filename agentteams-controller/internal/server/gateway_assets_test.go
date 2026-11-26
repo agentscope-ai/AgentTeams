@@ -201,6 +201,21 @@ func TestManagedMCPUsesSameRegistryAndHidesSecrets(t *testing.T) {
 	}
 }
 
+func TestWildcardMCPApprovalValidation(t *testing.T) {
+	for _, tc := range []struct {
+		runtime, tools, mode string
+		valid                bool
+	}{
+		{"codex", "*", "ask", true}, {"codex", "*", "allow", true}, {"codex", "*", "deny", true},
+		{"codex", "create_branch", "allow", false}, {"codex", "*", "unknown", false}, {"qwenpaw", "*", "allow", false},
+	} {
+		server := v1beta1.MCPServer{Name: "docs", Approvals: &v1beta1.MCPApprovals{Tools: tc.tools, Mode: tc.mode}}
+		if err := validateMCPApprovals(tc.runtime, []v1beta1.MCPServer{server}); (err == nil) != tc.valid {
+			t.Errorf("%+v: %v", tc, err)
+		}
+	}
+}
+
 func TestManagedMCPBindOnlyRequestedWorkerAndPreservesOtherServers(t *testing.T) {
 	store := ossfake.NewMemory()
 	mcpPutRegistry(t, store, "docs", `{"name":"docs","managed":true,"url":"http://gateway.test/mcp-servers/docs","transport":"streaminghttp","gatewayState":"ready","authorizedWorkers":["b"],"connection":{"kind":"proxy"},"verification":{"success":true}}`)

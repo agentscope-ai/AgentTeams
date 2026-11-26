@@ -11,6 +11,32 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+func TestMCPApprovalPolicyReachesRuntimeOnUpdate(t *testing.T) {
+	store := ossfake.NewMemory()
+	d := NewDeployer(DeployerConfig{OSS: store})
+	req := MemberRuntimeConfigDeployRequest{Name: "worker", Runtime: "codex", Spec: v1beta1.WorkerSpec{
+		McpServers: []v1beta1.MCPServer{{Name: "docs", URL: "https://gateway/docs"}},
+	}}
+	for _, mode := range []string{"ask", "allow", "deny"} {
+		req.Spec.McpServers[0].Approvals = &v1beta1.MCPApprovals{Tools: "*", Mode: mode}
+		if err := d.DeployMemberRuntimeConfig(t.Context(), req); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := store.GetObject(t.Context(), "agents/worker/runtime/runtime.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc memberRuntimeConfigDocument
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		got := doc.Desired.MCPServers[0].Approvals
+		if got == nil || *got != *req.Spec.McpServers[0].Approvals {
+			t.Fatalf("wanted %s for all tools, got %+v", mode, got)
+		}
+	}
+}
+
 func TestWorkerRuntimeConfigVersionTracksConfigurationInsteadOfRestartGeneration(t *testing.T) {
 	for _, harness := range []string{"codex", "hermes", "qwenpaw", "deepseek-harness", "openclaw", "openhuman"} {
 		t.Run(harness, func(t *testing.T) {

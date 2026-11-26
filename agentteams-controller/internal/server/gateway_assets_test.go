@@ -206,7 +206,7 @@ func TestWildcardMCPApprovalValidation(t *testing.T) {
 		runtime, tools, mode string
 		valid                bool
 	}{
-		{"codex", "*", "ask", true}, {"codex", "*", "allow", true}, {"codex", "*", "deny", true},
+		{"codex", "*", "ask", true}, {"codex", "*", "allow", true}, {"codex", "*", "deny", false},
 		{"codex", "create_branch", "allow", false}, {"codex", "*", "unknown", false}, {"qwenpaw", "*", "allow", false},
 	} {
 		server := v1beta1.MCPServer{Name: "docs", Approvals: &v1beta1.MCPApprovals{Tools: tc.tools, Mode: tc.mode}}

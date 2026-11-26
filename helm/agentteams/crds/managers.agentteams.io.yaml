@@ -62,7 +62,7 @@ spec:
                             enum: ["*"]
                           mode:
                             type: string
-                            enum: [ask, allow, deny]
+                            enum: [ask, allow]
                       name:
                         type: string
                         description: Key in mcporter-servers.json; used by tool calls as <name>.<tool>.

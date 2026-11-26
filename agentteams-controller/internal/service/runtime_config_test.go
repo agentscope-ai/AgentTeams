@@ -17,7 +17,7 @@ func TestMCPApprovalPolicyReachesRuntimeOnUpdate(t *testing.T) {
 	req := MemberRuntimeConfigDeployRequest{Name: "worker", Runtime: "codex", Spec: v1beta1.WorkerSpec{
 		McpServers: []v1beta1.MCPServer{{Name: "docs", URL: "https://gateway/docs"}},
 	}}
-	for _, mode := range []string{"ask", "allow", "deny"} {
+	for _, mode := range []string{"ask", "allow"} {
 		req.Spec.McpServers[0].Approvals = &v1beta1.MCPApprovals{Tools: "*", Mode: mode}
 		if err := d.DeployMemberRuntimeConfig(t.Context(), req); err != nil {
 			t.Fatal(err)

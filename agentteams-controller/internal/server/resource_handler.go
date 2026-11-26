@@ -2411,8 +2411,8 @@ func validateMCPApprovals(runtime string, servers []v1beta1.MCPServer) error {
 		if runtime != "codex" {
 			return fmt.Errorf("runtime %q does not support MCP approval rules for %s", runtime, server.Name)
 		}
-		if p.Tools != "*" || (p.Mode != "ask" && p.Mode != "allow" && p.Mode != "deny") {
-			return fmt.Errorf("MCP %s approvals require tools '*' and mode ask, allow or deny", server.Name)
+		if p.Tools != "*" || (p.Mode != "ask" && p.Mode != "allow") {
+			return fmt.Errorf("MCP %s approvals require tools '*' and mode ask or allow", server.Name)
 		}
 	}
 	return nil

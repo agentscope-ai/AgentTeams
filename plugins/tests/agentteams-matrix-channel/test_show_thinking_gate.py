@@ -3,7 +3,7 @@
 The channel parses ``show_thinking`` from config (default True), but the
 reasoning stream tail and completed REASONING messages used to reach the
 room regardless. When the switch is False neither path may send anything;
-with the default True the behavior is unchanged byte for byte.
+with the default True completed reasoning is routed as a process notice.
 """
 
 from __future__ import annotations
@@ -134,8 +134,10 @@ def test_completed_reasoning_default_on_routes():
         asyncio.run(channel.on_event_message_completed(None, ROOM, event, meta))
     root.assert_awaited_once()
     flush.assert_awaited_once()
-    send.assert_awaited_once_with(ROOM, parts, meta)
-    assert channel_module._MATRIX_FORCE_NOTICE_KEY not in meta
+    send.assert_awaited_once_with(ROOM, parts, {
+        **meta, channel_module._MATRIX_FORCE_NOTICE_KEY: True, "_matrix_completed_reasoning": True,
+    })
+    assert meta == {}
 
 
 def test_streaming_end_clears_prepopulated_metadata_when_gated_off():

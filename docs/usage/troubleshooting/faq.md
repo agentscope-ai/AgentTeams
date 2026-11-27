@@ -749,10 +749,9 @@ uses the same `agentteams-harness-qwenpaw` image as its Workers in Core v1.2.7.
 
 ## Can I connect my own agent implementation as a Worker
 
-Not by adding an arbitrary new `spec.runtime` value. The Worker CRD currently
-accepts `openclaw`, `qwenpaw`, `copaw` (legacy), or `hermes`. Although the
-Controller and CLI contain an OpenHuman path, the CRD does not currently accept
-`openhuman`, so it cannot be used directly in Worker YAML.
+Choose a `spec.runtime` value allowed by the Worker CRD in your installed Core
+version. For example, the [v1.2.8 Worker CRD](https://github.com/agentscope-ai/AgentTeams/blob/v1.2.8/agentteams-controller/config/crd/workers.agentteams.io.yaml)
+accepts `openhuman`.
 
 For most custom Worker needs, package your role prompt, skills, dependencies,
 and optional Dockerfile as a Worker package, or set a custom image while keeping
@@ -760,9 +759,8 @@ one of the supported runtimes. See [Importing Existing Workers](../import-worker
 and the `spec.package` / `spec.image` fields in
 [Declarative Resource Management](../resource-management.md#worker-resource).
 
-Adding a completely new runtime requires code changes in the controller,
-runtime image defaults, and the corresponding agent template wiring. It is not
-a configuration-only operation.
+To integrate a different runtime, follow the [Harness integration guide](../../design/harness-integration-guide.md)
+for the adapter, Controller registration, image, and role configuration.
 
 ---
 

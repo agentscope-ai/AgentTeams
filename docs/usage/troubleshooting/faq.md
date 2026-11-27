@@ -498,7 +498,7 @@ After creating a Worker, Manager automatically adds you and the Worker to a shar
 
 When using Element or similar clients, type `@` followed by the first letter(s) of the Worker's display name to trigger autocomplete and select the right user.
 
-Alternatively, you can click the Worker's avatar and open a **direct message** (DM) conversation. In a DM you don't need to @mention — every message triggers the Worker. Keep in mind that Manager is not in the DM room and won't see any of that conversation.
+Alternatively, you can click the Worker's avatar and open a **direct message** (DM) conversation. You can send the Worker a direct message without an @mention. Keep in mind that Manager is not in the DM room and won't see any of that conversation.
 
 ---
 
@@ -823,9 +823,9 @@ container path.
 
 ## Why does Manager/Worker keep showing "typing"
 
-This is normal — it means the underlying Agent engine is actively executing. AgentTeams sets a 30-minute timeout per task, so an agent can stay in this state for up to 30 minutes while working.
+The typing indicator can stay visible while the Agent handles a turn. A long-running turn can also outlast the indicator. Check runtime logs to see what the Agent is doing.
 
-To see what the agent is actually doing, exec into the Manager or Worker container and check the session logs:
+For OpenClaw, check the session logs in the Agent's container:
 
 ```bash
 # For Manager
@@ -843,43 +843,32 @@ The `.jsonl` files in that directory are written in real time and contain the fu
 
 ## Manager/Worker not responding to messages
 
-If Manager or Worker doesn't respond to your messages, check these common causes:
+### 1. Check the message status
 
-### 1. Check if the agent is working
-
-**If there's no response and no "typing" indicator**, the agent is almost certainly **busy working**.
-
-OpenClaw limits the "typing" indicator to a maximum of **2 minutes**. If the agent's task takes longer than 2 minutes, the typing indicator stops showing even though the agent is still working.
-
-**How to confirm your message is queued**:
-- After sending a message, look for a small **"m" icon** on the right side of your message
-- This icon indicates the Manager has **read** your message
-- When you see this icon, your message is in the queue and will be processed after the current task finishes
+A read receipt marks the message as read. Use runtime diagnostics to check
+whether the Agent accepted it for execution, whether the turn ran, and whether
+the reply reached the room. Typing indicators can appear or expire during a turn,
+so use logs or available traces to check progress.
 
 ### 2. Check the chat environment
 
-**Direct message vs. group chat**:
-- In a **direct message** (DM, just you and one agent), every message triggers a response
-- In a **group chat** (2+ participants), you must **@mention the agent** for it to respond — messages without mentions are ignored
+In a group room, @mention the Agent you want to respond. In a direct message to
+that Agent, you can omit the mention.
 
-### 3. Check session status
+### 3. Collect diagnostics before retrying
 
-The session might be corrupted. Enter the Manager or Worker container and use the OpenClaw TUI to investigate:
+Record the Agent, room, Matrix event ID, message time with time zone, and the Core
+and Harness versions. Use [runtime diagnostics](../runtime-diagnosis.md) to
+correlate monitoring, logs, and any available trace for that message. A container
+can be running while a message is still waiting to execute. If logs or traces are
+unavailable, record that gap.
 
-```bash
-# Manager
-docker exec -it agentteams-manager openclaw tui
-
-# Worker (replace <worker-name> with actual container name)
-docker exec -it <worker-name> openclaw tui
-```
-
-In the TUI:
-1. Type `/sessions` to list all sessions
-2. Switch to the session for the relevant chat
-3. Try sending a message and observe if there are any errors
-
-If the session is corrupted, try sending `/new` as a standalone message in the corresponding chat in Element (or other Matrix client) to reset the session and see if that restores normal behavior.
+If you see `Message is not admitted for normal inference or tools`, the
+AgentTeams execution guard has blocked normal execution. Possible causes include
+an unverified tool result or a gap in room history. Save the relevant diagnostics
+before restarting, resending the message, or resetting the session. Verify the
+outcome of any pending tool operation before retrying it. Share only the
+diagnostic excerpts needed for the report and redact sensitive content.
 
 ---
 

@@ -480,7 +480,7 @@ Element 要求填写自定义 homeserver 时，不要填写 Element Web UI 的�
 
 在 Element 等客户端中，输入 `@` 后再输入 Worker 昵称的首字母，才会出现补全列表，选择对应用户即可。
 
-也可以点击 Worker 的头像，进入**私聊**。私聊中不需要 @，每条消息都会触发 Worker 响应。但注意：私聊对 Manager 不可见，Manager 不会感知到这部分对话内容。
+也可以点击 Worker 的头像，进入**私聊**。私聊中可以直接给 Worker 发消息，无需 @。Manager 不在私聊房间内，无法看到这部分对话。
 
 ---
 
@@ -781,9 +781,9 @@ Manager 或 Worker 输出的路径通常是容器内部路径。如果你在宿�
 
 ## 为什么 Manager/Worker 一直显示"输入中"
 
-这是正常现象，说明底层的 Agent 引擎正在执行任务。AgentTeams 设定的单次任务超时时间为 30 分钟，Agent 最长会持续执行 30 分钟。
+Agent 处理消息时可能持续显示「输入中」。一次执行也可能在提示消失后继续。查看运行日志可以了解 Agent 实际在做什么。
 
-如果想查看 Agent 的执行细节，可以进入 Manager 或 Worker 容器，查看 session 日志：
+使用 OpenClaw 时，可在 Agent 容器内查看会话日志：
 
 ```bash
 # Manager
@@ -801,43 +801,19 @@ docker exec -it <worker-name> ls .openclaw/agents/main/sessions/
 
 ## Manager/Worker 不回复消息怎么办
 
-如果给 Manager 或 Worker 发送消息后没有回复，可以按以下步骤排查：
+### 1. 检查消息状态
 
-### 1. 检查是否正在工作
-
-**如果一直不回复，且没有显示"输入中"**，绝大多数原因是 **Agent 正在工作**。
-
-OpenClaw 限制"输入中"状态最多持续 **2 分钟**，工作超过 2 分钟就不会再显示"输入中"了。
-
-**如何确认消息已入队列**：
-- 发送消息后，查看消息右边是否有一个 **m 小图标**
-- 这个图标表示 Manager 已读
-- 出现这个图标就说明消息已入队列，会在当前任务执行完后继续处理该消息
+已读回执表示消息被标记为已读。请通过运行诊断确认消息是否获准执行、运行时是否已处理，以及回复是否送达房间。「输入中」提示可能在执行过程中出现或消失，请结合日志和可用的 Trace 判断进度。
 
 ### 2. 检查聊天环境
 
-**私聊 vs 群聊**：
-- 如果是**私聊**（只有你和一个 Agent），每条消息都会触发 Agent 响应
-- 如果是**2 人以上的房间**（群聊），必须 **@ Agent** 才能让它响应，没有 @ 的消息会被忽略
+在群聊中，请 @ 你希望回复的 Agent。给该 Agent 发私聊消息时，可以省略 @。
 
-### 3. 检查 Session 状态
+### 3. 重试前收集诊断信息
 
-可能是 session 损坏了。进入 Manager 或 Worker 容器，使用 OpenClaw TUI 查看：
+记录目标 Agent、房间、Matrix 事件 ID、带时区的消息时间，以及 Core 和 Harness 的版本。参照[运行诊断](../runtime-diagnosis.md)，结合监控、日志和可用的 Trace 核对这条消息。容器处于运行状态时，消息仍可能在等待执行。日志或 Trace 不可用时，请记录这一情况。
 
-```bash
-# Manager
-docker exec -it agentteams-manager openclaw tui
-
-# Worker（将 <worker-name> 替换为实际容器名）
-docker exec -it <worker-name> openclaw tui
-```
-
-进入 TUI 后：
-1. 输入 `/sessions` 查看所有 session
-2. 切换到对应聊天记录的 session
-3. 尝试对话，观察是否有报错
-
-如果 session 确实损坏了，可以尝试在 Element 等 Matrix 客户端中对应的会话里直接输入 `/new` 重置会话，看是否恢复正常。
+遇到 `Message is not admitted for normal inference or tools` 时，表示 AgentTeams 的执行检查阻止了正常执行。可能的原因包括工具结果待核实或房间历史缺失。在重启、重发消息或重置会话前保留相关诊断信息，并在重试工具操作前核实上一次的结果。提交报告时只分享排查所需的片段，并先脱敏。
 
 ---
 

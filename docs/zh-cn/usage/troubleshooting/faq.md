@@ -714,9 +714,9 @@ QwenPaw。Helm 默认 OpenClaw，可通过 `manager.runtime` 覆盖。
 
 ## 如何接入自己实现的 agent 作为 Worker
 
-不能直接通过新增任意 `spec.runtime` 值来接入。当前 Worker CRD 接受
-`openclaw`、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`、`codex`
-及旧版兼容值 `copaw`。
+请从已部署 Core 版本的 Worker CRD 中选择允许的 `spec.runtime` 值。
+例如，[v1.2.8 的 Worker CRD](https://github.com/agentscope-ai/AgentTeams/blob/v1.2.8/agentteams-controller/config/crd/workers.agentteams.io.yaml)
+接受 `openhuman`。
 
 大多数自定义 Worker 场景应通过 Worker package 或自定义镜像完成：把角色提示词、
 skills、依赖和可选 Dockerfile 打包，或在保留受支持 runtime 的前提下设置自定义
@@ -724,8 +724,8 @@ image。具体见 [导入已有 Worker](../import-worker.md)，以及
 [声明式资源管理](../resource-management.md#worker-资源) 中的
 `spec.package` / `spec.image` 字段。
 
-如果要新增一种完全不同的 runtime，需要修改 controller、runtime 默认镜像以及对应
-agent 模板接线，不是纯配置项。
+如需接入其他运行时，请按照 [Harness 接入指南](../../../design/harness-integration-guide.md)
+完成适配器、Controller 注册、镜像和角色配置。
 
 ---
 

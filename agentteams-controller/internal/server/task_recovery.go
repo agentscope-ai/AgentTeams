@@ -25,14 +25,20 @@ import (
 
 // Execution is part of the task CAS, never the notification outbox lease.
 // A replacement can take over only after the backend reports another start.
+type taskRetiredRun struct {
+	Generation uint64 `json:"generation"`
+	Kind       string `json:"kind"`
+}
+
 type taskExecution struct {
-	Generation uint64          `json:"generation"`
-	InstanceID string          `json:"instance_id"`
-	ProcessID  string          `json:"process_id"`
-	Runtime    string          `json:"runtime"`
-	State      string          `json:"state"`
-	Checkpoint *taskCheckpoint `json:"checkpoint,omitempty"`
-	HandoffID  string          `json:"handoff_id,omitempty"`
+	RetiredRuns []taskRetiredRun `json:"retired_runs,omitempty"`
+	Generation  uint64           `json:"generation"`
+	InstanceID  string           `json:"instance_id"`
+	ProcessID   string           `json:"process_id"`
+	Runtime     string           `json:"runtime"`
+	State       string           `json:"state"`
+	Checkpoint  *taskCheckpoint  `json:"checkpoint,omitempty"`
+	HandoffID   string           `json:"handoff_id,omitempty"`
 	// The process generation that saved the current reply. Only its own
 	// acknowledged final callback can seal its native turn.
 	ReplyGeneration uint64 `json:"reply_generation,omitempty"`
@@ -462,8 +468,9 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 	}
 	switch input.Action {
 	case "claim":
-		if !sameProcess {
-			if execution.InstanceID == instance {
+		restart := sameProcess && execution.State == "released" && (status == "assigned" || status == "in_progress") && (execution.Checkpoint == nil || execution.Checkpoint.Result == nil)
+		if !sameProcess || restart {
+			if !sameProcess && execution.InstanceID == instance {
 				writeError(w, 409, "another process owns this live instance")
 				return
 			}
@@ -476,6 +483,13 @@ func (h *TaskRecoveryHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 				cp.Version++
 			}
 			execution.HandoffID = ""
+			if execution.Generation > 0 {
+				kind := "failed"
+				if cp := execution.Checkpoint; cp != nil && cp.Result != nil && !unresolvedOperation(cp) {
+					kind = "quiet"
+				}
+				execution.RetiredRuns = append(execution.RetiredRuns, taskRetiredRun{Generation: execution.Generation, Kind: kind})
+			}
 			execution.Generation++
 			execution.InstanceID, execution.ProcessID, execution.Runtime = instance, input.ProcessID, runtime
 		}

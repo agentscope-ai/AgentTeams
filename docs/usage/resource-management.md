@@ -95,7 +95,7 @@ spec:
 |-------|------|----------|---------|-------------|
 | `metadata.name` | string | Yes | — | Worker name, globally unique |
 | `spec.model` | string | Yes | — | LLM model ID, e.g. `claude-sonnet-4-6`, `qwen3.5-plus` |
-| `spec.runtime` | string | No | install/backend default | `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, `openhuman`, `codex`, or legacy `copaw`; Helm defaults to OpenClaw, the local installer to QwenPaw. |
+| `spec.runtime` | string | No | install/backend default | `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, `openhuman`, `codex`, or legacy `copaw`; New Workers default to Codex in Helm and the local installer; Manager defaults to QwenPaw. |
 | `spec.image` | string | No | — | Custom image; when empty, the Controller selects its configured image for the runtime. The current chart provides `worker.defaultImage` entries for all six current Harnesses. Legacy CoPaw requires an explicit old repository and tag. |
 | `spec.identity` | string | No | — | Worker public identity (OpenClaw: generates IDENTITY.md; QwenPaw: merged into SOUL.md per controller) |
 | `spec.soul` | string | No | — | Worker personality and values (generates SOUL.md) |

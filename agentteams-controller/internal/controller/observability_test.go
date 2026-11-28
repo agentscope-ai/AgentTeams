@@ -68,3 +68,34 @@ func TestTeamProjectionKeepsCentralObservabilitySettings(t *testing.T) {
 		t.Fatal("team projection dropped central tracing configuration")
 	}
 }
+
+func TestManagerContainerReceivesCentralTracingWithoutQueryCredentials(t *testing.T) {
+	scheme := newControllerTestScheme(t)
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	for _, runtime := range []string{"qwenpaw", "hermes", "deepseek-harness", "claudecode", "codex"} {
+		for _, enabled := range []bool{true, false} {
+			data, _ := json.Marshal(map[string]any{"revision": "manager-central", "enabled": enabled, "captureContent": false, "collectorEndpoint": "http://collector:4318", "secretKey": "query-secret-never-manager"})
+			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: observability.SecretName, Namespace: "default"}, Data: map[string][]byte{"config.json": data}}
+			reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+			b := mocks.NewMockWorkerBackend()
+			r := &ManagerReconciler{ObservabilityReader: reader, Provisioner: mocks.NewMockManagerProvisioner(), EnvBuilder: mocks.NewMockManagerEnvBuilder()}
+			m := &v1beta1.Manager{ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "default"}, Spec: v1beta1.ManagerSpec{Runtime: runtime, Env: map[string]string{"KEEP": "yes"}}}
+			if _, err := r.createManagerContainer(t.Context(), &managerScope{manager: m, provResult: &service.ManagerProvisionResult{MatrixToken: "fixture"}}, b); err != nil {
+				t.Fatal(err)
+			}
+			env := b.Calls.CreateReqs[0].Env
+			if env["AGENTTEAMS_OTEL_ENABLED"] != map[bool]string{true: "true", false: "false"}[enabled] || env["AGENTTEAMS_OTEL_CONFIG_REVISION"] != "manager-central" || env["KEEP"] != "yes" {
+				t.Fatalf("%s: incomplete Manager tracing environment", runtime)
+			}
+			if enabled && env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] != "http://collector:4318/v1/traces" {
+				t.Fatal("Manager Collector endpoint absent")
+			}
+			encoded, _ := json.Marshal(env)
+			if strings.Contains(string(encoded), "query-secret") {
+				t.Fatal("query credential entered Manager container")
+			}
+		}
+	}
+}

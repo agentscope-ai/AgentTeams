@@ -116,6 +116,8 @@ def test_completion_requires_explicit_selection_for_competing_output_names(bridg
     assert result['result']['effect'] == 'none' and result['phaseComplete'] is False
     bridge.invoke({'operation': 'task', 'arguments': {**arguments, 'artifacts': ['final']}, 'context': context}, call=call)
     assert calls == [{**arguments, 'artifacts': ['final']}]
+    bridge.invoke({'operation': 'task', 'arguments': {**arguments, 'artifacts': []}, 'context': context}, call=call)
+    assert calls[-1] == {**arguments, 'artifacts': []}
 
 
 @pytest.mark.parametrize("role", ["manager", "leader"])
@@ -273,7 +275,7 @@ def test_verified_submission_adds_the_shared_receipt_fact(bridge):
     assert 'Delivery and acceptance are not yet confirmed' in result['fact']
 
 
-def test_verified_submission_displays_saved_business_conclusion_and_artifact_names(bridge):
+def test_verified_submission_keeps_file_listing_out_of_business_message(bridge):
     result = bridge.invoke({'operation': 'task', 'arguments': {'action': 'submit', 'taskId': 't1', 'summary': 'uncommitted wording'},
                             'context': {'role': 'worker', 'execution': 't1'}},
                            call=lambda _: {'task': {'id': 't1', 'status': 'submitted', 'submissionId': 's1',
@@ -281,7 +283,8 @@ def test_verified_submission_displays_saved_business_conclusion_and_artifact_nam
                                'artifacts': [{'artifactId': 'html', 'name': 'index.html'}], 'report': 'Large repeated report'}},
                              'notification': {'status': 'queued', 'recipient': 'lead', 'eventId': 'notice'}})
     assert result['phaseComplete'] is True
-    assert result['displayText'] == '页面搜索功能已实现，独立检查通过。\n\n产物：index.html'
+    assert result['displayText'] == '页面搜索功能已实现，独立检查通过。'
+    assert 'index.html' not in result['displayText']
     assert 'uncommitted wording' not in result['displayText']
     assert 'Large repeated report' not in result['displayText']
     assert 'Task system receipt' not in result['displayText']
@@ -534,3 +537,81 @@ def test_final_review_reads_only_unambiguous_accepted_artifacts(bridge, monkeypa
         bridge.invoke({"operation": "task", "arguments": {"action": "files_read", "taskId": input_id, "artifactId": requested},
                        "context": {"role": "leader", "completion": "main", "context": {"acceptedResults": accepted}}}, call=call)
         assert calls[-1]["taskId"] == resolved
+
+def test_plain_room_continuation_prepares_current_execution(bridge, monkeypatch, tmp_path):
+    import task_canonical
+    monkeypatch.setattr(task_canonical, 'admit', lambda _: {'ok': True})
+    root = tmp_path / 'tasks' / 'exec-new'
+    context = {'role': 'worker', 'sourceEvent': '$followup', 'sourceRoom': '!room:test'}
+    task = {'id': 'exec-new', 'kind': 'execution', 'status': 'in_progress',
+            'roomId': '!room:test', 'assignmentId': 'assignment-new',
+            'assignedTo': 'dev', 'mainTaskId': 'main-one'}
+    calls = []
+    def call(args):
+        calls.append(args['action'])
+        if args['action'] == 'get':
+            return {'task': task}
+        if args['action'] == 'begin':
+            return {'task': task, 'taskDirectory': str(root),
+                    'outputDirectory': str(root / 'output'), 'scratchDirectory': str(root / 'scratch')}
+        return {'ok': False, 'effect': 'none', 'message': 'fixture stops before committing'}
+    bridge.invoke({'operation': 'task', 'arguments': {'action': 'submit', 'taskId': 'exec-new', 'summary': 'done'},
+                   'context': context}, call=call)
+    assert calls == ['get', 'begin', 'submit']
+    assert context['execution'] == 'exec-new'
+
+def test_plain_room_continuation_rejects_other_room_before_begin(bridge):
+    calls = []
+    def call(args):
+        calls.append(args['action'])
+        return {'task': {'id': 'exec-other', 'kind': 'execution', 'roomId': '!elsewhere:test'}}
+    with pytest.raises(ValueError, match='current room'):
+        bridge.invoke({'operation': 'task', 'arguments': {'action': 'submit', 'taskId': 'exec-other', 'summary': 'done'},
+                       'context': {'role': 'worker', 'sourceRoom': '!room:test'}}, call=call)
+    assert calls == ['get']
+
+
+def test_task_room_context_reads_current_task_and_owned_execution_without_chat(bridge):
+    calls = []
+    def get(path):
+        assert path.startswith("tasks/room-context?roomId=")
+        return {"taskId": "main", "teamId": "alpha", "executionTaskId": "leaf"}
+    def call(arguments):
+        calls.append(arguments)
+        task = {"id": arguments["taskId"], "roomId": "!task:test", "spec": "current requirement", "status": "in_progress",
+                "kind": "execution" if arguments["taskId"] == "leaf" else "main", "mainTaskId": "main",
+                "assignmentId": "dispatch", "assignedTo": "canonical-worker"}
+        return {"task": task, **({"taskDirectory": "/shared/tasks/leaf", "outputDirectory": "/shared/tasks/leaf/workspace",
+                                 "scratchDirectory": "/shared/tasks/leaf/workspace/scratch"} if arguments["action"] == "begin" else {})}
+    result = bridge.invoke({"operation": "room_context", "room": "!task:test"}, call=call, get_json=get)
+    assert [row["action"] for row in calls] == ["get", "get", "begin"]
+    assert result["context"]["mainTask"]["id"] == "main"
+    assert result["context"]["task"]["id"] == "leaf"
+    assert result["context"]["currentExecution"]["id"] == "leaf"
+    assert result["context"]["outputDirectory"] == "/shared/tasks/leaf/workspace"
+    assert result["execution"] == "leaf"
+    # This public bridge result is passed to native runtimes as JSON, just
+    # like prepare_event; its internal Path/tuple acknowledgement cannot leak.
+    transported = json.loads(json.dumps(result))
+    assert transported["ack"] == ["leaf", "/shared/tasks/leaf", "canonical-worker", "dispatch"]
+    assert "Matrix chat history" in result["fact"]
+
+
+def test_task_room_without_owned_execution_does_not_prepare_or_assign_work(bridge):
+    from unittest.mock import Mock
+    call = Mock(return_value={"task": {"id": "main", "roomId": "!task:test", "status": "in_progress"}})
+    result = bridge.invoke({"operation": "room_context", "room": "!task:test"}, call=call,
+                           get_json=lambda path: {"taskId": "main"})
+    call.assert_called_once_with({"action": "get", "taskId": "main"})
+    assert "execution" not in result
+    assert "outputDirectory" not in result["context"]
+
+
+def test_personal_room_does_not_invent_a_task_and_foreign_task_room_is_rejected(bridge):
+    from unittest.mock import Mock
+    call = Mock()
+    assert bridge.invoke({"operation": "room_context", "room": "!dm:test"}, call=call, get_json=lambda path: {}) == {}
+    call.assert_not_called()
+    with pytest.raises(ValueError, match="Task room context unavailable"):
+        bridge.invoke({"operation": "room_context", "room": "!task:test"}, get_json=lambda path: {"taskId": "main"},
+                      call=lambda args: {"task": {"id": "main", "roomId": "!foreign:test"}})

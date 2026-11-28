@@ -18,7 +18,7 @@ if __package__:
 else:
     import task_receipt as receipts
 
-_MUTATIONS = frozenset({'create', 'plan', 'begin', 'submit', 'accept', 'reject', 'complete', 'cancel', 'files_put'})
+_MUTATIONS = frozenset({'create', 'plan', 'begin', 'submit', 'accept', 'reject', 'complete', 'cancel', 'amend', 'files_put'})
 
 
 def request(payload):
@@ -38,7 +38,7 @@ def request(payload):
             result = json.load(error)
             if (isinstance(result, dict) and result.get('ok') is False
                     and result.get('effect') == 'none'
-                    and result.get('error') in {'invalid_task_handoff', 'invalid_task_plan_assignee', 'repeated_task_request'}):
+                    and result.get('error') in {'invalid_task_handoff', 'invalid_task_plan_assignee', 'invalid_task_target', 'repeated_task_request'}):
                 return result
         raise
     if not isinstance(result, dict):
@@ -81,6 +81,9 @@ def confirmed(arguments, result):
     task = result.get('task') or {}
     if arguments['action'] == 'begin':
         return task.get('id') == arguments.get('taskId') and task.get('status') == 'in_progress'
+    if arguments['action'] == 'amend':
+        return (result.get('effect') == 'committed' and task.get('id') == arguments.get('taskId')
+                and task.get('spec') == arguments.get('spec'))
     if arguments['action'] == 'cancel':
         return task.get('id') == arguments.get('taskId') and task.get('status') == 'cancelled'
     return arguments['action'] == 'files_put' and bool(result.get('artifactId')) and bool(result.get('version'))

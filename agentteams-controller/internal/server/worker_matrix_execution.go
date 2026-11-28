@@ -68,7 +68,7 @@ func matrixRoomRecoveryMode(state *service.WorkerMatrixState, input *service.Wor
 }
 
 func (h *WorkerMatrixHandler) GetExecution(w http.ResponseWriter, r *http.Request) {
-	name, instance, runtime, _, ok := h.identity(w, r)
+	name, instance, runtime, account, ok := h.identity(w, r)
 	if !ok {
 		return
 	}
@@ -87,12 +87,17 @@ func (h *WorkerMatrixHandler) GetExecution(w http.ResponseWriter, r *http.Reques
 		h.writeError(w, err)
 		return
 	}
+	mode, err := h.messageRecoveryMode(r.Context(), account, state, input, execution)
+	if err != nil {
+		writeError(w, 503, "Task context authority unavailable")
+		return
+	}
 	w.Header().Set("ETag", etag)
-	httputil.WriteJSON(w, 200, map[string]any{"input": input, "execution": execution, "etag": etag, "instance_id": instance, "runtime": runtime, "recovery": matrixRoomRecoveryMode(state, input, execution)})
+	httputil.WriteJSON(w, 200, map[string]any{"input": input, "execution": execution, "etag": etag, "instance_id": instance, "runtime": runtime, "recovery": mode})
 }
 
 func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Request) {
-	name, instance, runtime, _, ok := h.identity(w, r)
+	name, instance, runtime, account, ok := h.identity(w, r)
 	if !ok {
 		return
 	}
@@ -171,7 +176,12 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 	}
 	switch request.Action {
 	case "claim":
-		if matrixRoomRecoveryMode(state, input, execution) == "backfill" {
+		mode, err := h.messageRecoveryMode(r.Context(), account, state, input, execution)
+		if err != nil {
+			writeError(w, 503, "Task context authority unavailable")
+			return
+		}
+		if mode == "backfill" {
 			writeError(w, 409, "backfill or verify the room's missing history before new inference")
 			return
 		}
@@ -239,6 +249,11 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		writeError(w, 400, "unsupported message execution action")
 		return
 	}
+	recoveryMode, err := h.messageRecoveryMode(r.Context(), account, state, input, execution)
+	if err != nil {
+		writeError(w, 503, "Task context authority unavailable")
+		return
+	}
 	var savedResult string
 	if matrixRecoveryMode(execution) == "deliver" {
 		artifact := execution.Checkpoint.Result
@@ -281,5 +296,5 @@ func (h *WorkerMatrixHandler) UpdateExecution(w http.ResponseWriter, r *http.Req
 		_ = h.store.Retire(r.Context(), name, start, r.PathValue("key"))
 	}
 	w.Header().Set("ETag", contentETag(body))
-	httputil.WriteJSON(w, 200, map[string]any{"input": input, "execution": execution, "etag": contentETag(body), "recovery": matrixRoomRecoveryMode(state, input, execution), "saved_result": savedResult})
+	httputil.WriteJSON(w, 200, map[string]any{"input": input, "execution": execution, "etag": contentETag(body), "recovery": recoveryMode, "saved_result": savedResult})
 }

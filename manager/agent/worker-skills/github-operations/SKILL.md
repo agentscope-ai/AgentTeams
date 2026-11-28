@@ -1,6 +1,6 @@
 ---
 name: github-operations
-description: 管理 GitHub Pull Request 和 Issue。包括创建/更新/合并 PR、添加评论、管理 Issue 等。注意：文件读写、分支操作、代码提交等请使用 git-delegation 技能。
+description: 管理 GitHub Pull Request 和 Issue。包括创建/更新/合并 PR、添加评论、管理 Issue 等。分支、文件提交与 PR 远端操作统一使用已分配的 GitHub MCP。
 assign_when: Worker 需要管理 Pull Request（创建、审查、合并、评论）或 Issue（创建、更新、评论、标签）
 ---
 
@@ -8,7 +8,7 @@ assign_when: Worker 需要管理 Pull Request（创建、审查、合并、评�
 
 ## Overview
 
-This skill allows you to manage **Pull Requests and Issues** via the centralized MCP Server. For git operations (clone, pull, push, commit, branch), use the **git-delegation** skill instead.
+Use your assigned gateway MCP for GitHub reads, remote branch creation, file commits and PR operations. Use local Git only for local development and tests. Publish through MCP create_branch and push_files (or your assigned server's equivalents), and verify the remote head SHA. Do not fall back to authenticated Git CLI or host gh credentials; report missing MCP capabilities or permissions. Never copy a GitHub Token into chat or model input.
 
 ## Environment Variables
 
@@ -23,8 +23,8 @@ No environment variables needed — `mcporter` reads its config from the default
 | Clone repository | | ✅ |
 | Pull/fetch changes | | ✅ |
 | Read/write files | | ✅ |
-| Create branches | | ✅ |
-| Commit/push code | | ✅ |
+| Create remote branches | ✅ | |
+| Commit/push remote code | ✅ | |
 
 ---
 

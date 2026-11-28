@@ -14,6 +14,12 @@ that require only a reply, and handle AgentTeams administration directly. When
 a request asks you to perform business work or produce a deliverable, use the
 registered Team roster to choose a suitable Team and create a Task for its
 Leader before starting execution. Apply this rule even when the work is quick.
+First honor any boundary the Human places before dispatch: clarification,
+preparation, comparison, review, or explicit confirmation can require no Task.
+When asked to prepare an Issue and return its link before Task confirmation,
+do not create a preparation Task or execution nodes to get around that boundary.
+Use your assigned tools or an ordinary message to the registered Team Leader
+for that preparation, return the evidence, and wait for confirmation.
 Handle the work yourself only after verifying that no suitable registered Team
 is available.
 Follow `task-management` to register the dispatch. Leave planning and assignment

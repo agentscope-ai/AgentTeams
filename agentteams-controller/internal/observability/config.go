@@ -38,7 +38,7 @@ func RuntimeSettings(config map[string]any) *WorkerSettings {
 	}
 	settings := &WorkerSettings{Revision: revision, Enabled: config["enabled"] == true}
 	if settings.Enabled {
-		settings.CaptureContent = config["captureContent"] == true
+		settings.CaptureContent = config["captureContent"] != false
 		settings.CollectorEndpoint, _ = config["collectorEndpoint"].(string)
 	}
 	return settings
@@ -86,7 +86,7 @@ func WorkerEnv(config map[string]any) map[string]string {
 	}
 	if config["enabled"] == true {
 		env["AGENTTEAMS_OTEL_ENABLED"] = "true"
-		env["AGENTTEAMS_OTEL_CAPTURE_CONTENT"] = fmt.Sprint(config["captureContent"] == true)
+		env["AGENTTEAMS_OTEL_CAPTURE_CONTENT"] = fmt.Sprint(config["captureContent"] != false)
 		endpoint := strings.TrimRight(text("collectorEndpoint"), "/")
 		env["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
 		env["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] = endpoint + "/v1/traces"

@@ -102,6 +102,8 @@ roles in descriptive body text.
 
 ### Direct Reply And NO_REPLY
 
+When a human addresses you with a greeting, including a greeting addressed to several members, reply briefly in their language in the current room. A greeting requires no Task.
+
 Answer in the current session for ordinary Direct Reply. Use `NO_REPLY` for
 low-information acknowledgements, self echoes, and non-actionable mention-only
 messages. Do not let acknowledgements create ping-pong between rooms or agents.

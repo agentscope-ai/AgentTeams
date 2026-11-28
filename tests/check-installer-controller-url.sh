@@ -18,7 +18,7 @@ fail() {
 [[ -f "$install_sh" ]] || fail "missing $install_sh"
 [[ -f "$helm_ctrl" ]] || fail "missing $helm_ctrl"
 
-expected='CONTROLLER_URL=http://agentteams-controller:8090'
+expected='CONTROLLER_URL=http://${CONTROLLER_CONTAINER}:8090'
 count="$(grep -c -- "$expected" "$install_sh" || true)"
 [[ "${count:-0}" -ge 2 ]] || fail "installer must set $expected for the Manager and the Controller (found ${count:-0})"
 

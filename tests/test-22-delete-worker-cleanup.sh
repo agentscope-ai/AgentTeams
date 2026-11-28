@@ -23,7 +23,7 @@ source "${SCRIPT_DIR}/lib/higress-client.sh"
 test_setup "22-delete-worker-cleanup"
 
 TEST_WORKER="test-del-$$"
-TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 _cleanup() {
@@ -124,7 +124,7 @@ if _get_higress_consumers "pre-delete snapshot"; then
     fi
 fi
 
-if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}" = "qwenpaw" ]; then
+if [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}" = "qwenpaw" ]; then
     wait_worker_runtime_file_contains "${TEST_WORKER}" "SOUL.md" "Session files are runtime-private state" 180 || true
 else
     wait_worker_runtime_file_contains "${TEST_WORKER}" "SOUL.md" "${TEST_WORKER}" 180 || true

@@ -231,9 +231,7 @@ jobs:
           python3 tests/test-install-mc.py
           python3 tests/test-release-metrics.py
 
-      - name: Run DeepSeek Harness bridge tests
-        run: |
-          make -C deepseek-harness test
+      # Native bridge/SDK tests run in agentteams-harness-deepseek CI.
 
   mcp-setup-tests:
     runs-on: ubuntu-latest

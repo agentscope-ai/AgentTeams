@@ -113,8 +113,7 @@ def terminal_display(action, arguments, result):
         candidate = task.get("candidate") or {}
         summary = candidate.get("summary")
         if candidate.get("id") == task.get("submissionId") and isinstance(summary, str) and summary.strip():
-            names = [item["name"] for item in candidate.get("artifacts", []) if item.get("name")]
-            return summary.strip() + ("\n\n产物：" + "、".join(names) if names else "")
+            return summary.strip()
 
 
 def _invoke(payload, *, call=None, get_json=None, notify=None):
@@ -159,6 +158,41 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         return task_context.model_context(payload["context"])
     if operation == "model_result":
         return model_result(payload["outcome"])
+    if operation == "room_context":
+        room = payload.get("room")
+        if not isinstance(room, str) or not room.startswith("!"):
+            raise ValueError("native Matrix room required")
+        binding = (get_json or controller_json)("tasks/room-context?roomId=" + quote(room, safe=""))
+        if not binding.get("taskId"):
+            return {}
+        result = call({"action": "get", "taskId": binding["taskId"]})
+        if result.get("ok") is False or (result.get("task") or {}).get("roomId") != room:
+            raise ValueError("Task room context unavailable")
+        if binding.get("executionTaskId"):
+            assigned = call({"action": "get", "taskId": binding["executionTaskId"]})
+            if assigned.get("ok") is False or (assigned.get("task") or {}).get("roomId") != room:
+                raise ValueError("Assigned execution context unavailable")
+            execution = assigned["task"]
+            if execution.get("kind") != "execution" or execution.get("mainTaskId") != binding["taskId"]:
+                raise ValueError("Assigned execution context unavailable")
+            # The binding is selected by Core for this caller, never by the
+            # model. Prepare the same idempotent begin context before file tools,
+            # rather than waiting until a later submit to discover its paths.
+            prepared = task_context.prepare_event({
+                "kind": "task_assigned", "task_id": binding["executionTaskId"],
+                "main_task_id": binding["taskId"], "project_id": execution.get("projectId"),
+                "delivery_id": execution.get("assignmentId"),
+            }, call)
+            if prepared.get("ok") is False:
+                raise ValueError("Assigned execution preparation unavailable")
+            if prepared["context"]["task"].get("roomId") != room:
+                raise ValueError("Assigned execution context unavailable")
+            prepared["context"].update(mainTask=result["task"], currentExecution=execution)
+            prepared["fact"] += "This continuation is in the current Task room. Use Task state, not Matrix chat history."
+            return json.loads(json.dumps(prepared, default=str))
+        return {"context": result, "fact": "This is the current Task room. Use the authoritative Task specification, "
+                "node state, upstream deliveries and accepted reports below. This snapshot is context, not a new assignment "
+                "or permission to repeat completed work. Do not reconstruct Task requirements from Matrix chat history."}
     if operation == "prepare_event":
         # Paths and tuples remain native in prepare(); JSON is this bridge's IO.
         return json.loads(json.dumps(task_context.prepare_event(payload.get("event"), call), default=str))
@@ -201,6 +235,19 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
         if len(owners) == 1:
             arguments["taskId"] = owners.pop()
     review = context.get("review")
+    if action in {"begin", "submit"} and not context.get("execution") and context.get("sourceRoom") and identity:
+        snapshot = call({"action": "get", "taskId": identity}).get("task") or {}
+        if snapshot.get("roomId") != context["sourceRoom"] or snapshot.get("kind") != "execution":
+            raise ValueError("task continuation must belong to the current room")
+        prepared = task_context.prepare_event({
+            "kind": "task_assigned", "task_id": identity,
+            "main_task_id": snapshot.get("mainTaskId", ""),
+            "project_id": snapshot.get("projectId", ""),
+            "delivery_id": snapshot.get("assignmentId"),
+        }, call)
+        if prepared.get("ok") is False:
+            return {"result": prepared["result"], "phaseComplete": False}
+        context.update(prepared)
     if action in {"begin", "submit"} and (not context.get("execution") or identity != context["execution"]):
         raise ValueError("task operation does not match the current execution")
     if action == "plan" and identity not in (context.get("planning") or []):
@@ -211,7 +258,7 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
             raise ValueError("plan requires overview: summarize the goal, acceptance criteria, responsibilities and final files before dispatch")
     if action == "complete" and (not context.get("completion") or identity != context["completion"]):
         raise ValueError("task completion does not match the accepted main task")
-    if action == "complete" and not arguments.get("artifacts"):
+    if action == "complete" and arguments.get("artifacts") is None:
         names = set()
         for accepted in (context.get("context") or {}).get("acceptedResults", []):
             for artifact in (accepted.get("candidate") or {}).get("artifacts", []):
@@ -221,6 +268,15 @@ def _invoke(payload, *, call=None, get_json=None, notify=None):
                             "message": "Accepted results contain repeated output filenames. Select the final deliverable set explicitly with artifactId values from acceptedResults; exclude superseded intermediate versions."},
                             "phaseComplete": False}
                 names.add(name)
+    resume_blocked = action == "reject" and not review and bool(arguments.get("replacementSpec")) and bool(identity)
+    if resume_blocked:
+        lookup = {"action": "get", "taskId": identity}
+        if arguments.get("team"):
+            lookup["team"] = arguments["team"]
+        task = call(lookup).get("task") or {}
+        if task.get("id") != identity or task.get("status") != "blocked":
+            raise ValueError("continuation requires a reviewed blocked execution")
+        review = [identity, task.get("submissionId")]
     if action in {"accept", "reject"}:
         arguments["submissionId"] = receipts.prepared_submission_id(arguments, review)
     source = ""

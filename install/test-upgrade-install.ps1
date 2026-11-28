@@ -5,7 +5,7 @@ $source = Join-Path $PSScriptRoot '../.installer-source/public/install.ps1'
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($source, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
 $definitions = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
-foreach ($name in @('Load-UpgradeConfig', 'Prepare-UpgradeDashboard', 'Get-InstalledStorage', 'Recover-ExistingInstall', 'Step-Existing', 'New-EnvFile')) {
+foreach ($name in @('Load-UpgradeConfig', 'Prepare-UpgradeDashboard', 'Get-InstalledStorage', 'Recover-ExistingInstall', 'Step-Existing', 'New-EnvFile', 'Invoke-DockerLogged', 'Assert-UnifiedEntryImages')) {
     Invoke-Expression ($definitions | Where-Object Name -eq $name | Select-Object -First 1).Extent.Text
 }
 function Write-Log { param($Message) }
@@ -21,6 +21,7 @@ function docker {
         'ps --format' { 'agentteams-manager'; 'agentteams-worker-test'; return }
         'volume inspect' { return }
         'volume ls' { if ($script:failImages) { throw 'Storage must not be created before image preparation' }; return 'original-data' }
+        'inspect agentteams-manager' { return 'AGENTTEAMS_MANAGER_RUNTIME=qwenpaw' }
         'inspect agentteams-controller' {
             switch ($args[3]) {
                 '{{json .Mounts}}' { return (@(@{Type='volume'; Name=$script:mountedData; Destination='/data'}, @{Type='bind'; Source='/original/work space'; Destination='/root/agentteams-fs/agents/manager'}) | ConvertTo-Json -Compress) }
@@ -34,6 +35,7 @@ function docker {
 function Reset-Fixture {
     Get-ChildItem Env:AGENTTEAMS_* | ForEach-Object { [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process') }
     $script:InstallEnvKeys = @{}
+    $script:AGENTTEAMS_LOG_FILE = Join-Path $directory 'install.log'
     $script:config = @{}
     $script:RecoveredConfig = $null
     $script:AGENTTEAMS_REGISTRY = 'registry.example'
@@ -43,6 +45,10 @@ function Reset-Fixture {
     $script:prompts = 0
     $script:orphan = $false
     $script:mountedData = 'original-data'
+    $script:CONTROLLER_CONTAINER = 'agentteams-controller'
+    $script:MANAGER_CONTAINER = 'agentteams-manager'
+    $script:WORKER_CONTAINER_PREFIX = 'agentteams-worker-'
+    $script:DEFAULT_DATA_VOLUME = 'original-data'
     $script:Command = 'manager'
     $script:saved = @('AGENTTEAMS_ADMIN_USER=operator', 'AGENTTEAMS_ADMIN_PASSWORD=secret#with=equals', 'AGENTTEAMS_MANAGER_PASSWORD=manager-secret', 'AGENTTEAMS_REGISTRATION_TOKEN=registration-secret', 'AGENTTEAMS_MINIO_USER=storage-admin', 'AGENTTEAMS_MINIO_PASSWORD=storage-secret', 'AGENTTEAMS_MANAGER_GATEWAY_KEY=gateway-secret', 'AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=false', 'AGENTTEAMS_DATA_DIR=original-data', 'AGENTTEAMS_WORKSPACE_DIR=/original/work space', 'AGENTTEAMS_DASHBOARD=0', 'AGENTTEAMS_DOCKER_PROXY=0')
     $script:saved | Set-Content -LiteralPath $script:AGENTTEAMS_ENV_FILE
@@ -90,10 +96,10 @@ try {
     Reset-Fixture
     $script:config = @{DASHBOARD_VERSION='v1.3.1'; DASHBOARD_IMAGE='registry.example/agentteams/agentteams-dashboard:v1.3.1'}
     Prepare-UpgradeDashboard
-    if ($script:config.DASHBOARD_VERSION -ne 'v1.4.1' -or $script:config.DASHBOARD -ne '1') { throw 'Old default Dashboard was not upgraded' }
+    if ($script:config.DASHBOARD_VERSION -ne 'v1.4.3' -or $script:config.DASHBOARD -ne '1') { throw 'Old default Dashboard was not upgraded' }
     $script:config = @{DASHBOARD_VERSION='v1.4.0'; DASHBOARD_IMAGE='registry.example/agentteams/agentteams-dashboard:v1.4.0'}
     Prepare-UpgradeDashboard
-    if ($script:config.DASHBOARD_VERSION -ne 'v1.4.1') { throw 'Dashboard 1.4.0 default was not upgraded' }
+    if ($script:config.DASHBOARD_VERSION -ne 'v1.4.3') { throw 'Dashboard 1.4.0 default was not upgraded' }
     $script:config = @{DASHBOARD_VERSION='v1.3.1'; DASHBOARD_IMAGE='custom/dashboard:pinned'; DASHBOARD='0'}
     Prepare-UpgradeDashboard
     if ($script:config.DASHBOARD_IMAGE -ne 'custom/dashboard:pinned' -or $script:config.DASHBOARD -ne '0') { throw 'Custom Dashboard configuration was changed' }

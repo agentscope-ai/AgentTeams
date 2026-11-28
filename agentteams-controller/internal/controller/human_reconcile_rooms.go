@@ -14,7 +14,8 @@ import (
 // path — the pre-refactor controller had separate handleCreate /
 // handleUpdate branches; those are unified here.
 //
-// Additions: invite via admin (always), then /join as the user (only
+// Additions: invite ordinary team members and let them accept. For other rooms,
+// invite via admin, then /join as the user (only
 // when a user access token is obtainable — see ensureUserToken). When
 // the user token cannot be obtained (login failed / stale password), we
 // skip /join and record the invite as pending by not appending to
@@ -67,20 +68,23 @@ func (r *HumanReconciler) reconcileHumanRooms(ctx context.Context, s *humanScope
 					continue
 				}
 			}
-			// Acquire a user token lazily — only on the first new-room
-			// addition of this reconcile. Steady-state passes (desired ==
-			// observed) and revoke-only passes never reach this call, so
-			// Matrix Login is not issued on every 5-minute requeue.
-			token := r.ensureUserToken(ctx, s)
-			if token == "" {
-				logger.V(1).Info("user token unavailable; invite-only this cycle",
-					"room", rid, "human", h.Name, "username", s.username)
-				continue
+			if !origin.inviteOnly {
+				// Acquire a user token lazily — only on the first new-room
+				// addition of this reconcile. Steady-state passes (desired ==
+				// observed) and revoke-only passes never reach this call, so
+				// Matrix Login is not issued on every 5-minute requeue.
+				token := r.ensureUserToken(ctx, s)
+				if token == "" {
+					logger.V(1).Info("user token unavailable; invite-only this cycle",
+						"room", rid, "human", h.Name, "username", s.username)
+					continue
+				}
+				if err := r.Provisioner.JoinRoomAs(ctx, rid, token); err != nil {
+					logger.Error(err, "failed to join room as human", "room", rid)
+					continue
+				}
 			}
-			if err := r.Provisioner.JoinRoomAs(ctx, rid, token); err != nil {
-				logger.Error(err, "failed to join room as human", "room", rid)
-				continue
-			}
+			// Track the invitation for revocation even while acceptance is pending.
 			next = append(next, rid)
 		}
 		// The Manager created this private DM with both participants at 100.

@@ -12,6 +12,16 @@ import yaml
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/release/build-harness-platform.sh'
 
 class HarnessPublicationTest(unittest.TestCase):
+    def test_standard_release_uses_six_selected_harnesses(self):
+        workflow = yaml.safe_load((SCRIPT.parents[2] / '.github/workflows/publish-harnesses.yml').read_text())
+        script = workflow['jobs']['prepare']['steps'][0]['run']
+        expected = ['qwenpaw', 'hermes', 'deepseek', 'openhuman', 'codex', 'claudecode']
+        self.assertIn("runtimes='" + json.dumps(expected, separators=(',', ':')) + "'", script)
+        options = workflow[True]['workflow_dispatch']['inputs']['runtime']['options']
+        self.assertNotIn('opencode', options)
+        self.assertNotIn('qoder', options)
+        self.assertEqual(options[-1], 'openclaw')
+
     def test_staging_only_build_cannot_publish_release_tags(self):
         workflow = yaml.safe_load((SCRIPT.parents[2] / '.github/workflows/publish-harnesses.yml').read_text())
         inputs = workflow[True]['workflow_dispatch']['inputs']
@@ -43,7 +53,7 @@ if os.environ.get('FAIL_SMOKE') == '1' and sys.argv[1:2] == ['run']: sys.exit(9)
             return result.returncode, calls
 
     def test_all_six_names_and_smoke_before_push(self):
-        for runtime in ['openclaw', 'qwenpaw', 'hermes', 'deepseek', 'openhuman', 'codex']:
+        for runtime in ['openclaw', 'qwenpaw', 'hermes', 'deepseek', 'openhuman', 'codex', 'claudecode']:
             with self.subTest(runtime=runtime):
                 code, calls = self.exercise(runtime)
                 self.assertEqual(code, 0)
@@ -52,16 +62,22 @@ if os.environ.get('FAIL_SMOKE') == '1' and sys.argv[1:2] == ['run']: sys.exit(9)
                 self.assertTrue(any(c[:2] == ['docker', 'run'] for c in calls[:-1]))
                 self.assertNotIn('agentteams-manager', json.dumps(calls))
 
-    def test_openclaw_uses_the_matching_release_base(self):
+    def test_openclaw_uses_the_last_compatibility_base(self):
         code, calls = self.exercise('openclaw')
         self.assertEqual(code, 0)
         build = next(call for call in calls if call[0] == 'make')
-        self.assertIn('OPENCLAW_BASE_VERSION=v1.2.7', build)
+        self.assertIn('OPENCLAW_BASE_VERSION=v1.2.8', build)
 
     def test_failed_smoke_never_pushes(self):
         code, calls = self.exercise('qwenpaw', fail_smoke=True)
         self.assertNotEqual(code, 0)
         self.assertFalse(any(c[:2] == ['docker', 'push'] for c in calls))
+
+    def test_codex_source_build_uses_the_same_controller(self):
+        code, calls = self.exercise('codex')
+        self.assertEqual(code, 0)
+        source_build = next(call for call in calls if call[:2] == ['docker', 'build'] and call[-1] == 'codex-harness')
+        self.assertIn('AGENTTEAMS_CONTROLLER_IMAGE=registry.test/controller@sha256:123', source_build)
 
     def test_unknown_runtime_never_builds_or_pushes(self):
         code, calls = self.exercise('unknown')

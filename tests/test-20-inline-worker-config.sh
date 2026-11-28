@@ -18,7 +18,7 @@ test_setup "20-inline-worker-config"
 TEST_WORKER="test-inline-$$"
 TEST_WORKER_OVERRIDE="test-inlover-$$"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
-TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
 
 # ---- Cleanup handler ----
 _cleanup() {

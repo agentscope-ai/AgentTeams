@@ -342,11 +342,11 @@ plugin_files = Dir.glob((plugin_root / "**/*").to_s, File::FNM_DOTMATCH)
   .reject { |path| path.extname == ".pyc" }
 
 combined = plugin_files.map { |path| read(path) }.join("\n")
+assert(!combined.match?(%r{/api/agentteam(?:/|\b)}), "forbidden legacy API path /api/agentteam")
 [
   "AGENTTEAM_",
   "teamharness_periodic_sync",
   "AGENTTEAM_SYNC_INTERVAL_SECONDS",
-  "/api/agentteam",
   "agentteam-qwenpaw",
   "project.json",
   "task.json"

@@ -109,3 +109,28 @@ func TestManagerEnvIsNotIncludedInListsOrScopedReads(t *testing.T) {
 		t.Fatal("environment values exposed to scoped caller")
 	}
 }
+
+func TestManagerRuntimeChangeUsesSharedHarnessImageUnlessExplicit(t *testing.T) {
+	for _, image := range []string{"", "custom-codex:local"} {
+		t.Run(image, func(t *testing.T) {
+			mgr := &v1beta1.Manager{ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "default"}, Spec: v1beta1.ManagerSpec{Runtime: "qwenpaw", Image: "old-qwenpaw:local"}}
+			c := fake.NewClientBuilder().WithScheme(newServerTestScheme(t)).WithObjects(mgr).Build()
+			h := NewResourceHandler(c, "default", nil, "", nil)
+			body, _ := json.Marshal(map[string]string{"runtime": "codex", "image": image})
+			req := httptest.NewRequest(http.MethodPut, "/", strings.NewReader(string(body)))
+			req.SetPathValue("name", "default")
+			rec := httptest.NewRecorder()
+			h.UpdateManager(rec, req)
+			if rec.Code != 200 {
+				t.Fatalf("runtime update: %d %s", rec.Code, rec.Body.String())
+			}
+			var saved v1beta1.Manager
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(mgr), &saved); err != nil {
+				t.Fatal(err)
+			}
+			if saved.Spec.Runtime != "codex" || saved.Spec.Image != image {
+				t.Fatalf("wrong runtime/image: %s %s", saved.Spec.Runtime, saved.Spec.Image)
+			}
+		})
+	}
+}

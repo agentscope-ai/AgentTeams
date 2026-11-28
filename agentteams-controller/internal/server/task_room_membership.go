@@ -86,7 +86,12 @@ func (h *CoordinationHandler) JoinTaskRoomHumans(w http.ResponseWriter, r *http.
 			invited[m.UserID] = true
 		}
 	}
-	joined, failed, err := h.acceptTaskRoomHumanInvites(r.Context(), team, room, invited)
+	joinedTeam, err := h.joinedTeamHumans(r.Context(), team, token)
+	if err != nil {
+		writeError(w, 503, "team room membership unavailable")
+		return
+	}
+	joined, failed, err := h.acceptTaskRoomHumanInvites(r.Context(), team, room, invited, joinedTeam)
 	if err != nil {
 		writeError(w, 503, "team Humans unavailable")
 		return
@@ -94,7 +99,7 @@ func (h *CoordinationHandler) JoinTaskRoomHumans(w http.ResponseWriter, r *http.
 	httputil.WriteJSON(w, 200, map[string]any{"joined": joined, "failed": failed})
 }
 
-func (h *CoordinationHandler) acceptTaskRoomHumanInvites(ctx context.Context, team *v1beta1.Team, room string, invited map[string]bool) ([]string, []string, error) {
+func (h *CoordinationHandler) acceptTaskRoomHumanInvites(ctx context.Context, team *v1beta1.Team, room string, invited, joinedTeam map[string]bool) ([]string, []string, error) {
 	var humans v1beta1.HumanList
 	var reader client.Reader = h.deps.Client
 	if h.deps.APIReader != nil {
@@ -109,7 +114,7 @@ func (h *CoordinationHandler) acceptTaskRoomHumanInvites(ctx context.Context, te
 		if !invited[id] || !human.DeletionTimestamp.IsZero() {
 			continue
 		}
-		if !taskRoomHumanAllowed(team, &human) {
+		if !taskRoomHumanAllowed(team, &human) || (!teamAdminHuman(team, &human) && !joinedTeam[id]) {
 			continue
 		}
 		localpart := strings.SplitN(strings.TrimPrefix(id, "@"), ":", 2)[0]
@@ -135,9 +140,27 @@ func (h *CoordinationHandler) acceptTaskRoomHumanInvites(ctx context.Context, te
 	return joined, failed, nil
 }
 
+func (h *CoordinationHandler) joinedTeamHumans(ctx context.Context, team *v1beta1.Team, leaderToken string) (map[string]bool, error) {
+	joined := map[string]bool{}
+	if team.Status.TeamRoomID == "" {
+		return joined, nil
+	}
+	members, err := h.deps.MatrixClient.ListRoomMembersWithToken(ctx, team.Status.TeamRoomID, leaderToken)
+	for _, member := range members {
+		if member.Membership == "join" {
+			joined[member.UserID] = true
+		}
+	}
+	return joined, err
+}
+
+func teamAdminHuman(team *v1beta1.Team, human *v1beta1.Human) bool {
+	return team.Spec.Admin != nil && team.Spec.Admin.Name == human.Name && (team.Spec.Admin.MatrixUserID == "" || team.Spec.Admin.MatrixUserID == human.Status.MatrixUserID)
+}
+
 func taskRoomHumanAllowed(team *v1beta1.Team, human *v1beta1.Human) bool {
 	id := human.Status.MatrixUserID
-	if team.Spec.Admin != nil && team.Spec.Admin.Name == human.Name && (team.Spec.Admin.MatrixUserID == "" || team.Spec.Admin.MatrixUserID == id) {
+	if teamAdminHuman(team, human) {
 		return true
 	}
 	for _, member := range team.Spec.HumanMembers {

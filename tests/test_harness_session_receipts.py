@@ -28,6 +28,15 @@ class HarnessReceiptTests(unittest.TestCase):
         with self.receipts.connect() as db:
             return set(db.execute("SELECT event,status FROM receipts").fetchall())
 
+    def test_native_runtime_switch_uses_only_terminal_room_scoped_receipts(self):
+        self.receipts.committed(["$input"])
+        self.assertFalse(self.receipts.was_completed("!room:hs", "$input"))
+        self.receipts.enqueue("!room:hs", "$input", "completed")
+        reopened = Receipts(self.root)
+        self.assertTrue(reopened.was_completed("!room:hs", "$input"))
+        self.assertFalse(reopened.was_completed("!other:hs", "$input"))
+        self.assertFalse(reopened.was_completed("!room:hs", "$new"))
+
     def test_outbox_connections_close_after_each_transaction(self):
         with self.receipts.connect() as db:
             db.execute("SELECT 1")

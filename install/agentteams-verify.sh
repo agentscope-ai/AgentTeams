@@ -147,7 +147,7 @@ fi
 # TODO(k8s): replace with `kubectl exec <manager-pod> -- <health-check-command>`
 #   Pod name must be resolved dynamically before this call.
 MANAGER_RUNTIME=$(echo "$container_env" | grep ^AGENTTEAMS_MANAGER_RUNTIME= | cut -d= -f2-)
-MANAGER_RUNTIME="${MANAGER_RUNTIME:-openclaw}"
+MANAGER_RUNTIME="${MANAGER_RUNTIME:-qwenpaw}"
 
 if [ "${MANAGER_RUNTIME}" = "copaw" ] || [ "${MANAGER_RUNTIME}" = "qwenpaw" ]; then
     # QwenPaw and legacy CoPaw: check app API health endpoint

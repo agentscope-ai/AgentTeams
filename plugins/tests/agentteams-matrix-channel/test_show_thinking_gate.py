@@ -94,7 +94,7 @@ def test_reasoning_stream_end_default_on_regression():
 def test_completed_reasoning_gated_off():
     """show_thinking=False: a completed REASONING event is dropped before the thread root."""
     channel = _make_channel(show_thinking=False)
-    event = SimpleNamespace(type=_enum("REASONING"))
+    event = SimpleNamespace(type=_enum("REASONING"), content=[SimpleNamespace(text="Reasoning text")])
     with patch.object(channel, "_ensure_thread_root", AsyncMock()) as root, patch.object(
         channel, "_flush_pending_final_message_to_thread", AsyncMock()
     ) as flush, patch.object(
@@ -121,7 +121,7 @@ def test_completed_message_branch_unaffected_by_gate():
 def test_completed_reasoning_default_on_routes():
     """show_thinking default True: a completed REASONING event still routes."""
     channel = _make_channel()
-    event = SimpleNamespace(type=_enum("REASONING"))
+    event = SimpleNamespace(type=_enum("REASONING"), content=[SimpleNamespace(text="Reasoning text")])
     parts = [object()]
     meta: dict = {}
     with patch.object(channel, "_ensure_thread_root", AsyncMock()) as root, patch.object(

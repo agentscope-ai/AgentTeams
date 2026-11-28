@@ -37,7 +37,7 @@ class StagePacketTest(unittest.TestCase):
     def receive(self, full, body, extra=None, sender="@leader:test"):
         channel = self.channel_type(process=lambda *args, **kwargs: None)
         channel._user_id = "@receiver:test"
-        channel._session_receipts = object()
+        channel._session_receipts = SimpleNamespace(was_completed=AsyncMock(return_value=False))
         received = []
         channel._enqueue = received.append
         event = SimpleNamespace(sender=sender, event_id="$event", body=body, source={"content": {

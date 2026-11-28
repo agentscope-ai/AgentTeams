@@ -76,10 +76,9 @@ WORK_DIR="/tmp/agentteams-test-${TEST_WORKER}"
 
 # Track the matrix runtime so the worker we import here matches the runtime
 # being exercised by this CI shard. Without this the apply-zip path always
-# defaults to openclaw on the controller side (defaultRuntime("") returns
-# RuntimeOpenClaw), which makes the "copaw shard" run a hidden openclaw
-# worker -- defeating the point of the matrix expansion.
-TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+# uses the controller's default runtime, which may differ from this shard.
+# Passing the matrix runtime preserves the intended Harness coverage.
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
 
 exec_in_manager bash -c "
     mkdir -p ${WORK_DIR}/package/config ${WORK_DIR}/package/skills/test-skill

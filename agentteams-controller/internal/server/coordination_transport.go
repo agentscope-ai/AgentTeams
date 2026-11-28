@@ -569,7 +569,10 @@ func coordinationMatrixAssignment(e coordinationEvent, p map[string]any) map[str
 			prefix = "前置的" + strings.Join(prior, "、") + "环节已完成交付。"
 		}
 	}
-	body := e.Recipient + " " + prefix + "请继续开始「" + coordinationTaskTitle(e, p) + "」任务，按任务要求完成并提交结果。"
+	body := e.Recipient + " " + prefix + "请开始「" + coordinationTaskTitle(e, p) + "」任务，按任务要求完成并提交结果。"
+	if e.Protocol == "task/v1" && strings.TrimSpace(e.Handoff) != "" {
+		body = e.Recipient + " " + strings.TrimSpace(e.Handoff)
+	}
 	formatted := strings.ReplaceAll(html.EscapeString(body), html.EscapeString(e.Recipient), `<a href="https://matrix.to/#/`+url.PathEscape(e.Recipient)+`">`+html.EscapeString(strings.Split(e.Recipient, ":")[0])+`</a>`)
 	return map[string]any{"msgtype": "m.text", "body": body, "format": "org.matrix.custom.html", "formatted_body": formatted, "m.mentions": map[string]any{"user_ids": []string{e.Recipient}}, "org.agentteams.coordination": coordinationPayload(e)}
 }
@@ -592,6 +595,9 @@ func coordinationMatrixNotification(e coordinationEvent, p map[string]any) map[s
 		caption = "「" + coordinationTaskTitle(e, p) + "」已提交结果，请检查本次提交并验收。"
 	case "project_ready", "main_task_ready":
 		caption = "所有执行环节已完成，请核对最终交付并验收本次任务。"
+		if e.Protocol == "task/v1" && strings.TrimSpace(e.Handoff) != "" {
+			caption = strings.TrimSpace(e.Handoff)
+		}
 	}
 	if caption != "" {
 		body := e.Recipient + " " + caption
@@ -764,6 +770,11 @@ func taskRoomStageIDs(e coordinationEvent, main map[string]any) []string {
 }
 
 func (h *CoordinationHandler) taskResultPublicationPending(ctx context.Context, e coordinationEvent, main, child map[string]any) (bool, error) {
+	// Main-task closure reads accepted immutable reports. A chat projection
+	// receipt is presentation state, not another business acceptance condition.
+	if e.Kind == "main_task_ready" {
+		return false, nil
+	}
 	ids := taskRoomStageIDs(e, main)
 	for _, id := range ids {
 		if !isSafeTaskID(id) {

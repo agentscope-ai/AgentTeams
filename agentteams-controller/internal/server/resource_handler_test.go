@@ -856,8 +856,8 @@ func TestCreateWorkerDefaultsRuntime(t *testing.T) {
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "worker-cr", Namespace: "default"}, &stored); err != nil {
 		t.Fatalf("get created worker: %v", err)
 	}
-	if got := stored.Spec.Runtime; got != "openclaw" {
-		t.Fatalf("worker.spec.runtime = %q, want openclaw", got)
+	if got := stored.Spec.Runtime; got != "codex" {
+		t.Fatalf("worker.spec.runtime = %q, want codex", got)
 	}
 }
 

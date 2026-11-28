@@ -153,11 +153,12 @@ def node_check(module: Path) -> None:
     if node is None:
         return
     result = subprocess.run(
-        [node, "--check", str(module)],
+        [node, "--input-type=module", "--check", "-"],
+        input=module.read_text(encoding="utf-8"),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     assert result.returncode == 0, (
-        f"node --check rejected {module.name}:\n{result.stderr}"
+        f"node --check rejected {module.name} (exit {result.returncode}):\n{result.stderr}"
     )

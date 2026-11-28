@@ -9,7 +9,7 @@ import os
 import subprocess
 import urllib.error
 
-from task_recovery import Recovery, RecoveryConflict
+from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable
 
 
 def matrix_event_key(room_id, event_id):
@@ -30,6 +30,11 @@ class WorkerMatrix:
         if snapshot["runtime"] != self.runtime:
             raise RecoveryConflict("Actual Worker Harness differs from this native adapter")
         body = {"action": "start", "instance_id": snapshot["instance_id"], "process_id": self.recovery.process}
+        active = (snapshot.get("state") or {}).get("active_start") or {}
+        # Polling and tool hooks share this state; an unchanged start needs no write.
+        if snapshot["etag"] and active == {"instance_id": snapshot["instance_id"],
+                                           "process_id": self.recovery.process, "runtime": self.runtime}:
+            return snapshot
         if snapshot["etag"]:
             saved = self.recovery.request("POST", "runtime/matrix", body, snapshot["etag"])
         else:
@@ -195,15 +200,36 @@ class WorkerMatrix:
     def _message_update(self, key, snapshot, action, checkpoint=None):
         if snapshot["runtime"] != self.runtime:
             raise RecoveryConflict("Actual Worker Harness differs from this native adapter")
-        return self.recovery.request("POST", self._message_path(key), {
-            "action": action, "instance_id": snapshot["instance_id"],
-            "process_id": self.recovery.process,
-            "generation": snapshot["execution"].get("generation", 0), "checkpoint": checkpoint,
-        }, snapshot["etag"])
+        try:
+            return self.recovery.request("POST", self._message_path(key), {
+                "action": action, "instance_id": snapshot["instance_id"],
+                "process_id": self.recovery.process,
+                "generation": snapshot["execution"].get("generation", 0), "checkpoint": checkpoint,
+            }, snapshot["etag"])
+        except RecoveryUnavailable:
+            if action == "checkpoint":
+                confirmed = self.message(key)
+                actual = confirmed["execution"]
+                if (confirmed["runtime"] == self.runtime
+                        and confirmed["instance_id"] == snapshot["instance_id"]
+                        and actual.get("process_id") == self.recovery.process
+                        and all(actual.get(field) == snapshot["execution"].get(field)
+                                for field in ("generation", "instance_id", "process_id"))
+                        and Recovery.checkpoint_committed(actual.get("checkpoint"), checkpoint)):
+                    return confirmed
+            raise
 
     def message_claim(self, key):
         claimed = self._message_update(key, self.message(key), "claim")
-        return self._message_view(key, claimed)
+        view = self._message_view(key, claimed)
+        operation = (view['execution'].get('checkpoint') or {}).get('operation') or {}
+        if view['recovery'] == 'verify' and operation.get('state') == 'started':
+            from native_tool_returns import load
+            stored = load(view['identity'], operation['id'])
+            if stored:
+                return self.message_finish_tools(view['identity'], operation['id'], stored['results'],
+                                                 deliver_result=stored.get('deliver_result', False))
+        return view
 
     @staticmethod
     def _message_view(key, entry):
@@ -257,13 +283,21 @@ class WorkerMatrix:
             cp["artifacts"] = list(cp.get("artifacts") or [])
             for data in output_bytes:
                 cp["artifacts"].append(self._message_artifact(entry, data))
-        self._message_update(identity["event_key"], entry, "checkpoint", cp)
+        try:
+            self._message_update(identity["event_key"], entry, "checkpoint", cp)
+        except RecoveryUnavailable:
+            from native_tool_returns import not_dispatched
+            not_dispatched(identity, op, calls)
+            raise
         return op
 
-    def message_pending_tools(self, identity, operation_id):
+    def message_pending_tools(self, identity, operation_id, *, allow_verified=False):
         """Recheck the operation immediately before issuing a native side effect."""
         entry = self._message_owned(identity)
         from task_operation import pending
+        operation = (entry['execution'].get('checkpoint') or {}).get('operation') or {}
+        if allow_verified and operation.get('id') == operation_id and operation.get('state') == 'verified':
+            return entry
         if entry['recovery'] != 'verify':
             raise RecoveryConflict('Native results do not own an outstanding tool operation')
         pending(entry['execution'].get('checkpoint'), operation_id)
@@ -271,9 +305,13 @@ class WorkerMatrix:
 
     def message_finish_tools(self, identity, operation_id, results, *, deliver_result=False):
         """Call only for confirmed tool returns. Uncertain effects remain fenced."""
-        entry = self.message_pending_tools(identity, operation_id)
-        from task_operation import result_bytes, finish
+        from native_tool_returns import stage
+        stage(identity, operation_id, results, deliver_result=deliver_result)
+        entry = self.message_pending_tools(identity, operation_id, allow_verified=True)
+        from task_operation import result_bytes, finish, verified_return
         original = entry['execution']['checkpoint']
+        if verified_return(original, operation_id, results):
+            return {**self._message_view(identity['event_key'], entry), 'idempotent_hit': True}
         data = result_bytes(original, operation_id, results)
         if deliver_result and not original.get('result'):
             raise RecoveryConflict('Message has no staged result')
@@ -287,8 +325,17 @@ class WorkerMatrix:
     def _message_artifact(entry, data):
         digest = hashlib.sha256(data).hexdigest()
         key = entry["input"]["member_prefix"] + "/runtime/matrix/results/" + digest + ".txt"
-        subprocess.run(["mc", "pipe", os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/" + key],
-                       input=data, capture_output=True, check=True, timeout=30)
+        for attempt in range(2):
+            try:
+                subprocess.run(["mc", "pipe", os.environ["AGENTTEAMS_STORAGE_PREFIX"].rstrip("/") + "/" + key],
+                               input=data, capture_output=True, check=True, timeout=30)
+                break
+            except (OSError, subprocess.SubprocessError) as error:
+                # The key is a digest of these exact bytes. Retrying a timed-out
+                # upload cannot repeat the native tool that produced them.
+                if isinstance(error, subprocess.TimeoutExpired) and attempt == 0:
+                    continue
+                raise RecoveryUnavailable(f"Native receipt upload failed ({type(error).__name__}); keep the operation pending and do not replay its tool") from error
         return {"key": key, "sha256": digest, "size": len(data)}
 
     def message_save_reply(self, identity, text):

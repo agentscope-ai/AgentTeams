@@ -156,7 +156,7 @@ The Bash and PowerShell installers are maintained only in the website repository
 
 ```bash
 git clone https://github.com/agentteams-group/agentteams-group.github.io.git .installer-source
-git -C .installer-source checkout 4ad3228780e1b0e8b6d53c110e914d90720b34f5
+git -C .installer-source checkout 8fef1a33f77547a2144e001d3287696ae6fcc3b0
 ```
 
 This checkout is test input only, ignored by Git, and is never used as an installation wrapper. Runtime integration installation uses the website endpoint directly.

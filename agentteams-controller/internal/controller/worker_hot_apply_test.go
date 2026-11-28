@@ -143,6 +143,7 @@ func TestApplySubagentModelHotDialsOnce(t *testing.T) {
 	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"}}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(w.DeepCopy()).Build()
 	r := &WorkerReconciler{
+		DefaultRuntime:      "qwenpaw",
 		Client:              k8sClient,
 		KubeMode:            "embedded",
 		subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL },
@@ -187,6 +188,7 @@ func TestApplySubagentModelHotSkips(t *testing.T) {
 	}
 	mkR := func(w *v1beta1.Worker, kubeMode string) *WorkerReconciler {
 		return &WorkerReconciler{
+			DefaultRuntime:      "qwenpaw",
 			Client:              fake.NewClientBuilder().WithScheme(scheme).WithObjects(w.DeepCopy()).Build(),
 			KubeMode:            kubeMode,
 			subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL },
@@ -223,6 +225,7 @@ func TestApplySubagentModelHotResolvesTeamDefault(t *testing.T) {
 	scheme := newControllerTestScheme(t)
 	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"}}
 	r := &WorkerReconciler{
+		DefaultRuntime:      "qwenpaw",
 		Client:              fake.NewClientBuilder().WithScheme(scheme).WithObjects(w.DeepCopy()).Build(),
 		KubeMode:            "embedded",
 		subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL },
@@ -266,6 +269,7 @@ func TestHotApplyProviderProjection(t *testing.T) {
 	scheme := newControllerTestScheme(t)
 	w := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "alpha-dev", Namespace: "default"}}
 	r := &WorkerReconciler{
+		DefaultRuntime:      "qwenpaw",
 		Client:              fake.NewClientBuilder().WithScheme(scheme).WithObjects(w.DeepCopy()).Build(),
 		KubeMode:            "embedded",
 		subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL },

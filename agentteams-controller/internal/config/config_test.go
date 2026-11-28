@@ -176,7 +176,7 @@ func TestBackendConfigsResolveCodexWorkerImage(t *testing.T) {
 			cfg := LoadConfig()
 			want := image
 			if want == "" {
-				want = "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"
+				want = "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v1.2.8"
 			}
 			for name, got := range map[string]string{
 				"docker":  cfg.DockerConfig().CodexWorkerImage,
@@ -431,5 +431,20 @@ func TestLoadConfigAutoPrefixDisabledKeepsExplicitContainerPrefix(t *testing.T) 
 
 	if cfg.ContainerPrefix != "custom-worker-" {
 		t.Fatalf("ContainerPrefix = %q, want %q", cfg.ContainerPrefix, "custom-worker-")
+	}
+}
+
+func TestFreshRuntimeDefaultsKeepManagerAndWorkerIndependent(t *testing.T) {
+	t.Setenv("AGENTTEAMS_MANAGER_RUNTIME", "")
+	t.Setenv("AGENTTEAMS_DEFAULT_WORKER_RUNTIME", "")
+	cfg := LoadConfig()
+	if cfg.ManagerRuntime != "qwenpaw" || cfg.DefaultWorkerRuntime != "codex" {
+		t.Fatalf("fresh defaults: manager=%q worker=%q", cfg.ManagerRuntime, cfg.DefaultWorkerRuntime)
+	}
+	t.Setenv("AGENTTEAMS_MANAGER_RUNTIME", "hermes")
+	t.Setenv("AGENTTEAMS_DEFAULT_WORKER_RUNTIME", "openclaw")
+	cfg = LoadConfig()
+	if cfg.ManagerRuntime != "hermes" || cfg.DefaultWorkerRuntime != "openclaw" {
+		t.Fatalf("explicit saved choices were changed: manager=%q worker=%q", cfg.ManagerRuntime, cfg.DefaultWorkerRuntime)
 	}
 }

@@ -228,6 +228,14 @@ run_start_dashboard() {
         curl() { return 0; }
         sleep() { :; }
         DOCKER_CMD="fake_docker"
+        CONTROLLER_CONTAINER="agentteams-controller"
+        MANAGER_CONTAINER="agentteams-manager"
+        DASHBOARD_CONTAINER="agentteams-dashboard"
+        DASHBOARD_VOLUME="agentteams-dashboard-data"
+        DOCKER_NETWORK="agentteams-net"
+        AGENTTEAMS_UNIFIED_ENTRY=0
+        eval "$(extract_function prepare_unified_entry "${INSTALLER}")"
+        run_logged() { "$@"; }
         fake_docker() {
             if [ "$1" = "run" ]; then
                 printf '%s\n' "$*" >> "${run_log}"

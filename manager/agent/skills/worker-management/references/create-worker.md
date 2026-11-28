@@ -21,7 +21,7 @@ provisioning, polling, credentials and container lifecycle.
 For one Worker:
 
 ```bash
-agt create worker --name frontend-worker --runtime openclaw \
+agt create worker --name frontend-worker --runtime qwenpaw \
   --soul 'You are a frontend Worker. Implement requested UI changes and report results.' \
   --wait-timeout 45s -o json
 ```

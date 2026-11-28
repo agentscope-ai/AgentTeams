@@ -18,7 +18,7 @@ def functions(*names):
 
 def run(script):
     return subprocess.run(
-        ["bash"], input=script, text=True, capture_output=True,
+        ["bash"], input=functions("resolve_resource_names") + "\nresolve_resource_names\n" + script, text=True, capture_output=True,
         env={"PATH": os.environ["PATH"], "HOME": "/nonexistent/one-click-test"}, timeout=15,
     )
 
@@ -111,7 +111,7 @@ check_container_runtime
         self.assertNotIn("UNEXPECTED", result.stdout)
 
     def test_password_goes_to_clipboard_only(self):
-        result = run(functions("open_dashboard") + """
+        result = run(functions("dashboard_browser_url", "open_dashboard") + """
 log() { :; }
 msg() { :; }
 AGENTTEAMS_ADMIN_PASSWORD=synthetic-password

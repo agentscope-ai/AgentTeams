@@ -47,3 +47,28 @@ func TestMainTaskPlanWritesAndMembershipAreProtected(t *testing.T) {
 		t.Fatal("subtask reassigned to an unrelated main task")
 	}
 }
+
+func TestMainTaskIndexUsesCurrentPlanDependenciesAfterReplacement(t *testing.T) {
+	store := ossfake.NewMemory()
+	putProject(store, "teams/alpha/shared/tasks/main/meta.json", map[string]any{
+		"task_id": "main", "task_kind": "main", "status": "in_progress",
+		"tasks": []any{map[string]any{"task_id": "ready", "depends_on": []string{"fix", "recheck"}}},
+	})
+	putProject(store, "teams/alpha/shared/tasks/ready/meta.json", map[string]any{
+		"task_id": "ready", "main_task_id": "main", "status": "completed", "depends_on": []string{"retired-test"},
+	})
+	h := &ProjectHandler{oss: store}
+	tasks, err := h.appendMainTasks(context.Background(), nil, []string{"teams/alpha/shared/projects/"}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		if task.TaskID == "ready" {
+			if task.Status != "completed" || len(task.DependsOn) != 2 || task.DependsOn[0] != "fix" || task.DependsOn[1] != "recheck" {
+				t.Fatalf("stale execution metadata overrode the current plan: %+v", task)
+			}
+			return
+		}
+	}
+	t.Fatal("planned execution missing from task index")
+}

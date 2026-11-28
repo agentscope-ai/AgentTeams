@@ -123,6 +123,11 @@ func (h *ProjectHandler) appendMainTasks(ctx context.Context, tasks []teamTask, 
 						merged[k] = v
 					}
 				}
+				// Revisions update plan edges without rewriting existing execution
+				// records. Keep live execution state, but display the current DAG.
+				if dependencies, present := node["depends_on"]; present {
+					merged["depends_on"] = dependencies
+				}
 				add(merged, id)
 			}
 		}

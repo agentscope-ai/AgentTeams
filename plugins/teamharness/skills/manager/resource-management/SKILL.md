@@ -113,6 +113,14 @@ Check that the Team Admin has a Human CR before creating the Team. A Matrix
 login account alone is not a Human CR. Use `agt create human --help` for required
 fields; permission levels are 1, 2, or 3 and must follow the admin's request.
 
+## One-click GitHub development squad
+
+When you deploy a GitHub development squad, use the authenticated Matrix sender of the original deployment request as its Team Admin. Match the full Matrix ID to one registered Human with `agt get humans -o json`. If the match is missing or ambiguous, report the blocker. Pass the Human resource name to `agt create team --admin`. When resuming the same deployment, fill an empty admin and stop on a conflicting owner. Before reporting success, read back the Team and verify its admin name, team room and Leader DM.
+
+Use the repository named by the requester. If it is missing, ask for owner/repository. Verify the requested or default Worker model before provisioning. For GitHub access, reuse a configured tool or guide the requester in the current conversation. Ask for the repository first. For a new credential, guide the user to select a fine-grained token for just that repository, with Contents, Issues, and Pull requests set to Read-only for the initial scan. Then direct them to the “配置 GitHub Token” secure input above the chat composer. Wait for the tool name in the confirmation message, then resume the same request. Never ask for a token in chat. After the Workers exist, bind the tool to each designated Worker and verify repository, Issue and PR reads using each Worker’s own authorization. If a binding needs user action, identify the affected Worker and resume the same deployment after authorization. Report the actual results before enabling Issue checks.
+
+The Team Admin gets access to the team chat and the private team assistant. Add other people as ordinary team members and let each person accept their team invitation. An issued invitation is pending until Matrix reports a joined membership. Once a member has joined the team, use the standard task-room workflow for automatic participation in new tasks. Keep the assistant DM private to its designated administrator and Leader.
+
 ## Communicate and coordinate
 
 Use the TeamHarness `message` tool with the destination room ID and full Matrix

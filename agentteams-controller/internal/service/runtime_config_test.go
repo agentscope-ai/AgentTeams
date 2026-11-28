@@ -6,10 +6,64 @@ import (
 	"testing"
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/agentconfig"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/oss/ossfake"
 	"sigs.k8s.io/yaml"
 )
+
+func TestMCPApprovalPolicyReachesRuntimeOnUpdate(t *testing.T) {
+	store := ossfake.NewMemory()
+	d := NewDeployer(DeployerConfig{OSS: store})
+	req := MemberRuntimeConfigDeployRequest{Name: "worker", Runtime: "codex", Spec: v1beta1.WorkerSpec{
+		McpServers: []v1beta1.MCPServer{{Name: "docs", URL: "https://gateway/docs"}},
+	}}
+	for _, mode := range []string{"ask", "allow"} {
+		req.Spec.McpServers[0].Approvals = &v1beta1.MCPApprovals{Tools: "*", Mode: mode}
+		if err := d.DeployMemberRuntimeConfig(t.Context(), req); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := store.GetObject(t.Context(), "agents/worker/runtime/runtime.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc memberRuntimeConfigDocument
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		got := doc.Desired.MCPServers[0].Approvals
+		if got == nil || *got != *req.Spec.McpServers[0].Approvals {
+			t.Fatalf("wanted %s for all tools, got %+v", mode, got)
+		}
+	}
+}
+
+func TestAgentApprovalModeReachesEveryRuntime(t *testing.T) {
+	for _, runtime := range []string{"qwenpaw", "hermes", "deepseek-harness", "claudecode", "codex"} {
+		t.Run(runtime, func(t *testing.T) {
+			store := ossfake.NewMemory()
+			d := NewDeployer(DeployerConfig{OSS: store})
+			req := MemberRuntimeConfigDeployRequest{Name: "worker", Runtime: runtime}
+			for _, mode := range []string{"ask", "allow", "ask"} {
+				req.Spec.ApprovalMode = mode
+				if err := d.DeployMemberRuntimeConfig(t.Context(), req); err != nil {
+					t.Fatal(err)
+				}
+				raw, err := store.GetObject(t.Context(), "agents/worker/runtime/runtime.yaml")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var doc memberRuntimeConfigDocument
+				if err := yaml.Unmarshal(raw, &doc); err != nil {
+					t.Fatal(err)
+				}
+				if doc.Desired.ApprovalMode != mode {
+					t.Fatalf("mode %s: %+v", mode, doc.Desired)
+				}
+			}
+		})
+	}
+}
 
 func TestWorkerRuntimeConfigVersionTracksConfigurationInsteadOfRestartGeneration(t *testing.T) {
 	for _, harness := range []string{"codex", "hermes", "qwenpaw", "deepseek-harness", "openclaw", "openhuman"} {
@@ -167,5 +221,27 @@ func TestMemberRuntimeConfigProjectsProvider(t *testing.T) {
 				t.Fatalf("desired.subagentModel.providerId=%q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestManagerRuntimeConfigRetainsCommonObservability(t *testing.T) {
+	for _, runtime := range []string{"qwenpaw", "hermes", "deepseek-harness", "claudecode", "codex"} {
+		store := ossfake.NewMemory()
+		d := NewDeployer(DeployerConfig{OSS: store, AgentConfig: agentconfig.NewGenerator(agentconfig.Config{MatrixDomain: "matrix.local"})})
+		settings := observability.RuntimeSettings(map[string]any{"revision": "manager-central", "enabled": true, "captureContent": false, "collectorEndpoint": "http://collector:4318"})
+		if err := d.DeployManagerConfig(t.Context(), ManagerDeployRequest{Name: "default", Spec: v1beta1.ManagerSpec{Runtime: runtime}, Observability: settings}); err != nil {
+			t.Fatal(err)
+		}
+		data, err := store.GetObject(t.Context(), "agents/manager/runtime/runtime.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc memberRuntimeConfigDocument
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if doc.Member.Role != "manager" || doc.Desired.Observability == nil || *doc.Desired.Observability != *settings {
+			t.Fatalf("%s: Manager lost common tracing contract", runtime)
+		}
 	}
 }

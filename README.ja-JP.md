@@ -179,7 +179,7 @@ helm install agentteams higress.io/agentteams \
 | `credentials.defaultModel` | 任意 | デフォルトモデル、デフォルトは `gpt-5.4` |
 | `credentials.llmBaseUrl` | 任意 | OpenAI 互換のベース URL（例: `https://api.deepseek.com/v1`）。公式 OpenAI API を使用する場合は空のまま |
 | `manager.runtime` | 任意 | 現行ソース Chart: `openclaw`（デフォルト）、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`。`copaw` は QwenPaw の互換エイリアス。Harness イメージは自動選択 |
-| `worker.defaultRuntime` | 任意 | `openclaw`（Chart デフォルト）、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`、`codex`。旧 `copaw` は以前のイメージを明示的に固定 |
+| `worker.defaultRuntime` | 任意 | `codex`（Chart デフォルト）、`qwenpaw`、`openclaw`（互換用途）、`hermes`、`deepseek-harness`、`openhuman`、`codex`。旧 `copaw` は以前のイメージを明示的に固定 |
 
 <details>
 <summary>代替ランタイムの使用（QwenPaw Manager + Hermes Workers）</summary>

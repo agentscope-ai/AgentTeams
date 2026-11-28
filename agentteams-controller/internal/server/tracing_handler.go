@@ -23,7 +23,7 @@ type traceWorkerAccess struct {
 	Teams       map[string]bool
 }
 
-// traceWorkers verifies current Worker/Team membership before returning data.
+// traceWorkers verifies current member resources and Team membership before returning data.
 func (h *ProjectHandler) traceWorkers(ctx context.Context, caller *authpkg.CallerIdentity) (map[string]traceWorkerAccess, error) {
 	var workers v1beta1.WorkerList
 	if err := h.client.List(ctx, &workers, client.InNamespace(h.namespace)); err != nil {
@@ -59,6 +59,21 @@ func (h *ProjectHandler) traceWorkers(ctx context.Context, caller *authpkg.Calle
 		identity := worker.Spec.EffectiveWorkerName(worker.Name)
 		access := traceWorkerAccess{RuntimeName: identity, Teams: teams}
 		allowed[worker.Name], allowed[identity] = access, access
+	}
+	// Managers currently emit the shared runtime identity "manager". Their
+	// private turns are visible only to namespace-wide readers, never through
+	// a Human's Worker assignments or a Leader's Team scope.
+	if caller.Role == authpkg.RoleAdmin || caller.Role == authpkg.RoleManager {
+		var managers v1beta1.ManagerList
+		if err := h.client.List(ctx, &managers, client.InNamespace(h.namespace)); err != nil {
+			return nil, err
+		}
+		for _, manager := range managers.Items {
+			if manager.DeletionTimestamp.IsZero() {
+				allowed["manager"] = traceWorkerAccess{RuntimeName: "manager", Teams: map[string]bool{"": true}}
+				break
+			}
+		}
 	}
 	return allowed, nil
 }
@@ -195,7 +210,7 @@ func (h *ProjectHandler) ListTraces(w http.ResponseWriter, r *http.Request) {
 	if worker := query.Get("worker"); worker != "" {
 		params.Set("userId", workers[worker].RuntimeName)
 	}
-	for _, label := range []string{"task", "team", "project", "room"} {
+	for _, label := range []string{"task", "main_task", "team", "project", "room"} {
 		if value := query.Get(label); value != "" {
 			params.Add("tags", label+":"+value)
 		}
@@ -246,7 +261,7 @@ func (h *ProjectHandler) ListTraces(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			match := true
-			for _, label := range []string{"task", "team", "project", "room"} {
+			for _, label := range []string{"task", "main_task", "team", "project", "room"} {
 				if value := query.Get(label); value != "" && traceIdentity(row, label) != value {
 					match = false
 				}

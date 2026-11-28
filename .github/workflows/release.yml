@@ -54,10 +54,9 @@ jobs:
         run: |
           # Keep this list aligned with the release targets in build.yml.
           images=(
-            openclaw-base agentteams-controller agentteams-embedded
-            agentteams-harness-openclaw
+            agentteams-controller agentteams-embedded
             agentteams-harness-qwenpaw agentteams-harness-hermes agentteams-harness-openhuman
-            agentteams-harness-deepseek agentteams-harness-codex
+            agentteams-harness-deepseek agentteams-harness-codex agentteams-harness-claudecode
           )
           for image in "${images[@]}"; do
             ref="${REGISTRY}/${REPO}/${image}:${VERSION}"
@@ -157,11 +156,16 @@ jobs:
           # Embedded all-in-one (infra + controller; pulled by the installer)
           docker pull ${REGISTRY}/${REPO}/agentteams-embedded:${VERSION}
 
-          # OpenClaw Harness (Manager, Leader and Worker)
-          docker pull ${REGISTRY}/${REPO}/agentteams-harness-openclaw:${VERSION}
+          # Claude Code Harness (Manager, Leader and Worker)
+          docker pull ${REGISTRY}/${REPO}/agentteams-harness-claudecode:${VERSION}
 
           # QwenPaw Harness (Manager, Leader and Worker)
           docker pull ${REGISTRY}/${REPO}/agentteams-harness-qwenpaw:${VERSION}
+
+          # Hermes, OpenHuman and Codex Harnesses
+          docker pull ${REGISTRY}/${REPO}/agentteams-harness-hermes:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/agentteams-harness-openhuman:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/agentteams-harness-codex:${VERSION}
 
           # DeepSeek Harness Worker (experimental)
           docker pull ${REGISTRY}/${REPO}/agentteams-harness-deepseek:${DEEPSEEK_HARNESS_WORKER_VERSION}

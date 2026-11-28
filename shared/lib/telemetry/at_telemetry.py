@@ -25,6 +25,11 @@ _model_request = ContextVar("at_model_request", default=None)
 _provider = None
 _secret_key = re.compile(r"(?:api[_-]?key|secret|password|authorization|access[_-]?token|gateway[_-]?key|credential|license[_-]?key|security[_-]?token|OTEL_EXPORTER_OTLP(?:_TRACES)?_HEADERS)", re.I)
 _limit = 256 * 1024
+_content_attributes = (
+    "langfuse.observation.input", "langfuse.observation.output",
+    "langfuse.trace.input", "langfuse.trace.output", "gen_ai.input", "gen_ai.output",
+    "gen_ai.prompt", "gen_ai.completion", "gen_ai.tool.call.arguments", "gen_ai.tool.call.result",
+)
 
 
 def sanitize(value):
@@ -70,8 +75,10 @@ def sanitize(value):
     return f"<{type(value).__name__}>"
 
 
-def capture(value):
+def capture(value, *, complete=False):
     value = sanitize(value)
+    if complete:
+        return value
     encoded = json.dumps(value, ensure_ascii=False, default=str).encode()
     if len(encoded) <= _limit:
         return value
@@ -182,10 +189,9 @@ class SanitizingExporter(SpanExporter):
                     if span.name == "worker.turn":
                         attrs.setdefault(f"langfuse.trace.metadata.{key}", value)
             if os.getenv("AGENTTEAMS_OTEL_CAPTURE_CONTENT", "true").lower() not in ("true", "1"):
-                attrs = {k: v for k, v in attrs.items() if not k.startswith((
-                    "langfuse.observation.input", "langfuse.observation.output", "gen_ai.input", "gen_ai.output",
-                    "gen_ai.prompt", "gen_ai.completion", "gen_ai.tool.call.arguments", "gen_ai.tool.call.result"))}
-            sanitized = {key: "[REDACTED]" if _secret_key.search(key) else capture(value) for key, value in attrs.items()}
+                attrs = {k: v for k, v in attrs.items() if not k.startswith(_content_attributes)}
+            sanitized = {key: "[REDACTED]" if _secret_key.search(key) else
+                         capture(value, complete=key.startswith(_content_attributes)) for key, value in attrs.items()}
             attrs = {key: value if isinstance(value, (str, int, float, bool)) or
                      (isinstance(value, list) and all(isinstance(v, (str, int, float, bool)) for v in value)) else
                      json.dumps(value, ensure_ascii=False) for key, value in sanitized.items()}
@@ -229,9 +235,13 @@ def turn_fields(session_id, *, user_id="", metadata=None):
             fields["agentteams.message.received_at_ns"] = value
         if key == "execution_generation" and isinstance(value, int):
             fields["agentteams.execution.generation"] = value
-        if key in ("room_id", "task_id", "team_id", "project_id", "event_id", "coordination_id") and value:
+        if key in ("room_id", "task_id", "main_task_id", "team_id", "project_id", "event_id", "coordination_id") and value:
             fields[f"agentteams.{key[:-3] if key.endswith('_id') else key}.id"] = str(value)
     coordination = (metadata or {}).get("teamharness_coordination")
+    if isinstance(coordination, dict):
+        for key in ("task_id", "main_task_id", "project_id"):
+            if coordination.get(key):
+                fields.setdefault(f"agentteams.{key[:-3]}.id", str(coordination[key]))
     if isinstance(coordination, dict) and coordination.get("id"):
         fields["agentteams.coordination.id"] = str(coordination["id"])
         if coordination.get("kind"):
@@ -341,7 +351,7 @@ class IdentityProcessor(SpanProcessor):
         }
         root = _active_turn.get()
         if root is not None and root.context.trace_id == span.context.trace_id:
-            for key in ("agentteams.task.id", "agentteams.project.id", "agentteams.task.correlation"):
+            for key in ("agentteams.task.id", "agentteams.main_task.id", "agentteams.team.id", "agentteams.project.id", "agentteams.task.correlation"):
                 if key in root.attributes:
                     fields.setdefault(key, root.attributes[key])
         for key, value in fields.items():
@@ -351,7 +361,7 @@ class IdentityProcessor(SpanProcessor):
         tags = ["agentteams", fields["agentteams.runtime"]]
         if fields.get("agentteams.turn.id"):
             tags.append("worker-turn")
-        for label in ("task", "team", "room", "project"):
+        for label in ("task", "main_task", "team", "room", "project"):
             if fields.get(f"agentteams.{label}.id"):
                 tags.append(f"{label}:{fields[f'agentteams.{label}.id']}")
         span.set_attribute("langfuse.trace.tags", tags)
@@ -434,14 +444,7 @@ def configure(*, local_only=False):
     if os.getenv("AGENTTEAMS_LOG_CAPTURED") == "1":
         provider.add_span_processor(RuntimeLogProcessor())
     os.environ["TRACELOOP_TRACE_CONTENT"] = os.getenv("AGENTTEAMS_OTEL_CAPTURE_CONTENT", "true")
-    from at_runtime_adapters import install, register_hook
-    if os.getenv("AGENTTEAMS_OTEL_RUNTIME") != "qwenpaw":
-        def instrument_openai(_module):
-            from opentelemetry.instrumentation.openai import OpenAIInstrumentor
-            OpenAIInstrumentor().instrument()
-        # Receipt and transport helpers do not need a model SDK. Install its
-        # tracing wrapper when the runtime actually imports it.
-        register_hook(instrument_openai, "openai")
+    from at_runtime_adapters import install
     install()
     _provider = provider
     return provider
@@ -473,7 +476,7 @@ def set_io(span, *, input=None, output=None):
         if value is not None:
             if os.getenv("AGENTTEAMS_OTEL_CAPTURE_CONTENT", "true").lower() in ("true", "1"):
                 try:
-                    span.set_attribute(f"langfuse.observation.{key}", json.dumps(capture(value), ensure_ascii=False, default=str))
+                    span.set_attribute(f"langfuse.observation.{key}", json.dumps(capture(value, complete=True), ensure_ascii=False, default=str))
                 except Exception as exc:
                     span.set_attribute(f"agentteams.telemetry.{key}.capture_error", type(exc).__name__)
 

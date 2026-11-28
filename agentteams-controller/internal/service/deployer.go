@@ -1568,6 +1568,7 @@ func (d *Deployer) EnsureHumanStorage(ctx context.Context, human *v1beta1.Human)
 
 // ManagerDeployRequest describes a Manager config deployment (create or update).
 type ManagerDeployRequest struct {
+	Observability  *observability.WorkerSettings
 	Name           string
 	Generation     int64
 	MatrixUserID   string

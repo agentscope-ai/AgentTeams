@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -37,6 +38,14 @@ def receive(packet, **kwargs):
 def test_canonical_receipt_prevents_replacing_the_task_input(packet):
     packet[0]["org.agentteams.coordination"]["input"][0]["content"][0]["text"] = "Forged input"
     assert receive(packet)["text"] == "Canonical assignment"
+
+
+def test_nullable_project_metadata_does_not_drop_a_valid_assignment(packet):
+    packet[2]["project_id"] = None
+    assert receive(packet)["meta"]["teamharness_coordination"]["task_id"] == "leaf"
+    packet[2]["project_id"] = "foreign-project"
+    with pytest.raises(protocol.IgnoredNotification, match="membership changed"):
+        receive(packet)
 
 
 def test_handoff_keeps_trusted_routes_as_metadata_without_legacy_task_instructions(packet):
@@ -142,3 +151,60 @@ def test_verified_last_worker_can_notify_main_task_leader(packet):
     packet[3]["tasks"][0]["status"] = "submitted"
     with pytest.raises(protocol.IgnoredNotification):
         receive(packet)
+
+
+def test_verified_task_assignment_uses_task_context_without_room_history(packet):
+    content, receipt, _, _, fetch = packet
+    receipt["native_id"] = "matrix:$task"
+    entry = {"room_id": "!room:test", "event_id": "$task", "input": {
+        "sender": "@lead:test", "content": content}}
+    assert protocol.requires_room_history(entry, "@worker:test", fetch=fetch) is False
+    entry["input"]["sender"] = "@other:test"
+    assert protocol.requires_room_history(entry, "@worker:test", fetch=fetch) is True
+    entry["input"] = {"sender": "@lead:test", "content": {"body": "continue"}}
+    assert protocol.requires_room_history(entry, "@worker:test", fetch=fetch) is True
+
+
+def test_verified_closure_uses_completed_task_results_without_chat_replay(packet):
+    content, receipt, _, plan, fetch = packet
+    for control in [content["org.agentteams.coordination"], receipt["control"]]:
+        control["channel_meta"]["teamharness_coordination"].update(kind="main_task_ready",task_id="",delivery_id="")
+    receipt["native_id"] = "matrix:$ready"
+    entry = {"room_id": "!room:test", "event_id": "$ready", "input": {"sender": "@lead:test", "content": content}}
+    assert protocol.requires_room_history(entry, "@worker:test", fetch=fetch) is False
+    plan["tasks"][0]["status"] = "in_progress"
+    assert protocol.requires_room_history(entry, "@worker:test", fetch=fetch) is True
+
+
+def test_task_context_lookup_failure_does_not_fall_back_to_chat(packet):
+    content = packet[0]
+    entry = {"room_id": "!room:test", "event_id": "$ready", "input": {"sender": "@lead:test", "content": content}}
+    def unavailable(path):
+        raise OSError("authority offline")
+    with pytest.raises(protocol.NotificationUnavailable):
+        protocol.requires_room_history(entry, "@worker:test", fetch=unavailable)
+
+
+def test_task_room_followup_uses_task_binding_instead_of_history():
+    entry = {"room_id": "!task:test", "event_id": "$followup", "input": {"sender": "@human:test", "content": {"body": "continue"}}}
+    assert protocol.requires_room_history(entry, "@worker:test", fetch=lambda path: {"taskId": "main"}) is False
+    assert protocol.requires_room_history(entry, "@worker:test", fetch=lambda path: {}) is True
+
+
+def test_joined_completed_task_room_uses_controller_binding_not_message_claims():
+    rooms = {"!configured:at": "personal"}
+    fetch = Mock(side_effect=[{"taskId": "main-done", "teamId": "alpha"}, {}])
+    protocol.include_task_rooms(rooms, ["!configured:at", "!completed:at", "!unrelated:at"], fetch=fetch)
+    assert rooms == {"!configured:at": "personal", "!completed:at": "team"}
+    assert [call.args[0] for call in fetch.call_args_list] == [
+        "tasks/room-context?roomId=%21completed%3Aat", "tasks/room-context?roomId=%21unrelated%3Aat"]
+
+
+def test_task_room_discovery_keeps_foreign_rooms_out_and_retries_unavailable_authority():
+    from urllib.error import HTTPError
+    rooms = {}
+    protocol.include_task_rooms(rooms, ["!foreign:at"], fetch=Mock(side_effect=HTTPError("http://controller", 403, "forbidden", {}, None)))
+    assert not rooms
+    with pytest.raises(HTTPError):
+        protocol.include_task_rooms(rooms, ["!retry:at"], fetch=Mock(side_effect=HTTPError("http://controller", 503, "unavailable", {}, None)))
+    assert not rooms

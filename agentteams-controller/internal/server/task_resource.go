@@ -125,6 +125,13 @@ func (h *ProjectHandler) GetTaskResource(w http.ResponseWriter, r *http.Request)
 		// Closure consumes saved accepted evidence, never guessed task identities.
 		storedNodes, _ := record["tasks"].([]any)
 		for i, node := range resource.Nodes {
+			if isSafeTaskID(node.TaskID) && node.TaskID != id {
+				data, err := h.oss.GetObject(r.Context(), path.Join(path.Dir(path.Dir(key)), node.TaskID, "meta.json"))
+				var current map[string]any
+				if err == nil && json.Unmarshal(data, &current) == nil && current["main_task_id"] == id && current["task_id"] == node.TaskID {
+					resource.Nodes[i].Spec = coordinationString(current, "spec")
+				}
+			}
 			if node.Status != "completed" {
 				continue
 			}

@@ -154,22 +154,11 @@ jobs:
             'pytest>=8.3,<10' \
             'pytest-asyncio>=0.23,<2'
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: agentteams-controller/go.mod
-          cache-dependency-path: agentteams-controller/go.sum
-      - name: Build Task CLI for adapter tests
-        working-directory: agentteams-controller
-        run: |
-          mkdir -p "$RUNNER_TEMP/qwenpaw-bin"
-          go build -o "$RUNNER_TEMP/qwenpaw-bin/agt" ./cmd/agt
-          echo "$RUNNER_TEMP/qwenpaw-bin" >> "$GITHUB_PATH"
-
-      - name: Run QwenPaw tests against repository source
+      # The complete native suite runs in agentteams-harness-qwenpaw.
+      - name: Run shared Matrix reload and Task recovery integration checks
         env:
           AGENTTEAMS_CORE_SOURCE: ${{ github.workspace }}
         run: |
-          python -m pytest qwenpaw/tests -q
           python -m pytest plugins/tests/agentteams-matrix/test_qwenpaw_reload_delivery.py -q
           PYTHONPATH=shared/lib python -m pytest plugins/tests/agentteams-matrix/test_qwenpaw_task_recovery.py -q
 
@@ -780,7 +769,7 @@ jobs:
           python -m pip install \
             'matrix-nio[e2e]>=0.26,<0.27' \
             'PyYAML>=6.0,<7' \
-            'qwenpaw>=2.2.1,<2.3' \
+            -e ./qwenpaw \
             'pytest>=8.3,<10' \
             'pytest-asyncio>=0.23,<2'
 

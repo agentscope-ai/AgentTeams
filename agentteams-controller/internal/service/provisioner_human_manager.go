@@ -25,7 +25,7 @@ func (p *Provisioner) EnsureHumanManagerRoom(ctx context.Context, req HumanManag
 	if roomID == "" {
 		managerID := p.matrix.UserID("manager")
 		room, err := p.matrix.CreateRoom(ctx, matrix.CreateRoomRequest{
-			Name: "AT助手", Topic: fmt.Sprintf("Private Manager conversation for %s", req.HumanName),
+			Name: "AgentTeams助手", Topic: fmt.Sprintf("Private Manager conversation for %s", req.HumanName),
 			CreatorToken: token, Invite: []string{req.HumanMatrixID}, IsDirect: true,
 			PowerLevels:   map[string]int{managerID: 100, req.HumanMatrixID: 100},
 			InitialState:  roomMetaState(managerDMRoomMeta(req.ManagerName, managerID, req.HumanMatrixID, req.HumanName)),

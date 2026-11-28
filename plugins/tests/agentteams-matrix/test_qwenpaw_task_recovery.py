@@ -457,8 +457,8 @@ def test_reply_uses_saved_transaction_and_requires_matrix_event_id(native_channe
         assert await channel.send_task_reply("!room", "saved result", "stable-txn", {"team_id": "team", "task_id": "T", "generation": 2}) == "$persisted"
         channel._room_send_with_retry.assert_awaited_once_with("!room", "m.room.message", {
             "msgtype": "m.text", "body": "saved result", "org.agentteams.progress_only": True, "org.agentteams.reply_txn": "stable-txn",
-            "org.agentteams.run_id": "qwenpaw:task:team:T:2",
-            "org.agentteams.run": {"version": "1", "run_id": "qwenpaw:task:team:T:2", "blocks": [{"type": "text", "text": "saved result"}]},
+            "org.agentteams.run_id": "task:team:T:2",
+            "org.agentteams.run": {"version": "1", "run_id": "task:team:T:2", "blocks": [{"type": "text", "text": "saved result"}]},
         }, tx_id="stable-txn")
         channel._room_send_with_retry.return_value = SimpleNamespace()
         with pytest.raises(RuntimeError, match="not acknowledged"):
@@ -854,7 +854,7 @@ def test_nio_sync_retries_from_authority_and_dispatches_after_ordered_commit(nat
         order.append("commit")
         return copy.deepcopy(state)
     matrix.ingest = ingest
-    channel._task_execution = SimpleNamespace(matrix=matrix, lock=asyncio.Lock())
+    channel._task_execution = SimpleNamespace(matrix=matrix, lock=asyncio.Lock(), supplement=AsyncMock(return_value=False))
     channel._enqueue = lambda payload: order.append(payload["meta"]["event_id"])
     runner = ManagedNioSync(channel, channel._task_execution)
     def event(event_id, body):
@@ -909,7 +909,7 @@ def test_nio_history_page_uses_immutable_anchor_and_native_policy(native_channel
     channel._client = client
     client.rooms[room] = nio.MatrixRoom(room, worker)
     matrix = WorkerMatrix("qwenpaw", recovery=SimpleNamespace())
-    channel._task_execution = SimpleNamespace(matrix=matrix, lock=asyncio.Lock())
+    channel._task_execution = SimpleNamespace(matrix=matrix, lock=asyncio.Lock(), supplement=AsyncMock(return_value=False))
     runner = ManagedNioSync(channel, channel._task_execution)
     channel._is_dm_room = AsyncMock(return_value=True)
     channel._announce_session_receipts = AsyncMock()
@@ -957,6 +957,8 @@ def test_pending_ordinary_message_rebuilds_then_retries_only_saved_reply(native_
     from qwenpaw_matrix_sync import ManagedNioSync
     from qwenpaw_message_execution import MessageExecution
     from worker_matrix_state import matrix_event_key
+
+    monkeypatch.setattr("task_coordination.controller_json", lambda _path: {})
 
     worker, room, event_id = "@worker:hs", "!room:hs", "$original"
     key = matrix_event_key(room, event_id)
@@ -1020,7 +1022,8 @@ def test_pending_ordinary_message_rebuilds_then_retries_only_saved_reply(native_
         message_save_reply=store, message_checkpoint=bind, message_delivered=delivered)
     sessions = SimpleNamespace(load=lambda work: {"generation": 2, "checkpoint_digest": Recovery.digest(state["checkpoint"]),
         "cache": {"native_ref": "matrix:message:" + key + ":lost"}})
-    execution = SimpleNamespace(matrix=matrix, sessions=sessions, lock=asyncio.Lock())
+    execution = SimpleNamespace(matrix=matrix, sessions=sessions, lock=asyncio.Lock(),
+                                supplement=AsyncMock(return_value=False))
     execution.messages = MessageExecution(channel, execution)
     channel._task_execution = execution
     runner = ManagedNioSync(channel, execution)
@@ -1096,7 +1099,8 @@ def test_qwenpaw_native_tool_hook_holds_unknown_effects(native_channel, outcome)
         yield ToolResponse(state="success" if outcome == "late_timeout" else outcome, content=[TextBlock(text="saved")])
         if outcome == "late_timeout":
             raise TimeoutError("tool stream disconnected during finalization")
-    agent = SimpleNamespace(_acting_middlewares=[module.SessionReceiptMiddleware(ctx)], _acting_impl=invoke)
+    agent = SimpleNamespace(_acting_middlewares=[module.SessionReceiptMiddleware(ctx)], _acting_impl=invoke,
+                            toolkit=SimpleNamespace(get_tool=AsyncMock(return_value=None)))
     async def scenario():
         if outcome == "success":
             results = [r async for r in Agent._acting(agent, call)]
@@ -1175,7 +1179,7 @@ def test_late_assignment_is_observed_in_existing_task_session(adapter, native_ch
     address = {"session_id": session, "user_id": room, "channel": channel.channel}
     client = channel._client = nio.AsyncClient("https://hs", "@worker:hs", "D")
     client.rooms[room] = nio.MatrixRoom(room, "@worker:hs")
-    channel._session_receipts = SimpleNamespace(submit=AsyncMock())
+    channel._session_receipts = SimpleNamespace(submit=AsyncMock(), was_completed=AsyncMock(return_value=False))
     channel.enqueue_recovered_task = AsyncMock()
     authority.claim = Mock(side_effect=AssertionError("Existing Task must not be claimed or executed again"))
     execution.admitted.add(admission)

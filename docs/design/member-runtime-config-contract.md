@@ -11,6 +11,43 @@ normally use environment/file bindings. Existing remote-managed compatibility
 fields may carry explicitly projected credentials; consumers must not copy a
 native device token into the standard transport policy.
 
+## Configuration UI authority
+
+Dashboard configuration pages are clients of Controller's standard desired state,
+not clients of a Harness's native configuration API. Model connection, MCP
+assignments and per-service approval overrides, Skills, environment variables and
+Agent-wide approval use the same fields and write paths for every runtime.
+Changing `member.runtime` must not select a different configuration page or
+replace the user's settings with a native registry snapshot.
+
+MCP configuration lists contain the assigned standard `mcpServers` only. Native
+self-registration can be diagnostic data, but must not override names, addresses,
+permissions or editability in that list. Empty assignments are meaningful even
+when the Agent is stopped or the native registry endpoint is unavailable.
+
+A save updates the owned standard fields through Controller. Controller publishes
+`runtime.yaml`; each Harness materializes its native format internally. Do not
+add Dashboard runtime-name branches, direct native-file writes, or Core
+runtime-to-runtime converters to implement these shared settings. Legacy native
+editors must not provide a competing write path in the standard settings pages.
+Removing an old editor entry does not erase stored native files or establish
+feature parity for parameters that have no standard field yet.
+
+Keep only necessary shared settings in this standard. Do not add duplicate
+records for a legacy native editor. A common setting that a Harness does not yet
+consume must be disabled with an explicit unsupported explanation; accepting a
+save and silently ignoring it is not support. For example, `desired.heartbeat`
+is a shared setting, but only the implemented native consumer may enable its
+configuration control. Retired UI entries must preserve existing stored values.
+Environment bindings remain in the existing resource/injection path; UI
+unification is not a reason to duplicate secrets into another YAML document.
+
+Configuration acceptance covers the same page, exact partial-update payload,
+readback, permissions and retained settings across QwenPaw, Hermes, DeepSeek,
+Claude Code and Codex. Real Harness consumption and runtime switching are
+separate acceptance checks; UI tests alone do not prove them. Native sessions,
+logs and execution diagnostics are runtime outputs, not configuration authority.
+
 ## Storage Path
 
 Canonical object path (relative to the tenant/installation storage root):

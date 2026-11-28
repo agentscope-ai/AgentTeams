@@ -10,13 +10,26 @@ $assignment = $ast.Find({ param($node)
     $node.Left.Extent.Text -eq '$script:CODEX_WORKER_IMAGE'
 }, $true)
 if (-not $assignment) { throw 'Codex image resolver missing' }
-$script:AGENTTEAMS_CODEX_WORKER_VERSION = 'v0.1.0'
+$versionAssignment = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $node.Left.Extent.Text -eq '$codexVersion'
+}, $true)
+if (-not $versionAssignment) { throw 'Codex version resolver missing' }
+$script:AGENTTEAMS_VERSION = 'v1.2.9'
+$script:AGENTTEAMS_CODEX_WORKER_VERSION = ''
 $script:AGENTTEAMS_REGISTRY = 'example.test'
 Remove-Item Env:AGENTTEAMS_INSTALL_CODEX_WORKER_IMAGE -ErrorAction SilentlyContinue
 Remove-Item Env:AGENTTEAMS_CODEX_WORKER_IMAGE -ErrorAction SilentlyContinue
+Invoke-Expression $versionAssignment.Extent.Text
+Invoke-Expression $assignment.Extent.Text
+if ($script:CODEX_WORKER_IMAGE -ne 'example.test/agentteams/agentteams-harness-codex:v1.2.9') {
+    throw 'Default Codex image missing'
+}
+$script:AGENTTEAMS_CODEX_WORKER_VERSION = 'v0.1.0'
+Invoke-Expression $versionAssignment.Extent.Text
 Invoke-Expression $assignment.Extent.Text
 if ($script:CODEX_WORKER_IMAGE -ne 'example.test/agentteams/agentteams-harness-codex:v0.1.0') {
-    throw 'Default Codex image missing'
+    throw 'Explicit Codex version ignored'
 }
 $env:AGENTTEAMS_CODEX_WORKER_IMAGE = 'example.test/codex:saved'
 Invoke-Expression $assignment.Extent.Text

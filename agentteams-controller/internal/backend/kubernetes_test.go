@@ -186,12 +186,14 @@ func newTestK8sBackend(objects ...*corev1.Pod) *K8sBackend {
 func newTestK8sBackendWithFake(extra K8sConfig, objects ...*corev1.Pod) (*K8sBackend, *fakeK8sCoreClient) {
 	client := newFakeK8sCoreClient(objects...)
 	cfg := K8sConfig{
-		Namespace:        "agentteams",
-		WorkerImage:      "agentteams/worker-agent:latest",
-		CopawWorkerImage: "agentteams/copaw-worker:latest",
-		WorkerCPU:        "1000m",
-		WorkerMemory:     "2Gi",
-		ControllerName:   extra.ControllerName,
+		Namespace:          "agentteams",
+		QwenPawWorkerImage: "agentteams/worker-agent:latest",
+		CodexWorkerImage:   "agentteams/worker-agent:latest",
+		WorkerImage:        "agentteams/worker-agent:latest",
+		CopawWorkerImage:   "agentteams/copaw-worker:latest",
+		WorkerCPU:          "1000m",
+		WorkerMemory:       "2Gi",
+		ControllerName:     extra.ControllerName,
 	}
 	return NewK8sBackendWithClient(client, cfg, "agentteams-worker-", nil), client
 }
@@ -636,12 +638,14 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := newFakeK8sCoreClient()
 			b := NewK8sBackendWithClient(client, K8sConfig{
-				Namespace:         "agentteams",
-				WorkerImage:       "agentteams/worker-agent:latest",
-				CopawWorkerImage:  "agentteams/copaw-worker:latest",
-				HermesWorkerImage: "agentteams/hermes-worker:latest",
-				WorkerCPU:         "1000m",
-				WorkerMemory:      "2Gi",
+				Namespace:          "agentteams",
+				QwenPawWorkerImage: "agentteams/worker-agent:latest",
+				CodexWorkerImage:   "agentteams/worker-agent:latest",
+				WorkerImage:        "agentteams/worker-agent:latest",
+				CopawWorkerImage:   "agentteams/copaw-worker:latest",
+				HermesWorkerImage:  "agentteams/hermes-worker:latest",
+				WorkerCPU:          "1000m",
+				WorkerMemory:       "2Gi",
 			}, "agentteams-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{
@@ -690,7 +694,7 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_claudecode", RuntimeClaudeCode, "", "agentteams/claudecode-harness:v1", RuntimeClaudeCode},
 		{"explicit_deepseek_harness", RuntimeDeepSeekHarness, "", "agentteams/deepseek-harness-worker:latest", RuntimeDeepSeekHarness},
 		{"explicit_openclaw", RuntimeOpenClaw, "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
-		{"empty_no_fallback", "", "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
+		{"empty_no_fallback", "", "", "agentteams/codex-harness:v1", RuntimeCodex},
 		{"empty_with_copaw_fallback", "", RuntimeCopaw, "agentteams/copaw-worker:latest", RuntimeCopaw},
 		{"empty_with_hermes_fallback", "", RuntimeHermes, "agentteams/hermes-worker:latest", RuntimeHermes},
 		{"empty_with_qwenpaw_fallback", "", RuntimeQwenPaw, "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
@@ -880,8 +884,10 @@ func TestK8sCreate_SetsControllerReferenceFromOwner(t *testing.T) {
 
 	client := newFakeK8sCoreClient()
 	b := NewK8sBackendWithClient(client, K8sConfig{
-		Namespace:   "agentteams",
-		WorkerImage: "agentteams/worker-agent:latest",
+		Namespace:          "agentteams",
+		QwenPawWorkerImage: "agentteams/worker-agent:latest",
+		CodexWorkerImage:   "agentteams/worker-agent:latest",
+		WorkerImage:        "agentteams/worker-agent:latest",
 	}, "agentteams-worker-", scheme)
 
 	owner := &v1beta1.Worker{
@@ -928,7 +934,7 @@ func TestK8sCreate_SetsControllerReferenceFromOwner(t *testing.T) {
 // error we want to catch loudly rather than silently drop the ownerRef.
 func TestK8sCreate_OwnerRequiresScheme(t *testing.T) {
 	client := newFakeK8sCoreClient()
-	b := NewK8sBackendWithClient(client, K8sConfig{Namespace: "agentteams", WorkerImage: "img"}, "agentteams-worker-", nil)
+	b := NewK8sBackendWithClient(client, K8sConfig{Namespace: "agentteams", QwenPawWorkerImage: "img"}, "agentteams-worker-", nil)
 
 	owner := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "agentteams", UID: "u"},
@@ -1043,11 +1049,13 @@ func TestBuildDefaultResources_EmptyFallback(t *testing.T) {
 func TestK8sCreate_CustomResourcePrefix(t *testing.T) {
 	client := newFakeK8sCoreClient()
 	cfg := K8sConfig{
-		Namespace:      "agentteams",
-		WorkerImage:    "agentteams/worker-agent:latest",
-		WorkerCPU:      "1000m",
-		WorkerMemory:   "2Gi",
-		ResourcePrefix: "teamB-",
+		Namespace:          "agentteams",
+		QwenPawWorkerImage: "agentteams/worker-agent:latest",
+		CodexWorkerImage:   "agentteams/worker-agent:latest",
+		WorkerImage:        "agentteams/worker-agent:latest",
+		WorkerCPU:          "1000m",
+		WorkerMemory:       "2Gi",
+		ResourcePrefix:     "teamB-",
 	}
 	b := NewK8sBackendWithClient(client, cfg, "teamB-worker-", nil)
 
@@ -1076,9 +1084,11 @@ func TestK8sCreate_CustomResourcePrefix(t *testing.T) {
 func TestK8sCreate_DefaultSAFallback(t *testing.T) {
 	client := newFakeK8sCoreClient()
 	cfg := K8sConfig{
-		Namespace:      "agentteams",
-		WorkerImage:    "agentteams/worker-agent:latest",
-		ResourcePrefix: "acme-",
+		Namespace:          "agentteams",
+		QwenPawWorkerImage: "agentteams/worker-agent:latest",
+		CodexWorkerImage:   "agentteams/worker-agent:latest",
+		WorkerImage:        "agentteams/worker-agent:latest",
+		ResourcePrefix:     "acme-",
 	}
 	b := NewK8sBackendWithClient(client, cfg, "acme-worker-", nil)
 
@@ -1119,8 +1129,10 @@ func TestK8sCreate_LocalKeepsOwnerReference(t *testing.T) {
 
 	client := newFakeK8sCoreClient()
 	b := NewK8sBackendWithClient(client, K8sConfig{
-		Namespace:   "agentteams",
-		WorkerImage: "agentteams/worker-agent:latest",
+		Namespace:          "agentteams",
+		QwenPawWorkerImage: "agentteams/worker-agent:latest",
+		CodexWorkerImage:   "agentteams/worker-agent:latest",
+		WorkerImage:        "agentteams/worker-agent:latest",
 	}, "agentteams-worker-", scheme)
 
 	owner := &v1beta1.Worker{

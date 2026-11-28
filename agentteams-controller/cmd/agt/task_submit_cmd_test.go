@@ -81,6 +81,42 @@ func TestTaskSubmitPublishesFromTaskDirectoryAndReturnsNotificationToTool(t *tes
 	}
 }
 
+func TestTaskSubmitOptionalHandoffReachesAPI(t *testing.T) {
+	for _, note := range []string{"", "请独立验证离线交互。"} {
+		t.Run(note, func(t *testing.T) {
+			shared := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(shared, "tasks/t1/workspace"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if value, exists := body["handoff"]; (note == "" && exists) || (note != "" && value != note) {
+					t.Errorf("optional handoff changed: %v", body)
+				}
+				_, _ = w.Write([]byte(`{"task":{"id":"t1"}}`))
+			}))
+			defer server.Close()
+			t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
+			t.Setenv("AGENTTEAMS_AUTH_TOKEN", "test-token")
+			t.Setenv("AGENTTEAMS_PROCESS_ID", "process-one")
+			t.Setenv("TEAMHARNESS_SHARED_DIR", shared)
+			cmd := newRootCommand("agt")
+			cmd.SetOut(io.Discard)
+			args := []string{"task", "submit", "t1", "--summary", "Actual result"}
+			if note != "" {
+				args = append(args, "--handoff", note)
+			}
+			cmd.SetArgs(args)
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestTaskSubmitPreflightsAllOutputsBeforePublishing(t *testing.T) {
 	for _, scenario := range []string{"missing", "escape", "duplicate"} {
 		t.Run(scenario, func(t *testing.T) {

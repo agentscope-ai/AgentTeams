@@ -152,13 +152,13 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 		switch {
 		case req.Runtime == RuntimeCopaw:
 			workerImage = s.config.CopawWorkerImage
-		case req.Runtime == RuntimeHermes && s.config.HermesWorkerImage != "":
+		case req.Runtime == RuntimeHermes:
 			workerImage = s.config.HermesWorkerImage
-		case req.Runtime == RuntimeOpenHuman && s.config.OpenHumanWorkerImage != "":
+		case req.Runtime == RuntimeOpenHuman:
 			workerImage = s.config.OpenHumanWorkerImage
-		case req.Runtime == RuntimeQwenPaw && s.config.QwenPawWorkerImage != "":
+		case req.Runtime == RuntimeQwenPaw:
 			workerImage = s.config.QwenPawWorkerImage
-		case req.Runtime == RuntimeDeepSeekHarness && s.config.DeepSeekHarnessWorkerImage != "":
+		case req.Runtime == RuntimeDeepSeekHarness:
 			workerImage = s.config.DeepSeekHarnessWorkerImage
 		case req.Runtime == RuntimeOpenCode:
 			workerImage = s.config.OpenCodeWorkerImage
@@ -177,7 +177,7 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 			}
 		case req.Runtime == RuntimeQoder:
 			return nil, fmt.Errorf("qoder runtime requires an explicitly built spec.image")
-		case s.config.WorkerImage != "":
+		case req.Runtime == RuntimeOpenClaw:
 			workerImage = s.config.WorkerImage
 		}
 	}

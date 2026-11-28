@@ -5,7 +5,7 @@
 # Used locally and in CI/CD (GitHub Actions).
 #
 # Usage:
-#   make build                    # Build all images (native arch, local)
+#   make build                    # Build Core-context images (Codex/Claude use publish-harnesses)
 #   make build-manager            # Build Manager image only
 #   make build-worker             # Build Worker image only
 #   make test                     # Build + run all integration tests
@@ -21,7 +21,7 @@
 # ---------- Configuration ----------
 
 VERSION        ?= latest
-DEEPSEEK_HARNESS_WORKER_VERSION ?= v1.2.8
+DEEPSEEK_HARNESS_WORKER_VERSION ?= $(VERSION)
 REGISTRY       ?= higress-registry.cn-hangzhou.cr.aliyuncs.com
 REPO           ?= agentteams
 
@@ -128,7 +128,7 @@ all: build
 
 # ---------- Build ----------
 
-build: build-manager build-manager-qwenpaw build-worker build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-agentteams-controller ## Build shared Harness images and local role aliases
+build: build-manager-qwenpaw build-hermes-worker build-openhuman-worker build-qwenpaw-worker build-deepseek-harness-worker build-agentteams-controller ## Build Core-context Harness images and local role aliases; Codex/Claude use publish-harnesses
 
 build-openclaw-base: ## Build OpenClaw base image
 	@echo "==> Building OpenClaw base image: $(LOCAL_OPENCLAW_BASE) (registry: $(HIGRESS_REGISTRY))"
@@ -292,7 +292,7 @@ else
 	fi
 endif
 
-push: push-worker push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-agentteams-controller push-embedded ## Build + push shared Harness images; experimental runtimes publish independently
+push: push-hermes-worker push-openhuman-worker push-qwenpaw-worker push-deepseek-harness-worker push-agentteams-controller push-embedded ## Build + push shared Harness images; experimental runtimes publish independently
 
 push-openclaw-base: buildx-setup ## Build + push multi-arch OpenClaw base image
 	@echo "==> Building + pushing multi-arch OpenClaw base: $(OPENCLAW_BASE_TAG) [$(MULTIARCH_PLATFORMS)]"
@@ -655,8 +655,8 @@ uninstall: ## Stop and remove Manager + all Worker containers
 		if [ -n "$$WORKSPACE_DIR" ] && [ -d "$$WORKSPACE_DIR" ]; then \
 			PARENT=$$(dirname "$$WORKSPACE_DIR"); \
 			BASE=$$(basename "$$WORKSPACE_DIR"); \
-			RUNTIME=$$(grep '^AGENTTEAMS_MANAGER_RUNTIME=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "openclaw"); \
-			if [ "$$RUNTIME" = "copaw" ]; then \
+			RUNTIME=$$(grep '^AGENTTEAMS_MANAGER_RUNTIME=' "$$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "qwenpaw"); \
+			if [ "$$RUNTIME" != "openclaw" ]; then \
 				RM_IMAGE="$(LOCAL_MANAGER_QWENPAW)"; \
 			else \
 				RM_IMAGE="$(LOCAL_MANAGER)"; \

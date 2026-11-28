@@ -8,6 +8,7 @@ import (
 
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/httputil"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -322,10 +323,7 @@ func (h *ResourceHandler) writeWorkerModelAccess(ctx context.Context, w http.Res
 		}
 	}
 
-	runtime := worker.Spec.Runtime
-	if runtime == "" {
-		runtime = "openclaw"
-	}
+	runtime := backend.ResolveRuntime(worker.Spec.Runtime, h.defaultWorkerRuntime)
 	// writeVia records the identity that executes the write through this
 	// release's REAL write entries — not a guess:
 	//   - the model fields (main/spawn) are L1-only: the scoped-writer

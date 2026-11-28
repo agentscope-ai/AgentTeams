@@ -10,6 +10,7 @@ import (
 // --- Worker API types ---
 
 type CreateWorkerRequest struct {
+	ApprovalMode                 string                             `json:"approvalMode,omitempty"`
 	LlmHeartbeatEnabled          *bool                              `json:"llmHeartbeatEnabled,omitempty"`
 	Env                          map[string]string                  `json:"env,omitempty"`
 	Name                         string                             `json:"name"`
@@ -51,6 +52,7 @@ type CreateWorkerRequest struct {
 // UpdateWorkerRequest preserves modelProvider when omitted or null and clears it
 // when an explicit empty string is supplied.
 type UpdateWorkerRequest struct {
+	ApprovalMode        *string           `json:"approvalMode,omitempty"`
 	LlmHeartbeatEnabled *bool             `json:"llmHeartbeatEnabled,omitempty"`
 	Env                 map[string]string `json:"env,omitempty"`
 	WorkerName          string            `json:"workerName,omitempty"`
@@ -94,6 +96,7 @@ type UpdateWorkerRequest struct {
 }
 
 type WorkerResponse struct {
+	ApprovalMode        string            `json:"approvalMode,omitempty"`
 	LlmHeartbeatEnabled *bool             `json:"llmHeartbeatEnabled,omitempty"`
 	EnvEditable         bool              `json:"envEditable"`
 	Env                 map[string]string `json:"env,omitempty"`
@@ -676,6 +679,7 @@ type ModelAccessTableListResponse struct {
 // --- Manager API types ---
 
 type CreateManagerRequest struct {
+	ApprovalMode  string                             `json:"approvalMode,omitempty"`
 	Name          string                             `json:"name"`
 	Model         string                             `json:"model"`
 	ModelProvider string                             `json:"modelProvider,omitempty"`
@@ -693,6 +697,7 @@ type CreateManagerRequest struct {
 }
 
 type UpdateManagerRequest struct {
+	ApprovalMode  *string                            `json:"approvalMode,omitempty"`
 	Env           map[string]string                  `json:"env,omitempty"`
 	Model         string                             `json:"model,omitempty"`
 	ModelProvider *string                            `json:"modelProvider,omitempty"`
@@ -710,11 +715,12 @@ type UpdateManagerRequest struct {
 }
 
 type ManagerResponse struct {
-	Ready bool   `json:"ready"`
-	Name  string `json:"name"`
-	Phase string `json:"phase"`
-	State string `json:"state,omitempty"` // desired lifecycle state
-	Model string `json:"model,omitempty"`
+	ApprovalMode string `json:"approvalMode,omitempty"`
+	Ready        bool   `json:"ready"`
+	Name         string `json:"name"`
+	Phase        string `json:"phase"`
+	State        string `json:"state,omitempty"` // desired lifecycle state
+	Model        string `json:"model,omitempty"`
 	// ModelProvider mirrors ManagerSpec.ModelProvider (APIG Model API name).
 	ModelProvider string `json:"modelProvider,omitempty"`
 	Runtime       string `json:"runtime,omitempty"`

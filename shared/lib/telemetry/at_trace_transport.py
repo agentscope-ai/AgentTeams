@@ -3,7 +3,6 @@
 import os
 import copy
 import json
-import time
 from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -181,23 +180,6 @@ def matrix_client(module, path, content_index):
     wrapt.wrap_function_wrapper(module, path, send)
 
 
-def hermes_gateway(module):
-    async def receive(wrapped, instance, args, kwargs):
-        event = args[0] if args else kwargs["event"]
-        raw = event.raw_message
-        content = getattr(raw, "content", raw.get("content", raw) if isinstance(raw, dict) else {})
-        fields = {**telemetry._correlation.get(), **incoming(content, room_id=event.source.chat_id, event_id=event.message_id)}
-        fields["agentteams.message.received_at_ns"] = time.time_ns()
-        token = telemetry._correlation.set(fields)
-        delivery_token = _delivery.set({})
-        try:
-            # Native gateway creates its tasks here, copying ContextVars.
-            return await wrapped(*args, **kwargs)
-        finally:
-            _delivery.reset(delivery_token)
-            telemetry._correlation.reset(token)
-
-    wrapt.wrap_function_wrapper(module, "BasePlatformAdapter.handle_message", receive)
 
 
 def subprocesses(module):
@@ -223,7 +205,6 @@ def install():
         telemetry._correlation.set({k: str(v) for k, v in baggage.get_all(ctx).items() if k.startswith("agentteams.")})
     wrapt.register_post_import_hook(lambda m: matrix_client(m, "AsyncClient.room_send", 2), "nio")
     wrapt.register_post_import_hook(lambda m: matrix_client(m, "Client.send_message_event", 2), "mautrix.client")
-    wrapt.register_post_import_hook(hermes_gateway, "gateway.platforms.base")
     wrapt.register_post_import_hook(subprocesses, "subprocess")
     wrapt.register_post_import_hook(mcp_client, "mcp.client.session")
     wrapt.register_post_import_hook(urllib_requests, "urllib.request")

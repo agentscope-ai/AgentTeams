@@ -83,3 +83,34 @@ go test ./internal/server -run '^TestQwenPawLangfuseAcceptance$' -count=1 -v -ti
 ```
 
 默认单元测试跳过这项外部服务验收。常规回归覆盖 Controller 配置持久化、脱敏、并发保存、创建时注入、已有 Worker 应用、分页完整性、越权、CLI 和 QwenPaw MCP 环境继承。Dashboard 初次构建受三个既有路由导出的测试辅助符号阻断；该问题在独立的 [Dashboard PR #224](https://github.com/agentteams-group/agentteams-dashboard/pull/224) 修复，其完整生产构建和 3803 条测试已通过。配套配置改造需基于该修复继续验收。
+
+
+## 五运行时统一 Trace 验收要求（1.2.9）
+
+本节将验收范围扩展到 QwenPaw、Hermes、DeepSeek、Claude Code 和 Codex。上文 QwenPaw 方案和历史结果不能代替其余运行时验收。目标是从一个主任务准确找到跨 Worker 的实际执行轮次，并以真实模型、工具、交接与重试数据分析瓶颈；有 Trace 列表或展示字段不等于验收通过。
+
+### 关联字段与来源
+
+- `agentteams.task.id` 标识本轮实际执行的任务或执行节点；`agentteams.main_task.id` 保留主任务身份。执行节点与主任务不能混写。无任务的普通对话不伪造任务 ID。
+- `agentteams.worker.name` 标识 AT 运行成员；`gen_ai.agent.id` / `gen_ai.agent.name` 用于 Agent 身份识别，保留原生 SDK 的子 Agent 层次。团队使用 `agentteams.team.id`；运行时、会话、run/turn 和 execution generation 同时保留，区分重试与重复展示。
+- 身份来自 Controller 权威 Task/成员配置与已授权运行上下文，不从模型正文、页面显示名称或任意工具参数推断。Core 负责公共定义、权限和查询语义；Harness 负责原生 span、会话及 carrier 的正确映射。
+- Task 相关元数据应在根执行、模型、工具、HTTP 及消息交接记录中可核对。异步子任务不能丢失关联，也不能错误继承另一名 Worker 或另一任务的上下文。
+
+### 必须用真实数据验收
+
+1. 每个运行时选一个已交付主任务，按主任务 ID 查出分析、开发、独立测试、转待审核、Leader 收尾的实际执行；再逐个按执行节点、Worker/Agent、团队筛选并比对同一组 trace ID。
+2. 查询覆盖分页、较早任务、补充需求、重试与失败轮次；返回完整性状态。后端分页失败、缺失元数据或缺少某阶段必须明确报告，不能悄悄返回部分结果并声称完整。
+3. 跨 Worker 交接保留真实 W3C parent/carrier、span link 或明确上游 trace/span 引用。任务 DAG 是业务依赖，不能凭依赖关系伪造分布式 span 的父子链。关联视图同时展示业务节点和实际因果链接。
+4. 使用原生事件时间计算模型、工具、排队及交接耗时；缓冲后集中上报不能将事件时间改成刷出时间。可定位通知发布、输入接收、原生推理开始和答复投递各段耗时。
+5. 核对模型用量、工具结果/错误、终态与运行边界。内容采集的实际开关和截断状态必须清晰；未启用输入输出采集时，不宣称已验收完整正文数据。凭证继续按既有规则脱敏。
+6. 以其他团队/Worker 的反例验证查询隔离，不因按主任务聚合而扩大私聊和团队访问权限。页面、Controller API 与 Agent CLI 的筛选与权限应一致。
+
+### 当前核查发现，不计通过
+
+实际 Controller 查询已读到 QwenPaw/Hermes 的执行节点、成员、团队等元数据；同一主任务标识尚需补齐。Claude 列表存在 trace 与任务标签，但本次返回的 metadata 为空。Codex 和 DeepSeek 的指定 Worker 查询在该窗口为空，需要分别核对采集、标签和查询过滤，不能直接判定未采集。现有详细任务聚合入口以 Project 为前提，必须补验无 Project 的主任务。原始抽样证据见本地 `output/129-unified-closeout/trace-metadata-audit-2239/actual-trace-metadata.json`，该文件不是发布验收完成证明。
+
+
+独立主任务查询入口：`GET /api/v1/tasks/{id}/traces?team=...`，不要求创建 Project。返回主任务及其执行节点的 Trace、逐页读取的 observations、真实因果引用和缺失项；任务 DAG 不伪装为原生 span 父子关系。通用列表可用 `main_task` 过滤器精确筛选；采集端保留 `agentteams.main_task.id` 及 `main_task:<id>` 标签。查询沿用 Task 的团队权限，后端查询失败不能返回完整成功状态。此接口源码测试通过不代表真实采集数据已完整，部署后仍须进行五运行时实际查询验收。
+
+
+规模约束：原生运行时可能产生数百条 Trace。详情查询应使用 observations 的 `traceId` 多值筛选，每批最多 100 个已授权 Trace ID，逐页读取并逐条验证归属；禁止逐 Trace 串行发起一次查询，也禁止截断记录后仍宣称完整。Langfuse 返回异常、分页缺失或越界 observation 时，整次查询返回失败。相关协议参考：https://js.reference.langfuse.com/%2F/interfaces/_langfuse_core.legacy.GetObservationsRequest.html 。本地实际 Langfuse v3 已验证该筛选可用；后端不支持时保留明确错误，不取消权限或范围筛选。

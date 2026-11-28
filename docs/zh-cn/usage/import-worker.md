@@ -194,7 +194,7 @@ worker-package.zip
 ```
 
 `worker.runtime`（`openclaw`、`qwenpaw`、`copaw`（旧版兼容）或 `hermes`）会被 `agt apply worker --zip` 读取，
-显式传入的 `--runtime` 参数优先级更高。两者都没设置时由 controller 兜底（默认 `openclaw`）。
+显式传入的 `--runtime` 参数优先级更高。两者都没设置时由 controller 兜底（默认 `qwenpaw`）。
 
 ## 场景一：迁移独立运行的 OpenClaw
 

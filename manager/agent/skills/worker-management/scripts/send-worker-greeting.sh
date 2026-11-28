@@ -47,7 +47,7 @@ if [ -z "${WORKER}" ] || [ -z "${ROOM}" ]; then
 fi
 
 DOMAIN="${AGENTTEAMS_MATRIX_DOMAIN:-matrix-local.agentteams.io:18080}"
-RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
+RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
 
 MENTION="@${WORKER}:${DOMAIN}"
 if [ -n "${CUSTOM_TEXT}" ]; then

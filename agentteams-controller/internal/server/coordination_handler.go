@@ -50,6 +50,7 @@ type coordinationEvent struct {
 	OriginEventID     string              `json:"origin_event_id,omitempty"`
 	RoomID            string              `json:"room_id,omitempty"`
 	Text              string              `json:"text"`
+	Handoff           string              `json:"handoff,omitempty"`
 	SourceRoute       map[string]any      `json:"source_route,omitempty"`
 	RequesterRoute    map[string]any      `json:"requester_route,omitempty"`
 	ID                string              `json:"id"`
@@ -354,14 +355,18 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 		}
 		switch e.Kind {
 		case "task_assigned":
+			e.Handoff = ""
+			var notices map[string]taskNotificationIntent
+			data, _ := json.Marshal(task["task_notifications"])
+			_ = json.Unmarshal(data, &notices)
+			intent := notices["assigned"]
+			if e.Protocol == "task/v1" {
+				e.Handoff = intent.Event.Handoff
+			}
 			if e.DeliveryID == "" || coordinationString(task, "notifyTxn") != e.DeliveryID {
 				return reject()
 			}
 			if caller.Role != authpkg.RoleTeamLeader {
-				var notices map[string]taskNotificationIntent
-				data, _ := json.Marshal(task["task_notifications"])
-				_ = json.Unmarshal(data, &notices)
-				intent := notices["assigned"]
 				if caller.Role != authpkg.RoleWorker || e.Protocol != "task/v1" || coordinationString(task, "task_plan_id") == "" || intent.ActorRole != caller.Role || intent.ActorName != actor.Name || intent.Event.DeliveryID != e.DeliveryID || intent.Event.TaskID != e.TaskID {
 					return reject()
 				}
@@ -407,15 +412,19 @@ func (h *CoordinationHandler) resolve(ctx context.Context, e coordinationEvent, 
 			fence = e.TaskID + "\x00" + e.SubmissionID
 
 		case "project_ready", "main_task_ready":
+			e.Handoff = ""
+			var notices map[string]taskNotificationIntent
+			data, _ := json.Marshal(project["task_notifications"])
+			_ = json.Unmarshal(data, &notices)
+			intent := notices["ready"]
+			if e.Protocol == "task/v1" {
+				e.Handoff = intent.Event.Handoff
+			}
 			if !coordinationReady(project) || (e.Kind == "main_task_ready") != (e.MainTaskID != "") {
 				return reject()
 			}
 			recipient := actor
 			if caller.Role != authpkg.RoleTeamLeader {
-				var notices map[string]taskNotificationIntent
-				data, _ := json.Marshal(project["task_notifications"])
-				_ = json.Unmarshal(data, &notices)
-				intent := notices["ready"]
 				if caller.Role != authpkg.RoleWorker || e.Protocol != "task/v1" || intent.ActorRole != caller.Role || intent.ActorName != actor.Name || intent.Event.Kind != e.Kind || intent.Event.MainTaskID != e.MainTaskID {
 					return reject()
 				}

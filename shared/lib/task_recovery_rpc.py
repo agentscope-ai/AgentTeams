@@ -41,9 +41,18 @@ def canonical_receipts(admission, task_id):
 
 
 def execute(request):
+    if request.get('action') == 'task_run_id':
+        from runtime_control import task_run_id
+        return task_run_id(request['team_id'], request['task_id'], request['generation'])
     if request.get('action') == 'tool_policy':
         from task_operation import tool_policy
         return tool_policy(request.get('registration'))
+    if request.get('action') == 'approval_mode':
+        from runtime_control import approval_mode
+        return approval_mode(request.get('config') or {})
+    if request.get('action') == 'mcp_approval':
+        from runtime_control import mcp_approval
+        return mcp_approval(request.get('config') or {}, request['server_name'])
     if not enabled():
         raise RecoveryConflict('Worker process recovery is not configured')
     recovery = Recovery(device_delivery=request.get("device_delivery") is True)

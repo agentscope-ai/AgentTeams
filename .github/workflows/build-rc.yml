@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       targets:
-        description: 'Space-separated list of push targets (default: all). Options: openclaw-base agentteams-controller embedded manager manager-qwenpaw worker hermes-worker qwenpaw-worker openhuman-worker'
+        description: 'Core-context targets (default: controller, embedded, QwenPaw, Hermes, OpenHuman, DeepSeek). Codex/Claude use publish-harnesses; OpenClaw is explicit only'
         required: false
         type: string
         default: 'all'
@@ -47,13 +47,6 @@ jobs:
             exit 1
           fi
 
-      - name: Compute base stable tag
-        id: meta
-        run: |
-          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
-          DATE_TAG=$(date -u +%Y%m%d)
-          echo "base_stable_tag=${DATE_TAG}-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -67,57 +60,26 @@ jobs:
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Build and push base image
-        run: |
-          make push-openclaw-base \
-            VERSION=${{ inputs.version }} \
-            REGISTRY=${{ env.REGISTRY }} \
-            REPO=${{ env.REPO }} \
-            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com
-
-      - name: Tag base image with stable tag
-        run: |
-          BASE_IMAGE="${{ env.REGISTRY }}/${{ env.REPO }}/openclaw-base"
-          STABLE_TAG="${{ steps.meta.outputs.base_stable_tag }}"
-          docker buildx imagetools create \
-            --tag "${BASE_IMAGE}:${STABLE_TAG}" \
-            "${BASE_IMAGE}:${{ inputs.version }}"
-
       - name: Build and push multi-arch images
+        env:
+          REQUESTED_TARGETS: ${{ inputs.targets }}
+          VERSION: ${{ inputs.version }}
         run: |
-          make push-worker push-hermes-worker push-qwenpaw-worker push-openhuman-worker push-agentteams-controller push-embedded \
-            VERSION=${{ inputs.version }} \
-            OPENCLAW_BASE_VERSION=${{ inputs.version }} \
-            REGISTRY=${{ env.REGISTRY }} \
-            REPO=${{ env.REPO }} \
+          requested="${REQUESTED_TARGETS:-all}"
+          if [[ "$requested" == all ]]; then
+            requested="agentteams-controller embedded qwenpaw-worker hermes-worker openhuman-worker deepseek-harness-worker"
+          fi
+          read -r -a targets <<< "$requested"
+          [[ ${#targets[@]} -gt 0 ]]
+          pushes=()
+          for target in "${targets[@]}"; do
+            case "$target" in
+              agentteams-controller|embedded|qwenpaw-worker|hermes-worker|openhuman-worker|deepseek-harness-worker|worker) pushes+=("push-$target") ;;
+              *) echo "Unknown RC target: $target" >&2; exit 1 ;;
+            esac
+          done
+          make "${pushes[@]}" VERSION="$VERSION" OPENCLAW_BASE_VERSION=v1.2.8 \
+            REGISTRY=${{ env.REGISTRY }} REPO=${{ env.REPO }} \
             HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
             DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/"
-
-      - name: Summary
-        env:
-          BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/openclaw-base
-          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-harness-openclaw
-          HERMES_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-harness-hermes
-          QWENPAW_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-harness-qwenpaw
-          OPENHUMAN_WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-harness-openhuman
-          CONTROLLER_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-controller
-          EMBEDDED_IMAGE: ${{ env.REGISTRY }}/${{ env.REPO }}/agentteams-embedded
-        run: |
-          STABLE_TAG="${{ steps.meta.outputs.base_stable_tag }}"
-          echo "### RC Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Images:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Worker: \`${WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Hermes Worker: \`${HERMES_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- QwenPaw Worker: \`${QWENPAW_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- OpenHuman Worker: \`${OPENHUMAN_WORKER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Controller: \`${CONTROLLER_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Embedded: \`${EMBEDDED_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Base (RC): \`${BASE_IMAGE}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Base (stable): \`${BASE_IMAGE}:${STABLE_TAG}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Platforms: \`linux/amd64, linux/arm64\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**After RC validation**, update base image dependency to the stable tag:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "OPENCLAW_BASE_VERSION ?= ${STABLE_TAG}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          printf 'Built Core-context RC targets: %s\nCodex and Claude Code are published through publish-harnesses.\n' "$requested" >> "$GITHUB_STEP_SUMMARY"

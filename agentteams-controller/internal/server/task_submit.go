@@ -23,6 +23,7 @@ type taskSubmitRequest struct {
 	Artifacts []string `json:"artifacts"`
 	Report    string   `json:"report"`
 	Status    string   `json:"status"`
+	Handoff   string   `json:"handoff,omitempty"`
 }
 
 type taskSubmission struct {
@@ -55,6 +56,7 @@ func (h *ProjectHandler) SubmitTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Summary = strings.TrimSpace(input.Summary)
+	input.Handoff = strings.TrimSpace(input.Handoff)
 	if input.Status == "" {
 		input.Status = "SUCCESS"
 	}
@@ -90,7 +92,7 @@ func (h *ProjectHandler) SubmitTask(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 503, "task snapshot unavailable")
 			return
 		}
-		execution, ok := h.ownedTaskExecution(w, r, raw)
+		execution, ok := h.ownedTaskExecutionForReport(w, r, raw, input.Status == "BLOCKED")
 		if !ok {
 			return
 		}
@@ -189,7 +191,7 @@ func (h *ProjectHandler) SubmitTask(w http.ResponseWriter, r *http.Request) {
 		task["task_notifications"] = map[string]taskNotificationIntent{"submitted": {Event: event, ActorRole: caller.Role, ActorName: caller.Username, Team: caller.Team, Status: "pending"}}
 		appendTaskOperationHistory(task, "in_progress", "submitted", "submit_task", authzActor(caller))
 		if direct && (input.Status == "SUCCESS" || input.Status == "SUCCESS_WITH_NOTES") {
-			task["task_handoff"] = taskHandoff{SubmissionID: submissionID, ActorName: caller.Username, ActorRole: caller.Role}
+			task["task_handoff"] = taskHandoff{SubmissionID: submissionID, ActorName: caller.Username, ActorRole: caller.Role, Note: input.Handoff}
 			task["status"] = "completed"
 			delete(task, "task_notifications")
 			appendTaskOperationHistory(task, "submitted", "completed", "handoff_task", authzActor(caller))

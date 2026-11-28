@@ -18,7 +18,7 @@ _cleanup_hot_skill() {
 trap _cleanup_hot_skill EXIT
 
 # Guard: skip if Manager is not QwenPaw (e.g., openclaw shard)
-_MANAGER_RUNTIME=$(docker exec "${_AGENT_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
+_MANAGER_RUNTIME=$(docker exec "${_AGENT_CTR}" printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "qwenpaw")
 if [ "${_MANAGER_RUNTIME}" != "qwenpaw" ] && [ "${_MANAGER_RUNTIME}" != "copaw" ]; then
     log_info "Manager runtime is ${_MANAGER_RUNTIME} — skipping QwenPaw-specific test"
     test_teardown "27-qwenpaw-manager-startup"

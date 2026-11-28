@@ -722,7 +722,7 @@ spec:
   model: qwen3.5-plus
 ```
 
-If no runtime is specified, the default set during installation (`AGENTTEAMS_DEFAULT_WORKER_RUNTIME`) is used, falling back to `openclaw`.
+If no runtime is specified, the default set during installation (`AGENTTEAMS_DEFAULT_WORKER_RUNTIME`) is used, falling back to `qwenpaw`.
 
 ### After creation
 
@@ -738,7 +738,7 @@ Manager will use the worker-management skill to trigger a container recreation. 
 `QwenPaw` is the current Python runtime implementation. Both `qwenpaw` and the
 legacy compatibility value `copaw` are still accepted. The local installer
 writes `qwenpaw`; old Manager configurations using `copaw` still resolve to
-QwenPaw. Helm defaults to OpenClaw unless `manager.runtime` is overridden.
+QwenPaw. Helm defaults to QwenPaw unless `manager.runtime` is overridden.
 
 For Workers, keep the runtime and image paired instead of rewriting the value
 alone: existing deployments may map `copaw` to `agentteams-copaw-worker`, while

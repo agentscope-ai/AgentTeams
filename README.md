@@ -189,8 +189,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | no | Retry count for transient LLM preflight failures such as rate limits and provider 5xx responses. Defaults to `2` |
 | `preflight.llm.activeDeadlineSeconds` | no | Kubernetes Job active deadline for the preflight hook. Defaults to `120` |
 | `preflight.llm.resources` | no | Optional Kubernetes resource requests/limits for the preflight hook container |
-| `manager.runtime` | no | Current source chart: `openclaw` (default), `qwenpaw`, `hermes`, `deepseek-harness`, or `openhuman`; `copaw` is a QwenPaw compatibility alias. The Harness image is selected automatically unless overridden |
-| `worker.defaultRuntime` | no | `openclaw` (chart default), `qwenpaw`, `hermes`, `deepseek-harness`, `openhuman`, or `codex`; legacy `copaw` requires an explicitly pinned old image |
+| `manager.runtime` | no | Current source chart: `qwenpaw` (default), `openclaw` (legacy, not recommended), `hermes`, `deepseek-harness`, or `openhuman`; `copaw` is a QwenPaw compatibility alias. The Harness image is selected automatically unless overridden |
+| `worker.defaultRuntime` | no | `codex` (chart default), `qwenpaw`, `openclaw` (legacy, not recommended), `hermes`, `deepseek-harness`, `openhuman`, or `codex`; legacy `copaw` requires an explicitly pinned old image |
 
 Helm installs run an LLM preflight hook by default. The hook sends a minimal OpenAI-compatible `/chat/completions` request using `credentials.llmApiKey`, `credentials.llmBaseUrl`, and `credentials.defaultModel`; invalid keys, unreachable base URLs, unsupported models, quota errors, and provider outages fail the install before the controller starts. To bypass this check for restricted or offline clusters:
 

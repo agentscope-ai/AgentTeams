@@ -6,6 +6,13 @@ import re
 # These protocol phases coordinate work; only task_assigned executes it.
 COORDINATION_PHASES = frozenset({"handoff", "task_submitted", "main_task_ready"})
 
+TASK_FILE_RULE = (
+    "Write all generated files, including code, reports, test scripts, databases and screenshots, "
+    "under this execution's exact outputDirectory; use scratchDirectory for temporary work. "
+    "Inputs are read-only. Do not use another task's directory, your home or a system directory. "
+    "If a path is denied, correct it using these prepared directories instead of requesting broader access. "
+)
+
 
 def task_write_path_allowed(file_path, output_directory, scratch_directory):
     """Check a native file write against the prepared writable directories."""
@@ -60,7 +67,7 @@ def prepare(kind, event, result):
     if task.get("id") != task_id:
         raise ValueError("task preparation identity changed")
     if kind != "main_task_ready" and (task.get("mainTaskId", "") != event.get("main_task_id", "")
-                                     or task.get("projectId", "") != event.get("project_id", "")):
+                                     or (task.get("projectId") or "") != (event.get("project_id") or "")):
         raise ValueError("task preparation scope changed")
     if kind == "task_assigned":
         root = Path(result.get("taskDirectory") or ".")
@@ -76,7 +83,7 @@ def prepare(kind, event, result):
                         "Use the original request for context and produce only the deliverables assigned to your node. Upstream inputs contain summaries and verified file paths; read only the reports or files needed for your node. Do not load the whole history or repeat it in a handoff. Start work directly; do not send separate received, starting, or receipt messages. "
                         "Prefer native file tools for simple reads and writes. Use shell or patch tools when the assignment needs them. "
                         "Write each deliverable using the exact absolute outputDirectory below plus its filename. "
-                        "Use scratchDirectory for temporary work. Pass files as a JSON array of paths relative to outputDirectory. "
+                        + TASK_FILE_RULE + "Pass files as a JSON array of paths relative to outputDirectory. "
                         "Once you have produced and checked your deliverables, use the native Task tool to submit before ending your turn. For failed review or validation, submit REVISION_NEEDED; do not report SUCCESS merely because checking finished. Normal SUCCESS freezes this delivery and directly notifies ready downstream Workers; only exceptions or explicit approval gates go to the Leader.",
                 "context": result, "execution": task_id,
                 "ack": (task_id, root.resolve(), task["assignedTo"], task["assignmentId"])}
@@ -117,7 +124,7 @@ def prepare(kind, event, result):
                     or not (delivered or reviewed)):
                 raise ValueError("accepted result identity or saved review changed")
             remaining.remove(child["id"])
-        return {"fact": "All execution steps have completed. Use acceptedResults below: each id is the actual execution Task ID, with its summary, exact candidate identity and versioned report/artifact references, plus a frozen handoff or saved review. A handoff records delivery, not a prior Leader acceptance. Verify whole-request coverage from this evidence. Read a referenced report or artifact when needed to judge a requirement; do not reread unchanged evidence or rerun checks. Use files_read with its artifactId for a referenced report, using that result's id, never a local step alias or the main Task ID for child files. Call task complete with your final report, distinguishing recorded tests from your own review. Choose one coherent final deliverable set for the original request, excluding superseded intermediate versions and repeated filenames for the same project. Pass artifacts using the exact artifactId values from acceptedResults, including every file that final project needs. Omit artifacts only when all accepted outputs already form that final set. The task system returns report and artifacts to the original Human conversation using the first dispatch identity. Do not send another message or poll.",
+        return {"fact": "All execution steps have completed. Use acceptedResults below: each id is the actual execution Task ID, with its summary, exact candidate identity and versioned report/artifact references, plus a frozen handoff or saved review. A handoff records delivery, not a prior Leader acceptance. Verify whole-request coverage from this evidence. Read a referenced report or artifact when needed to judge a requirement; do not reread unchanged evidence or rerun checks. Use files_read with its artifactId for a referenced report, using that result's id, never a local step alias or the main Task ID for child files. Call task complete with your final report, distinguishing recorded tests from your own review. Choose one coherent final deliverable set for the original request, excluding superseded intermediate versions and repeated filenames for the same project. Pass artifacts using the exact artifactId values from acceptedResults, including every file that final project needs. Omit artifacts only when all accepted outputs already form that final set. Pass artifacts: [] when the final report links the deliverable (such as a PR) and no additional files should be attached. The task system returns report and artifacts to the original Human conversation using the first dispatch identity. Do not send another message or poll.",
                 "context": task, "completion": task_id}
     raise ValueError("unsupported task preparation event")
 

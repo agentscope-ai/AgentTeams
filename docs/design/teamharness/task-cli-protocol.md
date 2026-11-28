@@ -582,3 +582,19 @@ HTTP 429、5xx、连接错误及调用超时标为可重试；参数错误、权
 不能继承配置更新等无关请求的追踪身份；没有原始追踪证明的旧回执保持未关联。
 共享回合的模型用量按真实 span 去重，不按消息数量重复相加或任意均摊。未知来源必须
 保留为证据缺口，不能按正文相似、时间接近或 Harness 特例推断关联。
+
+### Leader 修改执行要求后的通知
+
+`amend` 的要求变更与定向通知意图在同一次条件写入中保存。对于已派发执行，Core
+重新核对 Team Leader、当前负责人和原派发身份，将普通定向消息发送到原 Task 房间。
+这沿用公共任务房间输入规则：活跃执行接收补充，空闲执行从权威任务绑定继续；不新增
+Harness 专用事件、会话 ID 或执行代次，也不解除未知副作用的验证围栏。
+
+回复中的 `notification.status=pending` 表示通知仍待发送，不能宣称 Worker 已收到；
+`queued` 仅证明 Matrix 已确认消息事件，Worker 原生接纳和实际继续执行仍需各自回执。
+传输失败使用同一 Matrix 事务标识重试；已提交或结束的执行不再接收延迟唤醒。
+未派发节点保留新要求，在正常依赖派发时执行，不提前越过依赖。
+
+### Optional recipient-facing handoff
+
+`submit` accepts optional `handoff` text (`agt task submit --handoff`). The model prepares it with the existing submission, guided by the common Task skill and actual downstream business context. It does not choose recipients or replace the result summary/report. The note is frozen in the immutable submission and carried by the existing downstream/Leader notification intent. Routing, idempotent delivery and fallback remain system-owned; an omitted or blank note uses the default notification. Internal execution context is kept separate from the public note. No additional model turn, required business Skill or runtime.yaml option is introduced. Neither a note nor Matrix delivery is a prerequisite for ready Task execution. Existing submissions without the optional field retain their canonical digest bytes.

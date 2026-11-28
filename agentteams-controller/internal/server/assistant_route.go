@@ -149,7 +149,7 @@ func (h *AssistantHandler) routeForRecipient(ctx context.Context, caller *authpk
 			}
 			out.owner += ":" + wb.Name() + "/" + status.InstanceID
 		}
-		out.room, out.name, out.kind, out.label, out.agent = manager.Status.RoomID, manager.Name, "manager", "AT助手", manager.Status.MatrixUserID
+		out.room, out.name, out.kind, out.label, out.agent = manager.Status.RoomID, manager.Name, "manager", "AgentTeams助手", manager.Status.MatrixUserID
 		if humanName == "" {
 			humanName = h.deps.MatrixConfig.AdminUser
 		}

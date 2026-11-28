@@ -10,6 +10,38 @@ processors:
     check_interval: 1s
     limit_mib: 128
     spike_limit_mib: 32
+  transform/native-identity:
+    error_mode: propagate
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["langfuse.user.id"], attributes["agentteams.worker.name"]) where attributes["langfuse.user.id"] == nil and attributes["agentteams.worker.name"] != nil
+          - set(attributes["langfuse.session.id"], attributes["agentteams.session.id"]) where attributes["langfuse.session.id"] == nil and attributes["agentteams.session.id"] != nil
+          - set(cache["tags"], ["agentteams", "worker-turn"]) where attributes["langfuse.trace.tags"] == nil and attributes["agentteams.worker.name"] != nil and attributes["agentteams.run.id"] != nil
+          - append(cache["tags"], attributes["agentteams.runtime"]) where cache["tags"] != nil and attributes["agentteams.runtime"] != nil
+          - append(cache["tags"], Concat(["task:", attributes["agentteams.task.id"]], "")) where cache["tags"] != nil and attributes["agentteams.task.id"] != nil
+          - append(cache["tags"], Concat(["main_task:", attributes["agentteams.main_task.id"]], "")) where cache["tags"] != nil and attributes["agentteams.main_task.id"] != nil
+          - append(cache["tags"], Concat(["team:", attributes["agentteams.team.id"]], "")) where cache["tags"] != nil and attributes["agentteams.team.id"] != nil
+          - append(cache["tags"], Concat(["room:", attributes["agentteams.room.id"]], "")) where cache["tags"] != nil and attributes["agentteams.room.id"] != nil
+          - append(cache["tags"], Concat(["project:", attributes["agentteams.project.id"]], "")) where cache["tags"] != nil and attributes["agentteams.project.id"] != nil
+          - set(attributes["langfuse.trace.tags"], cache["tags"]) where cache["tags"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.worker.name"], attributes["agentteams.worker.name"]) where attributes["langfuse.trace.metadata.agentteams.worker.name"] == nil and attributes["agentteams.worker.name"] != nil
+          - set(attributes["langfuse.trace.metadata.gen_ai.agent.id"], attributes["gen_ai.agent.id"]) where attributes["langfuse.trace.metadata.gen_ai.agent.id"] == nil and attributes["gen_ai.agent.id"] != nil
+          - set(attributes["langfuse.trace.metadata.gen_ai.agent.name"], attributes["gen_ai.agent.name"]) where attributes["langfuse.trace.metadata.gen_ai.agent.name"] == nil and attributes["gen_ai.agent.name"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.upstream.trace_id"], attributes["agentteams.upstream.trace_id"]) where attributes["langfuse.trace.metadata.agentteams.upstream.trace_id"] == nil and attributes["agentteams.upstream.trace_id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.upstream.span_id"], attributes["agentteams.upstream.span_id"]) where attributes["langfuse.trace.metadata.agentteams.upstream.span_id"] == nil and attributes["agentteams.upstream.span_id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.upstream.task_id"], attributes["agentteams.upstream.task_id"]) where attributes["langfuse.trace.metadata.agentteams.upstream.task_id"] == nil and attributes["agentteams.upstream.task_id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.runtime"], attributes["agentteams.runtime"]) where attributes["langfuse.trace.metadata.agentteams.runtime"] == nil and attributes["agentteams.runtime"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.run.id"], attributes["agentteams.run.id"]) where attributes["langfuse.trace.metadata.agentteams.run.id"] == nil and attributes["agentteams.run.id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.turn.id"], attributes["agentteams.turn.id"]) where attributes["langfuse.trace.metadata.agentteams.turn.id"] == nil and attributes["agentteams.turn.id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.session.id"], attributes["agentteams.session.id"]) where attributes["langfuse.trace.metadata.agentteams.session.id"] == nil and attributes["agentteams.session.id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.task.id"], attributes["agentteams.task.id"]) where attributes["langfuse.trace.metadata.agentteams.task.id"] == nil and attributes["agentteams.task.id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.main_task.id"], attributes["agentteams.main_task.id"]) where attributes["langfuse.trace.metadata.agentteams.main_task.id"] == nil and attributes["agentteams.main_task.id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.team.id"], attributes["agentteams.team.id"]) where attributes["langfuse.trace.metadata.agentteams.team.id"] == nil and attributes["agentteams.team.id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.room.id"], attributes["agentteams.room.id"]) where attributes["langfuse.trace.metadata.agentteams.room.id"] == nil and attributes["agentteams.room.id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.project.id"], attributes["agentteams.project.id"]) where attributes["langfuse.trace.metadata.agentteams.project.id"] == nil and attributes["agentteams.project.id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.event.id"], attributes["agentteams.event.id"]) where attributes["langfuse.trace.metadata.agentteams.event.id"] == nil and attributes["agentteams.event.id"] != nil
+          - set(attributes["langfuse.trace.metadata.agentteams.execution.generation"], attributes["agentteams.execution.generation"]) where attributes["langfuse.trace.metadata.agentteams.execution.generation"] == nil and attributes["agentteams.execution.generation"] != nil
   transform/native-kinds:
     error_mode: propagate
     trace_statements:
@@ -43,5 +75,5 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, transform/native-kinds, batch]
+      processors: [memory_limiter, transform/native-identity, transform/native-kinds, batch]
       exporters: [otlphttp/langfuse]

@@ -67,7 +67,7 @@ type WorkerReconciler struct {
 	// when a Worker CR omits spec.runtime. Sourced from
 	// AGENTTEAMS_DEFAULT_WORKER_RUNTIME (Config.DefaultWorkerRuntime). Empty means
 	// "no operator preference" — backend.ResolveRuntime will fall back to
-	// "openclaw".
+	// "qwenpaw".
 	DefaultRuntime string
 
 	// DefaultBackendRuntime is the cluster-level default backendRuntime ("pod" or "sandbox").

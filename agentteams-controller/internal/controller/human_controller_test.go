@@ -133,7 +133,7 @@ func newReadyTeam(name, roomID string) *v1beta1.Team {
 // TestHumanReconciler_Create_HappyPath covers the first-time provisioning
 // path: a brand-new Human CR, one ready Worker, one ready Team. Asserts
 // that a **single** reconcile converges — EnsureHumanUser is called
-// exactly once, each room gets one Invite+Join pair, Status is persisted
+// exactly once, the Worker room is joined and the Team room is invited, Status is persisted
 // in the same pass. The single-reconcile invariant is worth locking in
 // explicitly because the finalizer-add path does *not* early-return;
 // regressions that accidentally split the happy path into two reconciles
@@ -174,8 +174,8 @@ func TestHumanReconciler_Create_HappyPath(t *testing.T) {
 		t.Errorf("InviteToRoom calls=%d, want 2: %+v",
 			len(rig.prov.Calls.InviteToRoom), rig.prov.Calls.InviteToRoom)
 	}
-	if len(rig.prov.Calls.JoinRoomAs) != 2 {
-		t.Errorf("JoinRoomAs calls=%d, want 2: %+v",
+	if len(rig.prov.Calls.JoinRoomAs) != 1 || rig.prov.Calls.JoinRoomAs[0].RoomID != "!room-w1:localhost" {
+		t.Errorf("JoinRoomAs calls=%d, want only the Worker room: %+v",
 			len(rig.prov.Calls.JoinRoomAs), rig.prov.Calls.JoinRoomAs)
 	}
 
@@ -301,8 +301,8 @@ func TestHumanReconciler_Update_AddRoom(t *testing.T) {
 	if len(rig.prov.Calls.EnsureHumanUser) != 0 {
 		t.Errorf("EnsureHumanUser should not be called on update, got %d calls", len(rig.prov.Calls.EnsureHumanUser))
 	}
-	if len(rig.prov.Calls.LoginWithPassword) != 1 {
-		t.Errorf("LoginWithPassword calls=%d, want 1", len(rig.prov.Calls.LoginWithPassword))
+	if len(rig.prov.Calls.LoginWithPassword) != 0 {
+		t.Errorf("LoginWithPassword calls=%d, want 0", len(rig.prov.Calls.LoginWithPassword))
 	}
 	if len(rig.prov.Calls.LoginAsHuman) != 0 {
 		t.Errorf("LoginAsHuman (legacy shim) should not be used by the human steady-state path, got %d calls", len(rig.prov.Calls.LoginAsHuman))
@@ -313,9 +313,8 @@ func TestHumanReconciler_Update_AddRoom(t *testing.T) {
 		rig.prov.Calls.InviteToRoom[0].RoomID != "!room-t1:localhost" {
 		t.Errorf("Invite calls=%+v, want single invite to !room-t1:localhost", rig.prov.Calls.InviteToRoom)
 	}
-	if len(rig.prov.Calls.JoinRoomAs) != 1 ||
-		rig.prov.Calls.JoinRoomAs[0].RoomID != "!room-t1:localhost" {
-		t.Errorf("Join calls=%+v, want single join to !room-t1:localhost", rig.prov.Calls.JoinRoomAs)
+	if len(rig.prov.Calls.JoinRoomAs) != 0 {
+		t.Errorf("Join calls=%+v, ordinary member must accept the invitation", rig.prov.Calls.JoinRoomAs)
 	}
 	if len(rig.prov.Calls.KickFromRoom) != 0 {
 		t.Errorf("no kicks expected, got: %+v", rig.prov.Calls.KickFromRoom)

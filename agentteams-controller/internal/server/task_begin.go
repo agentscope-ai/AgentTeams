@@ -34,6 +34,11 @@ type taskResumeContext struct {
 }
 
 func (h *ProjectHandler) ownedTaskExecution(w http.ResponseWriter, r *http.Request, task map[string]json.RawMessage) (taskExecution, bool) {
+	return h.ownedTaskExecutionForReport(w, r, task, false)
+}
+
+// An owner may report a blocked execution without settling its unknown effects.
+func (h *ProjectHandler) ownedTaskExecutionForReport(w http.ResponseWriter, r *http.Request, task map[string]json.RawMessage, blocked bool) (taskExecution, bool) {
 	caller := authpkg.CallerFromContext(r.Context())
 	var execution taskExecution
 	if !recoveryCaller(caller) || h.recovery == nil || !h.recovery.owns(r.Context(), caller, task) {
@@ -44,7 +49,7 @@ func (h *ProjectHandler) ownedTaskExecution(w http.ResponseWriter, r *http.Reque
 		writeError(w, 403, "task execution namespace changed")
 		return execution, false
 	}
-	if json.Unmarshal(task["execution"], &execution) != nil || execution.Generation == 0 || execution.State != "active" || execution.ProcessID == "" || execution.ProcessID != r.Header.Get("X-AgentTeams-Process-ID") {
+	if json.Unmarshal(task["execution"], &execution) != nil || execution.Generation == 0 || (execution.State != "active" && !(blocked && execution.State == "needs_verification")) || execution.ProcessID == "" || execution.ProcessID != r.Header.Get("X-AgentTeams-Process-ID") {
 		writeError(w, 409, "task execution changed")
 		return execution, false
 	}

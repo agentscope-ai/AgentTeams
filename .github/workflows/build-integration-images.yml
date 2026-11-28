@@ -108,7 +108,9 @@ jobs:
       - name: Smoke-test packaged DeepSeek Harness
         if: matrix.target == 'deepseek-harness-worker'
         run: |
+          # Match the Harness smoke target when bypassing its entrypoint.
           docker run --rm --entrypoint python3 \
+            -e PYTHONPATH=/opt/agentteams/scripts:/opt/agentteams/scripts/lib \
             -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/headless_smoke.py:ro" \
             agentteams/agentteams-harness-deepseek:latest /tmp/headless_smoke.py
 

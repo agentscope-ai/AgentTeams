@@ -38,6 +38,29 @@ func TestTaskRecoveryUsesActualHarnessInsteadOfDesiredSpec(t *testing.T) {
 	}
 }
 
+func TestTaskRecoveryReclaimsReleasedOwnTurnWithNewGeneration(t *testing.T) {
+	store := ossfake.NewMemory()
+	putTask(store, taskMetaKey, taskMeta(map[string]any{"assigned_to": "alpha-dev", "status": "in_progress",
+		"execution": taskExecution{Generation: 3, InstanceID: "current-start", ProcessID: "own-process", Runtime: "qwenpaw", State: "released", Checkpoint: &taskCheckpoint{Version: 2}}}))
+	h := NewTaskRecoveryHandler(newProjectTestHandler(t, store, teamWithRoster("alpha-team")), ServerDeps{})
+	h.instance = func(context.Context, *authpkg.CallerIdentity) (string, string, error) {
+		return "current-start", "qwenpaw", nil
+	}
+	caller := &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "alpha-dev", Team: "alpha-team"}
+	for range 2 {
+		request := withCaller(httptest.NewRequest("POST", "/api/v1/tasks/t1/execution?team=alpha-team", strings.NewReader(`{"action":"claim","instance_id":"current-start","process_id":"own-process"}`)), caller)
+		request.SetPathValue("id", "t1")
+		request.Header.Set("If-Match", taskMetaETag(t, store, taskMetaKey))
+		request.Header.Set("X-AgentTeams-Process-ID", "own-process")
+		response := httptest.NewRecorder()
+		h.UpdateExecution(response, request)
+		var result struct{ Execution taskExecution }
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Execution.Generation != 4 || len(result.Execution.RetiredRuns) != 1 || result.Execution.State != "active" {
+			t.Fatalf("released native turn must restart once: %d %s", response.Code, response.Body)
+		}
+	}
+}
+
 func TestTaskCheckpointRetainsDurableArtifactsAndVerifiedOperation(t *testing.T) {
 	store := ossfake.NewMemory()
 	data := []byte("verified step output")
@@ -157,6 +180,10 @@ func TestTaskRecoveryFencesCheckpointAndProcess(t *testing.T) {
 	execution := task["execution"].(map[string]any)
 	if task["status"] != "in_progress" || task["task_id"] != "t1" || execution["generation"] != float64(2) || execution["state"] != "needs_verification" || execution["checkpoint"].(map[string]any)["version"] != float64(2) {
 		t.Fatalf("lost task continuity: %s", data)
+	}
+	retired := execution["retired_runs"].([]any)
+	if len(retired) != 1 || retired[0].(map[string]any)["generation"] != float64(1) || retired[0].(map[string]any)["kind"] != "failed" {
+		t.Fatalf("lost retired run needed for progress recovery: %s", data)
 	}
 	if r := call("checkpoint", "process-two", map[string]any{"version": 3, "completed_steps": []string{"one", "two"}}); r.Code != 409 {
 		t.Fatalf("blind replay: %d %s", r.Code, r.Body)

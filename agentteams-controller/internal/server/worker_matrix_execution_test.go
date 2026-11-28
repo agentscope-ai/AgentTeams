@@ -390,3 +390,24 @@ func TestMatrixQuietCompletionRetainsResultWithoutPublishingAReply(t *testing.T)
 		t.Fatalf("quiet completion repeated inference: %s", response)
 	}
 }
+
+func TestMatrixTaskSupplementClaimBeforeNativeCommitCanRetire(t *testing.T) {
+	f := newMatrixExecutionFixture(t, nil)
+	f.expect("claim", nil, 200)
+	input, _, err := f.h.store.InputSnapshot(t.Context(), "runtime-alice", f.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.NativeCommit = &service.WorkerMatrixNativeCommit{Start: f.start, Runtime: f.start.Runtime, NativeRef: "actual-task-session", NativeDigest: strings.Repeat("a", 64)}
+	input.InputState = "native_committed"
+	body, _ := json.Marshal(input)
+	if err := f.storage.PutObject(t.Context(), f.objectKey(), body); err != nil {
+		t.Fatal(err)
+	}
+	claimed := f.expect("claim", nil, 200)
+	if string(claimed["recovery"]) != `"resume"` {
+		t.Fatalf("admitted supplement became legacy unknown: %s", claimed["execution"])
+	}
+	f.expect("cancel", nil, 200)
+	f.expect("claim", nil, 200)
+}

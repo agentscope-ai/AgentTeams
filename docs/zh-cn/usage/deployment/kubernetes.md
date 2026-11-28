@@ -81,7 +81,7 @@ helm version
 
 ### 3.3 Manager runtime
 
-当前源码 Chart 和 Manager CRD 支持 `openclaw`、`qwenpaw`、`hermes`、`deepseek-harness` 和 `openhuman`。Chart 默认 OpenClaw；本地安装器推荐 QwenPaw，并提供 OpenClaw 选项。`copaw` 是旧 Manager 配置映射到 QwenPaw 的兼容别名。Codex 用于 Worker，Manager CRD 不接受它。
+当前源码 Chart 和 Manager CRD 支持 `openclaw`、`qwenpaw`、`hermes`、`deepseek-harness` 和 `openhuman`。Chart 默认 QwenPaw；本地安装器推荐 QwenPaw，并提供 OpenClaw 选项。`copaw` 是旧 Manager 配置映射到 QwenPaw 的兼容别名。Codex 用于 Worker，Manager CRD 不接受它。
 
 Manager、Leader 和 Worker 复用所选 Harness 镜像。`manager.image.repository` 留空时，Chart 自动从 `worker.defaultImage` 选择对应镜像；只有自定义镜像时才需要覆盖：
 
@@ -98,7 +98,7 @@ manager:
 
 | runtime | 默认镜像配置项 | 说明 |
 |---|---|---|
-| `openclaw` | `worker.defaultImage.openclaw` | Chart 默认值 |
+| `openclaw` | `worker.defaultImage.openclaw` | 兼容镜像，固定为 v1.2.8 |
 | `qwenpaw` | `worker.defaultImage.qwenpaw` | 本地安装器默认值 |
 | `hermes` | `worker.defaultImage.hermes` | Python Harness |
 | `deepseek-harness` | `worker.defaultImage.deepseekHarness` | 实验性 headless Harness；启动时拒绝 Matrix E2EE |
@@ -190,7 +190,7 @@ preflight:
 
 ## 5. 编写 values 文件
 
-与在命令行中传入大量 `--set` 相比，values 文件更容易审查、复用和升级。下面是一份使用默认托管基础设施、OpenClaw Manager 和 OpenClaw Worker 的示例：
+与在命令行中传入大量 `--set` 相比，values 文件更容易审查、复用和升级。下面是一份使用默认托管基础设施、QwenPaw Manager 和 QwenPaw Worker 的示例：
 
 ```yaml
 # agentteams-values.yaml
@@ -233,9 +233,9 @@ storage:
 
 manager:
   enabled: true
-  runtime: openclaw
+  runtime: qwenpaw
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-qwenpaw
   resources:
     requests:
       cpu: 500m
@@ -245,7 +245,7 @@ manager:
       memory: 4Gi
 
 worker:
-  defaultRuntime: openclaw
+  defaultRuntime: codex
   resources:
     requests:
       cpu: 100m
@@ -504,7 +504,7 @@ metadata:
   namespace: agentteams-system
 spec:
   model: gpt-5.4
-  runtime: openclaw
+  runtime: qwenpaw
   identity: 开发工程师，负责编码、测试和代码审查
 ```
 

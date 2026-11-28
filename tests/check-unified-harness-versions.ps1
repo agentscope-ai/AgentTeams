@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $source = Get-Content (Join-Path $PSScriptRoot '../.installer-source/public/install.ps1') -Raw
-$start = $source.IndexOf('    $script:MANAGER_IMAGE = if')
+$start = $source.IndexOf('    $openclawVersion = $script:AGENTTEAMS_VERSION')
 $end = $source.IndexOf('    # Resolve embedded controller image', $start)
 if ($start -lt 0 -or $end -lt 0) { throw 'Image resolution block missing' }
 $resolver = $source.Substring($start, $end - $start)
@@ -13,6 +13,14 @@ $script:AGENTTEAMS_VERSION = 'v1.2.7'
 Invoke-Expression $resolver
 foreach ($name in 'WORKER_IMAGE','QWENPAW_WORKER_IMAGE','HERMES_WORKER_IMAGE','OPENHUMAN_WORKER_IMAGE','DEEPSEEK_HARNESS_WORKER_IMAGE','CODEX_WORKER_IMAGE') {
     if ((Get-Variable $name -Scope Script -ValueOnly) -notlike 'registry.example/agentteams/agentteams-harness-*:v1.2.7') { throw "Incorrect unified version: $name" }
+}
+$script:AGENTTEAMS_VERSION = 'v1.2.9'
+$script:AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION = ''
+$script:AGENTTEAMS_CODEX_WORKER_VERSION = ''
+Invoke-Expression $resolver
+if ($script:WORKER_IMAGE -notlike '*:v1.2.8') { throw 'OpenClaw compatibility version changed' }
+foreach ($name in 'QWENPAW_WORKER_IMAGE','HERMES_WORKER_IMAGE','OPENHUMAN_WORKER_IMAGE','DEEPSEEK_HARNESS_WORKER_IMAGE','CODEX_WORKER_IMAGE') {
+    if ((Get-Variable $name -Scope Script -ValueOnly) -notlike '*:v1.2.9') { throw "Incorrect selected release version: $name" }
 }
 $script:AGENTTEAMS_VERSION = 'v1.2.6'
 Invoke-Expression $resolver

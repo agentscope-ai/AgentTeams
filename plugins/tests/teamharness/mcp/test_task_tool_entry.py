@@ -10,7 +10,7 @@ import server
 def test_role_schemas_offer_only_relevant_task_operations(monkeypatch):
     for role,expected in {
         "manager":{"create","get","cancel","files_list","files_read","files_get"},
-        "leader":{"create","plan","get","accept","reject","complete","cancel","files_list","files_read","files_get"},
+        "leader":{"amend","create","plan","get","accept","reject","complete","cancel","files_list","files_read","files_get"},
         "worker":{"begin","get","submit","files_list","files_read","files_get","files_put"},
     }.items():
         monkeypatch.setattr(server,"_runtime_role",lambda role=role:role)

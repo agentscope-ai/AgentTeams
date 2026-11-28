@@ -689,7 +689,7 @@ spec:
   model: qwen3.5-plus
 ```
 
-如果未指定运行时，使用安装时设定的默认值（`AGENTTEAMS_DEFAULT_WORKER_RUNTIME`），最终回退为 `openclaw`。
+如果未指定运行时，使用安装时设定的默认值（`AGENTTEAMS_DEFAULT_WORKER_RUNTIME`），最终回退为 `qwenpaw`。
 
 ### 创建后切换
 
@@ -704,7 +704,7 @@ Manager 会通过 worker-management 技能触发容器重建。Worker 的 Matrix
 
 `QwenPaw` 是当前的 Python 运行时实现。系统仍同时接受 `qwenpaw` 和旧版兼容值
 `copaw`：本地安装器写入 `qwenpaw`，旧 Manager 配置中的 `copaw` 仍映射到
-QwenPaw。Helm 默认 OpenClaw，可通过 `manager.runtime` 覆盖。
+QwenPaw。Helm 默认 QwenPaw，可通过 `manager.runtime` 覆盖。
 
 对于 Worker，不要只改 runtime 值，应保持 runtime 与镜像配套：已有部署可能把
 `copaw` 映射到 `agentteams-copaw-worker`，新的 QwenPaw 路径则使用

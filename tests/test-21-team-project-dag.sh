@@ -20,7 +20,7 @@ TEST_TEAM="dag-team-$$"
 TEST_LEADER="${TEST_TEAM}-lead"
 TEST_W1="${TEST_TEAM}-dev"
 TEST_W2="${TEST_TEAM}-qa"
-TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
 
 # ============================================================

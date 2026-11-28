@@ -47,9 +47,11 @@ Human 个人文件与 Agent 工作空间分别管理。向 Agent 提供个人文
 
 打开「工作台 → Tracing」。采集默认关闭，未配置时会显示引导。管理员可打开「可观测配置」，填写查询后端与已有的 OTLP/HTTP Collector，测试、保存，并显式应用到已有的受支持 Worker。
 
+启用 Tracing 后，全局内容采集开关默认开启，控制模型与工具输入输出，以及模型服务实际返回的推理正文。显式关闭后只采集元数据。导出前会脱敏凭证；服务未返回推理正文时，页面会如实提示。
+
 Core v1.2.7 将配置保存在 Controller 命名空间的 `agentteams-observability` Secret（`config.json`）。Langfuse 查询和查询密钥由 Controller 管理。Dashboard 不再使用旧本地 `observability.json`；从这种旧配置升级后，需要通过界面重新保存配置。密钥字段留空表示保留已保存值。
 
-保存不会立即重启运行中的 Worker。新建的受支持容器会读取保存的配置；对已有托管 QwenPaw/Hermes Worker 执行「应用」时，会通过正常环境更新和容器重建流程生效。请在空闲时应用，并逐个检查结果。关闭采集也需对已有容器执行应用。配置或连接测试成功不代表已入库：应执行一次简短对话或任务，再查询对应 Trace。
+保存不会立即重启运行中的 Worker。新建的受支持容器会读取保存的配置；对已有托管 Worker 执行「应用」时，会通过正常环境更新和容器重建流程生效。QwenPaw、Hermes、DeepSeek、Claude Code 和 Codex 使用相同的全局配置。请在空闲时应用，并逐个检查结果。关闭采集也需对已有容器执行应用。配置或连接测试成功不代表已入库：应执行一次简短对话或任务，再查询对应 Trace。
 
 使用 Langfuse 时，Collector 必须已配置向目标项目导出。AgentLoop 配置也由 Controller 保存，但 Dashboard 的 AgentLoop 查询适配器使用其服务端云身份；详见 [Dashboard 后端契约](https://github.com/agentteams-group/agentteams-dashboard/blob/main/docs/INTERFACES.md)。切换查询后端不会自动配置 Collector 出口。
 

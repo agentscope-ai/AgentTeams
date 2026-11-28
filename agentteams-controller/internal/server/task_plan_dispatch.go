@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"strings"
 	"time"
@@ -123,6 +124,22 @@ func (h *ProjectHandler) reconcileTaskPlan(ctx context.Context, key string) erro
 		if state := coordinationString(node, "status"); state != "planned" && state != "assigned" {
 			continue
 		}
+		// A planned node already has a public identity. Persist its record before
+		// dependencies are ready so the Leader can inspect and amend future work.
+		planned := maps.Clone(node)
+		id := coordinationString(node, "task_id")
+		planned["task_plan_id"], planned["main_task_id"] = plan.ID, main["task_id"]
+		planned["team_id"], planned["project_id"], planned["room_id"] = main["team_id"], coordinationString(main, "project_id"), main["room_id"]
+		planned["notifyTxn"] = "assign-" + plan.ID[:16] + "-" + id
+		planned["spec_path"] = "shared/tasks/" + id + "/spec.md"
+		data, _ := json.Marshal(planned)
+		create, ok := h.oss.(createIfAbsentWriter)
+		if !ok {
+			return oss.ErrConditionalUnsupported
+		}
+		if err := create.PutObjectIfNoneMatchStrict(ctx, path.Join(path.Dir(path.Dir(key)), id, "meta.json"), data); err != nil && !errors.Is(err, oss.ErrPreconditionFailed) {
+			return err
+		}
 		encoded, _ := json.Marshal(node["depends_on"])
 		var dependencies []string
 		if json.Unmarshal(encoded, &dependencies) != nil {
@@ -162,6 +179,7 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 	}
 	key := path.Join(path.Dir(path.Dir(mainKey)), id, "meta.json")
 	actorRole, actorName := authpkg.RoleTeamLeader, plan.ActorName
+	handoffNote := ""
 	revision := coordinationString(node, "revision_of")
 	var lastCompletion time.Time
 	// Validate actual accepted dependency identities before creating work. Begin
@@ -196,6 +214,7 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 			}
 			if lastCompletion.IsZero() || completed.After(lastCompletion) {
 				actorRole, actorName, lastCompletion = handoff.ActorRole, handoff.ActorName, completed
+				handoffNote = handoff.Note
 			}
 		}
 	}
@@ -217,7 +236,7 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 	child := map[string]any{"task_id": id, "task_kind": "execution", "task_plan_id": plan.ID, "main_task_id": mainID, "parent_task_id": mainID,
 		"project_id": coordinationString(main, "project_id"), "team_id": coordinationString(main, "team_id"), "assigned_to": node["assigned_to"], "title": node["title"],
 		"spec": node["spec"], "spec_path": "shared/tasks/" + id + "/spec.md", "room_id": main["room_id"], "status": "prepared", "notifyTxn": delivery, "decision_class": "r3",
-		"task_notifications": map[string]taskNotificationIntent{"assigned": {Event: coordinationEvent{Kind: "task_assigned", TaskID: id, MainTaskID: mainID, ProjectID: coordinationString(main, "project_id"), DeliveryID: delivery}, ActorRole: actorRole, ActorName: actorName, Team: coordinationString(main, "team_id"), Status: "pending"}}}
+		"task_notifications": map[string]taskNotificationIntent{"assigned": {Event: coordinationEvent{Kind: "task_assigned", TaskID: id, MainTaskID: mainID, ProjectID: coordinationString(main, "project_id"), DeliveryID: delivery, Handoff: handoffNote}, ActorRole: actorRole, ActorName: actorName, Team: coordinationString(main, "team_id"), Status: "pending"}}}
 	if class := coordinationString(node, "decision_class"); class != "" {
 		child["decision_class"] = class
 	}
@@ -225,6 +244,7 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 		child["revision_of"] = previous
 	}
 	appendTaskOperationHistory(child, "planned", "prepared", "prepare_task", "task-system")
+	prepared := child
 	encoded, _ := json.Marshal(child)
 	if len(encoded) > taskMetaCommitMaxBytes {
 		return fmt.Errorf("execution record limit exceeded")
@@ -238,10 +258,22 @@ func (h *ProjectHandler) dispatchTaskPlanNode(ctx context.Context, mainKey strin
 		if err != nil || json.Unmarshal(body, &child) != nil {
 			return fmt.Errorf("prepared execution unavailable")
 		}
-		if child["task_plan_id"] != plan.ID || child["main_task_id"] != mainID || child["assigned_to"] != node["assigned_to"] || child["notifyTxn"] != delivery || child["spec"] != node["spec"] {
+		if child["task_plan_id"] != plan.ID || child["main_task_id"] != mainID || child["assigned_to"] != node["assigned_to"] || child["notifyTxn"] != delivery || (child["spec"] != node["spec"] && child["original_spec"] != node["spec"]) {
 			return fmt.Errorf("execution identity collision")
 		}
 		state := coordinationString(child, "status")
+		if state == "planned" {
+			child["status"], child["task_notifications"] = "prepared", prepared["task_notifications"]
+			appendTaskOperationHistory(child, "planned", "prepared", "prepare_task", "task-system")
+			next, _ := json.Marshal(child)
+			if err := h.oss.(conditionalWriter).PutObjectIfMatchStrict(ctx, key, next, contentETag(body)); err != nil {
+				if errors.Is(err, oss.ErrPreconditionFailed) {
+					continue
+				}
+				return err
+			}
+			continue
+		}
 		if state == "in_progress" || state == "submitted" || state == "completed" || state == "revision" || state == "blocked" {
 			return nil
 		}

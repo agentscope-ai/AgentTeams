@@ -3,6 +3,7 @@ import copy
 import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -43,6 +44,69 @@ class OperationTest(unittest.TestCase):
         with self.assertRaisesRegex(RecoveryConflict, 'unconfirmed'):
             self.recovery.begin_tools(self.identity, self.calls)
         self.assertEqual(len(self.writes), 1)
+
+    def test_same_verified_return_is_an_idempotent_success_not_a_failed_retry(self):
+        from types import SimpleNamespace
+        op = self.recovery.begin_tools(self.identity, self.calls)
+        saved = []
+        def storage(command, **kwargs):
+            if command[1] == 'pipe': saved.append(kwargs['input'])
+            return SimpleNamespace(stdout=saved[-1])
+        with patch('task_recovery.subprocess.run', side_effect=storage):
+            self.recovery.finish_tools(self.identity, op, self.results)
+            repeated = self.recovery.finish_tools(self.identity, op, self.results)
+        self.assertTrue(repeated['idempotent_hit'])
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(len(self.writes), 2, 'the duplicate return must not create a new checkpoint')
+
+    def test_verified_operation_with_different_return_is_not_an_idempotent_hit(self):
+        from types import SimpleNamespace
+        op = self.recovery.begin_tools(self.identity, self.calls)
+        saved = []
+        def storage(command, **kwargs):
+            if command[1] == 'pipe': saved.append(kwargs['input'])
+            return SimpleNamespace(stdout=saved[-1])
+        with patch('task_recovery.subprocess.run', side_effect=storage):
+            self.recovery.finish_tools(self.identity, op, self.results)
+            with self.assertRaises(RecoveryConflict):
+                self.recovery.finish_tools(self.identity, op, [{'id':'call-1','content':'different result'}])
+        self.assertEqual(len(saved), 1)
+
+    def test_confirmed_return_survives_receipt_connection_failure_and_claim_settles_without_tool_replay(self):
+        from native_tool_returns import load
+        from task_recovery import RecoveryUnavailable
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, TEAMHARNESS_RUNTIME_CONFIG=root + '/runtime.yaml'):
+            op = self.recovery.begin_tools(self.identity, self.calls)
+            with patch.object(self.recovery, 'current', side_effect=RecoveryUnavailable('connection failed')):
+                with self.assertRaises(RecoveryUnavailable):
+                    self.recovery.finish_tools(self.identity, op, self.results)
+            self.assertEqual(load(self.identity, op)['results'], self.results)
+            claimed = {'task':copy.deepcopy(self.task), 'spec':'same task', 'saved_result':''}
+            original = self.recovery.request
+            def request(method, path, body=None, *args, **kwargs):
+                if body and body.get('action') == 'claim':
+                    return claimed
+                return original(method, path, body, *args, **kwargs)
+            with patch.object(self.recovery, 'request', side_effect=request), patch('task_recovery.subprocess.run'):
+                result = self.recovery.claim({'instance_id':'instance'}, {'task':self.task,'team_id':'team','etag':'etag'})
+            self.assertEqual(result['task']['execution']['checkpoint']['operation']['state'], 'verified')
+            self.assertEqual(len(self.writes), 2, 'one begin, one verified return; no native body replay')
+
+    def test_receipt_recovery_still_rejects_replaced_owner(self):
+        from native_tool_returns import stage
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, TEAMHARNESS_RUNTIME_CONFIG=root + '/runtime.yaml'):
+            op = self.recovery.begin_tools(self.identity, self.calls)
+            stage(self.identity, op, self.results, artifacts=[])
+            self.task['execution']['process_id'] = 'other'
+            claimed = {'task':copy.deepcopy(self.task)}
+            original = self.recovery.request
+            def request(method, path, body=None, *args, **kwargs):
+                if body and body.get('action') == 'claim': return claimed
+                return original(method, path, body, *args, **kwargs)
+            with patch.object(self.recovery, 'request', side_effect=request), patch('task_recovery.subprocess.run') as upload:
+                with self.assertRaises(RecoveryConflict):
+                    self.recovery.claim({'instance_id':'instance'}, {'task':self.task,'team_id':'team','etag':'etag'})
+            upload.assert_not_called()
 
     def test_confirmed_receipt_bytes_are_saved_before_verified_checkpoint(self):
         op = self.recovery.begin_tools(self.identity, self.calls)
@@ -197,3 +261,15 @@ class OperationAdmissionTest(unittest.TestCase):
             with self.subTest(checkpoint=checkpoint), self.assertRaises(RecoveryConflict):
                 operation.admit(checkpoint)
         self.assertTrue(operation.admit({'operation': {'state': 'verified'}}))
+
+    def test_three_confirmed_failures_do_not_block_the_task_or_an_alternative_tool(self):
+        with patch('task_recovery.subprocess.run'):
+            for attempt in range(3):
+                call = dict(self.calls[0], id=f'failed-{attempt}', name='mcp__fixture__lookup')
+                op = self.recovery.begin_tools(self.identity, [call])
+                self.recovery.finish_tools(self.identity, op, [dict(id=call['id'], status='error', content='Returned service failure')])
+                self.assertEqual(self.task['status'], 'in_progress')
+                self.assertEqual(self.task['execution']['state'], 'active')
+            alternative = dict(self.calls[0], id='alternative', name='mcp__other__search')
+            self.recovery.begin_tools(self.identity, [alternative])
+        self.assertFalse(any('/submit' in call.args[1] for call in self.request.call_args_list))

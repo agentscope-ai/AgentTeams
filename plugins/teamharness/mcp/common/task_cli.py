@@ -15,9 +15,10 @@ import subprocess
 _ACTIONS = {
     "create": (("leader", "title"), ("spec", "inputId"), {"relatedInputIds": "related-input-id"}),
     "plan": (("nodes",), ("team", "overview"), {}),
+    "amend": (("spec", "note"), ("team", "replacementNodes"), {}),
     "get": ((), ("team",), {}),
     "begin": ((), ("team",), {}),
-    "submit": (("summary",), ("report", "status", "team"), {"files": "file"}),
+    "submit": (("summary",), ("report", "status", "team", "handoff"), {"files": "file"}),
     "accept": (("submissionId", "note"), ("team",), {}),
     "reject": (("submissionId", "note"), ("team", "replacementSpec", "replacementNodes"), {}),
     "complete": (("report",), ("team",), {"artifacts": "artifact"}),
@@ -34,9 +35,9 @@ _READ_ONLY_ACTIONS = {"get", "files_list", "files_read"}
 TASK_SCHEMA = {
     "description": (
         "Operate on tasks through the common task-system CLI/API. Interpret Human intent before choosing an operation. "
-        "Manager: create a task when needed; Manager/Leader: cancel the intended existing main task; "
-        "Leader: plan only initial required work, never hypothetical correction nodes; handle failures with replacementNodes local IDs (entry dependsOn=[]), then verify and complete the main task; "
-        "Worker: begin and submit truthful outputs; normal planned SUCCESS hands off directly to ready downstream Workers. Use REVISION_NEEDED for failed checks, not SUCCESS. Use task IDs and artifact IDs, not Project or storage paths. "
+        "Manager/Leader: create only when current Human intent authorizes dispatch; honor explicit confirmation boundaries and do not invent preparation Tasks. Manager/Leader: cancel the intended existing main task; "
+        "Leader: use amend to update an unfinished execution spec with a change note; the task system persists and delivers the supplement to its assigned Worker. Do not send a separate @ notification; plan only initial required work, never hypothetical correction nodes; handle failures with replacementNodes local IDs (entry dependsOn=[]), then verify and complete the main task; "
+        "Worker: begin and submit truthful outputs; write all generated files under the prepared outputDirectory and temporary files under scratchDirectory; keep inputs read-only. Normal planned SUCCESS hands off directly to ready downstream Workers. Use REVISION_NEEDED for failed checks, not SUCCESS. Use task IDs and artifact IDs, not Project or storage paths. "
         "The task system prepares rooms, dispatches dependencies and returns accepted reports/artifacts "
         "to the original conversation automatically. Do not send duplicate notifications. "
         "files_read returns bounded text; files_get returns a verified local path. "
@@ -46,12 +47,12 @@ TASK_SCHEMA = {
         "type": "object", "required": ["action"], "additionalProperties": False,
         "properties": {
             "action": {"type": "string", "enum": list(_ACTIONS)},
-            "taskId": {"type": "string", "description": "Required except create. Use the task-system ID, not a local step alias."},
+            "taskId": {"type": "string", "description": "Required except create. Use the task-system ID, not a local step alias. For amend, use the execution node's Task ID, not the main Task ID."},
             "leader": {"type": "string", "description": "For create: registered Leader name."},
             "title": {"type": "string", "description": "For create: concise original request title."},
             "inputId": {"type": "string", "description": "For create: source input reference supplied by the framework; required when more than one message could be the original request. This is not a room, Project or storage path."},
             "relatedInputIds": {"type": "array", "items": {"type": "string"}, "description": "For create: later corrections or supplements to this same request, in supplied input order; same Human conversation only. Never use this field to merge distinct work requests merely because their text matches. The task system captures their exact bodies automatically."},
-            "spec": {"type": "string", "description": "For create: only necessary earlier context outside the supplied inputs. Bind supplied corrections with relatedInputIds; never put only their paraphrase here. The task system captures original Human bodies automatically."},
+            "spec": {"type": "string", "description": "For amend: required full updated requirements of this unfinished execution, preserving all unchanged requirements. For create: only necessary earlier context outside the supplied inputs. Bind supplied corrections with relatedInputIds; never put only their paraphrase here. The task system captures original Human bodies automatically."},
             "overview": {"type": "string", "description": "For plan: concise room message with the task goal, requirements, acceptance criteria, planned responsibilities and final deliverables. Publish once after planning, before assigning the first node. Never repeat the full original request or embed tool/control receipts."},
             "nodes": {"type": "array", "description": "For plan: complete execution DAG; no source routes or execution Task IDs.",
                       "items": {"type": "object", "additionalProperties": False, "required": ["id", "assignedTo", "spec", "dependsOn"],
@@ -59,13 +60,14 @@ TASK_SCHEMA = {
                                                "assignedTo": {"type": "string"}, "spec": {"type": "string", "description": "Only this node responsibility, inputs, outputs and acceptance checks. The original Human request is attached automatically; do not copy it or other nodes into each spec."},
                                                "dependsOn": {"type": "array", "items": {"type": "string"}, "description": "Required on every node. List all upstream local node IDs whose completed outputs this node needs; use [] only for independent work."}}}},
             "summary": {"type": "string", "description": "For submit: actual result and validation summary."},
+            "handoff": {"type": "string", "description": "For submit: optional business-specific note for the next stage or Leader, based on actual results and downstream work. Do not include @ recipients; the task system selects them. Omit when no note is needed; the default notification remains available."},
             "report": {"type": "string", "description": "For submit: optional detailed report; for complete: verified final human report."},
             "status": {"type": "string", "enum": ["SUCCESS", "SUCCESS_WITH_NOTES", "REVISION_NEEDED", "BLOCKED", "INTERRUPTED"]},
             "files": {"type": "array", "items": {"type": "string"}, "description": "For submit: JSON array of filenames relative to this task's prepared output directory, even for one file."},
-            "artifacts": {"type": "array", "items": {"type": "string"}, "description": "For complete: final deliverable set, using accepted artifactId values. Exclude superseded intermediate versions and repeated filenames for the same project. Omit only when every accepted output belongs in the final set."},
+            "artifacts": {"type": "array", "items": {"type": "string"}, "description": "For complete: final deliverable set, using accepted artifactId values. Exclude superseded intermediate versions and repeated filenames for the same project. Omit to include all accepted outputs; pass [] to return only the final report, for example when code is delivered by a PR."},
             "submissionId": {"type": "string", "description": "For accept/reject: exact candidate ID from the task system."},
             "replacementSpec": {"type": "string", "description": "For reject only: optional explicit corrections to dispatch a new execution of the same step, preserving the rejected attempt."},
-            "note": {"type": "string", "description": "For accept/reject: your independent business validation evidence or rejection reason."},
+            "note": {"type": "string", "description": "For amend: required explanation of the requirements change. For accept/reject: your independent business validation evidence or rejection reason."},
             "reason": {"type": "string", "description": "For cancel: explicit reason for cancelling this exact main Task. Saved results are retained; cancellation does not confirm a running tool has stopped."},
             "team": {"type": "string", "description": "Only when the task system reports an ambiguous task ID."},
             "name": {"type": "string", "description": "Declared task-local file name. With artifactId, this is an optional consistency check and must match that artifact."},
@@ -81,7 +83,7 @@ TASK_SCHEMA = {
 
 TASK_SCHEMA["inputSchema"]["properties"]["replacementNodes"] = {
     **copy.deepcopy(TASK_SCHEMA["inputSchema"]["properties"]["nodes"]),
-    "description": "For reject only: replace this failed step with a correction DAG, such as Developer fix then independent Reviewer. Requires replacementSpec. Entry nodes inherit this step's upstream inputs; downstream receives all corrected outputs and waits for the complete correction DAG. Use local IDs only. The main Task and prior attempts are retained.",
+    "description": "For amend or reject: replace this unfinished or failed step with a new DAG, such as Developer fix then independent Reviewer. For amend, spec supplies updated requirements; for reject, replacementSpec is required. Entry nodes inherit this step's upstream inputs; downstream receives all corrected outputs and waits for the complete correction DAG. Use local IDs only. The main Task and prior attempts are retained.",
 }
 
 
@@ -89,7 +91,7 @@ def schema(role: str) -> dict:
     """Present each runtime role's operations; API authorization remains final."""
     allowed = {
         "manager": {"create", "get", "cancel", "files_list", "files_read", "files_get"},
-        "leader": {"create", "plan", "get", "accept", "reject", "complete", "cancel", "files_list", "files_read", "files_get"},
+        "leader": {"amend", "create", "plan", "get", "accept", "reject", "complete", "cancel", "files_list", "files_read", "files_get"},
         "worker": {"begin", "get", "submit", "files_list", "files_read", "files_get", "files_put"},
         "remote-member": {"begin", "get", "submit", "files_list", "files_read", "files_get", "files_put"},
     }.get(role, set(_ACTIONS))
@@ -106,7 +108,10 @@ def schema(role: str) -> dict:
             "Use create only for a direct registered Team Admin work request in your private conversation; "
             "set leader to your own registered identity and use the supplied Human input reference. "
             "Preserve its receipt and wait for the admitted handoff before plan. "
-            "Use plan/review/completion only for the framework-prepared Task phase. With plan, include the room overview alongside nodes."
+            "Use plan/review/completion only for the framework-prepared Task phase. With plan, include the room overview alongside nodes. "
+            "Use amend on an unfinished execution in your registered Team: taskId is that execution node's Task ID, spec is its full updated requirements, and note explains the change. The Task system persists and delivers the supplement to its assigned Worker; do not send a separate @. replacementSpec is for reject, not amend. "
+            "With replacementNodes you can reassign or restructure that node before submission, preserving its history and downstream dependencies. Unverified in-flight effects must be resolved before structural replacement. "
+            "After structural amendment, continue the replacement nodes, not the retired node. For submitted or blocked candidates use reject with their exact submissionId and correction DAG."
         )
     properties = result["inputSchema"]["properties"]
     fields = {"action", "taskId"}
@@ -158,7 +163,8 @@ def command(arguments: dict) -> tuple[list[str], dict[str, str]]:
             if not isinstance(value, list):
                 raise ValueError("nodes must be an array")
             if field == "replacementNodes":
-                if not arguments.get("replacementSpec", "").strip() or not 0 < len(value) <= 50:
+                requirements = arguments.get("spec" if action == "amend" else "replacementSpec", "")
+                if not requirements.strip() or not 0 < len(value) <= 50:
                     raise ValueError("replacementNodes requires replacementSpec and 1 to 50 nodes")
                 ids = [node.get("id") for node in value if isinstance(node, dict)]
                 if len(ids) != len(value) or any(not isinstance(identity, str) or not _ID.fullmatch(identity) or len(identity) > 64 for identity in ids) or len(set(ids)) != len(ids):
@@ -204,6 +210,8 @@ def command(arguments: dict) -> tuple[list[str], dict[str, str]]:
             raise ValueError(field + " must be an array of nonempty strings")
         for value in values:
             argv += ["--" + flag, value]
+    if action == "complete" and arguments.get("artifacts") == []:
+        argv.append("--no-artifacts")
     if action in {"files_read", "files_get"} and not (arguments.get("name") or arguments.get("artifactId")):
         raise ValueError("name or artifactId required")
     env = os.environ.copy()

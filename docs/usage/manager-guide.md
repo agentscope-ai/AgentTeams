@@ -36,7 +36,7 @@ The Manager is configured via environment variables set during installation. The
 | `AGENTTEAMS_DATA_DIR` | No | `agentteams-data` | Docker volume name for persistent data |
 | `AGENTTEAMS_MOUNT_SOCKET` | No | `1` | Mount container runtime socket for direct Worker creation |
 | `AGENTTEAMS_YOLO` | No | - | Set to `1` to enable YOLO mode (autonomous decisions, no interactive prompts) |
-| `AGENTTEAMS_MANAGER_RUNTIME` | No | `qwenpaw` | Manager Harness: `qwenpaw` (default), `openclaw`, `hermes`, `deepseek-harness`, or `openhuman`. |
+| `AGENTTEAMS_MANAGER_RUNTIME` | No | `qwenpaw` | Manager Harness: `qwenpaw` (default), `hermes`, `deepseek-harness`, or `openhuman`. |
 
 Manager runtime choices are `qwenpaw`, `openclaw`, `hermes`, `deepseek-harness`, and `openhuman`. `copaw` remains a compatibility alias for the QwenPaw Manager. Each runtime uses the same Harness image and entrypoint as its Workers and Leaders; role prompts, credentials, and permissions come from the controller. Set `manager.runtime` in Helm; the local installer's interactive choices are QwenPaw and OpenClaw. An explicit Manager image override must support this role contract.
 

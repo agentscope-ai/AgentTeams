@@ -16,6 +16,7 @@ type taskHandoff struct {
 	SubmissionID string `json:"submissionId"`
 	ActorName    string `json:"actorName"`
 	ActorRole    string `json:"actorRole"`
+	Note         string `json:"note,omitempty"`
 }
 
 func taskHandoffOf(task map[string]any) *taskHandoff {

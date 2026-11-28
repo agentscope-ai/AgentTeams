@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 
@@ -33,6 +33,7 @@ def test_start_uses_actual_instance_and_create_if_absent():
 
 def test_resume_keeps_conditional_version_and_reads_pending_without_project_list():
     current = snapshot()
+    current["state"]["active_start"]["instance_id"] = "previous-instance"
     request = Mock(side_effect=[current, {"etag": "started", "state": current["state"]},
                                 {"etag": "ingested", "state": current["state"]}, {"event_id": "$one"}])
     recovery = Mock(process="actual-process", request=request)
@@ -43,6 +44,16 @@ def test_resume_keeps_conditional_version_and_reads_pending_without_project_list
     assert request.call_args_list[2].args[3] == "started"
     assert state.pending(updated) == [{"event_id": "$one"}]
     assert request.call_args.args == ("GET", "runtime/matrix/events/event-key")
+
+
+def test_repeated_start_does_not_race_with_matrix_or_tool_checkpoint_writes():
+    current = snapshot()
+    request = Mock(return_value=current)
+    recovery = Mock(process="actual-process", request=request)
+    matrix = WorkerMatrix("hermes", recovery=recovery)
+    assert matrix.start() is current
+    assert matrix.start() is current
+    assert request.call_args_list == [call("GET", "runtime/matrix"), call("GET", "runtime/matrix")]
 
 
 @pytest.mark.parametrize("change", ["actual-runtime", "process", "consumer-runtime"])

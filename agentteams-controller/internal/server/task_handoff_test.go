@@ -103,9 +103,7 @@ func TestTaskHandoffReviewFailureRepairsAndRechecksWithinSameMainTask(t *testing
 	failed := taskPlanExecutionID("alpha", "main", "R")
 	submission := submitPlannedCandidate(t, h, store, failed, "second-cr", "Wrong title; must match original request", "REVISION_NEEDED")
 	tester := taskPlanExecutionID("alpha", "main", "T")
-	if _, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+tester+"/meta.json"); err == nil {
-		t.Fatal("failed review released testing")
-	}
+	assertPlannedTaskWaiting(t, store, "teams/alpha/shared/tasks/"+tester+"/meta.json")
 	req := taskReviewRequest{SubmissionID: submission, Note: "Review found exact title mismatch", ReplacementSpec: "Restore exact requested title and independently recheck corrected head", ReplacementNodes: []taskPlanNode{
 		{ID: "fix", AssignedTo: "worker-cr", Spec: "Correct implementation using immutable original input", DependsOn: []string{}},
 		{ID: "review", AssignedTo: "second-cr", Spec: "Independently review correction", DependsOn: []string{"fix"}},
@@ -161,9 +159,7 @@ func TestTaskHandoffReviewFailureRepairsAndRechecksWithinSameMainTask(t *testing
 		t.Fatalf("retry: %d %s", retry.Code, retry.Body.String())
 	}
 	submitPlannedCandidate(t, h, store, fix, "worker-cr", "Corrected title at new head")
-	if _, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+tester+"/meta.json"); err == nil {
-		t.Fatal("correction bypassed independent re-review")
-	}
+	assertPlannedTaskWaiting(t, store, "teams/alpha/shared/tasks/"+tester+"/meta.json")
 	assertSender(review, "worker-cr")
 	submitPlannedCandidate(t, h, store, review, "second-cr", "Correction independently verified")
 	next, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+tester+"/meta.json")
@@ -206,9 +202,7 @@ func TestTaskHandoffRecoversSavedDeliveryAfterParentOutage(t *testing.T) {
 	id := taskPlanExecutionID("alpha", "main", "A")
 	submission := submitPlannedCandidate(t, h, store, id, "worker-cr", "Delivered once")
 	nextID := taskPlanExecutionID("alpha", "main", "C")
-	if _, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+nextID+"/meta.json"); err == nil {
-		t.Fatal("downstream dispatched before parent committed")
-	}
+	assertPlannedTaskWaiting(t, store, "teams/alpha/shared/tasks/"+nextID+"/meta.json")
 	fault.fail = false
 	for i := 0; i < 2; i++ {
 		h.recoverTaskNotifications(t.Context())

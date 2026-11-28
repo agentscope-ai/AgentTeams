@@ -15,13 +15,15 @@ RUNNER = (ROOT / 'tests/run-all-tests.sh').read_text()
 
 
 class IntegrationSchedulingTest(unittest.TestCase):
-    def matrix(self, untrusted=False):
+    def matrix(self, untrusted=False, qwenpaw_only=False):
         steps = yaml.safe_load(WORKFLOW)['jobs']['detect-changes']['steps']
         script = next(step['run'] for step in steps if step.get('id') == 'test-matrix')
         with tempfile.NamedTemporaryFile() as output:
             subprocess.run(['bash', '-eu', '-c', script], check=True, env={
                 **os.environ, 'GITHUB_OUTPUT': output.name,
                 'UNTRUSTED_PR': str(untrusted).lower(),
+                'QWENPAW_ONLY': str(qwenpaw_only).lower(),
+                'RUN_MODELS': 'true',
             })
             return json.loads(Path(output.name).read_text().removeprefix('matrix='))['include']
 
@@ -60,6 +62,18 @@ class IntegrationSchedulingTest(unittest.TestCase):
         self.assertEqual(len(matrix), 3)
         self.assertTrue(all(not entry['requires_secret'] for entry in matrix))
         self.assertTrue(any(entry['worker_runtime'] == 'qwenpaw' for entry in matrix))
+
+    def test_pull_requests_only_run_qwenpaw(self):
+        filters = yaml.safe_load(WORKFLOW)['env']
+        for untrusted, expected_count in [(False, 3), (True, 1)]:
+            with self.subTest(untrusted=untrusted):
+                matrix = self.matrix(untrusted=untrusted, qwenpaw_only=True)
+                self.assertEqual(len(matrix), expected_count)
+                self.assertEqual({(row['manager_runtime'], row['worker_runtime']) for row in matrix},
+                                 {('qwenpaw', 'qwenpaw')})
+                controller = next(row for row in matrix if row['shard'] == 'controller-cr')
+                full = set(filters['SHARD_C_QWENPAW_TESTS'].split())
+                self.assertEqual(set(filters[controller['filter_env']].split()), full - {'23', '29'})
 
     def test_mcp_probe_uses_configured_environment(self):
         script = (ROOT / 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh').read_text()

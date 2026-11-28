@@ -6,6 +6,9 @@ on:
       targets:
         required: true
         type: string
+      exclude_target:
+        type: string
+        default: ''
       controller:
         type: boolean
         default: false
@@ -29,6 +32,8 @@ jobs:
       fail-fast: false
       matrix:
         target: ${{ fromJSON(inputs.targets) }}
+        exclude:
+          - target: ${{ inputs.exclude_target }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -77,12 +82,12 @@ jobs:
           # Dependencies were built once by the caller and loaded above.
           EXTRA=()
           MAKE_ARGS=()
-          BUILD_NETWORK=()
+          BUILD_NETWORK=""
           # The all-in-one base's APT fetches fail DNS resolution in the
           # BuildKit sandbox on hosted runners; use the runner network only
           # for this build, without changing the resulting image network.
           if [ "${{ matrix.target }}" = embedded ]; then
-            BUILD_NETWORK=(--network=host)
+            BUILD_NETWORK=--network=host
           fi
           if [ "${{ inputs.controller }}" = true ]; then
             MAKE_ARGS+=(-o build-agentteams-controller)
@@ -102,17 +107,12 @@ jobs:
           fi
           make "${MAKE_ARGS[@]}" "build-$BUILD_TARGET" \
             HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
-            DOCKER_BUILD_ARGS="${BUILD_NETWORK[*]} --build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/" \
+            DOCKER_BUILD_ARGS="${BUILD_NETWORK} --build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/" \
             "${EXTRA[@]}"
 
       - name: Smoke-test packaged DeepSeek Harness
         if: matrix.target == 'deepseek-harness-worker'
-        run: |
-          # Match the Harness smoke target when bypassing its entrypoint.
-          docker run --rm --entrypoint python3 \
-            -e PYTHONPATH=/opt/agentteams/scripts:/opt/agentteams/scripts/lib \
-            -v "$PWD/deepseek-harness/tests/headless_smoke.py:/tmp/headless_smoke.py:ro" \
-            agentteams/agentteams-harness-deepseek:latest /tmp/headless_smoke.py
+        run: make -C deepseek-harness smoke IMAGE=agentteams/agentteams-harness-deepseek VERSION=latest
 
       - name: Save image
         run: |

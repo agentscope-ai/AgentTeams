@@ -108,6 +108,7 @@ env:
   SHARD_A_TESTS: "01 02 03 04 05 06"
   SHARD_C_TESTS: "15 17 18 19 20 22 24 100"
   SHARD_C_QWENPAW_TESTS: "15 17 18 19 20 22 23 24 25 27 28 29 100"
+  SHARD_C_QWENPAW_PR_TESTS: "15 17 18 19 20 22 24 25 27 28 100"
   SHARD_QWENPAW_TESTS: "26"
   NON_GITHUB_TESTS: "01 02 03 04 05 06 15 17 18 19 20 22 23 24 25 27 28 100"
 
@@ -144,6 +145,7 @@ jobs:
         env:
           UNTRUSTED_PR: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]') }}
           RUN_MODELS: ${{ steps.plan.outputs.run_models }}
+          QWENPAW_ONLY: ${{ github.event_name == 'pull_request' }}
         run: |
           MATRIX='[
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
@@ -157,13 +159,18 @@ jobs:
           if [ "$UNTRUSTED_PR" = "true" ] || [ "${RUN_MODELS:-true}" = false ]; then
             MATRIX=$(echo "$MATRIX" | jq -c '[.[] | select(.requires_secret == false)]')
           fi
+          if [ "${QWENPAW_ONLY:-false}" = true ]; then
+            # Runtime switching (23) and legacy CoPaw upgrade (29) need other images.
+            MATRIX=$(echo "$MATRIX" | jq -c '[.[] | select(.manager_runtime == "qwenpaw" and .worker_runtime == "qwenpaw") |
+              if .shard == "controller-cr" then .filter_env = "SHARD_C_QWENPAW_PR_TESTS" else . end]')
+          fi
           MATRIX=$(echo "$MATRIX" | jq -c '.')
           echo "matrix={\"include\":$MATRIX}" >> "$GITHUB_OUTPUT"
 
   # Registry/source-base failures affect only OpenClaw consumers.
   resolve-openclaw-base:
     needs: detect-changes
-    if: needs.detect-changes.outputs.run_builds == 'true'
+    if: github.event_name != 'pull_request' && needs.detect-changes.outputs.run_builds == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -350,6 +357,7 @@ jobs:
     uses: ./.github/workflows/build-integration-images.yml
     with:
       targets: '["qwenpaw-worker", "deepseek-harness-worker"]'
+      exclude_target: ${{ github.event_name == 'pull_request' && 'deepseek-harness-worker' || '' }}
       controller: true
     secrets: inherit
 
@@ -359,14 +367,15 @@ jobs:
     uses: ./.github/workflows/build-integration-images.yml
     with:
       targets: '["embedded", "hermes-worker"]'
+      exclude_target: ${{ github.event_name == 'pull_request' && 'hermes-worker' || '' }}
       controller: true
     secrets: inherit
 
   build-images-openclaw:
     needs: [detect-changes, resolve-openclaw-base, build-base, build-openclaw-base]
     if: |
-      always() && needs.detect-changes.result == 'success' &&
-      needs.detect-changes.outputs.run_builds == 'true' &&
+      always() && github.event_name != 'pull_request' &&
+      needs.detect-changes.result == 'success' && needs.detect-changes.outputs.run_builds == 'true' &&
       needs.resolve-openclaw-base.result == 'success' &&
       needs.build-base.result == 'success' &&
       (needs.build-openclaw-base.result == 'success' || needs.build-openclaw-base.result == 'skipped')
@@ -385,7 +394,8 @@ jobs:
       always() && needs.detect-changes.result == 'success' && needs.deepseek-harness-tests.result == 'success' &&
       needs.build-images-independent.result == 'success' &&
       needs.build-images-controller.result == 'success' &&
-      needs.build-images-openclaw.result == 'success'
+      (needs.build-images-openclaw.result == 'success' ||
+       (github.event_name == 'pull_request' && needs.build-images-openclaw.result == 'skipped'))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:

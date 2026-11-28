@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import tempfile
 import unittest
@@ -12,17 +13,20 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / '.github/workflows/test-integration.yml').read_text()
 RUNNER = (ROOT / 'tests/run-all-tests.sh').read_text()
+SELECT = runpy.run_path(str(ROOT / 'hack/ci-integration-plan.py'))['select_harnesses']
 
 
 class IntegrationSchedulingTest(unittest.TestCase):
-    def matrix(self, untrusted=False, qwenpaw_only=False):
+    def matrix(self, untrusted=False, event='push', labels=()):
+        selected = SELECT(event, labels)
         steps = yaml.safe_load(WORKFLOW)['jobs']['detect-changes']['steps']
         script = next(step['run'] for step in steps if step.get('id') == 'test-matrix')
         with tempfile.NamedTemporaryFile() as output:
             subprocess.run(['bash', '-eu', '-c', script], check=True, env={
                 **os.environ, 'GITHUB_OUTPUT': output.name,
                 'UNTRUSTED_PR': str(untrusted).lower(),
-                'QWENPAW_ONLY': str(qwenpaw_only).lower(),
+                'HARNESSES': json.dumps(selected['harnesses']),
+                'FULL_MATRIX': json.dumps(selected['full_matrix']),
                 'RUN_MODELS': 'true',
             })
             return json.loads(Path(output.name).read_text().removeprefix('matrix='))['include']
@@ -67,13 +71,25 @@ class IntegrationSchedulingTest(unittest.TestCase):
         filters = yaml.safe_load(WORKFLOW)['env']
         for untrusted, expected_count in [(False, 3), (True, 1)]:
             with self.subTest(untrusted=untrusted):
-                matrix = self.matrix(untrusted=untrusted, qwenpaw_only=True)
+                matrix = self.matrix(untrusted=untrusted, event='pull_request')
                 self.assertEqual(len(matrix), expected_count)
                 self.assertEqual({(row['manager_runtime'], row['worker_runtime']) for row in matrix},
                                  {('qwenpaw', 'qwenpaw')})
                 controller = next(row for row in matrix if row['shard'] == 'controller-cr')
                 full = set(filters['SHARD_C_QWENPAW_TESTS'].split())
                 self.assertEqual(set(filters[controller['filter_env']].split()), full - {'23', '29'})
+
+    def test_pr_label_adds_only_its_integration_shards(self):
+        qwen_and_hermes = self.matrix(event='pull_request', labels=['CI：HARNESS-HERMES'])
+        self.assertEqual(len(qwen_and_hermes), 5)
+        self.assertEqual({row['worker_runtime'] for row in qwen_and_hermes}, {'qwenpaw', 'hermes'})
+        self.assertEqual(self.matrix(event='pull_request', labels=['ci:harness-codex']),
+                         self.matrix(event='pull_request'))
+
+    def test_all_label_keeps_full_matrix_and_fork_secret_guard(self):
+        for untrusted in (False, True):
+            self.assertEqual(self.matrix(untrusted=untrusted, event='pull_request', labels=['CI：All']),
+                             self.matrix(untrusted=untrusted))
 
     def test_mcp_probe_uses_configured_environment(self):
         script = (ROOT / 'tests/test-26-qwenpaw-teamharness-plugin-mode.sh').read_text()

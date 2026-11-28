@@ -2,32 +2,8 @@ name: Integration Tests
 
 on:
   pull_request:
-    branches:
-      - main
-    paths:
-      - 'manager/**'
-      - 'worker'
-      - 'worker/**'
-      - 'openclaw-base/**'
-      - 'agentteams-controller/**'
-      - 'tests/**'
-      - 'install/**'
-      - 'shared/**'
-      - 'qwenpaw'
-      - 'qwenpaw/**'
-      - 'hermes'
-      - 'hermes/**'
-      - '.gitmodules'
-      - 'deepseek-harness'
-      - 'deepseek-harness/**'
-      - 'plugins/teamharness/**'
-      - 'plugins/workerflow/adapters/qwenpaw/**'
-      - 'Makefile'
-      - 'hack/versions.env'
-      - 'hack/ci-*.py'
-      - 'hack/install-mc.py'
-      - '.github/workflows/build-integration-images.yml'
-      - '.github/workflows/test-integration.yml'
+    branches: [main]
+    types: [opened, reopened, synchronize, labeled, unlabeled]
   push:
     branches:
       - main
@@ -122,6 +98,8 @@ jobs:
       base_changed: ${{ steps.plan.outputs.base_changed }}
       test_matrix: ${{ steps.test-matrix.outputs.matrix }}
       run_builds: ${{ steps.plan.outputs.run_builds }}
+      harnesses: ${{ steps.plan.outputs.harnesses }}
+      native_harnesses: ${{ steps.plan.outputs.native_harnesses }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -145,7 +123,8 @@ jobs:
         env:
           UNTRUSTED_PR: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]') }}
           RUN_MODELS: ${{ steps.plan.outputs.run_models }}
-          QWENPAW_ONLY: ${{ github.event_name == 'pull_request' }}
+          HARNESSES: ${{ steps.plan.outputs.harnesses }}
+          FULL_MATRIX: ${{ steps.plan.outputs.full_matrix }}
         run: |
           MATRIX='[
             {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
@@ -159,10 +138,13 @@ jobs:
           if [ "$UNTRUSTED_PR" = "true" ] || [ "${RUN_MODELS:-true}" = false ]; then
             MATRIX=$(echo "$MATRIX" | jq -c '[.[] | select(.requires_secret == false)]')
           fi
-          if [ "${QWENPAW_ONLY:-false}" = true ]; then
-            # Runtime switching (23) and legacy CoPaw upgrade (29) need other images.
-            MATRIX=$(echo "$MATRIX" | jq -c '[.[] | select(.manager_runtime == "qwenpaw" and .worker_runtime == "qwenpaw") |
-              if .shard == "controller-cr" then .filter_env = "SHARD_C_QWENPAW_PR_TESTS" else . end]')
+          if [ "${FULL_MATRIX:-true}" = false ]; then
+            # The full matrix also exercises OpenClaw switching (23) and the legacy CoPaw upgrade (29).
+            MATRIX=$(echo "$MATRIX" | jq -c --argjson selected "$HARNESSES" '[.[] |
+              select((.worker_runtime as $worker | $selected | index($worker)) and
+                     (.manager_runtime as $manager | $selected | index($manager))) |
+              if .shard == "controller-cr" and .worker_runtime == "qwenpaw"
+              then .filter_env = "SHARD_C_QWENPAW_PR_TESTS" else . end]')
           fi
           MATRIX=$(echo "$MATRIX" | jq -c '.')
           echo "matrix={\"include\":$MATRIX}" >> "$GITHUB_OUTPUT"
@@ -170,7 +152,7 @@ jobs:
   # Registry/source-base failures affect only OpenClaw consumers.
   resolve-openclaw-base:
     needs: detect-changes
-    if: github.event_name != 'pull_request' && needs.detect-changes.outputs.run_builds == 'true'
+    if: contains(fromJSON(needs.detect-changes.outputs.harnesses), 'openclaw') && needs.detect-changes.outputs.run_builds == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -357,7 +339,7 @@ jobs:
     uses: ./.github/workflows/build-integration-images.yml
     with:
       targets: '["qwenpaw-worker", "deepseek-harness-worker"]'
-      exclude_target: ${{ github.event_name == 'pull_request' && 'deepseek-harness-worker' || '' }}
+      exclude_target: ${{ !contains(fromJSON(needs.detect-changes.outputs.harnesses), 'deepseek') && 'deepseek-harness-worker' || '' }}
       controller: true
     secrets: inherit
 
@@ -367,15 +349,16 @@ jobs:
     uses: ./.github/workflows/build-integration-images.yml
     with:
       targets: '["embedded", "hermes-worker"]'
-      exclude_target: ${{ github.event_name == 'pull_request' && 'hermes-worker' || '' }}
+      exclude_target: ${{ !contains(fromJSON(needs.detect-changes.outputs.harnesses), 'hermes') && 'hermes-worker' || '' }}
       controller: true
     secrets: inherit
 
   build-images-openclaw:
     needs: [detect-changes, resolve-openclaw-base, build-base, build-openclaw-base]
     if: |
-      always() && github.event_name != 'pull_request' &&
-      needs.detect-changes.result == 'success' && needs.detect-changes.outputs.run_builds == 'true' &&
+      always() && needs.detect-changes.result == 'success' &&
+      contains(fromJSON(needs.detect-changes.outputs.harnesses), 'openclaw') &&
+      needs.detect-changes.outputs.run_builds == 'true' &&
       needs.resolve-openclaw-base.result == 'success' &&
       needs.build-base.result == 'success' &&
       (needs.build-openclaw-base.result == 'success' || needs.build-openclaw-base.result == 'skipped')
@@ -387,6 +370,75 @@ jobs:
       published_base_ref: ${{ needs.resolve-openclaw-base.outputs.openclaw_base_ref }}
     secrets: inherit
 
+  # These adapters have separate native CI rather than Core embedded shards.
+  native-harness-regressions:
+    needs: [detect-changes, build-base]
+    if: needs.detect-changes.outputs.native_harnesses != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: ${{ fromJSON(needs.detect-changes.outputs.native_harnesses) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Read the pinned Harness commit
+        if: matrix.harness != 'openhuman'
+        id: harness
+        env:
+          HARNESS: ${{ matrix.harness }}
+        run: |
+          case "$HARNESS" in
+            codex) key=CODEX_REF ;;
+            claudecode) key=CLAUDECODE_REF ;;
+            *) exit 1 ;;
+          esac
+          ref=$(sed -n "s/^  $key: //p" .github/workflows/publish-harnesses.yml)
+          [[ "$ref" =~ ^[0-9a-f]{40}$ ]]
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: matrix.harness != 'openhuman'
+        with:
+          submodules: recursive
+          repository: agentteams-group/agentteams-harness-${{ matrix.harness }}
+          ref: ${{ steps.harness.outputs.ref }}
+          path: selected-harness
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Run Codex native controls and Trace checks
+        if: matrix.harness == 'codex'
+        run: |
+          make -C selected-harness build AT_CONTEXT="$PWD" IMAGE=agentteams/ci-codex VERSION=latest
+          make -C selected-harness direct-control-smoke native-trace-content-smoke IMAGE=agentteams/ci-codex VERSION=latest
+      - uses: actions/download-artifact@v4
+        if: matrix.harness != 'codex'
+        with:
+          name: image-controller
+          path: /tmp
+      - name: Load the shared Controller image
+        if: matrix.harness != 'codex'
+        run: gunzip -c /tmp/agentteams-controller.tar.gz | docker load
+      - name: Build and test OpenHuman startup and headless gateway
+        if: matrix.harness == 'openhuman'
+        run: |
+          make -o build-agentteams-controller build-openhuman-worker \
+            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR="
+          make -C openhuman smoke IMAGE=agentteams/agentteams-harness-openhuman VERSION=latest
+      - name: Build and test Claude Code against this Core
+        if: matrix.harness == 'claudecode'
+        run: |
+          docker build --build-context agentteams=. \
+            --build-arg AGENTTEAMS_CONTROLLER_IMAGE=agentteams/agentteams-controller:latest \
+            -t agentteams/ci-claudecode:latest selected-harness
+          docker run --rm --entrypoint sh --workdir /core/selected-harness \
+            -e AGENTTEAMS_CORE_DIR=/core \
+            -e PYTHONPATH=/core/shared/lib/telemetry:/core/shared/lib \
+            -v "$PWD:/core:ro" agentteams/ci-claudecode:latest \
+            -ec 'python -m pip install pytest; python -m pytest /core/selected-harness/tests -q -p no:cacheprovider'
+
   # Step 3: Run test shards in parallel, each on its own runner with isolated cluster
   integration-tests:
     needs: [detect-changes, deepseek-harness-tests, build-images-independent, build-images-controller, build-images-openclaw]
@@ -395,7 +447,8 @@ jobs:
       needs.build-images-independent.result == 'success' &&
       needs.build-images-controller.result == 'success' &&
       (needs.build-images-openclaw.result == 'success' ||
-       (github.event_name == 'pull_request' && needs.build-images-openclaw.result == 'skipped'))
+       (!contains(fromJSON(needs.detect-changes.outputs.harnesses), 'openclaw') &&
+        needs.build-images-openclaw.result == 'skipped'))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:

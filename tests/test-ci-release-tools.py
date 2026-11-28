@@ -2,6 +2,7 @@
 import gzip
 import json
 import os
+import re
 from pathlib import Path
 import runpy
 import subprocess
@@ -257,6 +258,24 @@ class WorkflowPlanTests(unittest.TestCase):
         self.assertIn("needs.resolve-openclaw-base.result == 'success'", openclaw['if'])
         self.assertIn("needs.build-base.result == 'success'", openclaw['if'])
         self.assertIn("needs.build-openclaw-base.result == 'skipped'", openclaw['if'])
+
+    def test_pull_request_image_builds_only_qwenpaw_and_embedded(self):
+        jobs = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())['jobs']
+        reusable = yaml.safe_load((ROOT / '.github/workflows/build-integration-images.yml').read_text())
+        self.assertEqual(reusable['jobs']['build']['strategy']['matrix']['exclude'],
+                         [{'target': '${{ inputs.exclude_target }}'}])
+        selected = set()
+        for group in ('build-images-independent', 'build-images-controller'):
+            inputs = jobs[group]['with']
+            exclude = re.fullmatch(r"\$\{\{ github.event_name == 'pull_request' && '([^']+)' \|\| '' \}\}",
+                                  inputs['exclude_target'])
+            self.assertIsNotNone(exclude, group)
+            selected.update(set(json.loads(inputs['targets'])) - {exclude.group(1)})
+        self.assertEqual(selected, {'qwenpaw-worker', 'embedded'})
+        self.assertIn("github.event_name != 'pull_request'", jobs['resolve-openclaw-base']['if'])
+        self.assertIn("github.event_name != 'pull_request'", jobs['build-images-openclaw']['if'])
+        self.assertIn("github.event_name == 'pull_request' && needs.build-images-openclaw.result == 'skipped'",
+                      jobs['integration-tests']['if'])
 
     def test_consumers_build_with_local_shared_or_immutable_published_base(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/build-integration-images.yml').read_text())

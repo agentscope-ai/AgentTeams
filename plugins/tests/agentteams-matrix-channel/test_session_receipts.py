@@ -151,7 +151,7 @@ def test_started_receipt_service_never_sends_legacy_read_at_enqueue():
     spec.loader.exec_module(channel_module)
     channel = channel_module.AgentTeamsMatrixChannel(process=lambda *a, **kw: None)
     channel._user_id = '@bot:hs'
-    channel._session_receipts = SimpleNamespace(submit=AsyncMock())
+    channel._session_receipts = SimpleNamespace(submit=AsyncMock(), was_completed=AsyncMock(return_value=False))
     channel._is_dm_room = AsyncMock(return_value=True)
     channel._send_typing = AsyncMock()
     channel._send_read_receipt = AsyncMock()

@@ -601,3 +601,11 @@ MCP 初始化握手不应因为本轮业务上下文暂未绑定而直接终止�
 ### Admission failure before native dispatch
 
 If checkpoint publication and its exact readback are both unavailable, the common Task and ordinary-message admission helpers must retain a durable error receipt stating that the native body was not dispatched, then return the original failure. Only record this at the admission boundary before returning the operation ID to the adapter. Do not apply it after native invocation, infer an effect from an HTTP code, overwrite an existing native return, or replay a completed call ID. Recovery still validates ownership, call identities and checkpoint evidence through the normal finish API. This is shared Core behavior, not a runtime-specific error-code adapter or a YAML schema extension. Cover both admission paths, unavailable readback, duplicate calls and immutable receipt conflicts.
+
+### Recovery polling and standalone test dependencies
+
+Repeated registration of the same actual Worker instance, process and runtime must not rewrite the shared Matrix state. Polling and tool hooks share its conditional version; only an actual startup change needs a registration write. Subsequent cursor and tool writes still require their normal ownership and conditional checks.
+
+Run Harness tests against the explicitly selected shared Core source, including its telemetry library. Tests that require an installed native SDK must run in the native-image job as well as the lightweight suite; an optional import in a lightweight environment is not native acceptance. Use both unittest-style and pytest-style collection when the repository contains both.
+
+Polling recovery tests must supply a finite sequence of failures followed by success and an explicit test stop. Verify bounded backoff and preservation of the same process/state, rather than expecting the bridge to exit after three failures. A mocked sleep with a permanently failing poll can make a test spin indefinitely and does not demonstrate a runtime crash.

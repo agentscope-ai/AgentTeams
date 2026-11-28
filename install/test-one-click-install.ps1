@@ -4,7 +4,7 @@ $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../.installer-source/public/install.ps1'), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
 $definitions = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
-foreach ($name in @('Test-ShouldSkipStep', 'Step-Llm', 'Read-Prompt', 'Step-Admin', 'Step-Ports', 'Step-Domains', 'Step-Github', 'Step-Skills', 'Start-AgentTeamsDashboard')) {
+foreach ($name in @('Test-ShouldSkipStep', 'Step-Llm', 'Read-Prompt', 'Step-Admin', 'Step-Ports', 'Step-Domains', 'Step-Github', 'Step-Skills', 'Start-AgentTeamsDashboard', 'Invoke-DockerLogged', 'Get-DashboardBrowserUrl')) {
     Invoke-Expression ($definitions | Where-Object Name -eq $name | Select-Object -First 1).Extent.Text
 }
 function Write-Log { param($Message) }
@@ -37,6 +37,11 @@ $script:config.MINIO_USER = 'admin'
 $script:config.MINIO_PASSWORD = 'synthetic-storage-password'
 $script:dockerCalls = [System.Collections.Generic.List[string]]::new()
 function docker { $script:dockerCalls.Add(($args -join ' ')); $global:LASTEXITCODE = 0 }
+function Wait-UnifiedEntry {}
+$script:CONTROLLER_CONTAINER = 'agentteams-controller'
+$script:DASHBOARD_CONTAINER = 'agentteams-dashboard'
+$script:DASHBOARD_VOLUME = 'agentteams-dashboard-data'
+$script:DOCKER_NETWORK = 'agentteams-net'
 function Invoke-WebRequest { return @{ StatusCode = 200 } }
 function Set-Clipboard { param($Value) $script:copiedPassword = $Value }
 function Start-Process { param($FilePath) $script:openedUrl = $FilePath }
@@ -44,5 +49,5 @@ Start-AgentTeamsDashboard
 if ($script:copiedPassword -ne $script:config.ADMIN_PASSWORD) { throw 'Password was not copied' }
 if ($script:openedUrl -ne 'http://127.0.0.1:13000/?username=admin') { throw 'Wrong Dashboard URL' }
 if ($script:openedUrl.Contains($script:config.ADMIN_PASSWORD)) { throw 'Password leaked to URL' }
-if (-not ($script:dockerCalls | Where-Object { $_ -match 'run -d --name agentteams-dashboard' })) { throw 'Dashboard was not started' }
+if (-not ($script:dockerCalls | Where-Object { $_ -match '^run -d (?:.* )?--name agentteams-dashboard(?: |$)' })) { throw 'Dashboard was not started' }
 Write-Host 'PowerShell one-click install tests passed'

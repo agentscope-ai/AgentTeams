@@ -233,6 +233,7 @@ jobs:
 
       - name: Run DeepSeek Harness bridge tests
         run: |
+          python3 -m pip install --break-system-packages -r deepseek-harness/requirements-test.txt
           make -C deepseek-harness test
 
   mcp-setup-tests:

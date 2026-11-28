@@ -109,6 +109,7 @@ FAKE_CALLS="${workdir}/fake-calls"
 : > "${FAKE_CALLS}"
 fake_docker() {
     if [ "$1" = "inspect" ]; then
+        [ "$2" = "${CONTROLLER_CONTAINER}" ] || return 1
         case "${FAKE_MODE}" in
             named) printf '%s\n' "custom-data" ;;
             bind)  printf '%s\n' "/data/my data" ;;
@@ -126,6 +127,7 @@ fake_docker() {
     return 0
 }
 DOCKER_CMD="fake_docker"
+CONTROLLER_CONTAINER="fixture-controller"
 
 # (1) Named volume: the identifier must be the volume name, not the
 # /var/lib/docker/volumes/... internal path.

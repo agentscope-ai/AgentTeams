@@ -30,6 +30,11 @@ class WorkerMatrix:
         if snapshot["runtime"] != self.runtime:
             raise RecoveryConflict("Actual Worker Harness differs from this native adapter")
         body = {"action": "start", "instance_id": snapshot["instance_id"], "process_id": self.recovery.process}
+        active = snapshot["state"].get("active_start") or {}
+        # Polling and tool hooks share this state; an unchanged start needs no write.
+        if snapshot["etag"] and active == {"instance_id": snapshot["instance_id"],
+                                           "process_id": self.recovery.process, "runtime": self.runtime}:
+            return snapshot
         if snapshot["etag"]:
             saved = self.recovery.request("POST", "runtime/matrix", body, snapshot["etag"])
         else:

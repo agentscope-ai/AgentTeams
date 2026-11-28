@@ -89,7 +89,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: agentteams-group/agentteams-group.github.io
-          ref: 5aeeacaf9f5288f1fa00c94177f9c3852a822720
+          ref: 4a6e1bce6cfe677ca8d344d95b0c25eb2784bf4f
           path: .installer-source
           persist-credentials: false
 

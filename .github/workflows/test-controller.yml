@@ -769,7 +769,7 @@ jobs:
           python -m pip install \
             'matrix-nio[e2e]>=0.26,<0.27' \
             'PyYAML>=6.0,<7' \
-            'qwenpaw>=2.2.1,<2.3' \
+            -e ./qwenpaw \
             'pytest>=8.3,<10' \
             'pytest-asyncio>=0.23,<2'
 

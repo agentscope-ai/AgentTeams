@@ -90,11 +90,12 @@ func (d *Deployer) deployManagerRuntimeConfig(ctx context.Context, req ManagerDe
 	spec := v1beta1.WorkerSpec{
 		Runtime: req.Spec.Runtime, Model: req.Spec.Model, ModelProvider: req.Spec.ModelProvider,
 		Soul: req.Spec.Soul, Agents: req.Spec.Agents, Skills: req.Spec.Skills,
-		McpServers: req.Spec.McpServers, Package: req.Spec.Package, State: req.Spec.State,
+		ApprovalMode: req.Spec.ApprovalMode, McpServers: req.Spec.McpServers, Package: req.Spec.Package, State: req.Spec.State,
 	}
 	doc, err := d.memberRuntimeConfigDocument(MemberRuntimeConfigDeployRequest{
 		Name: req.Name, RuntimeName: "manager", Role: "manager", Spec: spec,
-		Generation: req.Generation, MatrixUserID: req.MatrixUserID,
+		Observability: req.Observability,
+		Generation:    req.Generation, MatrixUserID: req.MatrixUserID,
 		PersonalRoomID: req.RoomID, AIGatewayURL: req.AIGatewayURL,
 	}, "manager")
 	if err != nil {
@@ -160,6 +161,7 @@ type memberRuntimeConfigMatrix struct {
 }
 
 type memberRuntimeConfigDesired struct {
+	ApprovalMode       string                            `json:"approvalMode,omitempty"`
 	Model              *memberRuntimeConfigModel         `json:"model,omitempty"`
 	SubagentModel      *memberRuntimeConfigModel         `json:"subagentModel,omitempty"`
 	AgentPackage       *memberRuntimeConfigAgentPackage  `json:"agentPackage,omitempty"`
@@ -440,7 +442,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 		runtime = req.Spec.Runtime
 	}
 	if runtime == "" {
-		runtime = "openclaw"
+		runtime = backend.ResolveRuntime("", "")
 	}
 	role := strings.TrimSpace(req.Role)
 	if role == "" {
@@ -448,6 +450,7 @@ func (d *Deployer) memberRuntimeConfigDocument(req MemberRuntimeConfigDeployRequ
 	}
 
 	desired := memberRuntimeConfigDesired{
+		ApprovalMode:       req.Spec.ApprovalMode,
 		MCPServers:         req.Spec.McpServers,
 		ChannelPolicy:      req.Spec.ChannelPolicy,
 		AgentIdentity:      runtimeAgentIdentity(req.Spec),

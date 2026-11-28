@@ -16,7 +16,7 @@ import (
 )
 
 func taskSubmitCmd() *cobra.Command {
-	var team, summary, report, status string
+	var team, summary, report, status, handoff string
 	var files []string
 	cmd := &cobra.Command{Use: "submit <task-id>", Short: "Publish outputs and submit one candidate with an automatic notification receipt", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if !taskIdentifier.MatchString(args[0]) {
@@ -125,7 +125,11 @@ func taskSubmitCmd() *cobra.Command {
 			}
 			artifacts = append(artifacts, ref.ArtifactID)
 		}
-		body, err := json.Marshal(map[string]any{"summary": summary, "report": report, "status": status, "artifacts": artifacts})
+		payload := map[string]any{"summary": summary, "report": report, "status": status, "artifacts": artifacts}
+		if handoff != "" {
+			payload["handoff"] = handoff
+		}
+		body, err := json.Marshal(payload)
 		if err != nil {
 			return err
 		}
@@ -146,6 +150,7 @@ func taskSubmitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&team, "team", "", "Task's owning Team when its ID is ambiguous")
 	cmd.Flags().StringVar(&summary, "summary", "", "Candidate result summary")
 	cmd.Flags().StringVar(&report, "report", "", "Optional detailed result text")
+	cmd.Flags().StringVar(&handoff, "handoff", "", "Optional note for the next stage; the Task system selects the recipient")
 	cmd.Flags().StringVar(&status, "status", "SUCCESS", "Candidate result status")
 	cmd.Flags().StringArrayVar(&files, "file", nil, "Output name relative to this task's output directory; repeat for more files")
 	_ = cmd.MarkFlagRequired("summary")

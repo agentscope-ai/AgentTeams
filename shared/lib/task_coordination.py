@@ -31,6 +31,45 @@ def controller_json(path):
         return json.load(response)
 
 
+def include_task_rooms(rooms, joined, *, fetch=None):
+    """Admit joined Task rooms through current Controller scope, including closed Tasks."""
+    fetch = fetch or controller_json
+    for room in joined:
+        if room in rooms:
+            continue
+        try:
+            binding = fetch("tasks/room-context?roomId=" + urllib.parse.quote(room, safe=""))
+        except urllib.error.HTTPError as error:
+            if error.code in {403, 404}:
+                continue
+            raise
+        if binding.get("taskId"):
+            rooms[room] = "team"
+
+
+def requires_room_history(entry, own, *, fetch=None):
+    """Verified Task lifecycle inputs obtain context from Task state, not chat replay.
+
+    Ordinary chat keeps its ordered history recovery. An unavailable authority
+    lookup stays pending; an unverified packet cannot bypass that boundary.
+    """
+    fetch = fetch or controller_json
+    source = entry.get("input") or {}
+    try:
+        packet = notification(source.get("content") or {}, entry["room_id"],
+            source.get("sender"), own, fetch=fetch, event_id=entry["event_id"])
+    except IgnoredNotification:
+        return True
+    if packet is None:
+        try:
+            binding = fetch("tasks/room-context?roomId=" + urllib.parse.quote(entry["room_id"], safe=""))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise NotificationUnavailable("Task room context unavailable") from exc
+        return not bool(binding.get("taskId"))
+    return packet["meta"]["teamharness_coordination"]["kind"] not in {
+        "handoff", "task_assigned", "task_submitted", "main_task_ready"}
+
+
 def notification(content, room, sender, own, *, fetch=controller_json, event_id=None):
     """Return canonical input/session, None for chat; reject invalid controls.
 
@@ -80,7 +119,8 @@ def notification(content, room, sender, own, *, fetch=controller_json, event_id=
         kind = canonical["kind"]
         if kind in {"task_assigned", "task_submitted"}:
             task = verified_get("tasks/" + urllib.parse.quote(canonical["task_id"], safe="") + "/meta")
-            if any(task.get(k, "") != canonical.get(k, "") for k in ("main_task_id", "project_id")):
+            if (task.get("main_task_id", "") != canonical.get("main_task_id", "")
+                    or (task.get("project_id") or "") != (canonical.get("project_id") or "")):
                 raise IgnoredNotification("task membership changed")
             if kind == "task_assigned":
                 owners = {value for value in (own, own.split(":", 1)[0].lstrip("@"), os.getenv("AGENTTEAMS_WORKER_NAME"), os.getenv("AGENTTEAMS_WORKER_CR_NAME")) if value}

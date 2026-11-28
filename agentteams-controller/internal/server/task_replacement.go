@@ -18,7 +18,11 @@ func taskReviewArchived(main, child map[string]any) bool {
 	attempts := coordinationMap(main, "task_attempts")
 	archived := coordinationMap(attempts, coordinationString(child, "task_id"))
 	var review taskReview
-	encoded, _ := json.Marshal(child["task_review"])
+	record := child["task_review"]
+	if record == nil {
+		record = child["task_revision"]
+	}
+	encoded, _ := json.Marshal(record)
 	_ = json.Unmarshal(encoded, &review)
 	return review.ID != "" && !review.Accepted && review.ReplacementSpec != "" &&
 		archived["review_id"] == review.ID && archived["submission_id"] == review.SubmissionID &&
@@ -26,7 +30,7 @@ func taskReviewArchived(main, child map[string]any) bool {
 }
 
 func validateTaskReplacement(main, child map[string]any) error {
-	if main["task_plan"] == nil || main["status"] != "in_progress" || !taskReviewMembership(main, child) {
+	if main["task_plan"] == nil || (main["status"] != "in_progress" && main["status"] != "planned" && main["status"] != "assigned") || !taskReviewMembership(main, child) {
 		return fmt.Errorf("replacement requires the active managed main-task plan")
 	}
 	// A rejected candidate cannot have released a consumer. Never silently

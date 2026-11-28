@@ -109,9 +109,16 @@ type CredentialBinding struct {
 // control is the gateway operator's responsibility (or, for local Higress
 // deployments, handled out-of-band by Manager skills).
 type MCPServer struct {
-	Name      string `json:"name"`
-	URL       string `json:"url"`
-	Transport string `json:"transport,omitempty"`
+	Approvals *MCPApprovals `json:"approvals,omitempty"`
+	Name      string        `json:"name"`
+	URL       string        `json:"url"`
+	Transport string        `json:"transport,omitempty"`
+}
+
+// MCPApprovals controls native tool calls on this agent's MCP binding.
+type MCPApprovals struct {
+	Tools string `json:"tools"`
+	Mode  string `json:"mode"`
 }
 
 // RemoteSkill identifies one skill from a remote source.
@@ -186,6 +193,9 @@ type Worker struct {
 }
 
 type WorkerSpec struct {
+	// ApprovalMode selects native tool approval behavior without changing sandbox access.
+	// +kubebuilder:validation:Enum=ask;allow
+	ApprovalMode  string `json:"approvalMode,omitempty"`
 	Model         string `json:"model"`
 	ModelProvider string `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
 	// LlmHeartbeatEnabled controls OpenClaw's model-driven autonomous checks.
@@ -229,7 +239,7 @@ type WorkerSpec struct {
 	LlmRateLimitPause  string                     `json:"llmRateLimitPause,omitempty"`
 	LlmRateLimitJitter string                     `json:"llmRateLimitJitter,omitempty"`
 	LlmAcquireTimeout  string                     `json:"llmAcquireTimeout,omitempty"`
-	Runtime            string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness | codex | opencode | qoder | claudecode (default: openclaw)
+	Runtime            string                     `json:"runtime,omitempty"`    // openclaw | copaw | hermes | qwenpaw | deepseek-harness | codex | opencode | qoder | claudecode (default: codex)
 	Image              string                     `json:"image,omitempty"`      // custom Docker image
 	WorkerName         string                     `json:"workerName,omitempty"` // business/runtime identity (Matrix localpart, OSS path key)
 	Identity           string                     `json:"identity,omitempty"`
@@ -890,6 +900,8 @@ type Manager struct {
 }
 
 type ManagerSpec struct {
+	// +kubebuilder:validation:Enum=ask;allow
+	ApprovalMode  string                     `json:"approvalMode,omitempty"`
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-manager LLM provider
 	Runtime       string                     `json:"runtime,omitempty"`       // Harness runtime; independent of the Manager role

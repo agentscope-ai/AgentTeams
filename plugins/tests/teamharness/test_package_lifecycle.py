@@ -6,7 +6,7 @@ throwaway HOME and PATH-stubbed runtime binaries — no live runtime, no
 network, no credentials (the style of test_bundle_adapters.py).
 
 The seven entrypoint-level cases from the #1459 P1 fix: openclaw-only
-install/uninstall, the qwenpaw success path, multi-runtime coexistence, the
+install/uninstall, the native-QwenPaw boundary, multi-runtime coexistence, the
 no-runtime error, failure isolation, artifact-driven uninstall after the
 runtime binary disappears, and --dry-run writing nothing. A final test runs
 the ``bash -n`` syntax gate on both entrypoints (the container's shell
@@ -40,7 +40,7 @@ BUNDLE = REPO_ROOT / "plugins" / "agentteams-teamharness"
 INSTALL = BUNDLE / "scripts" / "install.sh"
 UNINSTALL = BUNDLE / "scripts" / "uninstall.sh"
 PLUGIN_ID = "agentteams-teamharness"
-RUNTIME_BINARIES = ("qwenpaw", "openclaw", "hermes")
+RUNTIME_BINARIES = ("openclaw", "hermes")
 SKILL_COUNT = 14
 
 BASH32_SKIP_MESSAGE = (
@@ -197,10 +197,6 @@ def run_entrypoint(
     )
 
 
-def _qwenpaw_marker(home: Path) -> Path:
-    return home / ".qwenpaw" / ".agentteams" / "teamharness" / "installed.json"
-
-
 @pytest.mark.parametrize("bash_bin", INTERPRETER_NAMES, ids=INTERPRETER_IDS)
 def test_openclaw_only_install_and_uninstall(tmp_path, bash_bin):
     home = tmp_path / "home"
@@ -210,7 +206,6 @@ def test_openclaw_only_install_and_uninstall(tmp_path, bash_bin):
     result = run_entrypoint(INSTALL, env=env, bash_bin=bash_bin)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "openclaw: installed" in result.stdout
-    assert "qwenpaw: skipped (not detected)" in result.stdout
     assert "hermes: skipped (not detected)" in result.stdout
 
     data = json.loads(config.read_text(encoding="utf-8"))
@@ -229,25 +224,21 @@ def test_openclaw_only_install_and_uninstall(tmp_path, bash_bin):
 
 
 @pytest.mark.parametrize("bash_bin", INTERPRETER_NAMES, ids=INTERPRETER_IDS)
-def test_qwenpaw_only_success_path(tmp_path, bash_bin):
+def test_legacy_bundle_does_not_claim_native_qwenpaw_installation(tmp_path, bash_bin):
     home = tmp_path / "home"
     env = _clean_env(tmp_path, stubs=("qwenpaw",))
 
     result = run_entrypoint(INSTALL, env=env, bash_bin=bash_bin)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "qwenpaw: installed" in result.stdout
+    # Native installation belongs to the pinned QwenPaw Harness (#1693).
+    assert result.returncode == 1, result.stdout + result.stderr
     assert "openclaw: skipped (not detected)" in result.stdout
     assert "hermes: skipped (not detected)" in result.stdout
 
-    marker = _qwenpaw_marker(home)
-    assert marker.is_file()
-    state = json.loads(marker.read_text(encoding="utf-8"))
-    assert state["runtime"] == "qwenpaw"
-
+    assert not (home / ".qwenpaw").exists()
     result = run_entrypoint(UNINSTALL, env=env, bash_bin=bash_bin)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "qwenpaw: uninstalled" in result.stdout
-    assert not marker.exists()
+    assert "nothing to uninstall" in result.stdout
+    assert not (home / ".qwenpaw").exists()
 
 
 @pytest.mark.parametrize("bash_bin", INTERPRETER_NAMES, ids=INTERPRETER_IDS)
@@ -266,8 +257,7 @@ def test_coexistence_installs_and_uninstalls_every_runtime(tmp_path, bash_bin):
     for runtime in RUNTIME_BINARIES:
         assert f"{runtime}: installed" in result.stdout
 
-    marker = _qwenpaw_marker(home)
-    assert marker.is_file()
+    assert not (home / ".qwenpaw").exists()
     assert "teamharness" in json.loads(oc_config.read_text(encoding="utf-8"))["mcp"]["servers"]
     staged_root = home / ".openclaw" / "plugins" / PLUGIN_ID
     assert staged_root.is_dir()
@@ -281,7 +271,6 @@ def test_coexistence_installs_and_uninstalls_every_runtime(tmp_path, bash_bin):
     for runtime in RUNTIME_BINARIES:
         assert f"{runtime}: uninstalled" in result.stdout
 
-    assert not marker.exists()
     data = json.loads(oc_config.read_text(encoding="utf-8"))
     assert "teamharness" not in data.get("mcp", {}).get("servers", {})
     assert not staged_root.exists()
@@ -303,26 +292,24 @@ def test_no_runtime_detected_exits_one_and_lists_runtimes(tmp_path, bash_bin):
 
 
 @pytest.mark.parametrize("bash_bin", INTERPRETER_NAMES, ids=INTERPRETER_IDS)
-def test_openclaw_failure_isolates_from_qwenpaw(tmp_path, bash_bin):
+def test_openclaw_failure_isolates_from_hermes(tmp_path, bash_bin):
     home = tmp_path / "home"
     # The "config file" is a directory: the adapter can stage the plugin but
     # cannot write the config, so its run fails.
     bad_config = home / ".openclaw" / "openclaw.json"
     bad_config.mkdir(parents=True)
     env = _clean_env(
-        tmp_path, stubs=("qwenpaw",), extra={"OPENCLAW_CONFIG": str(bad_config)}
+        tmp_path, extra={"OPENCLAW_CONFIG": str(bad_config), "HERMES_HOME": str(home / ".hermes")}
     )
 
     result = run_entrypoint(INSTALL, env=env, bash_bin=bash_bin)
     assert result.returncode != 0
-    assert "qwenpaw: installed" in result.stdout
+    assert "hermes: installed" in result.stdout
     assert "openclaw: failed (exit" in result.stdout
-    assert "hermes: skipped (not detected)" in result.stdout
     # the failure summary names the failing runtime
     assert "openclaw" in result.stdout + result.stderr
 
-    marker = _qwenpaw_marker(home)
-    assert marker.is_file()
+    assert "teamharness" in yaml.safe_load((home / ".hermes/config.yaml").read_text())["mcp_servers"]
 
 
 @pytest.mark.parametrize("bash_bin", INTERPRETER_NAMES, ids=INTERPRETER_IDS)
@@ -373,7 +360,6 @@ def test_worker_layout_default_install_honours_effective_config(tmp_path, bash_b
     result = run_entrypoint(INSTALL, env=env, bash_bin=bash_bin)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "openclaw: installed" in result.stdout
-    assert "qwenpaw: skipped (not detected)" in result.stdout
     assert "hermes: skipped (not detected)" in result.stdout
 
     # The canonical file the Worker actually reads gained the entry...

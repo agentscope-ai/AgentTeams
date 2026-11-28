@@ -1,10 +1,9 @@
 """Small version-tested adapters; runtime execution stays in native code."""
 
-import inspect
+import importlib
 import importlib.metadata
 import logging
 import os
-import re
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -14,6 +13,7 @@ from opentelemetry import context, trace
 
 import at_telemetry as telemetry
 _adapter_errors = []
+_runtime_packages = ("openai",)
 
 
 @lru_cache(maxsize=1)
@@ -78,7 +78,7 @@ def start_turn(fields, request):
         )))
     with bind(fields):
         versions = {}
-        for package in ("agentscope", "qwenpaw", "hermes-agent", "openai"):
+        for package in _runtime_packages:
             try:
                 versions[package] = importlib.metadata.version(package)
             except importlib.metadata.PackageNotFoundError:
@@ -95,197 +95,6 @@ def start_turn(fields, request):
         }, context=context.Context(), links=links)
     telemetry.set_io(span, input=request)
     return span
-
-
-def qwenpaw_runtime(module):
-    async def run(wrapped, instance, args, kwargs):
-        request = args[0] if args else kwargs["request"]
-        request = instance._normalize(request)
-        if args:
-            args = (request, *args[1:])
-        else:
-            kwargs = {**kwargs, "request": request}
-        metadata = dict(getattr(request, "channel_meta", {}) or {})
-        coordination = (getattr(request, "request_context", {}) or {}).get("teamharness_coordination")
-        if isinstance(coordination, dict):
-            metadata.update(coordination)
-        fields = telemetry.turn_fields(getattr(request, "session_id", "") or "unassigned",
-                                      user_id=getattr(request, "user_id", ""),
-                                      metadata=metadata)
-        from at_trace_transport import incoming
-        fields.update(incoming({"com.agentteams.trace": metadata.get("otel_carrier", {})}))
-        fields = enrich_task(fields, getattr(instance.workspace, "workspace_dir", None))
-        span = start_turn(fields, request)
-        from at_trace_transport import remember_reply
-        remember_reply(span, fields, metadata)
-        async for item in telemetry.trace_stream(wrapped(*args, **kwargs), span, fields):
-            yield item
-
-    wrapt.wrap_function_wrapper(module, "Runtime.run", run)
-
-
-def refresh_task_span(agent):
-    root = telemetry._active_turn.get()
-    if root is None or not root.is_recording() or root.attributes.get("agentteams.task.id"):
-        return
-    rc = getattr(agent, "_request_context", {}) or {}
-    fields = enrich_task(telemetry._correlation.get(), rc.get("workspace_dir") or getattr(agent, "workspace_dir", None))
-    with bind(fields):
-        telemetry.IdentityProcessor().on_start(root)
-
-
-def agentscope(module):
-    from agentscope.middleware import TracingMiddleware
-
-    class WorkerTracingMiddleware(TracingMiddleware):
-        async def on_acting(self, agent, input_kwargs, next_handler):
-            call = input_kwargs.get("tool_call")
-            fields = dict(telemetry._correlation.get())
-            span = trace.get_tracer("agentteams.worker").start_span(f"tool {getattr(call, 'name', 'unknown')}", attributes={
-                "gen_ai.operation.name": "execute_tool", "langfuse.observation.type": "tool",
-                "gen_ai.tool.name": getattr(call, "name", "unknown"),
-                "gen_ai.tool.call.id": getattr(call, "id", ""),
-            })
-            telemetry.set_io(span, input=getattr(call, "input", None))
-            async for item in telemetry.trace_stream(next_handler(**input_kwargs), span, fields):
-                yield item
-            refresh_task_span(agent)
-
-        async def on_check_permission(self, agent, input_kwargs, next_handler):
-            with telemetry.operation("tool.permission") as span:
-                telemetry.set_io(span, input=input_kwargs.get("tool_call"))
-                result = await next_handler(**input_kwargs)
-                telemetry.set_io(span, output=result)
-                if str(getattr(result, "behavior", "")).lower() == "deny":
-                    telemetry.outcome(span, error=RuntimeError("permission denied"))
-                return result
-
-        async def on_compress_context(self, agent, input_kwargs, next_handler):
-            refresh_task_span(agent)
-            with telemetry.operation("context.compress") as span:
-                telemetry.set_io(span, input=input_kwargs)
-                result = await next_handler(**input_kwargs)
-                telemetry.set_io(span, output=result)
-                return result
-
-    def initialize(wrapped, instance, args, kwargs):
-        # AgentScope's public middleware API captures model context, tools,
-        # tool-call IDs, usage, agent state and errors without SDK double counting.
-        middlewares = list((args[4] if len(args) > 4 else kwargs.get("middlewares")) or [])
-        # QwenPaw already supplies the standard middleware. Replace that
-        # instance so our outcome/task hooks run without double instrumentation.
-        middlewares = [WorkerTracingMiddleware() if type(m) is TracingMiddleware else m for m in middlewares]
-        if not any(isinstance(m, TracingMiddleware) for m in middlewares):
-            middlewares.insert(0, WorkerTracingMiddleware())
-        if len(args) > 4:
-            args = (*args[:4], middlewares, *args[5:])
-        else:
-            kwargs["middlewares"] = middlewares
-        return wrapped(*args, **kwargs)
-
-    async def reply(wrapped, instance, args, kwargs):
-        rc = getattr(instance, "_request_context", {}) or {}
-        if telemetry._correlation.get().get("agentteams.turn.id"):
-            # Runtime hooks may have synced the task files after run() began.
-            fields = enrich_task(telemetry._correlation.get(), rc.get("workspace_dir") or getattr(instance, "workspace_dir", None))
-            with bind(fields):
-                root = telemetry._active_turn.get()
-                if root is not None and root.is_recording():
-                    telemetry.IdentityProcessor().on_start(root)
-                    from at_trace_transport import remember_reply
-                    remember_reply(root, fields, rc.get("channel_meta"))
-                return await wrapped(*args, **kwargs)
-        session_id = rc.get("session_id") or getattr(instance.state, "session_id", "")
-        fields = telemetry.turn_fields(session_id, user_id=rc.get("user_id", ""), metadata=rc.get("channel_meta", {}))
-        fields = enrich_task(fields, rc.get("workspace_dir") or getattr(instance, "workspace_dir", None))
-        with bind(fields):
-            with trace.use_span(start_turn(fields, args or kwargs), end_on_exit=True) as span:
-                try:
-                    result = await wrapped(*args, **kwargs)
-                    telemetry.set_io(span, output=result)
-                    telemetry.outcome(span, result)
-                    return result
-                except BaseException as exc:
-                    telemetry.outcome(span, error=exc)
-                    raise
-
-    wrapt.wrap_function_wrapper(module, "Agent.__init__", initialize)
-    wrapt.wrap_function_wrapper(module, "Agent.reply", reply)
-
-
-def hermes_turn(module):
-    def run(wrapped, instance, args, kwargs):
-        metadata = {
-            "room_id": getattr(instance, "_chat_id", ""),
-            "event_id": kwargs.get("persist_user_platform_id", ""),
-        }
-        # Read the runtime's current verified frame; native session IDs are opaque.
-        try:
-            from hermes_matrix.public_tasks import current_turn
-        except ImportError:
-            current = None
-        else:
-            current = current_turn.get()
-        if current is not None:
-            metadata.update(current.trace_metadata())
-        fields = telemetry.turn_fields(str(getattr(instance, "session_id", "")), metadata=metadata)
-        if kwargs.get("task_id"):
-            fields["agentteams.runtime.task_id"] = str(kwargs["task_id"])
-        if getattr(instance, "_parent_session_id", None):
-            fields["agentteams.runtime.parent_session_id"] = str(instance._parent_session_id)
-        from at_trace_transport import incoming
-        fields.update(incoming({"com.agentteams.trace": metadata.get("otel_carrier", {})}))
-        fields = enrich_task(fields, os.getenv("AGENTTEAMS_WORKER_HOME") or os.getenv("HOME"))
-        with bind(fields):
-            with trace.use_span(start_turn(fields, {"message": args[0] if args else kwargs.get("user_message"),
-                                                    "history": kwargs.get("conversation_history")}), end_on_exit=True) as span:
-                from at_trace_transport import remember_reply
-                remember_reply(span, fields)
-                try:
-                    result = wrapped(*args, **kwargs)
-                    telemetry.set_io(span, output=result)
-                    telemetry.outcome(span, result)
-                    return result
-                except BaseException as exc:
-                    telemetry.outcome(span, error=exc)
-                    raise
-
-    wrapt.wrap_function_wrapper(module, "TurnFacadeMixin.run_conversation", run)
-
-
-def hermes_tools(module):
-    # Both sequential and parallel execution use this boundary, including policy
-    # blocks and inline tools. Keep an explicit compatibility check for upgrades.
-    signature = inspect.signature(module._run_agent_tool_execution_middleware)
-    required = {"function_name", "function_args", "tool_call_id", "execute"}
-    if not required.issubset(signature.parameters):
-        message = "Unsupported Hermes tool execution signature; update telemetry adapter"
-        _adapter_errors.append(message)
-        logging.getLogger("agentteams.telemetry").error(message)
-        return
-
-    def execute(wrapped, instance, args, kwargs):
-        name = kwargs["function_name"]
-        with telemetry.operation(f"tool {name}", attributes={
-            "langfuse.observation.type": "tool", "gen_ai.operation.name": "execute_tool",
-            "gen_ai.tool.name": name, "gen_ai.tool.call.id": kwargs.get("tool_call_id", ""),
-        }) as span:
-            telemetry.set_io(span, input=kwargs.get("function_args"))
-            try:
-                result = wrapped(*args, **kwargs)
-                telemetry.set_io(span, output=result.result)
-                span.set_attribute("agentteams.tool.blocked", result.blocked)
-                span.set_attribute("agentteams.tool.dispatched", result.dispatched)
-                span.set_attribute("agentteams.tool.middleware", str(telemetry.capture(result.middleware_trace)))
-                telemetry.outcome(span, result.result)
-                if result.blocked:
-                    telemetry.outcome(span, error=RuntimeError("tool blocked by policy"))
-                return result
-            except BaseException as exc:
-                telemetry.outcome(span, error=exc)
-                raise
-
-    wrapt.wrap_function_wrapper(module, "_run_agent_tool_execution_middleware", execute)
 
 
 def httpx(module):
@@ -329,34 +138,6 @@ def httpx(module):
     wrapt.wrap_function_wrapper(module, "AsyncClient.send", async_send)
 
 
-def openai_content(module):
-    # OpenAI instrumentation's prompt capture varies across SDK/provider paths.
-    # Supply the actual SDK request to its generation span at on_start instead
-    # of emitting a second generation (which would double-count usage).
-    def create(wrapped, instance, args, kwargs):
-        token = telemetry._model_request.set(kwargs)
-        try:
-            return wrapped(*args, **kwargs)
-        finally:
-            telemetry._model_request.reset(token)
-
-    async def async_create(wrapped, instance, args, kwargs):
-        token = telemetry._model_request.set(kwargs)
-        try:
-            return await wrapped(*args, **kwargs)
-        finally:
-            telemetry._model_request.reset(token)
-
-    wrapt.wrap_function_wrapper(module, "Completions.create", create)
-    wrapt.wrap_function_wrapper(module, "AsyncCompletions.create", async_create)
-
-
-def agentscope_ready(_module):
-    # Middleware 2.0.10 imports Agent while it is still initializing. Wait
-    # for the package to finish before importing and installing middleware.
-    agentscope(importlib.import_module("agentscope.agent._agent"))
-
-
 def register_hook(callback, name):
     def ready(module):
         try:
@@ -369,14 +150,21 @@ def register_hook(callback, name):
 
 
 def install():
-    runtime = os.getenv("AGENTTEAMS_OTEL_RUNTIME")
-    if runtime == "qwenpaw":
-        register_hook(agentscope_ready, "agentscope")
-        register_hook(qwenpaw_runtime, "qwenpaw.runtime.runtime")
-    elif runtime == "hermes":
-        register_hook(hermes_turn, "agent.turn_facade")
-        register_hook(hermes_tools, "agent.tool_executor")
-        register_hook(openai_content, "openai.resources.chat.completions")
+    global _runtime_packages
+    try:
+        native = importlib.import_module("at_native_telemetry")
+    except ModuleNotFoundError as exc:
+        if exc.name != "at_native_telemetry":
+            raise
+        native = None
+    if native is not None:
+        _runtime_packages = native.PACKAGES
+        native.install()
+    if native is None or native.INSTRUMENT_OPENAI:
+        def instrument_openai(_module):
+            from opentelemetry.instrumentation.openai import OpenAIInstrumentor
+            OpenAIInstrumentor().instrument()
+        register_hook(instrument_openai, "openai")
     register_hook(httpx, "httpx")
     from at_trace_transport import install as install_transport
     install_transport()

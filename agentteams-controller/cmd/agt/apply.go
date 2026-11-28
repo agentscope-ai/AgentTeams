@@ -193,7 +193,7 @@ func applyWorkerSubCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Worker name (required)")
 	cmd.Flags().StringVar(&model, "model", "", "LLM model ID (default: $AGENTTEAMS_DEFAULT_MODEL, else qwen3.6-plus)")
 	cmd.Flags().StringVar(&zipFile, "zip", "", "Local ZIP package (manifest.json)")
-	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (openclaw|copaw|qwenpaw|hermes|openhuman|deepseek-harness|codex|qoder|claudecode)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "Agent runtime (qwenpaw|codex|claudecode|hermes|deepseek-harness|openhuman|copaw|openclaw); OpenClaw is legacy and not recommended")
 	cmd.Flags().StringVar(&image, "image", "", "Container image override")
 	cmd.Flags().StringVar(&identity, "identity", "", "Worker identity description")
 	cmd.Flags().StringVar(&soul, "soul", "", "Worker SOUL.md content (inline)")
@@ -207,7 +207,7 @@ func applyWorkerSubCmd() *cobra.Command {
 // applyWorkerZip uploads a ZIP to the controller, then creates/updates the Worker.
 //
 // runtimeOverride wins over whatever the ZIP's manifest declares; both win over
-// the controller's defaultRuntime() (which silently falls back to openclaw and
+// the controller's defaultRuntime() (which falls back to codex and
 // hides cross-runtime test coverage gaps — see fix in this commit).
 func applyWorkerZip(name, zipPath, runtimeOverride string) error {
 	zipData, err := os.ReadFile(zipPath)

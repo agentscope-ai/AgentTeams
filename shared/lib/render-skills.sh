@@ -13,7 +13,7 @@ source /opt/agentteams/scripts/lib/agentteams-env.sh 2>/dev/null || true
 # Defaults for variables that may not be set in all environments
 export AGENTTEAMS_MATRIX_URL="${AGENTTEAMS_MATRIX_URL:-http://127.0.0.1:6167}"
 export AGENTTEAMS_AI_GATEWAY_URL="${AGENTTEAMS_AI_GATEWAY_URL:-http://aigw-local.agentteams.io:8080}"
-export AGENTTEAMS_DEFAULT_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+export AGENTTEAMS_DEFAULT_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
 export AGENTTEAMS_SKILLS_API_URL="${AGENTTEAMS_SKILLS_API_URL:-https://skills.sh}"
 
 # Whitelist: only replace these known variables, leave $task_id etc. untouched

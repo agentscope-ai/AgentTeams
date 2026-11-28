@@ -13,7 +13,7 @@ import at_telemetry as telemetry
 
 
 def test_coordination_identity_does_not_depend_on_native_session_format():
-    event = {'id': 'a' * 32, 'kind': 'task_submitted'}
+    event = {'id': 'a' * 32, 'kind': 'task_submitted', 'task_id': 'execution-one', 'main_task_id': 'main-one'}
     for session in ['opaque-native-thread', 'another-sdk-session']:
         fields = telemetry.turn_fields(session, metadata={'event_id': '$actual', 'room_id': '!room:test',
                                                          'teamharness_coordination': event})
@@ -21,6 +21,8 @@ def test_coordination_identity_does_not_depend_on_native_session_format():
         assert fields['agentteams.coordination.kind'] == event['kind']
         assert fields['agentteams.event.id'] == '$actual'
         assert fields['agentteams.runtime.session_id'] == session
+        assert fields['agentteams.task.id'] == 'execution-one'
+        assert fields['agentteams.main_task.id'] == 'main-one'
         assert 'agentteams.execution.generation' not in fields
 
 

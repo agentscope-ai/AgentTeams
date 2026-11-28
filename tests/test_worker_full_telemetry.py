@@ -16,62 +16,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 import at_telemetry as telemetry
 
 
-def test_qwenpaw_api_turn_uses_coordination_metadata(monkeypatch):
-    from types import SimpleNamespace
-    import at_runtime_adapters as adapters
-    callbacks = []
-    captured = []
-    monkeypatch.setattr(adapters.wrapt, 'wrap_function_wrapper', lambda module, name, callback: callbacks.append(callback))
-    monkeypatch.setattr(adapters, 'start_turn', lambda fields, request: captured.append(fields) or object())
-    monkeypatch.setattr(adapters, 'enrich_task', lambda fields, workspace: fields)
-    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(incoming=lambda content: {}, remember_reply=lambda *a: None))
-    async def stream(iterator, span, fields):
-        async for item in iterator:
-            yield item
-    monkeypatch.setattr(telemetry, 'trace_stream', stream)
-    adapters.qwenpaw_runtime(object())
-    meta = {'room_id': '!task:test', 'task_id': 'atomic-1', 'project_id': 'request-1', 'execution_generation': 2}
-    request = SimpleNamespace(session_id='coordination-task:atomic-1:dispatch-1', user_id='@requester:test',
-        channel_meta={}, request_context={'teamharness_coordination': meta})
-    runtime = SimpleNamespace(_normalize=lambda value: value, workspace=SimpleNamespace(workspace_dir=None))
-    async def wrapped(*args, **kwargs):
-        yield 'ok'
-    async def run():
-        return [item async for item in callbacks[0](wrapped, runtime, (request,), {})]
-    assert asyncio.run(run()) == ['ok']
-    assert captured[0]['agentteams.task.id'] == 'atomic-1'
-    assert captured[0]['agentteams.room.id'] == '!task:test'
-    assert captured[0]['agentteams.project.id'] == 'request-1'
-    assert captured[0]['agentteams.execution.generation'] == 2
 
 
-@pytest.mark.parametrize('event_id,expected', [
-    ('recovery:team-a/task-1:3', None),
-    ('$matrix-event:server', None),
-    ('recovery:team-a/task-1:0', None),
-    ('recovery:team-a/task-1:not-a-generation', None),
-    (None, None),
-])
-def test_hermes_recovery_trace_retains_task_and_execution_generation(monkeypatch, event_id, expected):
-    from types import SimpleNamespace
-    import at_runtime_adapters as adapters
-    callbacks, captured = [], []
-    monkeypatch.setattr(adapters.wrapt, 'wrap_function_wrapper', lambda module, name, callback: callbacks.append(callback))
-    monkeypatch.setattr(adapters, 'start_turn', lambda fields, request: captured.append(fields) or trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT))
-    monkeypatch.setattr(adapters, 'enrich_task', lambda fields, workspace: fields)
-    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(remember_reply=lambda *args: None, incoming=lambda *args: {}))
-    adapters.hermes_turn(object())
-    result = callbacks[0](lambda *args, **kwargs: {'ok': True},
-                          SimpleNamespace(session_id='native-session', _chat_id='!task:server'),
-                          ('resume',), {'persist_user_platform_id': event_id})
-    assert result == {'ok': True}
-    fields = captured[0]
-    assert fields['agentteams.runtime.session_id'] == 'native-session'
-    if expected:
-        assert (fields['agentteams.team.id'], fields['agentteams.task.id'], fields['agentteams.execution.generation']) == expected
-    else:
-        assert 'agentteams.task.id' not in fields
-        assert 'agentteams.execution.generation' not in fields
 
 
 def test_local_runtime_events_keep_model_tool_failures_without_content(tmp_path, monkeypatch):
@@ -138,20 +84,6 @@ def test_adapter_installation_failure_is_reported_without_breaking_import(monkey
     assert adapters._adapter_errors == ['Telemetry adapter framework.module failed: AttributeError']
 
 
-def test_agentscope_middleware_import_order_does_not_break_worker_startup(tmp_path):
-    package = tmp_path / 'agentscope'
-    (package / 'middleware').mkdir(parents=True)
-    (package / 'agent').mkdir()
-    (package / '__init__.py').write_text('from . import middleware\n')
-    (package / 'middleware/__init__.py').write_text('from ._tracing import TracingMiddleware\n')
-    (package / 'middleware/_tracing.py').write_text('from ..agent._agent import Agent\nclass TracingMiddleware: pass\n')
-    (package / 'agent/__init__.py').write_text('from ._agent import Agent\n')
-    (package / 'agent/_agent.py').write_text('class Agent:\n    def __init__(self, middlewares=None): self.middlewares = middlewares\n    async def reply(self): pass\n')
-    environment = {**os.environ, 'AGENTTEAMS_OTEL_ENABLED': 'true', 'AGENTTEAMS_OTEL_RUNTIME': 'qwenpaw',
-                   'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'shared/lib/telemetry') + os.pathsep + str(tmp_path)}
-    result = subprocess.run([sys.executable, '-c', 'from agentscope.agent import Agent; from agentscope.middleware import TracingMiddleware; assert isinstance(Agent().middlewares[0], TracingMiddleware); agent = Agent(middlewares=[TracingMiddleware()]); assert len(agent.middlewares) == 1; assert type(agent.middlewares[0]) is not TracingMiddleware'],
-                            env=environment, capture_output=True, text=True, timeout=15)
-    assert result.returncode == 0, result.stderr
 
 
 def test_startup_allows_runtime_to_configure_logging():
@@ -188,6 +120,49 @@ def test_sanitize_structured_content_and_boundaries(monkeypatch):
     bounded = telemetry.capture("x" * 300000)
     assert bounded["truncated"] and bounded["original_bytes"] == 300002
     assert len(bounded["sha256"]) == 64
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_large_model_and_tool_io_survive_export_with_redaction(monkeypatch, enabled):
+    monkeypatch.setenv('AGENTTEAMS_OTEL_CAPTURE_CONTENT', str(enabled).lower())
+    monkeypatch.setenv('MODEL_API_KEY', 'fixture-private-credential')
+    payload = {'text': '完整输入输出' * 60000 + ' END-OF-NATIVE-CONTENT',
+               'authorization': 'Bearer fixture-private-credential'}
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(telemetry.SanitizingExporter(exporter)))
+    try:
+        tracer = provider.get_tracer('test')
+        with tracer.start_as_current_span('model', attributes={
+            'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': json.dumps(payload),
+            'gen_ai.output.messages': json.dumps(payload), 'langfuse.trace.input': json.dumps(payload),
+            'langfuse.trace.output': json.dumps(payload), 'diagnostic.note': 'x' * 300000,
+        }):
+            pass
+        with tracer.start_as_current_span('tool') as span:
+            telemetry.set_io(span, input=payload, output=payload)
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 2
+        for span in spans:
+            for field in ('input', 'output'):
+                key = 'langfuse.observation.' + field
+                if enabled:
+                    captured = json.loads(span.attributes[key])
+                    assert captured['text'] == payload['text']
+                    assert captured['authorization'] == '[REDACTED]'
+                else:
+                    assert key not in span.attributes
+            assert 'fixture-private-credential' not in json.dumps(dict(span.attributes))
+        assert json.loads(spans[0].attributes['diagnostic.note'])['truncated'] is True
+        for field in ('input', 'output'):
+            key = 'langfuse.trace.' + field
+            if enabled:
+                assert json.loads(spans[0].attributes[key])['text'] == payload['text']
+            else:
+                assert key not in spans[0].attributes
+        assert payload['authorization'] == 'Bearer fixture-private-credential'
+    finally:
+        provider.shutdown()
 
 
 def test_session_identity_and_causal_link_are_worker_scoped(monkeypatch):
@@ -532,68 +507,31 @@ def test_http_propagates_business_baggage_only_to_local_api(monkeypatch):
         telemetry._correlation.reset(correlation)
 
 
-def test_task_identity_arriving_after_turn_start_reaches_children_and_carrier(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    import at_runtime_adapters as adapters
-    from at_trace_transport import carrier, incoming
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qwenpaw/adapters/teamharness"))
-    from task_trace import find_task_trace_context
-    monkeypatch.setattr(adapters, "task_resolver", lambda: find_task_trace_context)
-    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "alice")
-    provider = TracerProvider()
-    provider.add_span_processor(telemetry.IdentityProcessor())
-    tracer = provider.get_tracer("test")
-    fields = {"agentteams.room.id": "!room:test", "agentteams.turn.id": "turn"}
-    correlation = telemetry._correlation.set(fields)
-    root = tracer.start_span("worker.turn")
-    active = telemetry._active_turn.set(root)
-    agent = SimpleNamespace(workspace_dir=tmp_path)
-    try:
-        adapters.refresh_task_span(agent)
-        assert "agentteams.task.id" not in root.attributes
-        task_dir = tmp_path / "shared/tasks/one"
-        task_dir.mkdir(parents=True)
-        (task_dir / "meta.json").write_text(json.dumps({"task_id": "one", "project_id": "project", "room_id": "!room:test", "assigned_to": "@alice:test", "status": "in_progress"}))
-        adapters.refresh_task_span(agent)
-        assert root.attributes["agentteams.task.id"] == "one"
-        assert root.attributes["agentteams.project.id"] == "project"
-        with trace.use_span(root, end_on_exit=False):
-            with tracer.start_as_current_span("model") as child:
-                assert child.attributes["agentteams.task.id"] == "one"
-                received = incoming({"com.agentteams.trace": carrier()}, room_id="!other:test")
-                assert received["agentteams.upstream.task_id"] == "one"
-                assert received["agentteams.project.id"] == "project"
-        # An unrelated trace must not pick up the cached task from this turn.
-        with tracer.start_as_current_span("unrelated") as unrelated:
-            assert "agentteams.task.id" not in unrelated.attributes
-    finally:
-        telemetry._active_turn.reset(active)
-        telemetry._correlation.reset(correlation)
-        root.end()
-        provider.shutdown()
 
 
-@pytest.mark.parametrize('generation', [None, 4])
-def test_hermes_native_trace_uses_verified_current_frame(monkeypatch, generation):
+
+
+@pytest.mark.parametrize('instrument_openai', [False, True])
+def test_native_telemetry_contract_controls_sdk_hooks(monkeypatch, instrument_openai):
     from types import SimpleNamespace
     import at_runtime_adapters as adapters
-    callbacks, captured = [], []
-    metadata = {'room_id': '!canonical:test', 'event_id': '$canonical-event', 'task_id': 'task-actual',
-        'team_id': 'team-actual', 'teamharness_coordination': {'id': 'a' * 32, 'kind': 'task_assigned'}}
-    if generation is not None:
-        metadata['execution_generation'] = generation
-    monkeypatch.setitem(sys.modules, 'hermes_matrix.public_tasks', SimpleNamespace(
-        current_turn=SimpleNamespace(get=lambda: SimpleNamespace(trace_metadata=lambda: metadata))))
-    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(remember_reply=lambda *a: None, incoming=lambda *a: {}))
-    monkeypatch.setattr(adapters.wrapt, 'wrap_function_wrapper', lambda module, name, callback: callbacks.append(callback))
-    monkeypatch.setattr(adapters, 'start_turn', lambda fields, request: captured.append(fields) or trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT))
-    monkeypatch.setattr(adapters, 'enrich_task', lambda fields, workspace: fields)
-    adapters.hermes_turn(object())
-    callbacks[0](lambda *a, **kw: {'ok': True}, SimpleNamespace(session_id='opaque:other-task:999'), (), {})
-    actual = captured[0]
-    assert actual['agentteams.task.id'] == 'task-actual'
-    assert actual['agentteams.event.id'] == '$canonical-event'
-    assert actual['agentteams.room.id'] == '!canonical:test'
-    assert actual['agentteams.coordination.id'] == 'a' * 32
-    assert actual['agentteams.coordination.kind'] == 'task_assigned'
-    assert actual.get('agentteams.execution.generation') == generation
+    hooks, calls = [], []
+    native = SimpleNamespace(PACKAGES=('native-sdk',), INSTRUMENT_OPENAI=instrument_openai,
+                             install=lambda: calls.append('native'))
+    monkeypatch.setitem(sys.modules, 'at_native_telemetry', native)
+    monkeypatch.setitem(sys.modules, 'at_trace_transport', SimpleNamespace(install=lambda: calls.append('transport')))
+    monkeypatch.setattr(adapters, '_runtime_packages', ())
+    monkeypatch.setattr(adapters, 'register_hook', lambda callback, name: hooks.append(name))
+    adapters.install()
+    assert adapters._runtime_packages == ('native-sdk',)
+    assert calls == ['native', 'transport']
+    assert hooks == (['openai', 'httpx'] if instrument_openai else ['httpx'])
+
+
+def test_broken_native_telemetry_dependency_is_not_silently_skipped(monkeypatch):
+    import at_runtime_adapters as adapters
+    def missing_dependency(name):
+        raise ModuleNotFoundError('native SDK dependency missing', name='native_sdk')
+    monkeypatch.setattr(adapters.importlib, 'import_module', missing_dependency)
+    with pytest.raises(ModuleNotFoundError, match='native SDK dependency'):
+        adapters.install()

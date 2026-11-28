@@ -125,6 +125,7 @@ func (h *ProjectHandler) ReviewTask(accepted bool) http.HandlerFunc {
 				}
 			}
 			actor := "leader:" + caller.Username
+			previousStatus := coordinationString(task, "status")
 			var saved taskReview
 			if len(raw["task_review"]) > 0 {
 				if json.Unmarshal(raw["task_review"], &saved) != nil || saved.ID == "" {
@@ -133,14 +134,19 @@ func (h *ProjectHandler) ReviewTask(accepted bool) http.HandlerFunc {
 				}
 				savedNodes, _ := json.Marshal(saved.ReplacementNodes)
 				inputNodes, _ := json.Marshal(input.ReplacementNodes)
-				if saved.SubmissionID != input.SubmissionID || saved.Note != input.Note || saved.Accepted != accepted || saved.Actor != actor || saved.ReplacementSpec != input.ReplacementSpec || !sameJSONValue(savedNodes, inputNodes) {
+				if saved.SubmissionID == input.SubmissionID && saved.Note == input.Note && saved.Accepted == accepted && saved.Actor == actor && saved.ReplacementSpec == input.ReplacementSpec && sameJSONValue(savedNodes, inputNodes) {
+					h.writeTaskReview(w, r, key, id, team, task, saved)
+					return
+				}
+				// A blocked review may be followed once by explicit continuation
+				// instructions when its external prerequisite has been resolved.
+				if accepted || previousStatus != "blocked" || saved.Accepted || saved.Status != "blocked" || saved.ReplacementSpec != "" || input.ReplacementSpec == "" || saved.SubmissionID != input.SubmissionID {
 					writeError(w, 409, "candidate already has a different review decision")
 					return
 				}
-				h.writeTaskReview(w, r, key, id, team, task, saved)
-				return
+				task["blocked_review"] = task["task_review"]
 			}
-			if coordinationString(task, "status") != "submitted" || coordinationString(task, "submission_id") != input.SubmissionID || coordinationString(main, "status") != "in_progress" {
+			if (previousStatus != "submitted" && saved.ID == "") || coordinationString(task, "submission_id") != input.SubmissionID || coordinationString(main, "status") != "in_progress" {
 				writeError(w, 409, "review requires the current submitted candidate and active main task")
 				return
 			}
@@ -207,7 +213,7 @@ func (h *ProjectHandler) ReviewTask(accepted bool) http.HandlerFunc {
 			}
 			task["review"] = map[string]any{"verdict": verdict, "reviewer": review.Actor, "note": review.Note, "submission_id": review.SubmissionID, "review_id": review.ID}
 			task["reviewed_at"] = time.Now().UTC().Format(time.RFC3339)
-			appendTaskOperationHistory(task, "submitted", status, "review_task", review.Actor)
+			appendTaskOperationHistory(task, previousStatus, status, "review_task", review.Actor)
 			next, _ := json.Marshal(task)
 			strict, supported := h.oss.(conditionalWriter)
 			if !supported {
@@ -368,7 +374,10 @@ func (h *ProjectHandler) projectTaskOutcome(ctx context.Context, key string, chi
 			if coordinationString(node, "review_id") == outcome.ReviewID && node["status"] == outcome.Status && node["submission_id"] == outcome.SubmissionID {
 				return main, nil
 			}
-			if main["status"] != "in_progress" || taskStatusIsTerminal(coordinationString(node, "status")) {
+			blockedReview := coordinationMap(child, "blocked_review")
+			resuming := review != nil && review.ReplacementSpec != "" && node["status"] == "blocked" &&
+				blockedReview != nil && node["review_id"] == blockedReview["id"] && node["submission_id"] == review.SubmissionID
+			if (main["status"] != "in_progress" && !((main["status"] == "planned" || main["status"] == "assigned") && child["task_revision"] != nil)) || (taskStatusIsTerminal(coordinationString(node, "status")) && !resuming) {
 				return nil, fmt.Errorf("main task or node cannot accept this decision")
 			}
 			plan := coordinationMap(main, "task_plan")
@@ -400,10 +409,12 @@ func (h *ProjectHandler) projectTaskOutcome(ctx context.Context, key string, chi
 				_, name = parseActor(review.Actor)
 			}
 			role := authpkg.RoleTeamLeader
+			handoffNote := ""
 			if handoff := taskHandoffOf(child); handoff != nil {
 				role, name = handoff.ActorRole, handoff.ActorName
+				handoffNote = handoff.Note
 			}
-			notices["ready"] = taskNotificationIntent{Event: coordinationEvent{Kind: "main_task_ready", MainTaskID: mainID, ProjectID: coordinationString(main, "project_id")}, ActorRole: role, ActorName: name, Team: coordinationString(main, "team_id"), Status: "pending"}
+			notices["ready"] = taskNotificationIntent{Event: coordinationEvent{Kind: "main_task_ready", MainTaskID: mainID, ProjectID: coordinationString(main, "project_id"), Handoff: handoffNote}, ActorRole: role, ActorName: name, Team: coordinationString(main, "team_id"), Status: "pending"}
 			main["task_notifications"] = notices
 		}
 		next, _ := json.Marshal(main)
@@ -467,6 +478,20 @@ func (h *ProjectHandler) writeTaskReview(w http.ResponseWriter, r *http.Request,
 }
 
 func validateTaskReviewCommit(w http.ResponseWriter, current, next []byte) bool {
+	revisionBefore, revisionHad := rawJSONField(current, "task_revision")
+	revisionAfter, revisionHas := rawJSONField(next, "task_revision")
+	if revisionHad != revisionHas || (revisionHad && !sameJSONValue(revisionBefore, revisionAfter)) {
+		writeError(w, 403, "execution revisions are server-owned; use task amend")
+		return false
+	}
+	if revisionHad {
+		a, had := rawJSONField(current, "status")
+		b, has := rawJSONField(next, "status")
+		if had != has || !sameJSONValue(a, b) {
+			writeError(w, 403, "retired execution status is server-owned")
+			return false
+		}
+	}
 	before, had := rawJSONField(current, "task_review")
 	after, has := rawJSONField(next, "task_review")
 	if had != has || (had && !sameJSONValue(before, after)) {

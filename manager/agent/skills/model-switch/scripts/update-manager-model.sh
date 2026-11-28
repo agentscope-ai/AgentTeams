@@ -21,7 +21,7 @@ set -e
 source /opt/agentteams/scripts/lib/agentteams-env.sh
 
 # Detect runtime
-MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
+MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
 
 _get_max_tokens_param() {
     local model="$1"

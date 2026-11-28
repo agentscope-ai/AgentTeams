@@ -63,8 +63,8 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Report    string   `json:"report"`
-		Artifacts []string `json:"artifacts,omitempty"`
+		Report    string    `json:"report"`
+		Artifacts *[]string `json:"artifacts,omitempty"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, taskMetaCommitMaxBytes))
 	decoder.DisallowUnknownFields()
@@ -82,15 +82,16 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "verified final report required")
 		return
 	}
-	sort.Strings(input.Artifacts)
-	for i, ref := range input.Artifacts {
-		if ref == "" || (i > 0 && ref == input.Artifacts[i-1]) {
+	var selectedArtifacts []string
+	if input.Artifacts != nil {
+		selectedArtifacts = *input.Artifacts
+	}
+	sort.Strings(selectedArtifacts)
+	for i, ref := range selectedArtifacts {
+		if ref == "" || (i > 0 && ref == selectedArtifacts[i-1]) {
 			writeError(w, 400, "invalid or duplicate final artifact reference")
 			return
 		}
-	}
-	if input.Artifacts == nil {
-		input.Artifacts = []string{}
 	}
 	request, _ := json.Marshal(input)
 	requestSum := sha256.Sum256(request)
@@ -186,12 +187,12 @@ func (h *ProjectHandler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		finalFiles := []taskFinalArtifact{}
-		if len(input.Artifacts) == 0 {
+		if input.Artifacts == nil {
 			for _, file := range available {
 				finalFiles = append(finalFiles, file)
 			}
 		} else {
-			for _, ref := range input.Artifacts {
+			for _, ref := range selectedArtifacts {
 				file, exists := available[ref]
 				if !exists {
 					writeError(w, 404, "final artifact is not part of an accepted submission of this main task")

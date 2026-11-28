@@ -167,7 +167,7 @@ app.kubernetes.io/component: {{ .component }}
 {{/* ── Manager image helper (used by controller to create Manager CR) ──── */}}
 
 {{- define "agentteams.manager.image" -}}
-{{- $runtime := .Values.manager.runtime | default "openclaw" -}}
+{{- $runtime := .Values.manager.runtime | default "qwenpaw" -}}
 {{- if eq $runtime "copaw" }}{{- $runtime = "qwenpaw" -}}{{- end -}}
 {{- if eq $runtime "deepseek-harness" }}{{- $runtime = "deepseekHarness" -}}{{- end -}}
 {{- $harness := index .Values.worker.defaultImage $runtime | default dict -}}

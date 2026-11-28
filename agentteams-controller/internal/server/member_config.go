@@ -172,7 +172,7 @@ func (h *MemberConfigHandler) memberScope(w http.ResponseWriter, r *http.Request
 
 // managerFor resolves the worker's runtime through the controller's
 // standard runtime resolution (backend.ResolveRuntime: an empty
-// spec.runtime means the install default, normally openclaw — the same
+// spec.runtime means the install default, normally qwenpaw — the same
 // helper worker_controller uses, so a legacy worker whose container
 // actually runs openclaw stays configurable) and returns the config
 // manager of the registered adapter for that runtime. A resolved runtime

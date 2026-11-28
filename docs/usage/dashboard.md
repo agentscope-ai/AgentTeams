@@ -47,9 +47,11 @@ queries use the Controller's monitoring API and your current identity.
 
 Open **工作台 → Tracing**. Collection is off by default; an unconfigured deployment displays setup guidance. An administrator can open **可观测配置**, configure a query backend and an existing OTLP/HTTP Collector, test, save, and explicitly apply settings to existing supported Workers.
 
+When tracing is enabled, the global content switch defaults to on. It controls model and tool input/output capture, including reasoning returned by the model service. Explicitly disable it to collect metadata only. Credentials are redacted before export; a model that returns no reasoning cannot supply a reasoning panel.
+
 Core v1.2.7 stores these settings in the Controller namespace's `agentteams-observability` Secret (`config.json`). Langfuse queries and query secrets belong to the Controller. Dashboard no longer uses its old local `observability.json`; after upgrading an installation that used that file, save the settings again through the UI. Empty secret fields retain saved values.
 
-Saving does not restart running Workers. New supported containers receive the saved settings; applying to existing managed QwenPaw/Hermes Workers uses the normal environment-update and recreation flow. Apply while idle, and check the result for each Worker. Disabling collection also needs an apply for existing containers. Successful configuration or a connection test does not prove ingestion: run a short conversation or task and inspect its trace.
+Saving does not restart running Workers. New supported containers receive the saved settings; applying to existing managed Workers uses the normal environment-update and recreation flow. The same global settings apply across QwenPaw, Hermes, DeepSeek, Claude Code and Codex. Apply while idle, and check the result for each Worker. Disabling collection also needs an apply for existing containers. Successful configuration or a connection test does not prove ingestion: run a short conversation or task and inspect its trace.
 
 For Langfuse, the Collector must already export to the chosen project. AgentLoop settings also live in the Controller, while Dashboard's AgentLoop query adapter uses its server-side cloud identity; see the [Dashboard backend contracts](https://github.com/agentteams-group/agentteams-dashboard/blob/main/docs/INTERFACES.md). Changing the query backend does not configure Collector exporters.
 

@@ -328,6 +328,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/tasks/native-operations", mw.Authenticate(http.HandlerFunc(projh.NativeTaskOperation)))
 	mux.Handle("POST /api/v1/tasks", mw.Authenticate(http.HandlerFunc(projh.CreateTask)))
 	mux.Handle("GET /api/v1/tasks/recoverable", mw.Authenticate(http.HandlerFunc(recovery.ListRecoverableTasks)))
+	mux.Handle("GET /api/v1/tasks/room-context", mw.Authenticate(http.HandlerFunc(recovery.GetRoomContext)))
 	mux.Handle("POST /api/v1/tasks/{id}/execution", mw.Authenticate(http.HandlerFunc(recovery.UpdateExecution)))
 	workerMatrix := NewWorkerMatrixHandler(deps, recovery)
 	mux.Handle("GET /api/v1/runtime/handoff", mw.Authenticate(http.HandlerFunc(workerMatrix.SelfHandoff)))
@@ -564,6 +565,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	taskNameFn := func(r *http.Request) string { return r.PathValue("id") }
 	mux.Handle("GET /api/v1/tasks/{id}", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskResource)))
 	mux.Handle("GET /api/v1/tasks/{id}/files", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskFiles)))
+	mux.Handle("GET /api/v1/tasks/{id}/traces", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetMainTaskTraces)))
 	mux.Handle("POST /api/v1/tasks/{id}/files", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PublishTaskFile)))
 	mux.Handle("POST /api/v1/tasks/{id}/complete", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.CompleteTask)))
 	mux.Handle("POST /api/v1/tasks/{id}/cancel", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.CancelMainTask)))
@@ -572,6 +574,7 @@ func NewHTTPServer(addr string, deps ServerDeps) *HTTPServer {
 	mux.Handle("POST /api/v1/tasks/{id}/reject", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(projh.ReviewTask(false)))
 	mux.Handle("POST /api/v1/tasks/{id}/submit", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.SubmitTask)))
 	mux.Handle("POST /api/v1/tasks/{id}/begin", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.BeginTask)))
+	mux.Handle("POST /api/v1/tasks/{id}/amend", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.AmendTask)))
 	mux.Handle("GET /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionGet, "task-meta", taskNameFn)(http.HandlerFunc(projh.GetTaskMeta)))
 	mux.Handle("PUT /api/v1/tasks/{id}/meta", mw.RequireAuthz(authpkg.ActionUpdate, "task-meta", taskNameFn)(http.HandlerFunc(projh.PutTaskMeta)))
 

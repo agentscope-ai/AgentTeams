@@ -105,7 +105,7 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 		containerName = prefix + req.Name
 	}
 
-	// Resolve effective runtime once: explicit > caller fallback > openclaw.
+	// Resolve effective runtime once: explicit > caller fallback > codex.
 	// We do this before image fallback so all runtime-dependent decisions
 	// (image, working dir, labels) see a consistent normalized value. The
 	// CRD intentionally does not pin a default — see ResolveRuntime godoc.
@@ -120,13 +120,13 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 		switch {
 		case req.Runtime == RuntimeCopaw:
 			image = d.config.CopawWorkerImage
-		case req.Runtime == RuntimeHermes && d.config.HermesWorkerImage != "":
+		case req.Runtime == RuntimeHermes:
 			image = d.config.HermesWorkerImage
-		case req.Runtime == RuntimeOpenHuman && d.config.OpenHumanWorkerImage != "":
+		case req.Runtime == RuntimeOpenHuman:
 			image = d.config.OpenHumanWorkerImage
-		case req.Runtime == RuntimeQwenPaw && d.config.QwenPawWorkerImage != "":
+		case req.Runtime == RuntimeQwenPaw:
 			image = d.config.QwenPawWorkerImage
-		case req.Runtime == RuntimeDeepSeekHarness && d.config.DeepSeekHarnessWorkerImage != "":
+		case req.Runtime == RuntimeDeepSeekHarness:
 			image = d.config.DeepSeekHarnessWorkerImage
 		case req.Runtime == RuntimeOpenCode:
 			image = d.config.OpenCodeWorkerImage
@@ -145,9 +145,12 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			}
 		case req.Runtime == RuntimeQoder:
 			return nil, fmt.Errorf("qoder runtime requires an explicitly built spec.image")
-		default:
+		case req.Runtime == RuntimeOpenClaw:
 			image = d.config.WorkerImage
 		}
+	}
+	if image == "" {
+		return nil, fmt.Errorf("no image configured for runtime %q", req.Runtime)
 	}
 	req.Image = image
 

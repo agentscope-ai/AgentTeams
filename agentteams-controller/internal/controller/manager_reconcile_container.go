@@ -10,6 +10,7 @@ import (
 	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -178,6 +179,15 @@ func (r *ManagerReconciler) createManagerContainer(ctx context.Context, s *manag
 	managerEnv := r.EnvBuilder.BuildManager(m.Name, prov, effectiveSpec)
 	if s.modelProviderInfo != nil && s.modelProviderInfo.IntranetURL != "" {
 		managerEnv["AGENTTEAMS_AI_GATEWAY_URL"] = s.modelProviderInfo.IntranetURL
+	}
+	if r.ObservabilityReader != nil && observability.SupportsRuntime(effectiveSpec.Runtime) {
+		config, _, err := observability.Read(ctx, r.ObservabilityReader, m.Namespace)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("read Manager observability configuration: %w", err)
+		}
+		for key, value := range observability.WorkerEnv(config) {
+			managerEnv[key] = value
+		}
 	}
 	mergeUserEnv(managerEnv, m.Spec.Env, logger, "manager/"+m.Name)
 	containerName := r.managerContainerName(m.Name)

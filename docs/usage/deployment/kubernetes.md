@@ -81,7 +81,7 @@ This value is written into Element Web and Matrix-related configuration. It must
 
 ### 3.3 Manager runtime
 
-The current source chart and Manager CRD support `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, and `openhuman`. The chart defaults to OpenClaw; the local installer recommends QwenPaw and offers OpenClaw as the alternative. `copaw` is a legacy Manager alias for QwenPaw. Codex is a Worker runtime and is not accepted by the Manager CRD.
+The current source chart and Manager CRD support `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, and `openhuman`. The chart defaults to QwenPaw; the local installer recommends QwenPaw and offers OpenClaw as the alternative. `copaw` is a legacy Manager alias for QwenPaw. Codex is a Worker runtime and is not accepted by the Manager CRD.
 
 Manager, Leader, and Worker roles reuse the selected Harness image. Leave `manager.image.repository` empty to select it from `worker.defaultImage`; only set it when using a custom image:
 
@@ -98,7 +98,7 @@ For example, QwenPaw resolves to `agentteams-harness-qwenpaw`, and OpenClaw to `
 
 | Runtime | Default image value | Notes |
 |---|---|---|
-| `openclaw` | `worker.defaultImage.openclaw` | Chart default |
+| `openclaw` | `worker.defaultImage.openclaw` | Legacy compatibility image, pinned to v1.2.8 |
 | `qwenpaw` | `worker.defaultImage.qwenpaw` | Local installer default |
 | `hermes` | `worker.defaultImage.hermes` | Python Harness |
 | `deepseek-harness` | `worker.defaultImage.deepseekHarness` | Experimental headless Harness; Matrix E2EE is rejected at startup |
@@ -200,7 +200,7 @@ Keep strict probing enabled in production. Temporarily set `strict: false` or di
 
 ## 5. Write a values file
 
-A values file is easier to review, reuse, and upgrade than a long list of `--set` arguments. This example uses managed infrastructure, an OpenClaw Manager, and OpenClaw Workers:
+A values file is easier to review, reuse, and upgrade than a long list of `--set` arguments. This example uses managed infrastructure, a QwenPaw Manager, and QwenPaw Workers:
 
 ```yaml
 # agentteams-values.yaml
@@ -243,9 +243,9 @@ storage:
 
 manager:
   enabled: true
-  runtime: openclaw
+  runtime: qwenpaw
   image:
-    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw
+    repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-qwenpaw
   resources:
     requests:
       cpu: 500m
@@ -255,7 +255,7 @@ manager:
       memory: 4Gi
 
 worker:
-  defaultRuntime: openclaw
+  defaultRuntime: codex
   resources:
     requests:
       cpu: 100m
@@ -514,7 +514,7 @@ metadata:
   namespace: agentteams-system
 spec:
   model: gpt-5.4
-  runtime: openclaw
+  runtime: qwenpaw
   identity: Software engineer responsible for implementation, tests, and code review
 ```
 

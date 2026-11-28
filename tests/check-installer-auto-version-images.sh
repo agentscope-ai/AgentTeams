@@ -7,6 +7,7 @@ for fn in _normalize_version _ver_lt _supports_deepseek_harness resolve_image_ta
     eval "$(sed -n "/^${fn}()/,/^}/p" "$INSTALLER")"
 done
 log() { :; }
+msg() { printf '%s' "$1"; }
 error() { :; }
 die() { exit 9; }
 CALLS=$(mktemp)
@@ -50,6 +51,7 @@ reset_case() {
     AGENTTEAMS_DEFAULT_WORKER_RUNTIME=qwenpaw
     AGENTTEAMS_UPGRADE=0
     AGENTTEAMS_DASHBOARD=1
+    AGENTTEAMS_DASHBOARD_VERSION=v1.4.1
     DOCKER_CMD=mock_docker
     BAD_IMAGE=does-not-match
     FAILURE=missing

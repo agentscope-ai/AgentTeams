@@ -70,7 +70,7 @@ AgentTeams 适合以下场景：
 
 Worker 支持 OpenClaw、QwenPaw、Hermes、实验性 DeepSeek Harness、OpenHuman 和 Codex。旧版 `copaw` 仅保留给已有部署，需显式固定旧镜像。
 
-当前 Manager CRD 支持上述运行时中的前五种，不接受 Codex；旧 Manager 值 `copaw` 映射到 QwenPaw。本地安装器提供 QwenPaw（默认）与 OpenClaw Manager 选项。Helm 默认 OpenClaw，并自动选择对应的共享 Harness 镜像。
+当前 Manager CRD 支持上述运行时中的前五种，不接受 Codex；旧 Manager 值 `copaw` 映射到 QwenPaw。本地安装器提供 QwenPaw（默认）与 OpenClaw Manager 选项。Helm 默认 QwenPaw，并自动选择对应的共享 Harness 镜像。
 
 Core v1.2.7 为六种现行 Harness 统一发布 `v1.2.7` 标签，配套 Dashboard 独立编号为 `v1.4.1`。当前 Chart 和覆盖方式见[运行时/镜像配置](usage/deployment/kubernetes.md#33-manager-runtime)。
 

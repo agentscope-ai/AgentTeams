@@ -277,7 +277,7 @@ controller:
 manager:
   enabled: true                 # create Manager CR during cluster initialization
   model: ""                     # LLM model; defaults to credentials.defaultModel
-  runtime: "openclaw"           # openclaw | qwenpaw | hermes | deepseek-harness | openhuman
+  runtime: "qwenpaw"            # qwenpaw | codex | claudecode | hermes | deepseek-harness | openhuman | openclaw (legacy)
   image:
     repository: ""             # defaults to the selected Harness worker.defaultImage
     tag: ""                     # defaults to the Harness tag, then global.imageTag
@@ -325,7 +325,7 @@ worker:
   defaultImage:
     openclaw:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw
-      tag: ""                 # defaults to global.imageTag
+      tag: "v1.2.8"           # last compatibility release; no new standard OpenClaw build
     copaw:
       # Legacy CoPaw deployments only (issue #1310): new releases must not
       # inject AGENTTEAMS_COPAW_WORKER_IMAGE, so repository stays empty by
@@ -352,7 +352,7 @@ worker:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-deepseek
       tag: "v1.2.8"           # shared v1.2.8 Harness release; override supported
     claudecode:
-      repository: ""             # opt in with a locally built or operator-published image
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-claudecode
       tag: ""
     codex:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex
@@ -360,7 +360,7 @@ worker:
     opencode:
       repository: ""          # experimental; set an explicitly built candidate
       tag: ""                 # required when repository is configured
-  defaultRuntime: "openclaw"
+  defaultRuntime: "codex"
   resources:
     requests:
       cpu: 100m

@@ -49,6 +49,9 @@ func (h *ProjectHandler) flushTaskNotification(ctx context.Context, key, kind st
 		if intent.Status == "queued" {
 			return taskNotificationStatus{Status: "queued", EventID: intent.EventID, Recipient: intent.Recipient}
 		}
+		if intent.Status == "superseded" {
+			return taskNotificationStatus{Status: "superseded"}
+		}
 		// A direct Leader intake keeps the original reply route but moves planning
 		// to a durable Task room before admitting its internal wake-up.
 		if kind == "handoff" && intent.ActorRole == authpkg.RoleTeamLeader && intent.Event.Actor == intent.Event.Recipient {
@@ -79,7 +82,40 @@ func (h *ProjectHandler) flushTaskNotification(ctx context.Context, key, kind st
 				continue
 			}
 		}
-		admitted, err := h.coordination.enqueue(ctx, intent.Event, &authpkg.CallerIdentity{Role: intent.ActorRole, Username: intent.ActorName, Team: intent.Team})
+		caller := &authpkg.CallerIdentity{Role: intent.ActorRole, Username: intent.ActorName, Team: intent.Team}
+		var admitted coordinationAdmission
+		if strings.HasPrefix(kind, "amended-") {
+			// Reuse canonical assignment routing solely to authenticate the sender
+			// and recipient. Deliver ordinary directed text so the common room
+			// supplement path steers an active run or resumes the existing task.
+			var event coordinationEvent
+			event, err = h.coordination.resolve(ctx, intent.Event, caller)
+			if err == nil {
+				var main, execution map[string]any
+				main, execution, err = h.coordination.state(ctx, event)
+				if err == nil && (taskStatusIsTerminal(coordinationString(main, "status")) || coordinationString(execution, "status") == "submitted" || taskStatusIsTerminal(coordinationString(execution, "status"))) {
+					intent.Status = "superseded"
+					intents[kind] = intent
+					task["task_notifications"], _ = json.Marshal(intents)
+					next, _ := json.Marshal(task)
+					strict, ok := h.oss.(conditionalWriter)
+					if !ok {
+						return taskNotificationStatus{Status: "pending", Error: "conditional task storage required"}
+					}
+					if err := strict.PutObjectIfMatchStrict(ctx, key, next, contentETag(body)); err != nil && !errors.Is(err, oss.ErrPreconditionFailed) {
+						return taskNotificationStatus{Status: "pending", Error: err.Error()}
+					}
+					continue
+				}
+			}
+			if err == nil {
+				content := map[string]any{"msgtype": "m.text", "body": event.Recipient + " 任务 " + event.TaskID + " 的要求已更新：" + event.Text + "。请读取当前任务要求，在原执行节点继续；不要重新创建任务或重复已完成的外部操作。", "m.mentions": map[string]any{"user_ids": []string{event.Recipient}}}
+				admitted.EventID, err = h.coordination.sendMatrixContent(ctx, intent.ActorRole, intent.ActorName, event.RoomID, kind, content, false)
+				admitted.Accepted, admitted.Recipient = err == nil, event.Recipient
+			}
+		} else {
+			admitted, err = h.coordination.enqueue(ctx, intent.Event, caller)
+		}
 		if err != nil {
 			return taskNotificationStatus{Status: "pending", Error: err.Error()}
 		}
@@ -152,7 +188,11 @@ func (h *ProjectHandler) recoverTaskNotifications(ctx context.Context) {
 					}
 				}
 				var review taskReview
-				if json.Unmarshal(task["task_review"], &review) == nil && review.ID != "" {
+				reviewData := task["task_review"]
+				if len(reviewData) == 0 {
+					reviewData = task["task_revision"]
+				}
+				if json.Unmarshal(reviewData, &review) == nil && review.ID != "" {
 					var child map[string]any
 					if json.Unmarshal(body, &child) == nil {
 						main, err := h.projectTaskReview(ctx, key, child, review)

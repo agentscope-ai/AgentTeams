@@ -63,3 +63,35 @@ func TestTaskCompleteSelectsFinalOutputsByOpaqueArtifactID(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTaskCompleteExplicitlyOmitsAcceptedFiles(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var input map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil || string(input["artifacts"]) != "[]" {
+			t.Errorf("empty final selection lost: %+v %v", input, err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"task":{"id":"main","status":"completed"}}`))
+	}))
+	defer server.Close()
+	t.Setenv("AGENTTEAMS_CONTROLLER_URL", server.URL)
+	t.Setenv("AGENTTEAMS_AUTH_TOKEN", "test-token")
+	for _, conflict := range []bool{false, true} {
+		cmd := newRootCommand("agt")
+		cmd.SetOut(&bytes.Buffer{})
+		args := []string{"task", "complete", "main", "--report", "PR contains the code", "--no-artifacts"}
+		if conflict {
+			args = append(args, "--artifact", "file")
+		}
+		cmd.SetArgs(args)
+		err := cmd.Execute()
+		if (err != nil) != conflict {
+			t.Fatalf("selection conflict=%v: %v", conflict, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("conflicting selection reached API: %d", calls)
+	}
+}

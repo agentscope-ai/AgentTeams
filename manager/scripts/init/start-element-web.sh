@@ -59,7 +59,7 @@ NGINX
 # Generate Nginx config for Manager Console reverse proxy.
 # OpenClaw runtime: injects gateway token via inline script for auto-login.
 # QwenPaw runtime (incl. legacy CoPaw alias): plain reverse proxy, no token injection needed.
-if [ "${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}" = "openclaw" ]; then
+if [ "${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}" = "openclaw" ]; then
     OPENCLAW_TOKEN="${AGENTTEAMS_MANAGER_GATEWAY_KEY:-}"
     cat > /etc/nginx/conf.d/manager-console.conf << NGINX
 # Manager Console (OpenClaw) — reverse proxy to gateway loopback with auto-token injection

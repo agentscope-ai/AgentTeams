@@ -11,9 +11,9 @@ All-in-one Manager Agent container. Includes:
 
 ## Runtime Selection
 
-Manager Agent supports two runtime modes via `AGENTTEAMS_MANAGER_RUNTIME`:
-- `openclaw` (default): Node.js gateway mode
-- `copaw`: Python workspace mode
+The compatibility launcher selects its runtime via `AGENTTEAMS_MANAGER_RUNTIME`:
+- `qwenpaw` (default; `copaw` is a legacy alias): Python workspace mode
+- `openclaw`: legacy Node.js gateway mode, not recommended for new deployments
 
 Both runtimes share the same skills and workspace structure.
 
@@ -72,7 +72,7 @@ manager/
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `AGENTTEAMS_MANAGER_RUNTIME` | No | `openclaw` | Manager runtime: `openclaw` or `copaw` |
+| `AGENTTEAMS_MANAGER_RUNTIME` | No | `qwenpaw` | Manager runtime: `qwenpaw` (default), legacy `copaw` alias, or explicit `openclaw` |
 | `AGENTTEAMS_ADMIN_USER` | Yes | - | Human admin Matrix username |
 | `AGENTTEAMS_ADMIN_PASSWORD` | Yes | - | Human admin password |
 | `AGENTTEAMS_MANAGER_PASSWORD` | Yes | - | Manager Agent Matrix password |

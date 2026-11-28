@@ -207,6 +207,7 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 			Soul:                         req.Soul,
 			Agents:                       req.Agents,
 			Skills:                       req.Skills,
+			ApprovalMode:                 req.ApprovalMode,
 			McpServers:                   req.McpServers,
 			Package:                      req.Package,
 			Expose:                       req.Expose,
@@ -230,6 +231,14 @@ func (h *ResourceHandler) CreateWorker(w http.ResponseWriter, r *http.Request) {
 		(caller.Role == authpkg.RoleAdmin || caller.Role == authpkg.RoleManager) &&
 		worker.Spec.Model != "" {
 		h.appendModelGrant(r.Context(), worker, worker.Spec.ModelProvider, worker.Spec.Model)
+	}
+	if !validApprovalMode(worker.Spec.ApprovalMode) {
+		httputil.WriteError(w, http.StatusBadRequest, "approvalMode must be ask or allow")
+		return
+	}
+	if err := validateMCPApprovals(worker.Spec.McpServers); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	h.stampControllerLabel(&worker.ObjectMeta)
 
@@ -674,6 +683,9 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 		if req.RemoteSkills != nil {
 			worker.Spec.RemoteSkills = req.RemoteSkills
 		}
+		if req.ApprovalMode != nil {
+			worker.Spec.ApprovalMode = *req.ApprovalMode
+		}
 		if req.McpServers != nil {
 			worker.Spec.McpServers = req.McpServers
 		}
@@ -705,6 +717,14 @@ func (h *ResourceHandler) UpdateWorker(w http.ResponseWriter, r *http.Request) {
 			h.appendModelGrant(ctx, &worker, worker.Spec.ModelProvider, worker.Spec.Model)
 		}
 
+		if !validApprovalMode(worker.Spec.ApprovalMode) {
+			httputil.WriteError(w, http.StatusBadRequest, "approvalMode must be ask or allow")
+			return
+		}
+		if err := validateMCPApprovals(worker.Spec.McpServers); err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if err := h.client.Update(ctx, &worker); err != nil {
 			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
 				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
@@ -1717,6 +1737,7 @@ func (h *ResourceHandler) CreateManager(w http.ResponseWriter, r *http.Request) 
 			Soul:          req.Soul,
 			Agents:        req.Agents,
 			Skills:        req.Skills,
+			ApprovalMode:  req.ApprovalMode,
 			McpServers:    req.McpServers,
 			Package:       req.Package,
 			State:         req.State,
@@ -1727,6 +1748,14 @@ func (h *ResourceHandler) CreateManager(w http.ResponseWriter, r *http.Request) 
 		mgr.Spec.Config = *req.Config
 	}
 
+	if !validApprovalMode(mgr.Spec.ApprovalMode) {
+		httputil.WriteError(w, http.StatusBadRequest, "approvalMode must be ask or allow")
+		return
+	}
+	if err := validateMCPApprovals(mgr.Spec.McpServers); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	h.stampControllerLabel(&mgr.ObjectMeta)
 
 	if err := h.client.Create(r.Context(), mgr); err != nil {
@@ -1810,6 +1839,9 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 			mgr.Spec.ModelProvider = *req.ModelProvider
 		}
 		if req.Runtime != "" {
+			if !strings.EqualFold(mgr.Spec.Runtime, req.Runtime) && req.Image == "" {
+				mgr.Spec.Image = ""
+			}
 			mgr.Spec.Runtime = req.Runtime
 		}
 		if req.Image != "" {
@@ -1823,6 +1855,9 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 		}
 		if req.Skills != nil {
 			mgr.Spec.Skills = req.Skills
+		}
+		if req.ApprovalMode != nil {
+			mgr.Spec.ApprovalMode = *req.ApprovalMode
 		}
 		if req.McpServers != nil {
 			mgr.Spec.McpServers = req.McpServers
@@ -1840,6 +1875,14 @@ func (h *ResourceHandler) UpdateManager(w http.ResponseWriter, r *http.Request) 
 			mgr.Spec.Resources = req.Resources
 		}
 
+		if !validApprovalMode(mgr.Spec.ApprovalMode) {
+			httputil.WriteError(w, http.StatusBadRequest, "approvalMode must be ask or allow")
+			return
+		}
+		if err := validateMCPApprovals(mgr.Spec.McpServers); err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if err := h.client.Update(ctx, &mgr); err != nil {
 			if apierrors.IsConflict(err) && attempt+1 < k8sUpdateMaxRetries {
 				time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
@@ -1909,6 +1952,7 @@ func workerToResponse(w *v1beta1.Worker) WorkerResponse {
 		Soul:                         w.Spec.Soul,
 		Agents:                       w.Spec.Agents,
 		Skills:                       w.Spec.Skills,
+		ApprovalMode:                 w.Spec.ApprovalMode,
 		McpServers:                   w.Spec.McpServers,
 		Package:                      w.Spec.Package,
 		BackendRuntime:               w.Spec.GetBackendRuntime(),
@@ -2044,6 +2088,7 @@ func teamToResponse(t *v1beta1.Team) TeamResponse {
 
 func managerToResponse(m *v1beta1.Manager) ManagerResponse {
 	resp := ManagerResponse{
+		ApprovalMode:  m.Spec.ApprovalMode,
 		Ready:         m.Status.Ready,
 		Name:          m.Name,
 		Phase:         m.Status.Phase,
@@ -2212,6 +2257,9 @@ func (h *ResourceHandler) checkScopedWorkerUpdate(ctx context.Context, caller *a
 	// forbidden list for humans — checkHumanModelUpdate owns both outcomes.
 	if req.ModelProvider != nil && caller.Role != authpkg.RoleHuman {
 		forbidden = append(forbidden, "modelProvider")
+	}
+	if req.ApprovalMode != nil {
+		forbidden = append(forbidden, "approvalMode")
 	}
 	if req.Runtime != "" {
 		forbidden = append(forbidden, "runtime")
@@ -2384,4 +2432,21 @@ func writeK8sError(w http.ResponseWriter, op string, err error) {
 	default:
 		httputil.WriteError(w, http.StatusInternalServerError, op+": "+err.Error())
 	}
+}
+
+func validateMCPApprovals(servers []v1beta1.MCPServer) error {
+	for _, server := range servers {
+		p := server.Approvals
+		if p == nil {
+			continue
+		}
+		if p.Tools != "*" || (p.Mode != "ask" && p.Mode != "allow") {
+			return fmt.Errorf("MCP %s approvals require tools '*' and mode ask or allow", server.Name)
+		}
+	}
+	return nil
+}
+
+func validApprovalMode(mode string) bool {
+	return mode == "" || mode == "ask" || mode == "allow"
 }

@@ -220,7 +220,7 @@ func (k *K8sBackend) Available(_ context.Context) bool {
 }
 
 func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResult, error) {
-	// Resolve effective runtime once: explicit > caller fallback > openclaw.
+	// Resolve effective runtime once: explicit > caller fallback > codex.
 	// See ResolveRuntime godoc — the Worker / Manager CRDs intentionally have
 	// no schema-level default, so the only place the operator-side env var can
 	// take effect is here, via the caller-provided RuntimeFallback (which the
@@ -266,13 +266,13 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 		// default image). An unset CoPaw image fails loudly below.
 		case req.Runtime == RuntimeCopaw:
 			image = k.config.CopawWorkerImage
-		case req.Runtime == RuntimeHermes && k.config.HermesWorkerImage != "":
+		case req.Runtime == RuntimeHermes:
 			image = k.config.HermesWorkerImage
-		case req.Runtime == RuntimeOpenHuman && k.config.OpenHumanWorkerImage != "":
+		case req.Runtime == RuntimeOpenHuman:
 			image = k.config.OpenHumanWorkerImage
-		case req.Runtime == RuntimeQwenPaw && k.config.QwenPawWorkerImage != "":
+		case req.Runtime == RuntimeQwenPaw:
 			image = k.config.QwenPawWorkerImage
-		case req.Runtime == RuntimeDeepSeekHarness && k.config.DeepSeekHarnessWorkerImage != "":
+		case req.Runtime == RuntimeDeepSeekHarness:
 			image = k.config.DeepSeekHarnessWorkerImage
 		case req.Runtime == RuntimeOpenCode:
 			image = k.config.OpenCodeWorkerImage
@@ -291,7 +291,7 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			}
 		case req.Runtime == RuntimeQoder:
 			return nil, fmt.Errorf("qoder runtime requires an explicitly built spec.image")
-		case k.config.WorkerImage != "":
+		case req.Runtime == RuntimeOpenClaw:
 			image = k.config.WorkerImage
 		}
 	}
@@ -783,6 +783,8 @@ func rawK8sPhase(phase corev1.PodPhase) string {
 
 func defaultRuntime(runtime string) string {
 	switch runtime {
+	case RuntimeOpenClaw:
+		return RuntimeOpenClaw
 	case RuntimeCopaw:
 		return RuntimeCopaw
 	case RuntimeHermes:
@@ -802,7 +804,7 @@ func defaultRuntime(runtime string) string {
 	case RuntimeClaudeCode:
 		return RuntimeClaudeCode
 	default:
-		return RuntimeOpenClaw
+		return RuntimeQwenPaw
 	}
 }
 

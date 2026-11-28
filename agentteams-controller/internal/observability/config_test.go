@@ -27,3 +27,14 @@ func TestRuntimeSettingsContainOnlyCollectionConfiguration(t *testing.T) {
 		t.Fatal("unconfigured Controller must retain compatibility")
 	}
 }
+
+func TestContentCaptureDefaultsOnAndHonorsExplicitDisable(t *testing.T) {
+	config := map[string]any{"revision": "r-default", "enabled": true}
+	if !RuntimeSettings(config).CaptureContent || WorkerEnv(config)["AGENTTEAMS_OTEL_CAPTURE_CONTENT"] != "true" {
+		t.Fatal("missing capture setting must use the global enabled default")
+	}
+	config["captureContent"] = false
+	if RuntimeSettings(config).CaptureContent || WorkerEnv(config)["AGENTTEAMS_OTEL_CAPTURE_CONTENT"] != "false" {
+		t.Fatal("explicit global disable was not honored")
+	}
+}

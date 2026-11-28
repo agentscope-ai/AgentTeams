@@ -243,7 +243,7 @@ if [ -n "${PACKAGE_DIR}" ] && [ -d "${PACKAGE_DIR}" ]; then
     # Determine correct agent source for builtin content
     _worker_json=$(agt get workers "${WORKER_NAME}" -o json)
     _role=$(echo "${_worker_json}" | jq -r '.role // "worker"')
-    _runtime=$(echo "${_worker_json}" | jq -r '.runtime // "openclaw"')
+    _runtime=$(echo "${_worker_json}" | jq -r '.runtime // "qwenpaw"')
     if [ "${_role}" = "team_leader" ] && [ -d "/opt/agentteams/agent/team-leader-agent" ]; then
         _agent_src="/opt/agentteams/agent/team-leader-agent"
     elif [ "${_runtime}" = "copaw" ]; then

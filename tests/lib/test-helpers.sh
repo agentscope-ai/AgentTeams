@@ -197,7 +197,7 @@ wait_for_manager_agent_ready() {
 
     # Detect Manager runtime (check agent container first, then infra)
     local manager_runtime
-    manager_runtime=$(exec_in_agent printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
+    manager_runtime=$(exec_in_agent printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "qwenpaw")
 
     # Phase 1: Wait for Manager Agent to be healthy (runtime-specific, on agent container)
     log_info "Waiting for Manager ${manager_runtime} runtime to be healthy (container: ${agent_container})..."
@@ -395,7 +395,7 @@ wait_agent_file_contains() {
 read_worker_runtime_file() {
     local agent_name="$1"
     local rel_path="$2"
-    local runtime="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+    local runtime="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
     local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
     if [ "${runtime}" = "qwenpaw" ]; then
         docker exec "$(worker_container_name "${agent_name}")" cat \
@@ -431,10 +431,10 @@ wait_worker_runtime_file_contains() {
 # through the public ACL API; other runtimes persist it in openclaw.json.
 read_worker_matrix_allowlist() {
     local agent_name="$1"
-    local runtime="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+    local runtime="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
     local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"
     if [ "${agent_name}" = "manager" ]; then
-        runtime=$(exec_in_agent printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo openclaw)
+        runtime=$(exec_in_agent printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo qwenpaw)
         if [ "${runtime}" = "qwenpaw" ] || [ "${runtime}" = "copaw" ]; then
             exec_in_agent curl -sf http://127.0.0.1:18799/api/access-control/agentteams_matrix \
                 2>/dev/null | jq -r '.whitelist | keys[]?' 2>/dev/null
@@ -494,7 +494,7 @@ wait_agent_matrix_allow_contains() {
     local last=""
     while [ "${elapsed}" -lt "${timeout}" ]; do
         if [ "${jq_path}" = ".channels.matrix.groupAllowFrom" ] || \
-           { [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}" = "qwenpaw" ] && [ "${agent_name}" != "manager" ]; }; then
+           { [ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}" = "qwenpaw" ] && [ "${agent_name}" != "manager" ]; }; then
             last=$(read_worker_matrix_allowlist "${agent_name}")
         else
             local storage_prefix="${STORAGE_PREFIX:?STORAGE_PREFIX is required}"

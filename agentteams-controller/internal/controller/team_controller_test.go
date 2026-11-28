@@ -876,7 +876,8 @@ func TestReconcileTeamTeamReferences_RoleAwareChannelPolicy(t *testing.T) {
 	worker1 := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
 		Spec: v1beta1.WorkerSpec{
-			Model: "qwen",
+			Runtime: "openclaw",
+			Model:   "qwen",
 			ChannelPolicy: &v1beta1.ChannelPolicySpec{
 				GroupDenyExtra: []string{"qa"},
 			},
@@ -889,7 +890,7 @@ func TestReconcileTeamTeamReferences_RoleAwareChannelPolicy(t *testing.T) {
 	}
 	worker2 := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "qa", Namespace: "default"},
-		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Spec:       v1beta1.WorkerSpec{Runtime: "openclaw", Model: "qwen"},
 		Status: v1beta1.WorkerStatus{
 			Phase:        "Running",
 			MatrixUserID: "@qa:matrix.local",
@@ -1323,12 +1324,12 @@ func TestHandleDeleteTeamReferencesResetsChannelPolicyAndArchivesRoomsWithTeamAd
 
 	leaderWorker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
-		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Spec:       v1beta1.WorkerSpec{Runtime: "openclaw", Model: "qwen"},
 		Status:     v1beta1.WorkerStatus{RoomID: "!room-lead:matrix.local"},
 	}
 	worker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "dev", Namespace: "default"},
-		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Spec:       v1beta1.WorkerSpec{Runtime: "openclaw", Model: "qwen"},
 		Status:     v1beta1.WorkerStatus{RoomID: "!room-dev:matrix.local"},
 	}
 	team := &v1beta1.Team{
@@ -1608,7 +1609,7 @@ func TestReconcileTeamTeamReferences_HeartbeatFromTeamCR(t *testing.T) {
 
 	leaderWorker := &v1beta1.Worker{
 		ObjectMeta: metav1.ObjectMeta{Name: "lead", Namespace: "default"},
-		Spec:       v1beta1.WorkerSpec{Model: "qwen"},
+		Spec:       v1beta1.WorkerSpec{Runtime: "openclaw", Model: "qwen"},
 		Status: v1beta1.WorkerStatus{
 			Phase:        "Running",
 			MatrixUserID: "@lead:matrix.local",

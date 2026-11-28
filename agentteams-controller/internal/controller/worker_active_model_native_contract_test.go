@@ -57,7 +57,7 @@ func TestActiveModelHotUsesNativeContractAndReadback(t *testing.T) {
 			scheme := newControllerTestScheme(t)
 			worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "native-primary", Namespace: "default"}}
 			k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(worker.DeepCopy()).Build()
-			reconciler := &WorkerReconciler{Client: k8sClient, KubeMode: "embedded", subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL }}
+			reconciler := &WorkerReconciler{DefaultRuntime: "qwenpaw", Client: k8sClient, KubeMode: "embedded", subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL }}
 			reconciler.applyActiveModelHot(context.Background(), worker, v1beta1.WorkerSpec{Model: desired["model"], ModelProvider: "custom-gw"}, &MemberState{ContainerState: "running"})
 			var got v1beta1.Worker
 			if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: worker.Name, Namespace: worker.Namespace}, &got); err != nil {
@@ -89,7 +89,7 @@ func TestActiveModelHotReappliesProviderChange(t *testing.T) {
 	}))
 	defer srv.Close()
 	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "changed-provider", Namespace: "default", Annotations: map[string]string{annotationActiveModelApplied: "same-model", annotationActiveModelProviderApplied: "old-gw"}}}
-	reconciler := &WorkerReconciler{Client: fake.NewClientBuilder().WithScheme(newControllerTestScheme(t)).WithObjects(worker.DeepCopy()).Build(), KubeMode: "embedded", subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL }}
+	reconciler := &WorkerReconciler{DefaultRuntime: "qwenpaw", Client: fake.NewClientBuilder().WithScheme(newControllerTestScheme(t)).WithObjects(worker.DeepCopy()).Build(), KubeMode: "embedded", subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL }}
 	spec := v1beta1.WorkerSpec{Model: "same-model", ModelProvider: "new-gw"}
 	state := &MemberState{ContainerState: "running"}
 	reconciler.applyActiveModelHot(context.Background(), worker, spec, state)
@@ -121,7 +121,7 @@ func TestSubagentModelHotReappliesProviderChange(t *testing.T) {
 	}))
 	defer srv.Close()
 	worker := &v1beta1.Worker{ObjectMeta: metav1.ObjectMeta{Name: "changed-subagent-provider", Namespace: "default", Annotations: map[string]string{annotationSubagentModelApplied: "same-model", "agentteams.io/subagent-model-provider-applied": "old-gw"}}}
-	reconciler := &WorkerReconciler{Client: fake.NewClientBuilder().WithScheme(newControllerTestScheme(t)).WithObjects(worker.DeepCopy()).Build(), KubeMode: "embedded", subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL }}
+	reconciler := &WorkerReconciler{DefaultRuntime: "qwenpaw", Client: fake.NewClientBuilder().WithScheme(newControllerTestScheme(t)).WithObjects(worker.DeepCopy()).Build(), KubeMode: "embedded", subagentModelURLFor: func(*v1beta1.Worker, v1beta1.WorkerSpec) string { return srv.URL }}
 	spec := v1beta1.WorkerSpec{SubagentModel: "same-model", ModelProvider: "new-gw"}
 	state := &MemberState{ContainerState: "running"}
 	reconciler.applySubagentModelHot(context.Background(), worker, spec, MemberContext{}, state)

@@ -75,70 +75,8 @@ def test_mcp_server_restores_and_clears_identity_for_every_call(monkeypatch):
         assert not trace.get_current_span().get_span_context().is_valid
 
 
-def test_qwenpaw_normalizes_dictionary_requests_before_trace_identity(monkeypatch):
-    import at_runtime_adapters as adapters
-    provider = TracerProvider()
-    monkeypatch.setattr(trace, "get_tracer", lambda *args, **kwargs: provider.get_tracer("test"))
-    monkeypatch.setattr(adapters, "task_resolver", lambda: None)
-
-    class Runtime:
-        workspace = SimpleNamespace(workspace_dir=None)
-
-        def _normalize(self, request):
-            return SimpleNamespace(**request) if isinstance(request, dict) else request
-
-        async def run(self, request):
-            yield dict(telemetry._correlation.get())
-
-    adapters.qwenpaw_runtime(SimpleNamespace(Runtime=Runtime))
-
-    async def run():
-        return [row async for row in Runtime().run({"session_id": "real-session", "user_id": "user", "channel_meta": {"room_id": "!task:matrix"}})]
-
-    fields = asyncio.run(run())[0]
-    assert fields["agentteams.runtime.session_id"] == "real-session"
-    assert fields["agentteams.room.id"] == "!task:matrix"
 
 
-def test_qwenpaw_refreshes_task_identity_after_runtime_hooks_sync_files(monkeypatch):
-    import types
-    import at_runtime_adapters as adapters
-    monkeypatch.setenv("AGENTTEAMS_WORKER_NAME", "worker")
-    provider = TracerProvider()
-    exporter = InMemorySpanExporter()
-    provider.add_span_processor(telemetry.IdentityProcessor())
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("test")
-    monkeypatch.setattr(trace, "get_tracer", lambda *args, **kwargs: tracer)
-    middleware = types.ModuleType("agentscope.middleware")
-    middleware.TracingMiddleware = type("TracingMiddleware", (), {})
-    monkeypatch.setitem(sys.modules, "agentscope.middleware", middleware)
-    monkeypatch.setattr(adapters, "task_resolver", lambda: lambda *args, **kwargs: {"project_id": "project", "task": {"task_id": "work", "notifyTxn": "dispatch-one"}})
-
-    class Agent:
-        workspace_dir = "/tmp/workspace"
-        _request_context = {"channel_meta": {"room_id": "!task:matrix"}}
-
-        def __init__(self, **kwargs):
-            pass
-
-        async def reply(self):
-            with tracer.start_as_current_span("model"):
-                return dict(telemetry._correlation.get())
-
-    adapters.agentscope(SimpleNamespace(Agent=Agent))
-
-    async def run():
-        root = tracer.start_span("worker.turn")
-        async def execute():
-            yield await Agent().reply()
-        return [row async for row in telemetry.trace_stream(execute(), root, {"agentteams.turn.id": "turn", "agentteams.room.id": "!task:matrix"})]
-
-    assert asyncio.run(run())[0]["agentteams.task.id"] == "work"
-    root = next(span for span in exporter.get_finished_spans() if span.name == "worker.turn")
-    assert root.attributes["agentteams.task.id"] == "work"
-    assert "task:work" in root.attributes["langfuse.trace.tags"]
-    assert telemetry._correlation.get() == {}
 
 
 def test_urllib_matrix_handoff_injects_send_span_without_mutating_request(monkeypatch):

@@ -22,6 +22,7 @@ func TestTaskRoomAutoJoinOnlyInvitedTeamHumans(t *testing.T) {
 	_ = h.deps.Client.Get(context.Background(), client.ObjectKey{Name: "alpha", Namespace: "default"}, &team)
 	team.Spec.Admin = &v1beta1.TeamAdminSpec{Name: "admin", MatrixUserID: "@admin:test"}
 	team.Spec.HumanMembers = []v1beta1.TeamMemberSpec{{Name: "alice", MatrixUserID: "@alice:test"}}
+	team.Status.TeamRoomID = "!team:test"
 	if err := h.deps.Client.Update(context.Background(), &team); err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +42,11 @@ func TestTaskRoomAutoJoinOnlyInvitedTeamHumans(t *testing.T) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/state/room.meta/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"roomKind": "task_room", "teamName": roomTeam, "leaderWorker": map[string]any{"userId": "@lead:test"}})
+		case strings.Contains(r.URL.Path, "!team:test") && strings.HasSuffix(r.URL.Path, "/members"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"chunk": []any{
+				map[string]any{"state_key": "@alice:test", "content": map[string]any{"membership": "join"}},
+				map[string]any{"state_key": "@bob:test", "content": map[string]any{"membership": "invite"}},
+			}})
 		case strings.HasSuffix(r.URL.Path, "/members"):
 			events := []any{}
 			for _, name := range []string{"admin", "alice", "bob", "outsider"} {
@@ -94,7 +100,7 @@ func TestTaskRoomAutoJoinOnlyInvitedTeamHumans(t *testing.T) {
 			t.Fatalf("auto-join %d: %s", rec.Code, rec.Body.String())
 		}
 	}
-	if joins != 3 || !joined["admin"] || !joined["alice"] || !joined["bob"] || joined["outsider"] {
+	if joins != 2 || !joined["admin"] || !joined["alice"] || joined["bob"] || joined["outsider"] {
 		t.Fatalf("joins=%d users=%v", joins, joined)
 	}
 	roomTeam = "foreign"
@@ -107,7 +113,7 @@ func TestTaskRoomAutoJoinOnlyInvitedTeamHumans(t *testing.T) {
 	if rec := call(authpkg.RoleTeamLeader, "foreign"); rec.Code != 403 {
 		t.Fatal("accepted a foreign caller scope")
 	}
-	if joins != 3 {
+	if joins != 2 {
 		t.Fatal("unauthorized or repeated request joined users")
 	}
 }

@@ -19,7 +19,7 @@ on:
         description: 'Build only one runtime when recovering a failed platform'
         type: choice
         default: all
-        options: [all, openclaw, qwenpaw, hermes, deepseek, openhuman, codex, opencode, claudecode]
+        options: [all, qwenpaw, hermes, deepseek, openhuman, codex, claudecode, openclaw]
       architecture:
         description: 'Build only one architecture; partial builds require publish=false'
         type: choice
@@ -37,7 +37,6 @@ env:
   REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
   CODEX_REF: 693b167b0b6bb6053259716dfd879f70d74bfa11
   CLAUDECODE_REF: 1aee24741a31edabec7a8725a44e569d7cf282af
-  OPENCODE_REF: 3f39abf2e406c4959600513520a3daa55ca00b50
 
 jobs:
   prepare:
@@ -57,11 +56,11 @@ jobs:
           PUBLISH: ${{ inputs.publish }}
         run: |
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          [[ "$RUNTIME" =~ ^(all|openclaw|qwenpaw|hermes|deepseek|openhuman|codex|opencode|claudecode)$ ]] || exit 1
+          [[ "$RUNTIME" =~ ^(all|openclaw|qwenpaw|hermes|deepseek|openhuman|codex|claudecode)$ ]] || exit 1
           [[ "$ARCHITECTURE" =~ ^(all|amd64|arm64)$ ]] || exit 1
           [[ "$PUBLISH" != true || "$ARCHITECTURE" == all ]] || exit 1
-          # Experimental Harnesses remain opt-in during admission.
-          runtimes='["openclaw","qwenpaw","hermes","deepseek","openhuman","codex"]'
+          # OpenClaw is manual compatibility only; OpenCode and Qoder are not released.
+          runtimes='["qwenpaw","hermes","deepseek","openhuman","codex","claudecode"]'
           architectures='["amd64","arm64"]'
           if [[ "$RUNTIME" != all ]]; then runtimes="[\"$RUNTIME\"]"; fi
           if [[ "$ARCHITECTURE" != all ]]; then architectures="[\"$ARCHITECTURE\"]"; fi
@@ -158,12 +157,6 @@ jobs:
           repository: agentteams-group/agentteams-harness-claudecode
           ref: ${{ env.CLAUDECODE_REF }}
           path: claudecode-harness
-      - uses: actions/checkout@v4
-        if: matrix.runtime == 'opencode'
-        with:
-          repository: agentteams-group/agentteams-harness-opencode
-          ref: ${{ env.OPENCODE_REF }}
-          path: opencode-harness
       - uses: ruby/setup-ruby@v1
         if: matrix.runtime == 'qwenpaw'
         with:

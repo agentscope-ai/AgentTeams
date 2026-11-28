@@ -163,6 +163,10 @@ spec:
                               type: string
                             label:
                               type: string
+                approvalMode:
+                  type: string
+                  enum: [ask, allow]
+                  description: Native tool approval mode; does not change sandbox access.
                 mcpServers:
                   type: array
                   description: MCP servers callable via mcporter. url is the full endpoint; transport defaults to http.
@@ -170,6 +174,16 @@ spec:
                     type: object
                     required: [name, url]
                     properties:
+                      approvals:
+                        type: object
+                        required: [tools, mode]
+                        properties:
+                          tools:
+                            type: string
+                            enum: ["*"]
+                          mode:
+                            type: string
+                            enum: [ask, allow]
                       name:
                         type: string
                         description: Key in mcporter-servers.json; used by tool calls as <name>.<tool>.

@@ -147,7 +147,7 @@ the Console API surface.
 
 | Runtime | Stack | Notes |
 |---------|--------|--------|
-| **openclaw** (Helm default) | Node.js / OpenClaw gateway in **openclaw-base**-derived image | Primary worker path; **mcporter** for MCP tool calls through Higress |
+| **openclaw** (legacy compatibility) | Node.js / OpenClaw gateway in **openclaw-base**-derived image | Primary worker path; **mcporter** for MCP tool calls through Higress |
 | **copaw** | Python / CoPaw compatibility path | Retained for existing deployments; uses `agentteams-copaw-worker` and the `.copaw/` runtime directory |
 | **qwenpaw** | Python / **QwenPaw 2.x** | Current QwenPaw Worker path; uses `agentteams-harness-qwenpaw` and the `.qwenpaw/` runtime directory |
 | **hermes** | Python / **`hermes-worker`** | Matrix worker runtime with Hermes policy/config tree under `hermes-worker-agent/` |
@@ -155,7 +155,7 @@ the Console API surface.
 | **openhuman** | Rust / OpenHuman | Native Matrix Harness |
 | **codex** | Independent Codex Harness | Packaged separately; shared v1.2.7 release image |
 
-The current Worker CRD accepts all seven values above. Helm provides default images for the six current Harnesses, including QwenPaw. Legacy CoPaw requires an explicitly pinned old image. The Controller resolves the runtime and image when creating Pods or containers; the local installer defaults to QwenPaw, while Helm defaults to OpenClaw.
+The current Worker CRD accepts all seven values above. Helm provides default images for the six current Harnesses, including QwenPaw. Legacy CoPaw requires an explicitly pinned old image. The Controller resolves the runtime and image when creating Pods or containers; the local installer defaults to QwenPaw, while Helm defaults to QwenPaw.
 
 ### Manager runtimes
 
@@ -163,7 +163,7 @@ Manager, Leader, and Worker use the same image and entrypoint for each supported
 
 The current Manager CRD accepts `openclaw`, `qwenpaw`, `hermes`, `deepseek-harness`, and `openhuman`. `copaw` is a legacy Manager alias for QwenPaw and does not change the standalone CoPaw Worker runtime. Codex is Worker-only at this API boundary.
 
-Helm defaults to OpenClaw and selects the Harness image from `worker.defaultImage` unless `manager.image` is overridden. The local installer defaults to QwenPaw and offers OpenClaw as the alternative. Core v1.2.7 publishes shared Harness images, not dedicated Manager images; local compatibility wrappers remain under `manager/`.
+Helm defaults to QwenPaw and selects the Harness image from `worker.defaultImage` unless `manager.image` is overridden. The local installer defaults to QwenPaw and offers OpenClaw as the alternative. Core v1.2.7 publishes shared Harness images, not dedicated Manager images; local compatibility wrappers remain under `manager/`.
 
 The QwenPaw Manager runs under `/root/manager-workspace`, using the shared Manager prompts and management skills. See the [Manager Guide](../usage/manager-guide.md) and [Kubernetes runtime configuration](../usage/deployment/kubernetes.md#33-manager-runtime).
 

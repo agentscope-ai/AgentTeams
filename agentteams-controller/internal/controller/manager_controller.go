@@ -36,6 +36,7 @@ type ManagerEmbeddedConfig struct {
 type ManagerReconciler struct {
 	modelHealthRunning atomic.Bool
 	client.Client
+	ObservabilityReader client.Reader
 
 	Provisioner      service.ManagerProvisioner
 	Deployer         service.ManagerDeployer

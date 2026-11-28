@@ -644,18 +644,19 @@ func (a *App) initReconcilers(_ context.Context) error {
 
 	if a.cfg.ManagerEnabled {
 		mgrReconciler := &controller.ManagerReconciler{
-			Client:           a.mgr.GetClient(),
-			Provisioner:      a.provisioner,
-			Deployer:         a.deployer,
-			Backend:          a.registry,
-			EnvBuilder:       a.envBuilder,
-			ResourcePrefix:   resourcePrefix,
-			ManagerResources: a.cfg.ManagerResources(),
-			DefaultRuntime:   a.cfg.ManagerRuntime,
-			ControllerName:   a.cfg.ControllerName,
-			UserLanguage:     a.cfg.UserLanguage,
-			UserTimezone:     a.cfg.UserTimezone,
-			GatewayClient:    a.gateway,
+			ObservabilityReader: a.mgr.GetAPIReader(),
+			Client:              a.mgr.GetClient(),
+			Provisioner:         a.provisioner,
+			Deployer:            a.deployer,
+			Backend:             a.registry,
+			EnvBuilder:          a.envBuilder,
+			ResourcePrefix:      resourcePrefix,
+			ManagerResources:    a.cfg.ManagerResources(),
+			DefaultRuntime:      a.cfg.ManagerRuntime,
+			ControllerName:      a.cfg.ControllerName,
+			UserLanguage:        a.cfg.UserLanguage,
+			UserTimezone:        a.cfg.UserTimezone,
+			GatewayClient:       a.gateway,
 		}
 		if a.cfg.KubeMode == "embedded" {
 			mgrReconciler.EmbeddedConfig = &controller.ManagerEmbeddedConfig{

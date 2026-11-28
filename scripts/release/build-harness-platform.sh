@@ -22,14 +22,14 @@ case "$runtime" in
       --build-arg "AGENTTEAMS_CONTROLLER_IMAGE=$controller" -t "$image" opencode-harness
     ;;
   codex)
-    docker build --platform "$platform" --build-context at=. "${common[@]}" -t "${image}-source" codex-harness
+    docker build --platform "$platform" --build-context at=. "${common[@]}" --build-arg "AGENTTEAMS_CONTROLLER_IMAGE=$controller" -t "${image}-source" codex-harness
     docker build --platform "$platform" "${common[@]}" --build-arg "CODEX_IMAGE=${image}-source" --build-arg "CONTROLLER_IMAGE=$controller" -f scripts/release/Dockerfile.codex -t "$image" .
     ;;
   *) echo "Unknown runtime: $runtime" >&2; exit 1 ;;
 esac
 if [[ "$runtime" != codex && "$runtime" != opencode && "$runtime" != claudecode ]]; then
   make -o build-agentteams-controller "build-${target}" \
-    "$output=$image" "LOCAL_CONTROLLER_BUILD_IMAGE=$controller" "OPENCLAW_BASE_VERSION=$RELEASE_VERSION" \
+    "$output=$image" "LOCAL_CONTROLLER_BUILD_IMAGE=$controller" "OPENCLAW_BASE_VERSION=v1.2.8" \
     "DOCKER_PLATFORM=$platform" HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
     "DOCKER_BUILD_ARGS=${common[*]}"
 fi

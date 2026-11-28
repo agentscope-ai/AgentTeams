@@ -82,7 +82,7 @@ else
 fi
 
 # Inspect the native workspace selected by the Manager Harness.
-MANAGER_RUNTIME=$(exec_in_agent printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "openclaw")
+MANAGER_RUNTIME=$(exec_in_agent printenv AGENTTEAMS_MANAGER_RUNTIME 2>/dev/null || echo "qwenpaw")
 _MANAGER_WORKSPACE=/root/manager-workspace
 _ROLE_PROMPT=AGENTS.md
 case "${MANAGER_RUNTIME}" in

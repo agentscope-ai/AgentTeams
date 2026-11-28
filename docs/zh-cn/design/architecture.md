@@ -146,7 +146,7 @@ flowchart TB
 
 | Runtime | 技术栈 | 说明 |
 |---------|--------|------|
-| **openclaw**（Helm 默认） | Node.js / OpenClaw gateway，基于 **openclaw-base** 派生镜像 | 主 worker 路径；使用 **mcporter** 通过 Higress 调用 MCP 工具 |
+| **openclaw**（兼容，不推荐） | Node.js / OpenClaw gateway，基于 **openclaw-base** 派生镜像 | 主 worker 路径；使用 **mcporter** 通过 Higress 调用 MCP 工具 |
 | **copaw** | Python / CoPaw 兼容路径 | 保留给已有部署；使用 `agentteams-copaw-worker` 及 `.copaw/` 运行时目录 |
 | **qwenpaw** | Python / **QwenPaw 2.x** | 当前 QwenPaw Worker 路径；使用 `agentteams-harness-qwenpaw` 及 `.qwenpaw/` 运行时目录 |
 | **hermes** | Python / **`hermes-worker`** | Matrix worker runtime，Hermes policy/config tree 位于 `hermes-worker-agent/` |
@@ -154,7 +154,7 @@ flowchart TB
 | **openhuman** | Rust / OpenHuman | 原生 Matrix Harness |
 | **codex** | 独立 Codex Harness | 独立维护，纳入 v1.2.7 统一镜像发布 |
 
-当前 Worker CRD 接受上表七个值。Helm 为六种现行 Harness 提供默认镜像，包括 QwenPaw；旧版 CoPaw 必须显式固定旧镜像。Controller 创建 Pod 或容器时解析 runtime 与镜像。本地安装器默认 QwenPaw，Helm 默认 OpenClaw。
+当前 Worker CRD 接受上表七个值。Helm 为六种现行 Harness 提供默认镜像，包括 QwenPaw；旧版 CoPaw 必须显式固定旧镜像。Controller 创建 Pod 或容器时解析 runtime 与镜像。本地安装器默认 QwenPaw，Helm 默认 QwenPaw。
 
 ### Manager runtimes
 
@@ -162,7 +162,7 @@ flowchart TB
 
 当前 Manager CRD 接受 `openclaw`、`qwenpaw`、`hermes`、`deepseek-harness` 和 `openhuman`。`copaw` 是映射到 QwenPaw 的旧 Manager 别名，不改变独立 CoPaw Worker 的运行时。在此 API 边界上，Codex 仅用于 Worker。
 
-Helm 默认 OpenClaw；未覆盖 `manager.image` 时，从 `worker.defaultImage` 自动选择 Harness 镜像。本地安装器默认 QwenPaw，并提供 OpenClaw 选项。Core v1.2.7 发布共享 Harness 镜像，不再发布专用 Manager 镜像；`manager/` 仍保留本地兼容构建包装。
+Helm 默认 QwenPaw；未覆盖 `manager.image` 时，从 `worker.defaultImage` 自动选择 Harness 镜像。本地安装器默认 QwenPaw，并提供 OpenClaw 选项。Core v1.2.7 发布共享 Harness 镜像，不再发布专用 Manager 镜像；`manager/` 仍保留本地兼容构建包装。
 
 QwenPaw Manager 在 `/root/manager-workspace` 运行，使用共享 Manager 提示词与管理技能。详见 [Manager 指南](../usage/manager-guide.md)及 [Kubernetes 运行时配置](../usage/deployment/kubernetes.md#33-manager-runtime)。
 

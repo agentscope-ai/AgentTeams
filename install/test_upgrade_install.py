@@ -25,8 +25,9 @@ class UpgradeInstallTest(unittest.TestCase):
             original = 'AGENTTEAMS_ADMIN_PASSWORD=secret#with=equals\nAGENTTEAMS_FS_ENDPOINT=https://storage.example\nAGENTTEAMS_STORAGE_PROVIDER=s3\nAGENTTEAMS_CUSTOM_OPTION=with space#and=equals\n'
             if not fresh:
                 path.write_text(original)
-            script = functions('load_upgrade_config') + '\nset -e\n'
+            script = functions('load_upgrade_config', 'check_unified_entry_images') + '\nset -e\n'
             script += 'AGENTTEAMS_ENV_FILE=' + json.dumps(str(path)) + '\n'
+            script += 'AGENTTEAMS_LOG_FILE=' + json.dumps(str(Path(directory) / 'install.log')) + '\n'
             script += '''
 _INSTALL_ENV_KEYS=' '
 load_upgrade_config "$AGENTTEAMS_ENV_FILE"
@@ -76,7 +77,8 @@ DOCKER_CMD=docker
 UPGRADE_EXISTING_WORKERS='agentteams-worker-first agentteams-worker-second'
 log() { :; }
 msg() { :; }
-docker() { echo "$*"; }
+exec 3>&1
+docker() { echo "$*" >&3; }
 '''
             script += '_is_old_arch=' + str(legacy) + '\n' + SOURCE[start:end]
             result = run(script)
@@ -211,6 +213,7 @@ AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.1
 resolve_image_tags
 test "$WORKER_IMAGE" = registry.example/agentteams/agentteams-worker:v1.2.6
 test "$QWENPAW_WORKER_IMAGE" = registry.example/agentteams/agentteams-qwenpaw-worker:v1.2.6
+test "$MANAGER_QWENPAW_IMAGE" = registry.example/agentteams/agentteams-manager-qwenpaw:v1.2.6
 test "$DEEPSEEK_HARNESS_WORKER_IMAGE" = registry.example/agentteams/agentteams-deepseek-harness-worker:v0.1.1
 AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.2
 resolve_image_tags
@@ -224,6 +227,8 @@ AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_VERSION=v0.1.2
 resolve_image_tags
 test "$WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-openclaw:v1.2.7
 test "$QWENPAW_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-qwenpaw:v1.2.7
+test "$MANAGER_QWENPAW_IMAGE" = "$QWENPAW_WORKER_IMAGE"
+test "$MANAGER_IMAGE" = "$WORKER_IMAGE"
 test "$HERMES_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-hermes:v1.2.7
 test "$OPENHUMAN_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-openhuman:v1.2.7
 test "$DEEPSEEK_HARNESS_WORKER_IMAGE" = registry.example/agentteams/agentteams-harness-deepseek:v0.1.2
@@ -243,6 +248,9 @@ test "$QWENPAW_WORKER_IMAGE" = "$AGENTTEAMS_INSTALL_QWENPAW_WORKER_IMAGE"
 test "$HERMES_WORKER_IMAGE" = "$AGENTTEAMS_INSTALL_HERMES_WORKER_IMAGE"
 test "$OPENHUMAN_WORKER_IMAGE" = "$AGENTTEAMS_INSTALL_OPENHUMAN_WORKER_IMAGE"
 test "$DEEPSEEK_HARNESS_WORKER_IMAGE" = "$AGENTTEAMS_INSTALL_DEEPSEEK_HARNESS_WORKER_IMAGE"
+AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE=private.example/custom-manager:pinned
+resolve_image_tags
+test "$MANAGER_QWENPAW_IMAGE" = "$AGENTTEAMS_INSTALL_MANAGER_QWENPAW_IMAGE"
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -254,12 +262,12 @@ AGENTTEAMS_REGISTRY=registry.example
 AGENTTEAMS_DASHBOARD_VERSION=v1.3.1
 AGENTTEAMS_DASHBOARD_IMAGE=registry.example/agentteams/agentteams-dashboard:v1.3.1
 prepare_upgrade_dashboard
-test "$AGENTTEAMS_DASHBOARD_VERSION" = v1.4.1
-test "$AGENTTEAMS_DASHBOARD_IMAGE" = registry.example/agentteams/agentteams-dashboard:v1.4.1
+test "$AGENTTEAMS_DASHBOARD_VERSION" = v1.4.3
+test "$AGENTTEAMS_DASHBOARD_IMAGE" = registry.example/agentteams/agentteams-dashboard:v1.4.3
 AGENTTEAMS_DASHBOARD_VERSION=v1.4.0
 AGENTTEAMS_DASHBOARD_IMAGE=registry.example/agentteams/agentteams-dashboard:v1.4.0
 prepare_upgrade_dashboard
-test "$AGENTTEAMS_DASHBOARD_VERSION" = v1.4.1
+test "$AGENTTEAMS_DASHBOARD_VERSION" = v1.4.3
 AGENTTEAMS_DASHBOARD_IMAGE=private.example/dashboard:canary
 prepare_upgrade_dashboard
 test "$AGENTTEAMS_DASHBOARD_IMAGE" = private.example/dashboard:canary

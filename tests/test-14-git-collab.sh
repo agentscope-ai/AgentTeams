@@ -19,7 +19,7 @@ if ! require_llm_key; then
     exit 0
 fi
 
-TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
 
 ADMIN_LOGIN=$(matrix_login "${TEST_ADMIN_USER}" "${TEST_ADMIN_PASSWORD}")
 ADMIN_TOKEN=$(echo "${ADMIN_LOGIN}" | jq -r '.access_token')

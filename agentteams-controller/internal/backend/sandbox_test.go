@@ -146,11 +146,13 @@ func newTestSandboxBackend(plugin *fakeSandboxPlugin) *SandboxBackend {
 			DynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
 		},
 		SandboxConfig{
-			Namespace:      "test-ns",
-			WorkerImage:    "test/worker:latest",
-			WorkerCPU:      "500m",
-			WorkerMemory:   "1Gi",
-			ControllerName: "ctl-x",
+			Namespace:          "test-ns",
+			WorkerImage:        "test/worker:latest",
+			QwenPawWorkerImage: "test/worker:latest",
+			CodexWorkerImage:   "test/worker:latest",
+			WorkerCPU:          "500m",
+			WorkerMemory:       "1Gi",
+			ControllerName:     "ctl-x",
 		},
 		"agentteams-worker-",
 		nil, // scheme not needed for these tests
@@ -330,6 +332,8 @@ func TestSandboxBackend_Create_SandboxSetUsesConfiguredPrewarmSize(t *testing.T)
 				SandboxConfig{
 					Namespace:                    "test-ns",
 					WorkerImage:                  "test/worker:latest",
+					QwenPawWorkerImage:           "test/worker:latest",
+					CodexWorkerImage:             "test/worker:latest",
 					WorkerCPU:                    "500m",
 					WorkerMemory:                 "1Gi",
 					SandboxPrewarmSize:           tt.prewarmSize,
@@ -526,7 +530,7 @@ func TestSandboxBackend_Create_ImageResolution(t *testing.T) {
 		{
 			name:      "explicit image wins",
 			reqImage:  "custom/image:v1",
-			config:    SandboxConfig{WorkerImage: "default/image:latest"},
+			config:    SandboxConfig{QwenPawWorkerImage: "default/image:latest"},
 			wantImage: "custom/image:v1",
 		},
 		{
@@ -555,7 +559,7 @@ func TestSandboxBackend_Create_ImageResolution(t *testing.T) {
 		},
 		{
 			name:      "default worker image",
-			config:    SandboxConfig{WorkerImage: "default/worker:latest"},
+			config:    SandboxConfig{CodexWorkerImage: "default/worker:latest"},
 			wantImage: "default/worker:latest",
 		},
 		{
@@ -639,11 +643,12 @@ func TestSandboxBackend_Create_UsesFixedSandboxSetName(t *testing.T) {
 		plugin,
 		sandbox.ProviderConfig{Namespace: "test-ns", DynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())},
 		SandboxConfig{
-			Namespace:      "test-ns",
-			WorkerImage:    "img:latest",
-			WorkerCPU:      "500m",
-			WorkerMemory:   "1Gi",
-			ControllerName: "ctl-x",
+			Namespace:          "test-ns",
+			QwenPawWorkerImage: "img:latest",
+			CodexWorkerImage:   "img:latest",
+			WorkerCPU:          "500m",
+			WorkerMemory:       "1Gi",
+			ControllerName:     "ctl-x",
 		},
 		"prefix-",
 		nil,
@@ -683,11 +688,12 @@ spec:
 		plugin,
 		sandbox.ProviderConfig{Namespace: "test-ns", DynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())},
 		SandboxConfig{
-			Namespace:      "test-ns",
-			WorkerImage:    "worker:latest",
-			WorkerCPU:      "500m",
-			WorkerMemory:   "1Gi",
-			ControllerName: "my-controller",
+			Namespace:          "test-ns",
+			QwenPawWorkerImage: "worker:latest",
+			CodexWorkerImage:   "worker:latest",
+			WorkerCPU:          "500m",
+			WorkerMemory:       "1Gi",
+			ControllerName:     "my-controller",
 		},
 		"prefix-",
 		nil,
@@ -734,11 +740,12 @@ spec:
 		plugin,
 		sandbox.ProviderConfig{Namespace: "test-ns", DynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())},
 		SandboxConfig{
-			Namespace:      "test-ns",
-			WorkerImage:    "worker:latest",
-			WorkerCPU:      "500m",
-			WorkerMemory:   "1Gi",
-			ControllerName: "my-controller",
+			Namespace:          "test-ns",
+			QwenPawWorkerImage: "worker:latest",
+			CodexWorkerImage:   "worker:latest",
+			WorkerCPU:          "500m",
+			WorkerMemory:       "1Gi",
+			ControllerName:     "my-controller",
 		},
 		"prefix-",
 		nil,
@@ -767,7 +774,7 @@ spec:
 		t.Errorf("agent-name label not forced, got labels: %v", spec.Labels)
 	}
 	// Runtime label always set.
-	if spec.Labels["agentteams.io/runtime"] != "openclaw" {
+	if spec.Labels["agentteams.io/runtime"] != "codex" {
 		t.Errorf("runtime label missing, got labels: %v", spec.Labels)
 	}
 }

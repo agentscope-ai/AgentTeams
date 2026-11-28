@@ -59,9 +59,13 @@ func (h *CoordinationHandler) ensureTaskPlanRoom(ctx context.Context, main map[s
 	if reader.List(ctx, &humans, client.InNamespace(h.deps.Namespace)) != nil {
 		return "", fmt.Errorf("task room Humans unavailable")
 	}
+	joinedTeam, err := h.joinedTeamHumans(ctx, team, token)
+	if err != nil {
+		return "", err
+	}
 	humanMeta := []map[string]any{}
 	for _, human := range humans.Items {
-		if !human.DeletionTimestamp.IsZero() || !taskRoomHumanAllowed(team, &human) || !strings.HasPrefix(human.Status.MatrixUserID, "@") {
+		if !human.DeletionTimestamp.IsZero() || !taskRoomHumanAllowed(team, &human) || (!teamAdminHuman(team, &human) && !joinedTeam[human.Status.MatrixUserID]) || !strings.HasPrefix(human.Status.MatrixUserID, "@") {
 			continue
 		}
 		inviteSet[human.Status.MatrixUserID] = true
@@ -178,7 +182,7 @@ func (h *CoordinationHandler) ensureTaskPlanRoom(ctx context.Context, main map[s
 			invited[id] = true
 		}
 	}
-	_, failed, err := h.acceptTaskRoomHumanInvites(ctx, team, room.RoomID, invited)
+	_, failed, err := h.acceptTaskRoomHumanInvites(ctx, team, room.RoomID, invited, joinedTeam)
 	if err != nil || len(failed) > 0 {
 		return "", fmt.Errorf("task room Human membership pending")
 	}

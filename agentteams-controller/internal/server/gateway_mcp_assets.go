@@ -778,9 +778,12 @@ func (h *gatewayAssets) bindMCP(ctx context.Context, record *managedMCP, name st
 				return err
 			}
 			servers := []v1beta1.MCPServer{}
+			var approvals *v1beta1.MCPApprovals
 			for _, s := range worker.Spec.McpServers {
 				if s.Name != record.Name {
 					servers = append(servers, s)
+				} else {
+					approvals = s.Approvals
 				}
 			}
 			if enable {
@@ -788,7 +791,7 @@ func (h *gatewayAssets) bindMCP(ctx context.Context, record *managedMCP, name st
 				if record.Transport == "sse" {
 					transport = "sse"
 				}
-				servers = append(servers, v1beta1.MCPServer{Name: record.Name, URL: record.URL, Transport: transport})
+				servers = append(servers, v1beta1.MCPServer{Name: record.Name, URL: record.URL, Transport: transport, Approvals: approvals})
 			}
 			worker.Spec.McpServers = servers
 			return h.resources.client.Update(ctx, &worker)

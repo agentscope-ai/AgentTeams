@@ -61,6 +61,28 @@ def result_bytes(checkpoint, operation, results):
     return json.dumps({'calls': expected, 'results': results}, ensure_ascii=False).encode()
 
 
+def verified_return(checkpoint, operation, results):
+    """An identical durable return is success; a code or message is not proof."""
+    import hashlib
+    import os
+    from native_tool_returns import storage
+    cp = checkpoint or {}
+    saved = cp.get('operation') or {}
+    if (saved.get('id') != operation or saved.get('state') != 'verified'
+            or operation not in (cp.get('completed_steps') or [])):
+        return False
+    artifact = next((item for item in cp.get('artifacts') or []
+                     if item.get('key') == saved.get('evidence')), None)
+    if not artifact:
+        raise RecoveryConflict('Verified native return has no matching evidence')
+    data = storage(['cat', os.environ['AGENTTEAMS_STORAGE_PREFIX'].rstrip('/') + '/' + artifact['key']])
+    if len(data) != artifact['size'] or hashlib.sha256(data).hexdigest() != artifact['sha256']:
+        raise RecoveryConflict('Verified native return evidence changed')
+    if json.loads(data).get('results') != results:
+        raise RecoveryConflict('Native operation already has a different verified return')
+    return True
+
+
 def finish(checkpoint, operation, artifact):
     cp = pending(checkpoint, operation)
     cp.update(version=cp['version'] + 1,

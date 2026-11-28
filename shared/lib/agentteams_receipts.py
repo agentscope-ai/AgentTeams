@@ -69,6 +69,12 @@ class Receipts:
         for event in events:
             self.enqueue(room, event, "received")
 
+    def was_completed(self, room, event):
+        """A committed/read input alone never proves its turn completed."""
+        with self.connect() as db:
+            return db.execute("SELECT 1 FROM receipts WHERE room=? AND event=? AND status='completed'",
+                              (room, event)).fetchone() is not None
+
     def flush(self, request):
         with self.connect() as db:
             pending = db.execute("SELECT room,event,status,trace_context FROM receipts WHERE delivered=0").fetchall()

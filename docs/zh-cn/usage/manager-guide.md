@@ -36,7 +36,7 @@ Manager 通过安装时设置的环境变量进行配置。安装脚本会生成
 | `AGENTTEAMS_DATA_DIR` | 否 | `agentteams-data` | 持久化数据的 Docker 卷名称 |
 | `AGENTTEAMS_MOUNT_SOCKET` | 否 | `1` | 挂载容器运行时 socket 以支持直接创建 Worker |
 | `AGENTTEAMS_YOLO` | 否 | - | 设为 `1` 启用 YOLO 模式（自主决策，无交互提示） |
-| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `qwenpaw` | Manager Harness：`qwenpaw`（默认）、`openclaw`、`hermes`、`deepseek-harness` 或 `openhuman`。 |
+| `AGENTTEAMS_MANAGER_RUNTIME` | 否 | `qwenpaw` | Manager Harness：`qwenpaw`（默认）、`hermes`、`deepseek-harness` 或 `openhuman`。 |
 
 Manager 支持 `qwenpaw`、`openclaw`、`hermes`、`deepseek-harness` 和 `openhuman`。`copaw` 保留为 QwenPaw Manager 的兼容别名。每种运行时的 Manager、Leader、Worker 复用同一 Harness 镜像和入口，由 Controller 注入角色提示词、凭据与权限。Helm 使用 `manager.runtime` 选择，本地安装器的交互选项为 QwenPaw 和 OpenClaw；显式指定的 Manager 镜像也必须支持该角色契约。
 

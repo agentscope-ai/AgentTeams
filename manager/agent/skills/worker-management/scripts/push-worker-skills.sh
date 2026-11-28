@@ -36,9 +36,15 @@ mirror_skill() {
     local worker="$1"
     local skill="$2"
     local source
+    local recover_only="${3:-false}"
     local destination="${AGENTTEAMS_STORAGE_PREFIX}/agents/${worker}/skills/${skill}"
     if declare -F ensure_mc_credentials >/dev/null 2>&1; then
         ensure_mc_credentials
+    fi
+    # Reconciliation restores missing files; it must not roll back a newer
+    # copy distributed through the public Skill API from a stale workspace.
+    if [ "${recover_only}" = true ] && mc stat "${destination}/SKILL.md" >/dev/null 2>&1; then
+        return
     fi
     if source=$(find_skill_source "${skill}"); then
         # Keep the Worker copy exact so files removed from a replacement Skill
@@ -116,7 +122,7 @@ fi
 if [ -n "${WORKER_NAME}" ] && [ -n "${SKILL_NAME}" ] \
     && [ -z "${ADD_SKILL}" ] && [ -z "${REMOVE_SKILL}" ] \
     && [ "${NOTIFY}" = false ]; then
-    mirror_skill "${WORKER_NAME}" "${SKILL_NAME}"
+    mirror_skill "${WORKER_NAME}" "${SKILL_NAME}" true
     exit 0
 fi
 

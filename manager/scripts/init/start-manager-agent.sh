@@ -26,9 +26,12 @@ case "${MANAGER_RUNTIME}" in
     copaw|qwenpaw)
         log "Manager runtime: QwenPaw (Python workspace, runtime=${MANAGER_RUNTIME})"
         ;;
-    *)
+    openclaw)
         log "Manager runtime: OpenClaw (Node.js gateway)"
-        MANAGER_RUNTIME="openclaw"
+        ;;
+    *)
+        log "Unsupported Manager runtime: ${MANAGER_RUNTIME}; use its Harness entrypoint"
+        exit 1
         ;;
 esac
 

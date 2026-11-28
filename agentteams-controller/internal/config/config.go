@@ -119,7 +119,7 @@ type Config struct {
 	K8sManagerMemory        string
 
 	// DefaultWorkerRuntime is applied by the Worker reconciler when a Worker
-	// CR has spec.runtime unset, before falling back to "openclaw". Sourced
+	// CR has spec.runtime unset, before falling back to "codex". Sourced
 	// from AGENTTEAMS_DEFAULT_WORKER_RUNTIME at install time. Manager pods use
 	// ManagerRuntime instead, since Backend.Create is shared between both
 	// and only the caller knows which env var applies.
@@ -364,7 +364,7 @@ func LoadConfig() *Config {
 		ManagerModel:            firstNonEmpty(os.Getenv("AGENTTEAMS_MANAGER_MODEL"), envOrDefault("AGENTTEAMS_DEFAULT_MODEL", "qwen3.6-plus")),
 		ManagerRuntime:          envOrDefault("AGENTTEAMS_MANAGER_RUNTIME", "qwenpaw"),
 		ManagerImage:            os.Getenv("AGENTTEAMS_MANAGER_IMAGE"),
-		DefaultWorkerRuntime:    os.Getenv("AGENTTEAMS_DEFAULT_WORKER_RUNTIME"),
+		DefaultWorkerRuntime:    envOrDefault("AGENTTEAMS_DEFAULT_WORKER_RUNTIME", "codex"),
 		K8sManagerCPURequest:    envOrDefault("AGENTTEAMS_K8S_MANAGER_CPU_REQUEST", "500m"),
 		K8sManagerMemoryRequest: envOrDefault("AGENTTEAMS_K8S_MANAGER_MEMORY_REQUEST", "1Gi"),
 		K8sManagerCPU:           envOrDefault("AGENTTEAMS_K8S_MANAGER_CPU", "2"),
@@ -435,7 +435,7 @@ func LoadConfig() *Config {
 			AIGatewayURL:         envOrDefault("AGENTTEAMS_AI_GATEWAY_URL", "http://aigw-local.agentteams.io:8080"),
 			MatrixURL:            envOrDefault("AGENTTEAMS_MATRIX_URL", "http://matrix-local.agentteams.io:8080"),
 			AdminUser:            os.Getenv("AGENTTEAMS_ADMIN_USER"),
-			DefaultWorkerRuntime: os.Getenv("AGENTTEAMS_DEFAULT_WORKER_RUNTIME"),
+			DefaultWorkerRuntime: envOrDefault("AGENTTEAMS_DEFAULT_WORKER_RUNTIME", "codex"),
 			YoloMode:             envBool("AGENTTEAMS_YOLO"),
 			MatrixDebug:          envBool("AGENTTEAMS_MATRIX_DEBUG"),
 
@@ -543,13 +543,13 @@ func (c *Config) ManagerResources() *backend.ResourceRequirements {
 func (c *Config) DockerConfig() backend.DockerConfig {
 	return backend.DockerConfig{
 		SocketPath:                 c.SocketPath,
-		WorkerImage:                envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-harness-openclaw:latest"),
+		WorkerImage:                envOrDefault("AGENTTEAMS_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw:v1.2.8"),
 		CopawWorkerImage:           envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
 		HermesWorkerImage:          envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-harness-hermes:latest"),
 		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-harness-openhuman:latest"),
 		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
 		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
-		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
+		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v1.2.8"),
 		OpenCodeWorkerImage:        envOrDefault("AGENTTEAMS_OPENCODE_WORKER_IMAGE", ""),
 		ClaudeCodeWorkerImage:      os.Getenv("AGENTTEAMS_CLAUDECODE_WORKER_IMAGE"),
 		DefaultNetwork:             envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
@@ -599,13 +599,13 @@ func (c *Config) UsesExternalS3() bool {
 func (c *Config) K8sConfig() backend.K8sConfig {
 	return backend.K8sConfig{
 		Namespace:                  c.K8sNamespace,
-		WorkerImage:                envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-harness-openclaw:latest"),
+		WorkerImage:                envOrDefault("AGENTTEAMS_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw:v1.2.8"),
 		CopawWorkerImage:           envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
 		HermesWorkerImage:          envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-harness-hermes:latest"),
 		OpenHumanWorkerImage:       envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-harness-openhuman:latest"),
 		QwenPawWorkerImage:         envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
 		DeepSeekHarnessWorkerImage: envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
-		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
+		CodexWorkerImage:           envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v1.2.8"),
 		OpenCodeWorkerImage:        envOrDefault("AGENTTEAMS_OPENCODE_WORKER_IMAGE", ""),
 		ClaudeCodeWorkerImage:      os.Getenv("AGENTTEAMS_CLAUDECODE_WORKER_IMAGE"),
 		WorkerCPU:                  c.K8sWorkerCPU,
@@ -620,13 +620,13 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 		Namespace:                    c.K8sNamespace,
 		ProviderType:                 c.SandboxProviderType,
 		AgentRuntimeImage:            os.Getenv("AGENTTEAMS_SANDBOX_AGENT_RUNTIME_IMAGE"),
-		WorkerImage:                  envOrDefault("AGENTTEAMS_WORKER_IMAGE", "agentteams/agentteams-harness-openclaw:latest"),
+		WorkerImage:                  envOrDefault("AGENTTEAMS_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw:v1.2.8"),
 		CopawWorkerImage:             envOrDefault("AGENTTEAMS_COPAW_WORKER_IMAGE", "agentteams/agentteams-copaw-worker:latest"),
 		HermesWorkerImage:            envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-harness-hermes:latest"),
 		OpenHumanWorkerImage:         envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-harness-openhuman:latest"),
 		QwenPawWorkerImage:           envOrDefault("AGENTTEAMS_QWENPAW_WORKER_IMAGE", "agentteams/agentteams-harness-qwenpaw:latest"),
 		DeepSeekHarnessWorkerImage:   envOrDefault("AGENTTEAMS_DEEPSEEK_HARNESS_WORKER_IMAGE", "agentteams/agentteams-harness-deepseek:v0.1.2"),
-		CodexWorkerImage:             envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v0.1.0"),
+		CodexWorkerImage:             envOrDefault("AGENTTEAMS_CODEX_WORKER_IMAGE", "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v1.2.8"),
 		OpenCodeWorkerImage:          envOrDefault("AGENTTEAMS_OPENCODE_WORKER_IMAGE", ""),
 		ClaudeCodeWorkerImage:        os.Getenv("AGENTTEAMS_CLAUDECODE_WORKER_IMAGE"),
 		WorkerCPU:                    c.K8sWorkerCPU,

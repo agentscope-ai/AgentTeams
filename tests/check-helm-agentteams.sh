@@ -23,6 +23,9 @@ grep -q 'name: agentteams-controller' "${render}"
 grep -q 'app.kubernetes.io/name: agentteams' "${render}"
 
 echo "PASS: AgentTeams Helm release renders canonical resource names"
+grep -A1 'name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME' "${render}" | grep -q 'value: "codex"'
+grep -A1 'name: AGENTTEAMS_MANAGER_SPEC' "${render}" | grep -qF '\"runtime\":\"qwenpaw\"'
+echo "PASS: fresh Helm defaults keep QwenPaw Manager and Codex Workers independent"
 grep -qF -- 'value: "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-codex:v1.2.8"' "${render}"
 
 # Old releases using --reuse-values can omit the new Codex map. Null removes
@@ -50,10 +53,9 @@ fi
 grep -qF "worker.defaultImage.codex.tag is required" "${drift_err}"
 echo "PASS: Codex has a default image and requires its independent tag"
 
-if grep -qF -- "- name: AGENTTEAMS_CLAUDECODE_WORKER_IMAGE" "${render}"; then
-    echo "FAIL: Claude Code must remain opt-in"
-    exit 1
-fi
+grep -qF -- "- name: AGENTTEAMS_CLAUDECODE_WORKER_IMAGE" "${render}"
+grep -qF -- 'value: "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-claudecode:' "${render}"
+grep -A1 'name: AGENTTEAMS_MANAGER_SPEC' "${render}" | grep -qF '\"runtime\":\"qwenpaw\"'
 helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
     --set worker.defaultImage.claudecode=null > "${upg_render}"
 helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
@@ -62,13 +64,12 @@ helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
     --set worker.defaultImage.claudecode.tag=dev > "${upg_render}"
 grep -qF -- "- name: AGENTTEAMS_CLAUDECODE_WORKER_IMAGE" "${upg_render}"
 grep -qF -- 'value: "example.test/claudecode:dev"' "${upg_render}"
-if helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
+helm template agentteams "${CHART}" "${COMMON_ARGS[@]}" \
     --set worker.defaultImage.claudecode.repository=example.test/claudecode \
-    --set worker.defaultImage.claudecode.tag= > /dev/null 2> "${drift_err}"; then
-    echo "FAIL: Claude Code image requires an explicit tag"
-    exit 1
-fi
-grep -qF "worker.defaultImage.claudecode.tag is required" "${drift_err}"
+    --set worker.defaultImage.claudecode.tag= \
+    --set global.imageTag=v9.9.9 > "${upg_render}"
+grep -qF -- 'value: "example.test/claudecode:v9.9.9"' "${upg_render}"
+grep -qF -- 'value: "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-harness-openclaw:v1.2.8"' "${upg_render}"
 echo "PASS: Claude Code supports old values and explicit Manager/Worker image selection"
 
 # ---------------------------------------------------------------------------

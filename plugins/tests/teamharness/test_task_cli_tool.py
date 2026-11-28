@@ -152,6 +152,14 @@ def test_lifecycle_and_file_operations_preserve_cli_semantics(monkeypatch):
     assert argv[2:5]==["files","read","a"] and "--artifact" in argv
 
 
+def test_submit_accepts_optional_model_handoff_without_routing_fields(monkeypatch):
+    tool = load(monkeypatch)
+    argv, _ = tool.command({"action": "submit", "taskId": "a", "summary": "Implemented",
+                            "handoff": "Please independently verify the offline interaction."})
+    assert argv[argv.index("--handoff") + 1] == "Please independently verify the offline interaction."
+    assert "handoff" in tool.schema("worker")["inputSchema"]["properties"]
+
+
 @pytest.mark.parametrize("arguments",[
     {"action":"raw_shell","command":"rm -rf /"},
     {"action":"get","taskId":"../other"},
@@ -305,3 +313,20 @@ def test_invalid_selection_returns_exact_ids_and_filenames_for_correction(monkey
         tool._validate_mutation(args)
     assert '"report-accepted": "report.md"' in str(caught.value)
     tool._validate_mutation({**args, "artifacts": ["html-accepted", "report-accepted"]})
+
+
+def test_amend_contract_uses_task_system_notification_without_extra_mentions(monkeypatch):
+    tool = load(monkeypatch)
+    description = tool.TASK_SCHEMA["description"]
+    assert "task system persists and delivers the supplement" in description
+    assert "Do not send a separate @ notification" in description
+    assert "then @ its assigned Worker" not in description
+
+
+def test_empty_final_selection_survives_cli_transport(monkeypatch):
+    tool = load(monkeypatch)
+    arguments = {"action": "complete", "taskId": "main", "report": "PR contains the code"}
+    inherited, _ = tool.command(arguments)
+    selected, _ = tool.command({**arguments, "artifacts": []})
+    assert "--no-artifacts" not in inherited
+    assert selected == [*inherited, "--no-artifacts"]

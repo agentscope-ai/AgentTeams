@@ -62,6 +62,7 @@ func computeHumanPhase(h *v1beta1.Human, reconcileErr error) string {
 // admin is deliberately not a member of those rooms), while worker DM
 // rooms and teams without an Admin keep the default homeserver-admin actor.
 type humanRoomOrigin struct {
+	inviteOnly  bool
 	teamName    string // non-empty for team rooms (team.Status.TeamRoomID)
 	workerName  string // non-empty for worker DM rooms (worker.Status.RoomID)
 	managerName string // personal Manager DM; invited by the Manager
@@ -128,7 +129,7 @@ func buildDesiredHumanRooms(ctx context.Context, c client.Client, h *v1beta1.Hum
 				}
 			}
 			if belongs {
-				desired[tm.Status.TeamRoomID] = humanRoomOrigin{teamName: tm.Name}
+				desired[tm.Status.TeamRoomID] = humanRoomOrigin{teamName: tm.Name, inviteOnly: tm.Spec.Admin == nil || tm.Spec.Admin.Name != h.Name || (tm.Spec.Admin.MatrixUserID != "" && tm.Spec.Admin.MatrixUserID != h.Status.MatrixUserID)}
 			}
 		}
 	}

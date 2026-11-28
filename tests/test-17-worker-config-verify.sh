@@ -17,7 +17,7 @@ test_setup "17-worker-config-verify"
 
 TEST_WORKER="test-cfg-$$"
 STORAGE_PREFIX="${STORAGE_PREFIX:-${TEST_STORAGE_PREFIX:-agentteams/agentteams-storage}}"
-TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-openclaw}"
+TEST_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-qwenpaw}"
 
 if [ "${TEST_WORKER_RUNTIME}" = "copaw" ]; then
     BUILTIN_CONTENT_SENTINEL="Task Execution Workflow"

@@ -9,7 +9,7 @@ import urllib.error
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shared/lib"))
-from task_recovery import Recovery, RecoveryConflict, RecoveryUnavailable, enabled
+from task_recovery import Recovery, RecoveryConflict, MetadataConflict, RecoveryUnavailable, enabled
 
 
 class RecoveryTests(unittest.TestCase):
@@ -59,6 +59,100 @@ class RecoveryTests(unittest.TestCase):
                 with self.assertRaises(RecoveryUnavailable):
                     Recovery()._request("GET", "tasks/recoverable")
 
+    def test_read_only_recovery_retries_a_transient_timeout(self):
+        with patch.dict(os.environ, {"AGENTTEAMS_CONTROLLER_URL": "http://controller.invalid"}), \
+                patch("task_recovery.Path.read_text", return_value="private-test-token"), \
+                patch("task_recovery.time.sleep"), \
+                patch("task_recovery.urllib.request.urlopen", side_effect=[TimeoutError(), io.BytesIO(b'{"tasks":[]}')]) as request:
+            self.assertEqual(Recovery()._request("GET", "tasks/recoverable"), {"tasks": []})
+            self.assertEqual(request.call_count, 2)
+
+    def test_write_recovery_timeout_is_not_replayed(self):
+        with patch.dict(os.environ, {"AGENTTEAMS_CONTROLLER_URL": "http://controller.invalid"}), \
+                patch("task_recovery.Path.read_text", return_value="private-test-token"), \
+                patch("task_recovery.urllib.request.urlopen", side_effect=TimeoutError()) as request:
+            with self.assertRaises(RecoveryUnavailable):
+                Recovery()._request("POST", "tasks/task-one/execution", {"action": "checkpoint"})
+            self.assertEqual(request.call_count, 1)
+
+    def test_unavailable_admission_keeps_a_receipt_before_any_tool_can_be_dispatched(self):
+        import tempfile
+        from native_tool_returns import load
+        from task_operation import begin
+        from worker_matrix_state import WorkerMatrix
+        calls = [{"id": "call-one", "name": "fixture", "arguments": {}}]
+        identity = {"task_id": "stable-task", "team_id": "team", **{
+            key: self.task['execution'][key] for key in ('process_id', 'instance_id', 'generation')}}
+        for kind in ('task', 'message'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, {'TEAMHARNESS_RUNTIME_CONFIG': directory + '/runtime.yaml',
+                                            'AGENTTEAMS_STORAGE_PREFIX': ''}):
+                current = copy.deepcopy(self.task)
+                owned = dict(identity)
+                if kind == 'task':
+                    owner = self.recovery
+                    method, update = owner.begin_tools, 'checkpoint'
+                    read = patch.object(owner, 'tools_current', return_value=current)
+                    anchor = ['team', 'stable-task']
+                else:
+                    owner = WorkerMatrix('hermes', recovery=self.recovery)
+                    owned['event_key'] = 'event-one'
+                    method, update = owner.message_begin_tools, '_message_update'
+                    read = patch.object(owner, 'message_current', return_value=current)
+                    anchor = 'event-one'
+                operation, _ = begin(current['execution']['checkpoint'], anchor, calls)
+                with read, patch.object(owner, update, side_effect=RecoveryUnavailable('admission response and readback unavailable')):
+                    with self.assertRaises(RecoveryUnavailable):
+                        method(owned, calls)
+                receipt = load(owned, operation)
+                self.assertEqual(receipt['results'][0]['id'], 'call-one')
+                self.assertTrue(receipt['results'][0]['isError'])
+                self.assertEqual(receipt['results'][0]['status'], 'error')
+                self.assertIn('not dispatched', receipt['results'][0]['content'][0]['text'])
+                self.assertNotIn('effect', receipt['results'][0])
+
+    def test_completed_call_is_not_relabelled_as_an_admission_failure(self):
+        from task_operation import begin
+        from worker_matrix_state import WorkerMatrix
+        calls = [{"id": "call-one", "name": "fixture", "arguments": {}}]
+        for kind in ('task', 'message'):
+            with self.subTest(kind=kind):
+                current = copy.deepcopy(self.task)
+                identity = {"task_id": "stable-task", "team_id": "team", "event_key": "event-one"}
+                anchor = ['team', 'stable-task'] if kind == 'task' else 'event-one'
+                operation, _ = begin(current['execution']['checkpoint'], anchor, calls)
+                current['execution']['checkpoint']['completed_steps'].append(operation)
+                owner = self.recovery if kind == 'task' else WorkerMatrix('hermes', recovery=self.recovery)
+                read = 'tools_current' if kind == 'task' else 'message_current'
+                method = owner.begin_tools if kind == 'task' else owner.message_begin_tools
+                with patch.object(owner, read, return_value=current), \
+                        patch('native_tool_returns.not_dispatched') as record:
+                    with self.assertRaises(RecoveryConflict):
+                        method(identity, calls)
+                    record.assert_not_called()
+
+    def test_failed_inference_can_release_verified_progress_for_recovery(self):
+        self.task['execution']['state'] = 'active'
+        identity = {'task_id': 'stable-task', 'team_id': 'team', **{
+            key: self.task['execution'][key] for key in ('process_id', 'instance_id', 'generation')}}
+        self.assertTrue(self.recovery.release_failed_turn(identity))
+        payload = self.request.call_args.args[2]
+        self.assertEqual(payload['action'], 'release')
+        self.assertEqual(payload['checkpoint']['completed_steps'], ['one'])
+        self.assertEqual(payload['checkpoint']['version'], 4)
+
+    def test_failed_inference_does_not_release_uncertain_tools_or_saved_replies(self):
+        identity = {'task_id': 'stable-task', 'team_id': 'team', **{
+            key: self.task['execution'][key] for key in ('process_id', 'instance_id', 'generation')}}
+        self.task['execution']['state'] = 'active'
+        for operation in [{'id': 'write', 'state': 'started'}, {'id': 'write', 'state': 'unknown'}]:
+            self.task['execution']['checkpoint']['operation'] = operation
+            self.assertFalse(self.recovery.release_failed_turn(identity))
+        self.task['execution']['checkpoint'].pop('operation')
+        self.task['execution']['checkpoint']['result'] = {'key': 'saved-result'}
+        self.assertFalse(self.recovery.release_failed_turn(identity))
+        self.assertTrue(all(call.args[0] == 'GET' for call in self.request.call_args_list))
+
     def test_session_cache_requires_harness_version_and_expiry(self):
         checkpoint = self.task["execution"]["checkpoint"]
         session = {"runtime": "codex", "checkpoint_digest": self.recovery.digest(checkpoint), "expires_at": 100}
@@ -70,11 +164,190 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(self.recovery.session_usable(None, self.task, "codex", now=99))
 
     def test_claim_uses_team_and_stable_task_not_project(self):
+        self.request.return_value = {'task': self.task}
         self.recovery.claim(self.snapshot, self.snapshot["tasks"][0])
         args = self.request.call_args.args
         self.assertEqual(args[:2], ("POST", "tasks/stable-task/execution?team=team"))
         self.assertEqual(args[2]["process_id"], "actual-start")
         self.assertEqual(args[3], "read-version")
+
+    def test_checkpoint_rereads_only_metadata_cas_conflicts(self):
+        identity = {**self.task["execution"], "task_id": "stable-task", "team_id": "team"}
+        digest = self.recovery.digest(self.task["execution"]["checkpoint"])
+        posts = []
+        def request(method, path, body=None, etag=None):
+            if method == "GET":
+                return copy.deepcopy(self.snapshot)
+            posts.append((body, etag))
+            if len(posts) == 1:
+                self.snapshot["tasks"][0]["etag"] = "amended-version"
+                self.task["spec"] = "Leader supplement, same execution"
+                raise MetadataConflict("metadata race")
+            return {"checkpoint": body["checkpoint"]}
+        self.recovery.request = request
+        result = self.recovery.checkpoint("stable-task", "team", {"version": 4},
+            expected_identity=identity, expected_digest=digest)
+        self.assertEqual(result["checkpoint"], {"version": 4})
+        self.assertEqual([etag for _, etag in posts], ["read-version", "amended-version"])
+        self.assertEqual(posts[0][0], posts[1][0])
+
+    def test_checkpoint_lost_response_reads_back_exact_commit_without_repeating_write(self):
+        for change in ("none", "checkpoint", "generation", "process", "missing"):
+            with self.subTest(change=change):
+                snapshot = copy.deepcopy(self.snapshot)
+                expected = {"version": 4, "operation": {"id": "native-call", "state": "started"}}
+                posts = []
+                def request(method, path, body=None, etag=None):
+                    if method == "GET":
+                        return copy.deepcopy(snapshot)
+                    posts.append(body)
+                    execution = snapshot["tasks"][0]["task"]["execution"]
+                    execution["checkpoint"] = copy.deepcopy(body["checkpoint"])
+                    if change == "checkpoint":
+                        execution["checkpoint"]["version"] += 1
+                    if change == "generation":
+                        execution["generation"] += 1
+                    if change == "process":
+                        execution["process_id"] = "successor"
+                    if change == "missing":
+                        snapshot["tasks"] = []
+                    raise RecoveryUnavailable("response lost after commit")
+                recovery = Recovery(request=request)
+                if change == "none":
+                    result = recovery.checkpoint("stable-task", "team", expected)
+                    self.assertEqual(result["execution"]["checkpoint"], expected)
+                    self.assertTrue(result["idempotent_hit"])
+                else:
+                    with self.assertRaises(RecoveryUnavailable):
+                        recovery.checkpoint("stable-task", "team", expected)
+                self.assertEqual(len(posts), 1, "read-back must not replay the write or native tool")
+
+    def test_message_checkpoint_lost_response_uses_same_exact_readback_rule(self):
+        from worker_matrix_state import WorkerMatrix
+        for change in ("none", "checkpoint", "generation", "process", "runtime", "instance"):
+            with self.subTest(change=change):
+                entry = {"runtime": "hermes", "instance_id": "container/started-at", "etag": "old",
+                         "execution": copy.deepcopy(self.task["execution"])}
+                initial = copy.deepcopy(entry)
+                expected = {"version": 4, "operation": {"id": "native-call", "state": "started"}}
+                posts = []
+                def request(method, path, body=None, etag=None):
+                    if method == "GET":
+                        return copy.deepcopy(entry)
+                    posts.append(body)
+                    entry["execution"]["checkpoint"] = copy.deepcopy(expected)
+                    if change == "checkpoint":
+                        entry["execution"]["checkpoint"]["version"] += 1
+                    if change == "generation":
+                        entry["execution"]["generation"] += 1
+                    if change == "process":
+                        entry["execution"]["process_id"] = "successor"
+                    if change == "runtime":
+                        entry["runtime"] = "codex"
+                    if change == "instance":
+                        entry["instance_id"] = "replacement"
+                    raise RecoveryUnavailable("response lost after commit")
+                matrix = WorkerMatrix("hermes", recovery=Recovery(request=request))
+                if change == "none":
+                    result = matrix._message_update("event", initial, "checkpoint", expected)
+                    self.assertEqual(result["execution"]["checkpoint"], expected)
+                else:
+                    with self.assertRaises(RecoveryUnavailable):
+                        matrix._message_update("event", initial, "checkpoint", expected)
+                self.assertEqual(len(posts), 1)
+
+    def test_commit_readback_ignores_only_server_owned_shape(self):
+        proposed = {"version": 4, "operation": {"id": "one", "state": "started"}}
+        committed = {**copy.deepcopy(proposed), "saved_at": "server time", "completed_steps": None,
+                     "remaining_steps": None, "artifacts": None}
+        self.assertTrue(Recovery.checkpoint_committed(committed, proposed))
+        for key, value in (("version", 5), ("operation", {"id": "other", "state": "started"}),
+                           ("completed_steps", ["unexpected"]), ("artifacts", [{"key": "other"}]),
+                           ("result", {"key": "unexpected"})):
+            with self.subTest(key=key):
+                self.assertFalse(Recovery.checkpoint_committed({**committed, key: value}, proposed))
+
+    def test_real_http_lost_checkpoint_response_continues_without_replaying_tool(self):
+        import http.server
+        import socket
+        import threading
+        import json
+        snapshot = copy.deepcopy(self.snapshot)
+        snapshot["tasks"][0]["task"]["execution"]["state"] = "active"
+        posts = []
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                body = json.dumps(snapshot).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                posts.append(body)
+                committed = body["checkpoint"]
+                committed["saved_at"] = "2026-11-28T06:00:00Z"
+                for field in ("completed_steps", "remaining_steps", "artifacts"):
+                    committed.setdefault(field, None)
+                snapshot["tasks"][0]["task"]["execution"]["checkpoint"] = committed
+                self.connection.shutdown(socket.SHUT_RDWR)
+                self.connection.close()
+        with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with patch.dict(os.environ, {"AGENTTEAMS_CONTROLLER_URL":
+                        "http://127.0.0.1:" + str(server.server_port)}), \
+                        patch("task_recovery.Path.read_text", return_value="fixture-token"):
+                    recovery = Recovery()
+                    identity = {**self.task["execution"], "task_id": "stable-task", "team_id": "team"}
+                    operation = recovery.begin_tools(identity, [{"id": "call-one", "name": "fixture", "arguments": {}}])
+                    self.assertEqual(operation, snapshot["tasks"][0]["task"]["execution"]["checkpoint"]["operation"]["id"])
+                    self.assertEqual(len(posts), 1)
+            finally:
+                server.shutdown()
+                thread.join()
+
+    def test_metadata_retry_preserves_execution_fences_and_is_bounded(self):
+        for change in ("checkpoint", "generation", "process", "repeat", "unavailable"):
+            with self.subTest(change=change):
+                snapshot = copy.deepcopy(self.snapshot)
+                posts = []
+                def request(method, path, body=None, etag=None):
+                    if method == "GET":
+                        return copy.deepcopy(snapshot)
+                    posts.append(body)
+                    execution = snapshot["tasks"][0]["task"]["execution"]
+                    if change == "checkpoint":
+                        execution["checkpoint"]["version"] += 1
+                    if change == "generation":
+                        execution["generation"] += 1
+                    if change == "process":
+                        execution["process_id"] = "successor"
+                    if change == "unavailable":
+                        raise RecoveryUnavailable("write outcome unknown")
+                    raise MetadataConflict("metadata race")
+                recovery = Recovery(request=request)
+                with self.assertRaises(RecoveryUnavailable if change == "unavailable" else RecoveryConflict):
+                    recovery.checkpoint("stable-task", "team", {"version": 4})
+                self.assertEqual(len(posts), 2 if change == "repeat" else 1)
+
+    def test_only_structured_metadata_conflicts_are_retryable(self):
+        cases = [(409, b'{"code":"conflict"}', MetadataConflict),
+                 (412, b'{"code":"conflict"}', MetadataConflict),
+                 (409, b'{"error":"ownership changed"}', RecoveryConflict),
+                 (403, b'{"code":"conflict"}', RecoveryConflict)]
+        for status, body, expected in cases:
+            with self.subTest(status=status, body=body), patch.dict(os.environ, {
+                    "AGENTTEAMS_CONTROLLER_URL": "http://controller"}), \
+                    patch("task_recovery.Path.read_text", return_value="worker-token"), \
+                    patch("task_recovery.urllib.request.urlopen", side_effect=urllib.error.HTTPError(
+                        "http://controller", status, "Conflict", {}, io.BytesIO(body))):
+                with self.assertRaises(expected) as error:
+                    Recovery()._request("POST", "tasks/task/execution", {})
+                self.assertIs(type(error.exception), expected)
 
     def test_stale_process_cannot_commit_to_new_container(self):
         self.snapshot["instance_id"] = "replacement/started-at"

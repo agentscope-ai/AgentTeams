@@ -118,7 +118,7 @@ materialized condition flag.
 {{- define "agentteams.manager.spec" -}}
 {{- $spec := dict
   "model" (.Values.manager.model | default .Values.credentials.defaultModel)
-  "runtime" (.Values.manager.runtime | default "openclaw")
+  "runtime" (.Values.manager.runtime | default "qwenpaw")
   "image" (include "agentteams.manager.image" .)
   "resources" .Values.manager.resources
 -}}

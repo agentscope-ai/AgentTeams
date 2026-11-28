@@ -21,6 +21,51 @@ func callNativeOperation(h *ProjectHandler, caller *authpkg.CallerIdentity, requ
 	_ = json.Unmarshal(w.Body.Bytes(), &result)
 	return w, result
 }
+
+func TestNativeMainAmendIsRejectedBeforeRecordingIntent(t *testing.T) {
+	h, store, caller := nativeOperationFixture(t)
+	w, result := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": map[string]any{
+		"action": "amend", "taskId": "main", "spec": "updated", "note": "change",
+	}})
+	if w.Code != 409 || result["effect"] != "none" || result["error"] != "invalid_task_target" {
+		t.Fatalf("invalid main amendment: %d %s", w.Code, w.Body.String())
+	}
+	keys, err := store.ListObjects(t.Context(), "control/task-native/")
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("rejected amendment left a fence: %v %v", keys, err)
+	}
+}
+
+func TestNativeUnknownMainAmendDoesNotFenceTheNextValidOperation(t *testing.T) {
+	h, store, caller := nativeOperationFixture(t)
+	args := map[string]any{"action": "plan", "taskId": "main", "nodes": planRequest().Nodes}
+	_, begun := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+	keys, _ := store.ListObjects(t.Context(), "control/task-native/")
+	if len(keys) != 1 {
+		t.Fatal(keys)
+	}
+	ledgerKey := "control/task-native/" + keys[0]
+	raw, err := store.GetObject(t.Context(), ledgerKey)
+	var previous canonicalNativeOperation
+	if err != nil || json.Unmarshal(raw, &previous) != nil {
+		t.Fatal("ledger fixture unavailable", err)
+	}
+	previous.Action, previous.State = "amend", "unknown"
+	// Simulate the old adapter's uncertain receipt for an operation that the
+	// main-task endpoint cannot execute, rather than trusting a CLI error.
+	raw, _ = json.Marshal(previous)
+	if err := store.PutObject(t.Context(), ledgerKey, raw); err != nil {
+		t.Fatal(err)
+	}
+	_, admitted := callNativeOperation(h, caller, map[string]any{"mode": "admit", "arguments": map[string]any{"action": "get", "taskId": "main"}})
+	if admitted["mode"] != "admitted" {
+		t.Fatal(admitted)
+	}
+	w, next := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+	if w.Code != 200 || next["mode"] != "execute" || next["operationId"] == begun["operationId"] {
+		t.Fatalf("valid operation remains fenced: %d %s", w.Code, w.Body.String())
+	}
+}
 func TestNativePlanSelfAssignmentIsCorrectableWithoutOpeningLedger(t *testing.T) {
 	for _, assignee := range []string{"lead-cr", "@lead:test", "user:@lead:test"} {
 		t.Run(assignee, func(t *testing.T) {
@@ -66,6 +111,33 @@ func TestNativeOperationUnknownSurvivesNewRequestAndDoesNotAuthorizeReplay(t *te
 		t.Fatal(w.Body.String())
 	}
 }
+func TestUnknownFirstPlanCanResumeOnlyWhileUncommitted(t *testing.T) {
+	h, _, caller := nativeOperationFixture(t)
+	args := map[string]any{"action": "plan", "taskId": "main", "nodes": planRequest().Nodes}
+	request := map[string]any{"mode": "begin", "arguments": args}
+	_, first := callNativeOperation(h, caller, request)
+	_, mark := callNativeOperation(h, caller, map[string]any{"mode": "unknown", "operationId": first["operationId"], "arguments": args})
+	if mark["mode"] != "unknown" {
+		t.Fatal(mark)
+	}
+	_, admit := callNativeOperation(h, caller, map[string]any{"mode": "admit", "arguments": map[string]any{"action": "get", "taskId": "main"}})
+	if admit["mode"] != "admitted" {
+		t.Fatal(admit)
+	}
+	_, second := callNativeOperation(h, caller, request)
+	if second["mode"] != "execute" || second["operationId"] == first["operationId"] {
+		t.Fatal(second)
+	}
+	if res := callPlan(h, caller, planRequest()); res.Code != 200 {
+		t.Fatal(res.Body.String())
+	}
+	_, _ = callNativeOperation(h, caller, map[string]any{"mode": "unknown", "operationId": second["operationId"], "arguments": args})
+	_, blocked := callNativeOperation(h, caller, request)
+	if blocked["mode"] != "verify" {
+		t.Fatal(blocked)
+	}
+}
+
 func TestNativeOperationCachesOnlyActualReceiptAndReusesItWithoutMutation(t *testing.T) {
 	h, _, caller := nativeOperationFixture(t)
 	args := map[string]any{"action": "plan", "taskId": "main", "nodes": planRequest().Nodes}
@@ -325,5 +397,23 @@ func TestNativeCreateRouteRejectsUnknownLeaderWithoutFencingCorrectedHandoff(t *
 	resolved, status, message := h.resolveTaskHandoff(t.Context(), caller, "lead-cr", "$source", "!source:test", "@human:test", "")
 	if status != 0 || resolved.RoomID != "!manager-leader:test" || coordinationString(resolved.SourceRoute, "target_session") != "!source:test" || resolved.Recipient != "@lead:test" {
 		t.Fatalf("handoff and Human source room must stay distinct: %+v %d %s", resolved, status, message)
+	}
+}
+
+func TestNativeLeaderAmendIsAdmitted(t *testing.T) {
+	h, store, caller := nativeOperationFixture(t)
+	putTask(store, "teams/alpha/shared/tasks/exec-one/meta.json", map[string]any{"task_id": "exec-one", "task_kind": "execution", "main_task_id": "main", "team_id": "alpha", "assigned_to": "worker-cr", "status": "in_progress", "spec": "old"})
+	args := map[string]any{"action": "amend", "taskId": "exec-one", "spec": "updated requirement", "note": "user clarification"}
+	w, result := callNativeOperation(h, caller, map[string]any{"mode": "begin", "arguments": args})
+	if w.Code != 200 || result["mode"] != "execute" {
+		t.Fatalf("amend admission: %d %s", w.Code, w.Body.String())
+	}
+	_, marked := callNativeOperation(h, caller, map[string]any{"mode": "unknown", "arguments": args, "operationId": result["operationId"]})
+	if marked["mode"] != "unknown" {
+		t.Fatal(marked)
+	}
+	_, next := callNativeOperation(h, caller, map[string]any{"mode": "admit", "arguments": map[string]any{"action": "get", "taskId": "exec-one"}})
+	if next["mode"] != "verify" {
+		t.Fatal("genuine execution amendment lost its verification fence", next)
 	}
 }

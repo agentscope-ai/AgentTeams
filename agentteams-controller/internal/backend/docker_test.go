@@ -700,7 +700,7 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_claudecode_uses_claudecode_image", RuntimeClaudeCode, "", "agentteams/claudecode-harness:v1"},
 		{"explicit_deepseek_harness_uses_deepseek_harness_image", RuntimeDeepSeekHarness, "", "agentteams/deepseek-harness-worker:latest"},
 		{"explicit_openclaw_uses_worker_image", RuntimeOpenClaw, "", "agentteams/worker-agent:latest"},
-		{"empty_runtime_with_no_fallback_uses_worker_image", "", "", "agentteams/worker-agent:latest"},
+		{"empty_runtime_with_no_fallback_uses_codex_image", "", "", "agentteams/codex-harness:v1"},
 		{"empty_runtime_with_copaw_fallback_uses_copaw_image", "", RuntimeCopaw, "agentteams/copaw-worker:latest"},
 		{"empty_runtime_with_hermes_fallback_uses_hermes_image", "", RuntimeHermes, "agentteams/hermes-worker:latest"},
 		{"empty_runtime_with_qwenpaw_fallback_uses_qwenpaw_image", "", RuntimeQwenPaw, "agentteams/qwenpaw-worker:latest"},

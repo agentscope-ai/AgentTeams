@@ -56,17 +56,16 @@ class BuildWorkflowTests(unittest.TestCase):
             values = dict(line.split('=', 1) for line in output.read_text().splitlines()) if output.exists() else {}
             return result, values
 
-    def test_tag_builds_every_image(self):
+    def test_tag_build_excludes_openclaw_compatibility_images(self):
         result, values = self.resolve('worker', tag=True, version='ignored')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(values['version'], 'v1.2.3')
         selected = set(json.loads(values['targets']))
         self.assertEqual(selected, {
-            'openclaw-base', 'agentteams-controller', 'embedded',
-            'worker',
+            'agentteams-controller', 'embedded',
             'hermes-worker', 'qwenpaw-worker', 'openhuman-worker',
         })
-        self.assertEqual(selected, set(BUILD['jobs']) - {'prepare', 'release'})
+        self.assertEqual(selected, set(BUILD['jobs']) - {'prepare', 'release', 'worker', 'openclaw-base'})
         self.assertEqual(set(BUILD['jobs']['release']['needs']), selected | {'prepare'})
 
     def test_partial_build_includes_only_required_dependencies(self):
@@ -99,7 +98,7 @@ class BuildWorkflowTests(unittest.TestCase):
                       next(s['run'] for s in RELEASE['jobs']['release']['steps']
                            if s.get('name') == 'Verify versioned multi-architecture images'))
         rc = workflow('build-rc.yml')['jobs']['build-rc']['steps']
-        self.assertIn('push-openhuman-worker', next(s['run'] for s in rc if s.get('name') == 'Build and push multi-arch images'))
+        self.assertIn('openhuman-worker', next(s['run'] for s in rc if s.get('name') == 'Build and push multi-arch images'))
 
     def test_manual_default_version(self):
         result, values = self.resolve(version='')
@@ -259,7 +258,7 @@ class BuildWorkflowTests(unittest.TestCase):
                                                  'MANIFEST': both, 'LAST_MANIFEST': manifest,
                                                  'LAST_STATUS': status, 'IMAGE_LOG': str(log)})
                     self.assertEqual(result.returncode == 0, success, result.stderr)
-                    self.assertEqual(len(set(log.read_text().splitlines())), 9 if success else 7)
+                    self.assertEqual(len(set(log.read_text().splitlines())), 8 if success else 5)
 
 
 if __name__ == '__main__':

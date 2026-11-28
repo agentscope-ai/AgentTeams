@@ -195,8 +195,8 @@ helm install agentteams higress.io/agentteams \
 | `preflight.llm.retries` | 可选 | 限流、网络错误和服务商 5xx 等临时错误的重试次数；默认 `2` |
 | `preflight.llm.activeDeadlineSeconds` | 可选 | 探测 Job 的最长运行时间；默认 `120` 秒 |
 | `preflight.llm.resources` | 可选 | 探测容器的 Kubernetes requests/limits |
-| `manager.runtime` | 可选 | 当前源码 Chart 支持 `openclaw`（默认）、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`；`copaw` 为 QwenPaw 兼容别名。未覆盖镜像时自动选择对应 Harness |
-| `worker.defaultRuntime` | 可选 | `openclaw`（Chart 默认）、`qwenpaw`、`hermes`、`deepseek-harness`、`openhuman`、`codex`；旧版 `copaw` 必须显式固定旧镜像 |
+| `manager.runtime` | 可选 | 当前源码 Chart 支持 `qwenpaw`（默认）、`openclaw`（兼容，不推荐）、`hermes`、`deepseek-harness`、`openhuman`；`copaw` 为 QwenPaw 兼容别名。未覆盖镜像时自动选择对应 Harness |
+| `worker.defaultRuntime` | 可选 | `codex`（Chart 默认）、`qwenpaw`、`openclaw`（兼容，不推荐）、`hermes`、`deepseek-harness`、`openhuman`、`codex`；旧版 `copaw` 必须显式固定旧镜像 |
 
 Helm 默认在安装和升级前执行 LLM 探测，使用 `credentials.llmApiKey`、`credentials.llmBaseUrl` 和 `credentials.defaultModel` 发送一个最小的 OpenAI 兼容请求。无效密钥、无法访问的 Base URL、不支持的模型、额度错误或服务商故障会在 Controller 启动前终止安装。受限或离线集群可以临时关闭：
 

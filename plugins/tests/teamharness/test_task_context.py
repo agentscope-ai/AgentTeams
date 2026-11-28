@@ -37,6 +37,18 @@ def test_prepared_assignment_uses_backend_canonical_identity():
     assert "Prefer native file tools for simple reads and writes" in prepared["fact"]
 
 
+def test_task_without_project_accepts_nullable_storage_metadata():
+    event, result = assignment()
+    event["project_id"] = None  # Persisted planned-node metadata; no Project was selected.
+    assert context.prepare("task_assigned", event, result)["execution"] == "t1"
+    result["task"]["projectId"] = None
+    event.pop("project_id")
+    assert context.prepare("task_assigned", event, result)["execution"] == "t1"
+    result["task"]["projectId"] = "foreign-project"
+    with pytest.raises(ValueError, match="scope changed"):
+        context.prepare("task_assigned", event, result)
+
+
 @pytest.mark.parametrize("field,value", [("id", "other"), ("assignmentId", "stale"), ("status", "submitted"), ("mainTaskId", "other")])
 def test_wrong_assignment_fails_closed(field, value):
     event, result = assignment()

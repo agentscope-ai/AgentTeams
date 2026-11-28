@@ -1,6 +1,26 @@
 package backend
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
+
+func TestMissingHarnessImageDoesNotSelectOpenClaw(t *testing.T) {
+	for _, runtime := range []string{RuntimeQwenPaw, RuntimeHermes, RuntimeDeepSeekHarness, RuntimeOpenHuman} {
+		t.Run(runtime, func(t *testing.T) {
+			ctx := context.Background()
+			docker := &DockerBackend{config: DockerConfig{WorkerImage: "openclaw:legacy"}}
+			k8s := NewK8sBackendWithClient(newFakeK8sCoreClient(), K8sConfig{WorkerImage: "openclaw:legacy"}, "worker-", nil)
+			sandbox := newTestSandboxBackend(&fakeSandboxPlugin{})
+			sandbox.config.QwenPawWorkerImage = ""
+			for name, backend := range map[string]WorkerBackend{"docker": docker, "kubernetes": k8s, "sandbox": sandbox} {
+				if _, err := backend.Create(ctx, CreateRequest{Name: "missing-image", Runtime: runtime}); err == nil {
+					t.Errorf("%s selected an image without a configured %s image", name, runtime)
+				}
+			}
+		})
+	}
+}
 
 func TestResolveRuntime(t *testing.T) {
 	cases := []struct {
@@ -14,7 +34,7 @@ func TestResolveRuntime(t *testing.T) {
 		{"empty_uses_fallback_hermes", "", RuntimeHermes, RuntimeHermes},
 		{"empty_uses_fallback_copaw", "", RuntimeCopaw, RuntimeCopaw},
 		{"empty_uses_fallback_qwenpaw", "", RuntimeQwenPaw, RuntimeQwenPaw},
-		{"empty_and_no_fallback_uses_openclaw", "", "", RuntimeOpenClaw},
+		{"empty_and_no_fallback_uses_codex", "", "", RuntimeCodex},
 		{"explicit_openclaw_preserved", RuntimeOpenClaw, RuntimeHermes, RuntimeOpenClaw},
 		{"explicit_hermes_preserved", RuntimeHermes, RuntimeCopaw, RuntimeHermes},
 		{"explicit_qwenpaw_preserved", RuntimeQwenPaw, RuntimeCopaw, RuntimeQwenPaw},

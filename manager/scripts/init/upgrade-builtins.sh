@@ -13,7 +13,7 @@ set -e
 AGENT_SRC="/opt/agentteams/agent"
 WORKSPACE="/root/manager-workspace"
 IMAGE_VERSION=$(cat "${AGENT_SRC}/.builtin-version" 2>/dev/null || echo "unknown")
-MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-openclaw}"
+MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-qwenpaw}"
 
 source /opt/agentteams/scripts/lib/agentteams-env.sh
 source /opt/agentteams/scripts/lib/builtin-merge.sh
@@ -165,7 +165,7 @@ if [ -d "${WORKER_AGENT_SRC}" ] && mc alias ls "${AGENTTEAMS_STORAGE_ALIAS}" > /
 
             # Determine agent source based on role and runtime
             _worker_role=$(printf '%s' "${WORKERS_JSON}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .role // "worker"')
-            _worker_runtime=$(printf '%s' "${WORKERS_JSON}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .runtime // "openclaw"')
+            _worker_runtime=$(printf '%s' "${WORKERS_JSON}" | jq -r --arg w "${_worker_name}" '.workers[] | select(.name == $w) | .runtime // "qwenpaw"')
             if [ "${_worker_role}" = "team_leader" ] && [ -d "${AGENT_SRC}/team-leader-agent" ]; then
                 _worker_agent_src="${AGENT_SRC}/team-leader-agent"
             elif [ "${_worker_runtime}" = "copaw" ]; then

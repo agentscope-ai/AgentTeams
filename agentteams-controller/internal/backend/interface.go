@@ -82,7 +82,7 @@ func UsesMemberRuntimeConfig(runtime string) bool {
 //     AGENTTEAMS_MANAGER_RUNTIME for Manager pods, AGENTTEAMS_DEFAULT_WORKER_RUNTIME
 //     for Worker pods. The caller (reconciler) is responsible for picking the
 //     right env var since Backend.Create is shared between both.
-//  3. RuntimeOpenClaw — the historical default.
+//  3. RuntimeCodex — the default for new Workers.
 //
 // Backends call this once at the top of Create() so downstream image / working-
 // dir / label resolution can rely on a non-empty, normalized runtime value.
@@ -98,7 +98,7 @@ func ResolveRuntime(reqRuntime, fallback string) string {
 	if fallback != "" {
 		return fallback
 	}
-	return RuntimeOpenClaw
+	return RuntimeCodex
 }
 
 // ResourceRequirements specifies CPU/memory requests and limits for a container.

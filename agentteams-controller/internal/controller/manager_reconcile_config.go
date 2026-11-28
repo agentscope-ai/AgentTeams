@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/observability"
 	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/service"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -35,8 +36,13 @@ func (r *ManagerReconciler) reconcileManagerConfig(ctx context.Context, s *manag
 	}
 	spec := m.Spec
 	spec.Runtime = runtime
+	tracing, err := observability.ReadRuntimeSettings(ctx, r.ObservabilityReader, m.Namespace)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("read Manager observability settings: %w", err)
+	}
 	if err := r.Deployer.DeployManagerConfig(ctx, service.ManagerDeployRequest{
 		Name:           m.Name,
+		Observability:  tracing,
 		Spec:           spec,
 		Generation:     m.Generation,
 		MatrixUserID:   m.Status.MatrixUserID,

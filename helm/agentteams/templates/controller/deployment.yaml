@@ -112,7 +112,7 @@ spec:
             {{- with index .Values.worker.defaultImage "claudecode" }}
             {{- if .repository }}
             - name: AGENTTEAMS_CLAUDECODE_WORKER_IMAGE
-              value: {{ printf "%s:%s" .repository (required "worker.defaultImage.claudecode.tag is required" .tag) | quote }}
+              value: {{ printf "%s:%s" .repository (.tag | default (include "agentteams.globalImageTag" $)) | quote }}
             {{- end }}
             {{- end }}
             {{- $codexImage := .Values.worker.defaultImage.codex | default dict }}

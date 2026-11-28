@@ -52,7 +52,7 @@ jobs:
           if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', version):
               raise SystemExit('Invalid image version')
           requested = 'all' if tagged else os.environ['REQUESTED_TARGETS'] or 'all'
-          selected = set(dependencies) if requested == 'all' else set(requested.split())
+          selected = set(dependencies) - {'worker', 'openclaw-base'} if requested == 'all' else set(requested.split())
           if not selected or selected - dependencies.keys():
               raise SystemExit('Unknown or empty build targets: ' + requested)
           for target in list(selected):
@@ -125,7 +125,7 @@ jobs:
     secrets: inherit
 
   release:
-    needs: [prepare, openclaw-base, agentteams-controller, embedded, worker, hermes-worker, qwenpaw-worker, openhuman-worker]
+    needs: [prepare, agentteams-controller, embedded, hermes-worker, qwenpaw-worker, openhuman-worker]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write

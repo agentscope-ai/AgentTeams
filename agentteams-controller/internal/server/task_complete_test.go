@@ -228,3 +228,45 @@ func TestTaskCompleteChecksPublicationBeforeFreezingFinalDelivery(t *testing.T) 
 		t.Fatalf("failed publication irreversibly completed task: %s", data)
 	}
 }
+
+func TestTaskCompleteExplicitEmptyFilesDoNotRepublishAcceptedFiles(t *testing.T) {
+	h, store, leader := taskCompleteFixture(t)
+	for attempt := 0; attempt < 2; attempt++ {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/main/complete", strings.NewReader(`{"report":"Code is delivered in the PR.","artifacts":[]}`))
+		r.SetPathValue("id", "main")
+		w := httptest.NewRecorder()
+		h.CompleteTask(w, withCaller(r, leader))
+		if w.Code != 200 {
+			t.Fatalf("explicit empty completion/retry: %d %s", w.Code, w.Body.String())
+		}
+	}
+	data, _ := store.GetObject(t.Context(), "teams/alpha/shared/tasks/main/meta.json")
+	var main struct {
+		Completion taskCompletion `json:"task_completion"`
+		Files      taskFileIndex  `json:"task_files"`
+	}
+	if err := json.Unmarshal(data, &main); err != nil {
+		t.Fatal(err)
+	}
+	if len(main.Completion.Artifacts) != 0 || main.Files.Heads["result.md"] == "" {
+		t.Fatalf("empty selection must retain the final report without inherited files: %s", data)
+	}
+	event, err := h.coordination.resolve(t.Context(), coordinationEvent{Kind: "main_task_completed", MainTaskID: "main"}, leader)
+	if err != nil || len(event.Artifacts) != 0 {
+		t.Fatalf("completion notification reintroduced files: %+v %v", event, err)
+	}
+	childData, _ := store.GetObject(t.Context(), "teams/alpha/shared/tasks/t1/meta.json")
+	var child map[string]json.RawMessage
+	if err := json.Unmarshal(childData, &child); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	files, err := h.taskFileResources(r.Context(), "teams/alpha/shared/tasks/t1/meta.json", "t1", child)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("selection removed an upstream artifact: %+v %v", files, err)
+	}
+	changed := callTaskComplete(h, leader, "Code is delivered in the PR.")
+	if changed.Code != 409 {
+		t.Fatalf("inherited and explicit-empty selections must have distinct identity: %d %s", changed.Code, changed.Body.String())
+	}
+}

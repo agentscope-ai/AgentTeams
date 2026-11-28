@@ -70,7 +70,7 @@ For a first evaluation, start with the local path in [Quickstart](quickstart.md)
 
 Workers support OpenClaw, QwenPaw, Hermes, experimental DeepSeek Harness, OpenHuman, and Codex. Legacy `copaw` remains accepted for existing deployments, with an explicitly pinned old image.
 
-The current Manager CRD supports the same runtimes except Codex; its legacy `copaw` selector maps to QwenPaw. The local installer offers QwenPaw (default) and OpenClaw Managers. Helm defaults to OpenClaw and selects the shared Harness image for the chosen runtime.
+The current Manager CRD supports the same runtimes except Codex; its legacy `copaw` selector maps to QwenPaw. The local installer offers QwenPaw (default) and OpenClaw Managers. Helm defaults to QwenPaw and selects the shared Harness image for the chosen runtime.
 
 Core v1.2.7 publishes all six current Harness images with the `v1.2.7` tag. Dashboard is independently versioned at `v1.4.1` for that release. See [runtime/image configuration](usage/deployment/kubernetes.md#33-manager-runtime) for the current chart and overrides.
 

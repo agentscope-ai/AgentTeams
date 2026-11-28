@@ -172,12 +172,18 @@ func (h *ProjectHandler) nativeOperationScope(w http.ResponseWriter, r *http.Req
 		scope.TaskID, scope.Team, scope.TaskKey = id, team, key
 		raw, err := h.oss.GetObject(r.Context(), key)
 		var task struct {
+			Kind      string `json:"task_kind"`
 			Execution struct {
 				Generation uint64 `json:"generation"`
 			} `json:"execution"`
 		}
 		if err != nil || json.Unmarshal(raw, &task) != nil {
 			writeError(w, 503, "Task execution authority unavailable")
+			return "", scope, false
+		}
+		if input.Mode == "begin" && scope.Action == "amend" && task.Kind == "main" {
+			httputil.WriteJSON(w, http.StatusConflict, map[string]any{"ok": false, "effect": "none", "error": "invalid_task_target",
+				"message": "amend requires an execution node; use the current blocked candidate's rejection with replacement instructions to continue"})
 			return "", scope, false
 		}
 		scope.Generation = task.Execution.Generation
@@ -212,7 +218,7 @@ func (h *ProjectHandler) NativeTaskOperation(w http.ResponseWriter, r *http.Requ
 	}
 	if input.Mode != "admit" {
 		switch coordinationString(input.Arguments, "action") {
-		case "create", "plan", "begin", "submit", "accept", "reject", "complete", "cancel", "files_put":
+		case "create", "plan", "begin", "submit", "accept", "reject", "complete", "cancel", "amend", "files_put":
 		default:
 			writeError(w, 400, "canonical mutation required")
 			return
@@ -249,8 +255,35 @@ func (h *ProjectHandler) NativeTaskOperation(w http.ResponseWriter, r *http.Requ
 				writeError(w, 503, "Task authority unavailable; keep verification fence")
 				return
 			}
-			httputil.WriteJSON(w, 200, map[string]any{"mode": "verify", "operationId": saved.ID, "authority": authority})
-			return
+			// PlanTask commits the plan and every node in one conditional write
+			// before dispatch. Only a finished, uncertain first plan can reopen.
+			retryPlan := saved.State == "unknown" && saved.Action == "plan" &&
+				saved.TaskKey == scope.TaskKey && saved.TaskID == scope.TaskID &&
+				authpkg.CallerFromContext(r.Context()).Role == authpkg.RoleTeamLeader &&
+				(input.Mode == "admit" && scope.Action == "get" || input.Mode == "begin" && scope.Action == "plan")
+			if retryPlan {
+				raw, err := h.oss.GetObject(r.Context(), saved.TaskKey)
+				var task map[string]any
+				if err != nil || json.Unmarshal(raw, &task) != nil {
+					writeError(w, 503, "Task plan authority unavailable")
+					return
+				}
+				nodes, valid := task["tasks"].([]any)
+				retryPlan = task["task_id"] == saved.TaskID && task["task_kind"] == "main" &&
+					task["status"] == "planned" && task["task_plan"] == nil &&
+					(task["tasks"] == nil || valid && len(nodes) == 0)
+			}
+			// AmendTask rejects main Tasks before mutation. The immutable Task
+			// kind proves an old uncertain main amendment cannot have committed;
+			// a CLI error or unchanged spec alone is never this proof.
+			authoritativeTask, _ := authority["task"].(taskResource)
+			rejectedAmend := saved.State == "unknown" && saved.Action == "amend" &&
+				saved.TaskKey == scope.TaskKey && saved.TaskID == scope.TaskID &&
+				authoritativeTask.Kind == "main"
+			if !retryPlan && !rejectedAmend {
+				httputil.WriteJSON(w, 200, map[string]any{"mode": "verify", "operationId": saved.ID, "authority": authority})
+				return
+			}
 		}
 		if input.Mode == "admit" {
 			if saved.Generation != scope.Generation {

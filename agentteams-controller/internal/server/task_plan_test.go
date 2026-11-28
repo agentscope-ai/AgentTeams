@@ -169,13 +169,14 @@ func TestTaskPlanStoresWholeDAGAndDispatchesOnlyReadyNodes(t *testing.T) {
 		}
 		data, err := store.GetObject(t.Context(), "teams/alpha/shared/tasks/"+node.TaskID+"/meta.json")
 		if node.ID == "C" {
-			if err == nil || node.Status != "planned" {
-				t.Fatalf("dependent node dispatched early: %s", data)
+			var planned map[string]any
+			if err != nil || json.Unmarshal(data, &planned) != nil || planned["status"] != "planned" || planned["task_notifications"] != nil || node.Status != "planned" || planned["project_id"] != "" {
+				t.Fatalf("dependent node missing or dispatched early: %s", data)
 			}
 			continue
 		}
 		var child map[string]any
-		if err != nil || json.Unmarshal(data, &child) != nil || child["status"] != "assigned" || child["task_plan_id"] != response.Task.PlanID || child["main_task_id"] != "main" || child["room_id"] != "!planned:test" || !strings.Contains(child["spec"].(string), "Original request and acceptance criteria") {
+		if err != nil || json.Unmarshal(data, &child) != nil || child["status"] != "assigned" || child["task_plan_id"] != response.Task.PlanID || child["main_task_id"] != "main" || child["room_id"] != "!planned:test" || child["project_id"] != "" || !strings.Contains(child["spec"].(string), "Original request and acceptance criteria") {
 			t.Fatalf("invalid assignment: %s %v", data, err)
 		}
 	}
@@ -365,9 +366,7 @@ func TestTaskPlanSubmissionAutomaticallyDispatchesDependenciesAndCompletes(t *te
 	}
 	a, b, c := taskPlanExecutionID("alpha", "main", "A"), taskPlanExecutionID("alpha", "main", "B"), taskPlanExecutionID("alpha", "main", "C")
 	sa := submitPlannedCandidate(t, h, store, a, "worker-cr", "Accepted A bytes")
-	if _, err := store.GetObject(t.Context(), "teams/alpha/shared/tasks/"+c+"/meta.json"); err == nil {
-		t.Fatal("C dispatched before B delivery")
-	}
+	assertPlannedTaskWaiting(t, store, "teams/alpha/shared/tasks/"+c+"/meta.json")
 	sb := submitPlannedCandidate(t, h, store, b, "second-cr", "Accepted B bytes")
 	child, err := h.coordination.read(t.Context(), "teams/alpha/shared/tasks/"+c+"/meta.json")
 	if err != nil || child["status"] != "assigned" {
@@ -511,7 +510,7 @@ func TestTaskPlanKeepsTeamAdministratorAndEligibleHumanMembership(t *testing.T) 
 				t.Fatal(err)
 			}
 			w := callPlan(h, leader, planRequest())
-			if w.Code != 200 || !strings.Contains(w.Body.String(), `"progress":"ready"`) || !mx.joined[expected] {
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"progress":"ready"`) || mx.joined[expected] != (mode != "accessible-human") {
 				t.Fatalf("supervision membership missing: %d %s joined=%v", w.Code, w.Body.String(), mx.joined)
 			}
 			for _, room := range mx.rooms {
@@ -519,7 +518,7 @@ func TestTaskPlanKeepsTeamAdministratorAndEligibleHumanMembership(t *testing.T) 
 					t.Fatalf("administrator lost ownership: %+v", room.PowerLevels)
 				}
 				for _, id := range room.Invite {
-					if id == "@outsider:test" {
+					if id == "@outsider:test" || (mode == "accessible-human" && id == expected) {
 						t.Fatal("unrelated Human was invited")
 					}
 				}
@@ -635,7 +634,7 @@ func TestTaskPlanPublishesOverviewBeforeDispatchAndRetriesWithoutDuplicating(t *
 	}
 }
 
-func TestTaskHandoffWaitsForTheActualStageResultMessage(t *testing.T) {
+func TestTaskHandoffPublicationAndAcceptedMainTaskClosure(t *testing.T) {
 	h, store, _, _ := taskPlanFixture(t)
 	main := map[string]any{"task_plan": map[string]any{"request": map[string]any{"overview": "verified plan"}}, "tasks": []any{map[string]any{"task_id": "dev", "status": "completed"}, map[string]any{"task_id": "test", "depends_on": []string{"dev"}, "status": "assigned"}}}
 	for _, kind := range []string{"task_assigned", "main_task_ready", "task_submitted"} {
@@ -645,8 +644,8 @@ func TestTaskHandoffWaitsForTheActualStageResultMessage(t *testing.T) {
 				e.TaskID = "dev"
 			}
 			putTask(store, "teams/alpha/shared/tasks/dev/meta.json", map[string]any{"execution": map[string]any{"checkpoint": map[string]any{"delivery": "pending"}}})
-			if pending, err := h.coordination.taskResultPublicationPending(t.Context(), e, main, nil); err != nil || !pending {
-				t.Fatalf("handoff overtook stage result: %v %v", pending, err)
+			if pending, err := h.coordination.taskResultPublicationPending(t.Context(), e, main, nil); err != nil || pending != (kind != "main_task_ready") {
+				t.Fatalf("wrong publication dependency (accepted main closure must not wait for chat): %v %v", pending, err)
 			}
 			putTask(store, "teams/alpha/shared/tasks/dev/meta.json", map[string]any{"execution": map[string]any{"checkpoint": map[string]any{"delivery": "delivered", "reply_event": "$real-result"}}})
 			if pending, err := h.coordination.taskResultPublicationPending(t.Context(), e, main, nil); err != nil || pending {
@@ -684,5 +683,56 @@ func TestPlanningWakeUsesANonChatProtocolEvent(t *testing.T) {
 				t.Fatalf("control send: %v sends=%d", err, sends)
 			}
 		})
+	}
+}
+
+func TestLeaderCanAmendPlannedDependencyBeforeDispatch(t *testing.T) {
+	h, store, caller, _ := taskPlanFixture(t)
+	if w := callPlan(h, caller, planRequest()); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	id := taskPlanExecutionID("alpha", "main", "C")
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+id+"?team=alpha", nil)
+	r.SetPathValue("id", id)
+	w := httptest.NewRecorder()
+	h.GetTaskResource(w, withCaller(r, caller))
+	if w.Code != 200 {
+		t.Fatalf("planned node must be addressable: %d %s", w.Code, w.Body.String())
+	}
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+id+"/begin?team=alpha", nil)
+	r.SetPathValue("id", id)
+	w = httptest.NewRecorder()
+	h.BeginTask(w, withCaller(r, &authpkg.CallerIdentity{Role: authpkg.RoleWorker, Username: "worker-cr", Team: "alpha"}))
+	if w.Code != 409 {
+		t.Fatalf("planned node must not begin before dependencies: %d %s", w.Code, w.Body.String())
+	}
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+id+"/amend?team=alpha", strings.NewReader(`{"spec":"Updated future delivery","note":"new acceptance requirement"}`))
+	r.SetPathValue("id", id)
+	w = httptest.NewRecorder()
+	h.AmendTask(w, withCaller(r, caller))
+	if w.Code != 200 {
+		t.Fatalf("planned amendment: %d %s", w.Code, w.Body.String())
+	}
+	data, _ := store.GetObject(t.Context(), "teams/alpha/shared/tasks/"+id+"/meta.json")
+	var child map[string]any
+	_ = json.Unmarshal(data, &child)
+	if child["status"] != "planned" || child["spec"] != "Updated future delivery" || child["task_notifications"] != nil {
+		t.Fatalf("planned amendment dispatched early or lost requirements: %s", data)
+	}
+	submitPlannedCandidate(t, h, store, taskPlanExecutionID("alpha", "main", "A"), "worker-cr", "A done")
+	submitPlannedCandidate(t, h, store, taskPlanExecutionID("alpha", "main", "B"), "second-cr", "B done")
+	data, _ = store.GetObject(t.Context(), "teams/alpha/shared/tasks/"+id+"/meta.json")
+	_ = json.Unmarshal(data, &child)
+	if child["status"] != "assigned" || child["spec"] != "Updated future delivery" {
+		t.Fatalf("dispatch lost planned amendment: %s", data)
+	}
+}
+
+func assertPlannedTaskWaiting(t *testing.T, store *ossfake.Memory, key string) {
+	t.Helper()
+	data, err := store.GetObject(t.Context(), key)
+	var child map[string]any
+	if err != nil || json.Unmarshal(data, &child) != nil || child["status"] != "planned" || child["task_notifications"] != nil || child["execution"] != nil || child["assignment_id"] != nil {
+		t.Fatalf("future task missing or activated before prerequisites: %s %v", data, err)
 	}
 }

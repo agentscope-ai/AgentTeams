@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	v1beta1 "github.com/agentscope-ai/AgentTeams/agentteams-controller/api/v1beta1"
 	authpkg "github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/auth"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -161,5 +163,37 @@ func TestTraceWorkerScopePreservesExplicitHumanAssignments(t *testing.T) {
 	scope, err := h.traceWorkers(t.Context(), &authpkg.CallerIdentity{Role: authpkg.RoleHuman, AccessibleWorkers: []string{"worker-cr"}})
 	if err != nil || scope["worker"].Teams == nil || scope["foreign"].Teams != nil {
 		t.Fatalf("incorrect explicit scope: %+v %v", scope, err)
+	}
+}
+
+func TestTraceManagerTurnsRequireNamespaceWideReader(t *testing.T) {
+	h := tracingFixture(t)
+	manager := &v1beta1.Manager{ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "default"}}
+	if err := h.client.Create(t.Context(), manager); err != nil {
+		t.Fatal(err)
+	}
+	row := map[string]any{"userId": "manager", "metadata": map[string]any{"agentteams.worker.name": "manager"}}
+	for _, role := range []string{authpkg.RoleAdmin, authpkg.RoleManager, authpkg.RoleHuman, authpkg.RoleTeamLeader} {
+		t.Run(role, func(t *testing.T) {
+			scope, err := h.traceWorkers(t.Context(), &authpkg.CallerIdentity{Role: role, Team: "alpha", AccessibleWorkers: []string{"worker-cr"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := role == authpkg.RoleAdmin || role == authpkg.RoleManager
+			if traceIsVisible(row, scope) != want {
+				t.Fatalf("manager trace visibility for %s: want %v, scope=%+v", role, want, scope)
+			}
+			rowWithTeam := map[string]any{"userId": "manager", "metadata": map[string]any{"agentteams.worker.name": "manager", "agentteams.team.id": "other"}}
+			if traceIsVisible(rowWithTeam, scope) {
+				t.Fatal("unverified team identity made a Manager turn visible")
+			}
+		})
+	}
+	if err := h.client.Delete(t.Context(), manager); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := h.traceWorkers(t.Context(), &authpkg.CallerIdentity{Role: authpkg.RoleAdmin})
+	if err != nil || traceIsVisible(row, scope) {
+		t.Fatalf("deleted Manager stayed readable: %+v %v", scope, err)
 	}
 }

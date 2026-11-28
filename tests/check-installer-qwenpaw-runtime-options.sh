@@ -37,8 +37,8 @@ AGENTTEAMS_MANAGER_RUNTIME=""
 step_runtime >/dev/null
 step_manager_runtime >/dev/null
 
-[ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}" = "qwenpaw" ] ||
-    fail "Bash installer must default new Workers to QwenPaw"
+[ "${AGENTTEAMS_DEFAULT_WORKER_RUNTIME}" = "codex" ] ||
+    fail "Bash installer must default new Workers to Codex"
 [ "${AGENTTEAMS_MANAGER_RUNTIME}" = "qwenpaw" ] ||
     fail "Bash installer must default the Manager to QwenPaw"
 

@@ -40,10 +40,11 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 
 | Runtime   | Stack | Role |
 |-----------|--------|------|
-| `openclaw` | Node.js / OpenClaw | Helm default Worker runtime |
-| `qwenpaw` | Python / QwenPaw | Local installer default Worker runtime |
+| `openclaw` | Node.js / OpenClaw | Legacy compatibility Worker runtime |
+| `qwenpaw` | Python / QwenPaw | Alternative shared Worker runtime |
 | `openhuman` | Rust / OpenHuman | Native Matrix Worker runtime |
-| `codex` | Independent Codex Harness | Shared Manager/Worker runtime; Manager requires an updated image |
+| `codex` | Independent Codex Harness | Default for newly created Workers; shared Manager/Worker image |
+| `claudecode` | Native Claude Agent SDK / Claude Code | Shared Manager, Leader and Worker image |
 | `copaw` (legacy) | Python / AgentScope via CoPaw | Legacy workers only (EOL; do not use for new workers) |
 | `hermes`   | Python / `hermes-worker` package | Alternative worker runtime (Matrix bridge + policies under `hermes/src/`) |
 | `deepseek-harness` | Node.js / DeepSeek Harness | Experimental headless Worker runtime pinned to a tested DSH release |
@@ -58,8 +59,9 @@ Logs and local artifacts (for example replay logs) stay out of git via `.gitigno
 | `deepseek-harness` | Shared DSH image; TeamHarness selects Manager context and skills without requiring Team membership. |
 | `openhuman` | Shared OpenHuman image; native Matrix receives explicitly mentioned Manager messages across joined rooms. |
 | `codex` | Updated shared Codex image; consumes Manager prompts/skills and sender policy through the member contract; requires a Responses API route. |
+| `claudecode` | Shared Claude Code image; Manager role uses the same native SDK and standard member approval/channel policy. |
 
-The supported Manager Harnesses use their Worker image and entrypoint for Manager, Leader, and Worker. Helm defaults to OpenClaw; the local installer offers QwenPaw and OpenClaw. Core v1.2.7 publishes six shared Harness images with tag `v1.2.7`, including the Worker-only Codex image, and does not publish dedicated Manager images. Use an updated Codex image explicitly for the Manager role until a release containing that support is published. The controller projects role, credentials, prompts, and policy; the Manager remains a Manager API resource. The legacy Manager selector `copaw` resolves to QwenPaw without changing the CoPaw Worker runtime. `agt message` supplies cross-room messaging when a Harness lacks a native tool. OpenClaw keeps the controller compatibility projection separate from its SDK-owned native config so SDK migrations survive controller updates.
+The supported Manager Harnesses use their Worker image and entrypoint for Manager, Leader, and Worker. Manager defaults to QwenPaw and newly created Workers default to Codex; preserve explicit runtime/image selections. Helm defaults to QwenPaw; the local installer offers QwenPaw and OpenClaw. Core v1.2.7 publishes six shared Harness images with tag `v1.2.7`, including the Worker-only Codex image, and does not publish dedicated Manager images. Use an updated Codex image explicitly for the Manager role until a release containing that support is published. The controller projects role, credentials, prompts, and policy; the Manager remains a Manager API resource. The legacy Manager selector `copaw` resolves to QwenPaw without changing the CoPaw Worker runtime. `agt message` supplies cross-room messaging when a Harness lacks a native tool. OpenClaw keeps the controller compatibility projection separate from its SDK-owned native config so SDK migrations survive controller updates.
 
 **Deployment runtime** (`AGENTTEAMS_RUNTIME`): local embedded stack, `aliyun`, or `k8s` selects infrastructure and storage integration. Controller/installer infrastructure bootstrap is separate from the shared Harness entrypoints.
 
@@ -230,8 +232,8 @@ In `k8s` / `aliyun` modes, Workers are created via the controller API instead of
 | Matrix Server | Tuwunel (conduwuit fork) | IM between Agents and Human |
 | Matrix Client | Element Web (optional) | Browser-based IM interface |
 | File System | MinIO or OSS | Centralized object storage for workspaces and agent state |
-| Agent Framework | OpenClaw (fork) | Helm default Manager/Worker runtime (Node.js gateway + Matrix plugin) |
-| Agent Framework | QwenPaw | Local installer default Manager/Worker runtime |
+| Agent Framework | OpenClaw (fork) | Legacy compatibility Manager/Worker runtime (Node.js gateway + Matrix plugin) |
+| Agent Framework | QwenPaw | Default Manager runtime; alternative Worker runtime |
 | Agent Framework | CoPaw (Python / AgentScope) | Legacy Workers only; Manager selector maps to QwenPaw |
 | Agent Framework | Hermes (`hermes-worker`) | Alternative Python Worker runtime |
 | Agent Framework | DeepSeek Harness (`@deepseek-ai/dsh`) | Experimental headless Worker runtime with room-scoped session continuation |

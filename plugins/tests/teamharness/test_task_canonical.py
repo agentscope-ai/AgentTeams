@@ -260,15 +260,18 @@ def test_http_preledger_contract_is_required_and_never_trusted_after_execution(m
     rejected = {'ok': False, 'effect': 'none', 'error': 'invalid_task_handoff',
                 'message': 'registered Team Leader required'}
     def response(body):
-        status = 409 if body.get('error') == 'repeated_task_request' else 403
+        status = 409 if body.get('error') in {'repeated_task_request', 'invalid_task_target'} else 403
         return urllib.error.HTTPError('http://own-fixture', status, 'Request rejected', {}, io.BytesIO(json.dumps(body).encode()))
     plan_rejected = {'ok': False, 'effect': 'none', 'error': 'invalid_task_plan_assignee',
                      'message': 'Choose an independent registered Worker from your Team.'}
     relation_rejected = {'ok': False, 'effect': 'none', 'error': 'repeated_task_request',
                          'message': 'Use a distinct inputId for independent work.'}
+    target_rejected = {'ok': False, 'effect': 'none', 'error': 'invalid_task_target',
+                       'message': 'Amend an execution node.'}
     for mode, body, correctable in [('begin', rejected, True), ('finish', rejected, False),
                                     ('begin', plan_rejected, True), ('finish', plan_rejected, False),
                                     ('begin', relation_rejected, True), ('finish', relation_rejected, False),
+                                    ('begin', target_rejected, True), ('finish', target_rejected, False),
                                     ('begin', {'message': 'Forbidden'}, False)]:
         with patch.object(guard.urllib.request, 'urlopen', side_effect=response(body)):
             if correctable:
@@ -280,3 +283,25 @@ def test_http_preledger_contract_is_required_and_never_trusted_after_execution(m
                     pass
                 else:
                     raise AssertionError('unproven or post-execution HTTP error became no-effect')
+
+
+def test_amend_is_a_fenced_mutation_with_exact_saved_spec(monkeypatch):
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
+    ledger = Ledger()
+    args = {'action': 'amend', 'taskId': 'child', 'spec': 'new requirement', 'note': 'user supplement'}
+    result = {'effect': 'committed', 'task': {'id': 'child', 'spec': 'new requirement', 'status': 'in_progress'}}
+    call = Mock(return_value=result)
+    assert guard.run(args, call, rpc=ledger) == result
+    assert [row['mode'] for row in ledger.calls] == ['begin', 'finish']
+    assert not guard.confirmed(args, dict(result, task=dict(result['task'], spec='old requirement')))
+    assert not guard.confirmed(args, dict(result, task=dict(result['task'], id='other')))
+
+
+def test_ambiguous_amend_is_never_blindly_replayed(monkeypatch):
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', 'http://own-fixture')
+    ledger = Ledger()
+    call = Mock(side_effect=TimeoutError('lost amendment response'))
+    args = {'action': 'amend', 'taskId': 'child', 'spec': 'new requirement', 'note': 'supplement'}
+    assert guard.run(args, call, rpc=ledger)['effect'] == 'unknown'
+    assert guard.run(args, call, rpc=ledger)['effect'] == 'unknown'
+    call.assert_called_once()

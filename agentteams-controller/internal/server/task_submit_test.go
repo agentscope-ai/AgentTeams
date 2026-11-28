@@ -217,3 +217,66 @@ func TestTaskSubmissionAndNotificationCannotBeForgedThroughLegacyMeta(t *testing
 		})
 	}
 }
+
+func TestTaskSubmitBlockedPreservesUnconfirmedOperation(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, process, worker string
+		want                          int
+	}{
+		{"blocked report", "BLOCKED", "process-1", "worker-cr", 200},
+		{"success remains fenced", "SUCCESS", "process-1", "worker-cr", 409},
+		{"old process", "BLOCKED", "other-process", "worker-cr", 409},
+		{"other worker", "BLOCKED", "process-1", "other-worker", 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, store, caller, _ := taskSubmitFixture(t)
+			key := "teams/alpha/shared/tasks/t1/meta.json"
+			body, _ := store.GetObject(t.Context(), key)
+			var task map[string]any
+			if err := json.Unmarshal(body, &task); err != nil {
+				t.Fatal(err)
+			}
+			execution := task["execution"].(map[string]any)
+			execution["state"] = "needs_verification"
+			execution["checkpoint"] = map[string]any{"version": 4, "operation": map[string]any{"id": "pending-write", "state": "started"}}
+			before, _ := json.Marshal(execution)
+			putTask(store, key, task)
+			caller.Username = tc.worker
+			var first string
+			for i := 0; i < 2; i++ {
+				r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/t1/submit", strings.NewReader(`{"summary":"Tool result requires verification","status":"`+tc.status+`","report":"Original response unavailable; do not repeat the write."}`))
+				r.SetPathValue("id", "t1")
+				r.Header.Set("X-AgentTeams-Process-ID", tc.process)
+				w := httptest.NewRecorder()
+				h.SubmitTask(w, withCaller(r, caller))
+				if w.Code != tc.want {
+					t.Fatalf("submit: %d %s", w.Code, w.Body.String())
+				}
+				if tc.want == 200 {
+					var result struct {
+						Notification struct {
+							EventID   string `json:"eventId"`
+							Recipient string `json:"recipient"`
+						} `json:"notification"`
+					}
+					if json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Notification.EventID == "" || result.Notification.Recipient != "lead-cr" {
+						t.Fatalf("missing Leader notification: %s", w.Body.String())
+					}
+					if i == 0 {
+						first = result.Notification.EventID
+					} else if first != result.Notification.EventID {
+						t.Fatal("duplicate blocked report queued another event")
+					}
+				}
+			}
+			body, _ = store.GetObject(t.Context(), key)
+			if err := json.Unmarshal(body, &task); err != nil {
+				t.Fatal(err)
+			}
+			after, _ := json.Marshal(task["execution"])
+			if string(before) != string(after) {
+				t.Fatalf("unconfirmed execution changed: %s", after)
+			}
+		})
+	}
+}

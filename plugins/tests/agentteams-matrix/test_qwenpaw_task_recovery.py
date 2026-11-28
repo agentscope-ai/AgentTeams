@@ -457,8 +457,8 @@ def test_reply_uses_saved_transaction_and_requires_matrix_event_id(native_channe
         assert await channel.send_task_reply("!room", "saved result", "stable-txn", {"team_id": "team", "task_id": "T", "generation": 2}) == "$persisted"
         channel._room_send_with_retry.assert_awaited_once_with("!room", "m.room.message", {
             "msgtype": "m.text", "body": "saved result", "org.agentteams.progress_only": True, "org.agentteams.reply_txn": "stable-txn",
-            "org.agentteams.run_id": "qwenpaw:task:team:T:2",
-            "org.agentteams.run": {"version": "1", "run_id": "qwenpaw:task:team:T:2", "blocks": [{"type": "text", "text": "saved result"}]},
+            "org.agentteams.run_id": "task:team:T:2",
+            "org.agentteams.run": {"version": "1", "run_id": "task:team:T:2", "blocks": [{"type": "text", "text": "saved result"}]},
         }, tx_id="stable-txn")
         channel._room_send_with_retry.return_value = SimpleNamespace()
         with pytest.raises(RuntimeError, match="not acknowledged"):

@@ -10,3 +10,7 @@ from pathlib import Path
 BUNDLE_DIR = Path(__file__).resolve().parents[2] / "agentteams-matrix"
 if str(BUNDLE_DIR) not in sys.path:
     sys.path.insert(0, str(BUNDLE_DIR))
+
+# Integration fixtures import the actual adapter and common protocol helpers.
+ROOT = Path(__file__).resolve().parents[3]
+sys.path[:0] = [str(ROOT / "qwenpaw/adapters/matrix"), str(ROOT / "shared/lib")]

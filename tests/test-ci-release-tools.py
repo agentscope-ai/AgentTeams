@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PlanTests(unittest.TestCase):
-    def plan(self, path, before='before\n', after='after\n', event='pull_request', ref='refs/heads/test', main_change=None):
+    def plan(self, path, before='before\n', after='after\n', event='pull_request', ref='refs/heads/test', main_change=None, labels=()):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             def git(*args):
@@ -40,9 +40,12 @@ class PlanTests(unittest.TestCase):
                 git('add', '.')
                 git('commit', '-qm', 'unrelated main change')
                 base = git('rev-parse', 'HEAD')
+            payload = repo / 'event.json'
+            payload.write_text(json.dumps({'pull_request': {'labels': [{'name': label} for label in labels]}}))
             result = subprocess.run(['python3', str(ROOT / 'hack/ci-integration-plan.py'),
                 '--base', base, '--head', head, '--event', event, '--ref', ref],
-                cwd=repo, capture_output=True, text=True, env={**os.environ, 'GITHUB_OUTPUT': ''})
+                cwd=repo, capture_output=True, text=True,
+                env={**os.environ, 'GITHUB_OUTPUT': '', 'GITHUB_EVENT_PATH': str(payload)})
             self.assertEqual(result.returncode, 0, result.stderr)
             return json.loads(result.stdout)
 
@@ -68,6 +71,28 @@ class PlanTests(unittest.TestCase):
     def test_release_tags_and_manual_runs_always_keep_full_matrix(self):
         for event, ref in [('push', 'refs/tags/v1.2.7'), ('workflow_dispatch', 'refs/heads/main')]:
             self.assertTrue(self.plan('.github/workflows/build.yml', event=event, ref=ref)['run_models'])
+
+    def test_labels_select_distinct_runtimes_and_force_docs_validation(self):
+        result = self.plan('docs/example.md', labels=['CI:HARNESS-Hermes', 'ci：harness-codex', 'unrelated'])
+        self.assertEqual(result['harnesses'], ['qwenpaw', 'hermes', 'codex'])
+        self.assertEqual(result['native_harnesses'], ['codex'])
+        self.assertFalse(result['full_matrix'])
+        self.assertTrue(result['run_builds'] and result['run_models'])
+
+    def test_full_label_selects_all_integration_and_native_checks(self):
+        result = self.plan('docs/example.md', labels=['CI：ALL'])
+        self.assertEqual(result['harnesses'], ['qwenpaw', 'hermes', 'deepseek', 'openclaw',
+                                              'codex', 'claudecode', 'openhuman'])
+        self.assertEqual(result['native_harnesses'], ['codex', 'claudecode', 'openhuman'])
+        self.assertTrue(result['full_matrix'] and result['run_builds'] and result['run_models'])
+
+    def test_unlabel_falls_back_to_diff_and_qwenpaw(self):
+        result = self.plan('docs/example.md', labels=['documentation', 'ci:harness-unknown'])
+        self.assertEqual(result['harnesses'], ['qwenpaw'])
+        self.assertFalse(result['run_builds'] or result['run_models'] or result['full_matrix'])
+        result = self.plan('docs/example.md', labels=['ci:harness-qwenpaw'])
+        self.assertEqual(result['harnesses'], ['qwenpaw'])
+        self.assertTrue(result['run_builds'] and result['run_models'])
 
     def test_main_unchanged_base_is_not_forced_to_recompile(self):
         self.assertFalse(self.plan('worker/start.sh', event='push')['base_changed'])
@@ -137,10 +162,10 @@ class WorkflowPlanTests(unittest.TestCase):
     def test_runtime_submodule_updates_trigger_runtime_validation(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())
         triggers = workflow.get('on', workflow.get(True))
-        for event in ('push', 'pull_request'):
-            self.assertIn('hermes', triggers[event]['paths'])
-            self.assertIn('worker', triggers[event]['paths'])
-            self.assertIn('.gitmodules', triggers[event]['paths'])
+        self.assertTrue({'hermes', 'worker', '.gitmodules'} <= set(triggers['push']['paths']))
+        self.assertNotIn('paths', triggers['pull_request'])
+        self.assertEqual(set(triggers['pull_request']['types']),
+                         {'opened', 'reopened', 'synchronize', 'labeled', 'unlabeled'})
         for name in ('build-image', 'build-integration-images', 'build-rc', 'check-node-pins', 'test-integration'):
             jobs = yaml.safe_load((ROOT / f'.github/workflows/{name}.yml').read_text())['jobs']
             for job in jobs.values():
@@ -215,10 +240,6 @@ class WorkflowPlanTests(unittest.TestCase):
                     f'-m pytest plugins/tests/agentteams-matrix-channel/test_{case}.py -q -rs'
                     for case in expected])
 
-    def test_qwenpaw_workflow_contract_agrees_with_build_groups(self):
-        contract = runpy.run_path(str(ROOT / 'qwenpaw/tests/test_integration_workflow.py'))
-        contract['test_integration_workflow_runs_qwenpaw_like_copaw']()
-
     def test_build_groups_wait_only_for_actual_dockerfile_dependencies(self):
         jobs = yaml.safe_load((ROOT / '.github/workflows/test-integration.yml').read_text())['jobs']
         expected = {
@@ -267,15 +288,16 @@ class WorkflowPlanTests(unittest.TestCase):
         selected = set()
         for group in ('build-images-independent', 'build-images-controller'):
             inputs = jobs[group]['with']
-            exclude = re.fullmatch(r"\$\{\{ github.event_name == 'pull_request' && '([^']+)' \|\| '' \}\}",
-                                  inputs['exclude_target'])
+            exclude = re.fullmatch(
+                r"\$\{\{ !contains\(fromJSON\(needs.detect-changes.outputs.harnesses\), '([^']+)'\) && '([^']+)' \|\| '' \}\}",
+                inputs['exclude_target'])
             self.assertIsNotNone(exclude, group)
-            selected.update(set(json.loads(inputs['targets'])) - {exclude.group(1)})
+            runtime, target = exclude.groups()
+            self.assertEqual(target, f'{runtime}-harness-worker' if runtime == 'deepseek' else f'{runtime}-worker')
+            selected.update(set(json.loads(inputs['targets'])) - {target})
         self.assertEqual(selected, {'qwenpaw-worker', 'embedded'})
-        self.assertIn("github.event_name != 'pull_request'", jobs['resolve-openclaw-base']['if'])
-        self.assertIn("github.event_name != 'pull_request'", jobs['build-images-openclaw']['if'])
-        self.assertIn("github.event_name == 'pull_request' && needs.build-images-openclaw.result == 'skipped'",
-                      jobs['integration-tests']['if'])
+        for job in ('resolve-openclaw-base', 'build-images-openclaw', 'integration-tests'):
+            self.assertIn("contains(fromJSON(needs.detect-changes.outputs.harnesses), 'openclaw')", jobs[job]['if'])
 
     def test_consumers_build_with_local_shared_or_immutable_published_base(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/build-integration-images.yml').read_text())

@@ -38,6 +38,20 @@ Test Script                     AgentTeams System
 
 ## CI coverage and duplicate execution
 
+Core pull requests use QwenPaw by default. Add one or more labels from
+`ci:harness-qwenpaw`, `ci:harness-hermes`, `ci:harness-deepseek`,
+`ci:harness-openclaw`, `ci:harness-codex`, `ci:harness-claudecode`, and
+`ci:harness-openhuman` to explicitly request those checks alongside QwenPaw.
+`ci:all` runs the full Core integration matrix and the selected Harness native
+checks for all seven runtimes. Labels are case-insensitive and accept either
+colon form. Adding or removing a label refreshes the selection. Fork PRs run
+the checks that do not require secrets.
+
+PR CI covers integration shards and adapter smoke tests. For release
+acceptance, run the complex development squad end to end on QwenPaw, Hermes,
+DeepSeek, Claude Code, and Codex. For OpenClaw and OpenHuman, verify startup and
+a real conversation.
+
 The CI matrix keeps runtime-dependent worker checks (`15`, `17`–`20`, `22`,
 `24`) on OpenClaw, QwenPaw, and Hermes. Similar setup does not make
 these scenarios redundant: they verify different import/update paths,
